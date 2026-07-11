@@ -10,6 +10,11 @@ namespace ContractScribe.Cli;
 public static class CommandLineApplication
 {
     /// <summary>
+    /// Gets the informational version from the command-line assembly metadata.
+    /// </summary>
+    public static string ApplicationVersion { get; } = GetApplicationVersion();
+
+    /// <summary>
     /// Executes a supported command and writes only its documented output.
     /// </summary>
     public static int Execute(string[] args, TextWriter output, TextWriter error)
@@ -43,13 +48,13 @@ public static class CommandLineApplication
 
     private static int ShowVersion(TextWriter output)
     {
-        output.WriteLine($"{ProductInfo.Name} {GetApplicationVersion()}");
+        output.WriteLine($"{ProductInfo.Name} {ApplicationVersion}");
         return 0;
     }
 
     private static int ShowDoctor(TextWriter output)
     {
-        output.WriteLine($"application_version: {GetApplicationVersion()}");
+        output.WriteLine($"application_version: {ApplicationVersion}");
         output.WriteLine($"runtime_description: {RuntimeInformation.FrameworkDescription}");
         output.WriteLine($"process_architecture: {RuntimeInformation.ProcessArchitecture}");
         output.WriteLine($"runtime_identifier: {RuntimeInformation.RuntimeIdentifier}");
@@ -67,6 +72,9 @@ public static class CommandLineApplication
 
     private static string GetApplicationVersion()
     {
-        return typeof(CommandLineApplication).Assembly.GetName().Version?.ToString() ?? "unknown";
+        return typeof(CommandLineApplication)
+            .Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
     }
 }

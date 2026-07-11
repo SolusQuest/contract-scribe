@@ -49,6 +49,25 @@ public sealed class ProductInfoTests
     }
 
     [Fact]
+    public void Version_UsesTheSameAssemblyMetadataAsDoctor()
+    {
+        var versionOutput = new StringWriter();
+        var versionError = new StringWriter();
+        var doctorOutput = new StringWriter();
+        var doctorError = new StringWriter();
+
+        var versionExitCode = CommandLineApplication.Execute(["--version"], versionOutput, versionError);
+        var doctorExitCode = CommandLineApplication.Execute(["doctor"], doctorOutput, doctorError);
+
+        Assert.Equal(0, versionExitCode);
+        Assert.Equal(0, doctorExitCode);
+        Assert.Empty(versionError.ToString());
+        Assert.Empty(doctorError.ToString());
+        Assert.Equal($"ContractScribe {CommandLineApplication.ApplicationVersion}{Environment.NewLine}", versionOutput.ToString());
+        Assert.Contains($"application_version: {CommandLineApplication.ApplicationVersion}", doctorOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnknownCommand_Fails_AndWritesOnlyToStandardError()
     {
         var output = new StringWriter();
