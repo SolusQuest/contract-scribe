@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore ContractScribe.slnx
+      - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - run: dotnet test ContractScribe.slnx --configuration Release --no-build
+      - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
+      - run: dotnet run --project src/ContractScribe.Cli --configuration Release --no-build -- --help
+      - run: dotnet run --project src/ContractScribe.Cli --configuration Release --no-build -- --version
+      - run: git diff --check
