@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ContractScribe.Cli/ContractScribe.Cli.csproj" />
+    <Project Path="src/ContractScribe.Core/ContractScribe.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ContractScribe.Core.Tests/ContractScribe.Core.Tests.csproj" />
+  </Folder>
+</Solution>
