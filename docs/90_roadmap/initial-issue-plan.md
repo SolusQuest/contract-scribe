@@ -1,6 +1,6 @@
 # Initial issue plan
 
-All M0 items are independent, public, repository-local tasks under the M0 parent plan.
+All M0 items are separately tracked, public, repository-local tasks under the M0 parent plan.
 
 | Item | Purpose | Dependencies |
 | --- | --- | --- |

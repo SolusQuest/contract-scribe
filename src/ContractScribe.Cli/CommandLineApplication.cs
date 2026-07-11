@@ -39,7 +39,7 @@ public static class CommandLineApplication
         output.WriteLine("ContractScribe bootstrap CLI");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  contract-scribe [--help] [--version] [doctor]");
+        output.WriteLine("  contract-scribe [--help | --version | doctor]");
         output.WriteLine();
         output.WriteLine("Commands:");
         output.WriteLine("  doctor      Print an allowlisted local runtime diagnostic without network or credential access.");
@@ -75,6 +75,7 @@ public static class CommandLineApplication
         return typeof(CommandLineApplication)
             .Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "unknown";
+            ?.InformationalVersion
+            ?? throw new InvalidOperationException("The CLI assembly must define an informational version.");
     }
 }

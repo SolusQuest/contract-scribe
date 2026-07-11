@@ -1,16 +1,9 @@
-using ContractScribe.Core;
 using ContractScribe.Cli;
 
-namespace ContractScribe.Core.Tests;
+namespace ContractScribe.Tests;
 
-public sealed class ProductInfoTests
+public sealed class CommandLineApplicationTests
 {
-    [Fact]
-    public void Name_IsContractScribe()
-    {
-        Assert.Equal("ContractScribe", ProductInfo.Name);
-    }
-
     [Fact]
     public void Help_ExitsSuccessfully_AndWritesUsageToStandardOutput()
     {
@@ -63,6 +56,7 @@ public sealed class ProductInfoTests
         Assert.Equal(0, doctorExitCode);
         Assert.Empty(versionError.ToString());
         Assert.Empty(doctorError.ToString());
+        Assert.NotEqual("unknown", CommandLineApplication.ApplicationVersion);
         Assert.Equal($"ContractScribe {CommandLineApplication.ApplicationVersion}{Environment.NewLine}", versionOutput.ToString());
         Assert.Contains($"application_version: {CommandLineApplication.ApplicationVersion}", doctorOutput.ToString(), StringComparison.Ordinal);
     }

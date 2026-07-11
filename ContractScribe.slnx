@@ -4,6 +4,6 @@
     <Project Path="src/ContractScribe.Core/ContractScribe.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/ContractScribe.Core.Tests/ContractScribe.Core.Tests.csproj" />
+    <Project Path="tests/ContractScribe.Tests/ContractScribe.Tests.csproj" />
   </Folder>
 </Solution>
