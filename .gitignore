@@ -1,0 +1,13 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+
+# IDE and user-specific files
+.vs/
+.idea/
+*.user
+*.suo
+
+# Test results and coverage
+TestResults/
+coverage/
