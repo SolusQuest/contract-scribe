@@ -1,0 +1,32 @@
+name: M0 experiment
+description: Define a bounded contract or feasibility experiment.
+title: "Task: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: "Use this form for bounded M0 contracts and experiments."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and validation
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and decision impact
+    validations:
+      required: true
