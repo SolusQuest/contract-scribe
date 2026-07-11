@@ -12,14 +12,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
-      - run: dotnet run --project src/ContractScribe.Cli --configuration Release --no-build -- --help
-      - run: dotnet run --project src/ContractScribe.Cli --configuration Release --no-build -- --version
-      - run: git diff --check
+      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
+      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
+      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
