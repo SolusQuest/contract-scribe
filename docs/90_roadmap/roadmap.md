@@ -12,6 +12,8 @@ Exit criteria:
 - At least one independent synthetic repository completes the selected baseline smoke.
 - Unresolved decisions exist as explicit issues rather than hidden documentation assumptions.
 
+M0.1–M0.3 define contracts. M0.4 validates the framework-dependent semantic path; M0.5 tests that same path under Native AOT; M0.6 selects the loader/distribution baseline; and M0.7 validates that selected baseline against an independent synthetic repository. An unmet exit criterion keeps M0 open; non-blocking residual risks are recorded in linked issues.
+
 ## M1 — Deterministic audit
 
 Exit criteria: fixed fixtures yield stable JSON; required, optional, forbidden, and skip outcomes are covered; each decision is explainable; audit has no network, provider, or write-token dependency; a real downstream repository completes a read-only smoke; and the selected distribution path remains validated.
