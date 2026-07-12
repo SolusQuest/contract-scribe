@@ -12,6 +12,8 @@ Exit criteria:
 - At least one independent synthetic repository completes the selected baseline smoke.
 - Unresolved decisions exist as explicit issues rather than hidden documentation assumptions.
 
+M0.1–M0.3 define contract inputs to M1 planning. M0.4–M0.6 perform baseline experimentation and select an evidence-based candidate. M0.7 independently validates that selected baseline against an independent synthetic repository. A failed M0.7 smoke keeps M0 open and requires the ADR or selected baseline to be revised and revalidated before M0 can close; non-blocking residual risks are recorded in linked issues.
+
 ## M1 — Deterministic audit
 
 Exit criteria: fixed fixtures yield stable JSON; required, optional, forbidden, and skip outcomes are covered; each decision is explainable; audit has no network, provider, or write-token dependency; a real downstream repository completes a read-only smoke; and the selected distribution path remains validated.
