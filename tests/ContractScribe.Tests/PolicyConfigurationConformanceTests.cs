@@ -463,12 +463,15 @@ internal static class PolicyConfigurationV1Conformance
                         continue;
                     }
 
+                    var patternIndex = 0;
                     foreach (var pattern in patterns.EnumerateArray())
                     {
                         if (!IsValidPattern(pattern.GetString()!))
                         {
-                            return new ConformanceError("policy.semantic.invalid-pattern", $"/rules/{index}/{selectorName}/{memberName}");
+                            return new ConformanceError("policy.semantic.invalid-pattern", $"/rules/{index}/{selectorName}/{memberName}/{patternIndex}");
                         }
+
+                        patternIndex++;
                     }
                 }
             }

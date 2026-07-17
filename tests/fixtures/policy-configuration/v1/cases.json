@@ -68,7 +68,7 @@
       "stage": "semantic",
       "policyFile": "policies/invalid-pattern.json",
       "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
-      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include" } }
+      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include/0" } }
     },
     {
       "caseId": "unknown-property",
@@ -188,6 +188,13 @@
       "policyFile": "policies/glob-double-star.json",
       "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "one/two/three" },
       "expected": { "decision": "required", "matchedRuleId": "all-paths" }
+    },
+    {
+      "caseId": "invalid-pattern-selects-the-first-invalid-index",
+      "stage": "semantic",
+      "policyFile": "policies/invalid-pattern-second.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include/1" } }
     }
   ]
 }
