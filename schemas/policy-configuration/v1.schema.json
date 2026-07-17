@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:contract-scribe:policy-configuration:v1",
+  "title": "ContractScribe Policy/Configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defaultDecision"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "defaultDecision": {
+      "$ref": "#/$defs/decision"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "$defs": {
+    "decision": {
+      "type": "string",
+      "enum": ["required", "optional", "forbidden"]
+    },
+    "patternList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "include": {
+          "$ref": "#/$defs/patternList"
+        },
+        "exclude": {
+          "$ref": "#/$defs/patternList"
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "priority", "decision"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        },
+        "projectPaths": {
+          "$ref": "#/$defs/selector"
+        },
+        "sourcePaths": {
+          "$ref": "#/$defs/selector"
+        }
+      }
+    }
+  }
+}

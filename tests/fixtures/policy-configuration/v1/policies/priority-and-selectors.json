@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    {
+      "id": "source-required",
+      "priority": 10,
+      "decision": "required",
+      "sourcePaths": {
+        "include": ["src/**/*.cs"],
+        "exclude": ["src/**/Generated/**"]
+      }
+    },
+    {
+      "id": "generated-forbidden",
+      "priority": 20,
+      "decision": "forbidden",
+      "sourcePaths": {
+        "include": ["src/**/Generated/**"]
+      }
+    },
+    {
+      "id": "project-required",
+      "priority": 30,
+      "decision": "required",
+      "projectPaths": {
+        "include": ["projects/App/App.csproj"]
+      }
+    }
+  ]
+}

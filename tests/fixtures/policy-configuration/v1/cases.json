@@ -1,0 +1,108 @@
+{
+  "cases": [
+    {
+      "caseId": "missing-document",
+      "stage": "document",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.input.missing-document" } }
+    },
+    {
+      "caseId": "utf8-bom",
+      "stage": "raw-bytes",
+      "payloadBase64": "77u/e30=",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.bom-not-allowed" } }
+    },
+    {
+      "caseId": "invalid-utf8",
+      "stage": "raw-bytes",
+      "payloadBase64": "/w==",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.invalid-encoding" } }
+    },
+    {
+      "caseId": "minimal-default-fallback",
+      "stage": "resolution",
+      "policyFile": "policies/minimal-valid.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "decision": "optional", "matchedRuleId": null }
+    },
+    {
+      "caseId": "project-priority-wins",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/Generated/File.cs" },
+      "expected": { "decision": "required", "matchedRuleId": "project-required" }
+    },
+    {
+      "caseId": "exclude-allows-higher-generated-rule",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": "projects/Other/Other.csproj", "sourcePath": "src/App/Generated/File.cs" },
+      "expected": { "decision": "forbidden", "matchedRuleId": "generated-forbidden" }
+    },
+    {
+      "caseId": "windows-input-normalizes",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": ".\\projects\\Other\\Other.csproj", "sourcePath": ".\\src\\App\\File.cs" },
+      "expected": { "decision": "required", "matchedRuleId": "source-required" }
+    },
+    {
+      "caseId": "duplicate-rule-id",
+      "stage": "semantic",
+      "policyFile": "policies/duplicate-rule-id.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.duplicate-rule-id", "pointer": "/rules/1/id" } }
+    },
+    {
+      "caseId": "duplicate-priority",
+      "stage": "semantic",
+      "policyFile": "policies/duplicate-priority.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.duplicate-priority", "pointer": "/rules/1/priority" } }
+    },
+    {
+      "caseId": "invalid-pattern",
+      "stage": "semantic",
+      "policyFile": "policies/invalid-pattern.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include" } }
+    },
+    {
+      "caseId": "unknown-property",
+      "stage": "schema",
+      "policyFile": "policies/unknown-property.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.invalid-document", "pointer": "/unexpected", "schemaKeyword": "additionalProperties" } }
+    },
+    {
+      "caseId": "unsupported-version",
+      "stage": "version",
+      "policyFile": "policies/unsupported-version.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.unsupported-version", "pointer": "/schemaVersion" } }
+    },
+    {
+      "caseId": "invalid-json",
+      "stage": "json",
+      "policyFile": "policies/invalid-json.txt",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.invalid-json" } }
+    },
+    {
+      "caseId": "duplicate-property",
+      "stage": "json",
+      "policyFile": "policies/duplicate-property.txt",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.duplicate-property", "pointer": "/schemaVersion" } }
+    },
+    {
+      "caseId": "invalid-project-path",
+      "stage": "input",
+      "policyFile": "policies/minimal-valid.json",
+      "input": { "projectPath": "../outside/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.input.invalid-path", "pointer": "/projectPath" } }
+    }
+  ]
+}

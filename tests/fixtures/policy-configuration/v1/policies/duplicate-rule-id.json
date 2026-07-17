@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    { "id": "duplicate", "priority": 1, "decision": "required" },
+    { "id": "duplicate", "priority": 2, "decision": "forbidden" }
+  ]
+}
