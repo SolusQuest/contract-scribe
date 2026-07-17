@@ -59,14 +59,53 @@ public sealed class PolicyConfigurationConformanceTests
             "policy.schema.unsupported-version",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":2,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
         Assert.Equal(
+            "policy.schema.unsupported-version",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":2e0,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
+            "policy.schema.unsupported-version",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":2147483648,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
             "policy.document.duplicate-property",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":2,\"schemaVersion\":1,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
+            "optional",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":1.0,\"defaultDecision\":\"optional\"}"), schema, input).Decision);
         Assert.Equal(
             "policy.schema.invalid-document",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":\"2\",\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
         Assert.Equal(
             "policy.schema.invalid-document",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("[]"), schema, input).Error?.Code);
+    }
+
+    [Fact]
+    public void NestedDuplicateProperties_UseTheCurrentMemberPointerAndShortCircuitLaterSyntax()
+    {
+        var schema = PolicySchema.Value;
+        var input = new EvaluationInput("projects/App/App.csproj", "src/App/File.cs");
+        var nestedDuplicate = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"first\",\"id\":\"second\",\"priority\":1,\"decision\":\"required\"}]}";
+        var duplicateBeforeSyntaxError = "{\"schemaVersion\":1,\"schemaVersion\":1,\"defaultDecision\":\"optional\",";
+
+        Assert.Equal(
+            "/rules/0/id",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(nestedDuplicate), schema, input).Error?.Pointer);
+        Assert.Equal(
+            "policy.document.duplicate-property",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(duplicateBeforeSyntaxError), schema, input).Error?.Code);
+    }
+
+    [Fact]
+    public void GlobsSelectorsAndSemanticPriority_HaveNormativeOutcomes()
+    {
+        var schema = PolicySchema.Value;
+        var input = new EvaluationInput("projects/App/App.csproj", "a/b");
+        var zeroSegmentGlob = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"glob\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a/**/b\"]}}]}";
+        var excludeWins = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"excluded\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"**\"],\"exclude\":[\"a/**\"]}}]}";
+        var semanticPriority = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"same\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a**b\"]}},{\"id\":\"same\",\"priority\":0,\"decision\":\"forbidden\"}]}";
+
+        Assert.Equal("required", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(zeroSegmentGlob), schema, input).Decision);
+        Assert.Equal("optional", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(excludeWins), schema, input).Decision);
+        Assert.Equal("policy.semantic.duplicate-rule-id", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(semanticPriority), schema, input).Error?.Code);
     }
 
     private static string FindRepositoryRoot()
@@ -165,7 +204,7 @@ internal static class PolicyConfigurationV1Conformance
         using (document)
         {
             var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("schemaVersion", out var version) && version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out var versionNumber) && versionNumber != 1)
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("schemaVersion", out var version) && version.ValueKind == JsonValueKind.Number && IsIntegerOtherThanOne(version.GetRawText()))
             {
                 return Error("policy.schema.unsupported-version", "/schemaVersion");
             }
@@ -384,6 +423,55 @@ internal static class PolicyConfigurationV1Conformance
         }
 
         return previous[segment.Length];
+    }
+
+    private static bool IsIntegerOtherThanOne(string number)
+    {
+        var exponentIndex = number.IndexOfAny(['e', 'E']);
+        var mantissa = exponentIndex >= 0 ? number[..exponentIndex] : number;
+        var exponentText = exponentIndex >= 0 ? number[(exponentIndex + 1)..] : "0";
+        var decimalIndex = mantissa.IndexOf('.');
+        var fractionDigits = decimalIndex >= 0 ? mantissa.Length - decimalIndex - 1 : 0;
+        var digits = mantissa.Replace("-", string.Empty, StringComparison.Ordinal).Replace(".", string.Empty, StringComparison.Ordinal);
+        var isZero = digits.All(character => character == '0');
+
+        if (isZero)
+        {
+            return true;
+        }
+
+        if (!long.TryParse(exponentText, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var exponent))
+        {
+            return !exponentText.StartsWith("-", StringComparison.Ordinal);
+        }
+
+        int requiredTrailingZeros;
+        if (exponent < 0)
+        {
+            if (exponent == long.MinValue || -exponent >= digits.Length)
+            {
+                return false;
+            }
+
+            requiredTrailingZeros = (int)-exponent + fractionDigits;
+        }
+        else if (exponent > fractionDigits)
+        {
+            return true;
+        }
+        else
+        {
+            requiredTrailingZeros = fractionDigits - (int)exponent;
+        }
+
+        var trailingZeros = digits.Reverse().TakeWhile(character => character == '0').Count();
+        if (trailingZeros < requiredTrailingZeros)
+        {
+            return false;
+        }
+
+        var retainedDigitCount = digits.Length - requiredTrailingZeros;
+        return digits[..retainedDigitCount].TrimStart('0') != "1";
     }
 
     private static (string Pointer, string Keyword) FindSchemaFailure(EvaluationResults evaluation)
