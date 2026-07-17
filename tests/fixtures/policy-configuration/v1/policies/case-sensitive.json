@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    { "id": "upper-app", "priority": 0, "decision": "required", "sourcePaths": { "include": ["src/App/**"] } }
+  ]
+}

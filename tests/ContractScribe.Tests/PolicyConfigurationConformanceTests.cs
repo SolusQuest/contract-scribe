@@ -20,6 +20,7 @@ public sealed class PolicyConfigurationConformanceTests
             File.ReadAllText(Path.Combine(fixtureRoot, "cases.json")),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = false })
             ?? throw new InvalidOperationException("The conformance fixture manifest must deserialize.");
+        PolicyConfigurationV1Conformance.ValidateManifest(fixtureRoot, manifest);
 
         foreach (var conformanceCase in manifest.Cases)
         {
@@ -32,6 +33,7 @@ public sealed class PolicyConfigurationConformanceTests
             Assert.Equal(conformanceCase.Expected.Error?.Code, first.Error?.Code);
             Assert.Equal(conformanceCase.Expected.Error?.Pointer, first.Error?.Pointer);
             Assert.Equal(conformanceCase.Expected.Error?.SchemaKeyword, first.Error?.SchemaKeyword);
+            Assert.Equal(conformanceCase.Stage, PolicyConfigurationV1Conformance.GetStage(first));
         }
     }
 
@@ -76,6 +78,18 @@ public sealed class PolicyConfigurationConformanceTests
         Assert.Equal(
             "policy.schema.invalid-document",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("[]"), schema, input).Error?.Code);
+        Assert.Equal(
+            "policy.schema.unsupported-version",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":-1,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
+            "policy.schema.unsupported-version",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":-1.0,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
+            "policy.schema.unsupported-version",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":-10e-1,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
+        Assert.Equal(
+            "policy.schema.invalid-document",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":-1.5,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
     }
 
     [Fact]
@@ -92,6 +106,9 @@ public sealed class PolicyConfigurationConformanceTests
         Assert.Equal(
             "policy.document.duplicate-property",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(duplicateBeforeSyntaxError), schema, input).Error?.Code);
+        Assert.Equal(
+            "/rules/1/x",
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[0,{\"x\":1,\"x\":2}]}"), schema, input).Error?.Pointer);
     }
 
     [Fact]
@@ -106,6 +123,19 @@ public sealed class PolicyConfigurationConformanceTests
         Assert.Equal("required", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(zeroSegmentGlob), schema, input).Decision);
         Assert.Equal("optional", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(excludeWins), schema, input).Decision);
         Assert.Equal("policy.semantic.duplicate-rule-id", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(semanticPriority), schema, input).Error?.Code);
+    }
+
+    [Fact]
+    public void ManifestIntegrity_RejectsDuplicateIdsAndAmbiguousPayloads()
+    {
+        var fixtureRoot = Path.Combine(FindRepositoryRoot(), "tests", "fixtures", "policy-configuration", "v1");
+        var input = new EvaluationInput("projects/App/App.csproj", "src/App/File.cs");
+        var missingDocument = new ExpectedOutcome(null, null, new ExpectedError("policy.input.missing-document", null, null));
+        var duplicateCase = new ConformanceCase("duplicate", "document", null, null, null, input, missingDocument);
+
+        Assert.Throws<InvalidOperationException>(() => PolicyConfigurationV1Conformance.ValidateManifest(fixtureRoot, new ConformanceManifest([duplicateCase, duplicateCase])));
+        Assert.Throws<InvalidOperationException>(() => PolicyConfigurationV1Conformance.ValidateManifest(fixtureRoot, new ConformanceManifest([
+            new ConformanceCase("ambiguous", "raw-bytes", "policies/minimal-valid.json", "policies/invalid-utf8.base64", "base64", input, new ExpectedOutcome(null, null, new ExpectedError("policy.document.invalid-encoding", null, null)))])));
     }
 
     private static string FindRepositoryRoot()
@@ -128,7 +158,8 @@ internal sealed record ConformanceCase(
     [property: JsonPropertyName("caseId")] string CaseId,
     [property: JsonPropertyName("stage")] string Stage,
     [property: JsonPropertyName("policyFile")] string? PolicyFile,
-    [property: JsonPropertyName("payloadBase64")] string? PayloadBase64,
+    [property: JsonPropertyName("payloadFile")] string? PayloadFile,
+    [property: JsonPropertyName("payloadEncoding")] string? PayloadEncoding,
     [property: JsonPropertyName("input")] EvaluationInput? Input,
     [property: JsonPropertyName("expected")] ExpectedOutcome Expected);
 
@@ -154,9 +185,13 @@ internal static class PolicyConfigurationV1Conformance
 {
     public static ConformanceOutcome Evaluate(string fixtureRoot, JsonSchema schema, ConformanceCase conformanceCase)
     {
-        if (conformanceCase.PayloadBase64 is not null)
+        if (conformanceCase.PayloadFile is not null)
         {
-            return EvaluateBytes(Convert.FromBase64String(conformanceCase.PayloadBase64), schema, conformanceCase.Input ?? throw new InvalidOperationException("A raw payload case needs input."));
+            var payloadPath = GetFixturePayloadPath(fixtureRoot, conformanceCase.PayloadFile);
+            var payload = conformanceCase.PayloadEncoding == "base64"
+                ? Convert.FromBase64String(File.ReadAllText(payloadPath).Trim())
+                : File.ReadAllBytes(payloadPath);
+            return EvaluateBytes(payload, schema, conformanceCase.Input ?? throw new InvalidOperationException("A raw payload case needs input."));
         }
 
         if (conformanceCase.PolicyFile is null)
@@ -164,8 +199,114 @@ internal static class PolicyConfigurationV1Conformance
             return Error("policy.input.missing-document");
         }
 
-        var policyPath = Path.Combine(fixtureRoot, conformanceCase.PolicyFile.Replace('/', Path.DirectorySeparatorChar));
+        var policyPath = GetFixturePayloadPath(fixtureRoot, conformanceCase.PolicyFile);
         return EvaluateBytes(File.ReadAllBytes(policyPath), schema, conformanceCase.Input ?? throw new InvalidOperationException("A policy case needs input."));
+    }
+
+    public static void ValidateManifest(string fixtureRoot, ConformanceManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var caseIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var conformanceCase in manifest.Cases)
+        {
+            if (string.IsNullOrWhiteSpace(conformanceCase.CaseId) || !caseIds.Add(conformanceCase.CaseId))
+            {
+                throw new InvalidOperationException("Every conformance case must have a unique non-empty caseId.");
+            }
+
+            if (conformanceCase.Input is null || conformanceCase.Expected is null)
+            {
+                throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' must declare input and expected outcome.");
+            }
+
+            var hasPolicyFile = conformanceCase.PolicyFile is not null;
+            var hasPayloadFile = conformanceCase.PayloadFile is not null;
+            if (hasPolicyFile == hasPayloadFile)
+            {
+                if (conformanceCase.Stage != "document" || hasPolicyFile)
+                {
+                    throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' must declare exactly one fixture payload, except missing-document.");
+                }
+            }
+
+            if (hasPolicyFile)
+            {
+                _ = GetFixturePayloadPath(fixtureRoot, conformanceCase.PolicyFile!);
+                if (conformanceCase.PayloadEncoding is not null)
+                {
+                    throw new InvalidOperationException($"Policy case '{conformanceCase.CaseId}' cannot declare payloadEncoding.");
+                }
+            }
+
+            if (hasPayloadFile)
+            {
+                _ = GetFixturePayloadPath(fixtureRoot, conformanceCase.PayloadFile!);
+                if (conformanceCase.PayloadEncoding is not null and not "base64")
+                {
+                    throw new InvalidOperationException($"Raw case '{conformanceCase.CaseId}' has unsupported payloadEncoding.");
+                }
+            }
+
+            var isSuccess = conformanceCase.Expected.Decision is not null;
+            var isError = conformanceCase.Expected.Error is not null;
+            if (isSuccess == isError || (!isSuccess && conformanceCase.Expected.MatchedRuleId is not null))
+            {
+                throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' must declare exactly one valid outcome shape.");
+            }
+
+            if (isSuccess && conformanceCase.Expected.Decision is not ("required" or "optional" or "forbidden"))
+            {
+                throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' has an unknown decision.");
+            }
+
+            var expectedStage = isSuccess ? "resolution" : GetStage(conformanceCase.Expected.Error!.Code);
+            if (conformanceCase.Stage != expectedStage)
+            {
+                throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' declares stage '{conformanceCase.Stage}' but its expected outcome belongs to '{expectedStage}'.");
+            }
+
+            if (conformanceCase.Expected.Error?.SchemaKeyword is not null && conformanceCase.Stage != "schema")
+            {
+                throw new InvalidOperationException($"Only schema-stage errors may declare schemaKeyword.");
+            }
+        }
+    }
+
+    public static string GetStage(ConformanceOutcome outcome)
+    {
+        return outcome.Error is null ? "resolution" : GetStage(outcome.Error.Code);
+    }
+
+    private static string GetStage(string errorCode)
+    {
+        return errorCode switch
+        {
+            "policy.input.missing-document" => "document",
+            "policy.document.invalid-encoding" or "policy.document.bom-not-allowed" => "raw-bytes",
+            "policy.document.invalid-json" or "policy.document.duplicate-property" => "json",
+            "policy.schema.unsupported-version" => "version",
+            "policy.schema.invalid-document" => "schema",
+            "policy.semantic.duplicate-rule-id" or "policy.semantic.duplicate-priority" or "policy.semantic.invalid-pattern" => "semantic",
+            "policy.input.invalid-path" => "input",
+            _ => throw new InvalidOperationException($"Unknown conformance error code '{errorCode}'.")
+        };
+    }
+
+    private static string GetFixturePayloadPath(string fixtureRoot, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath) || !relativePath.StartsWith("policies/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Fixture payloads must be relative files under policies/.");
+        }
+
+        var root = Path.GetFullPath(Path.Combine(fixtureRoot, "policies")) + Path.DirectorySeparatorChar;
+        var path = Path.GetFullPath(Path.Combine(fixtureRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        if (!path.StartsWith(root, StringComparison.Ordinal) || !File.Exists(path))
+        {
+            throw new InvalidOperationException("Fixture payload file must exist beneath the fixture root.");
+        }
+
+        return path;
     }
 
     public static ConformanceOutcome EvaluateBytes(byte[] payload, JsonSchema schema, EvaluationInput input)
@@ -470,6 +611,11 @@ internal static class PolicyConfigurationV1Conformance
             return false;
         }
 
+        if (number.StartsWith("-", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         var retainedDigitCount = digits.Length - requiredTrailingZeros;
         return digits[..retainedDigitCount].TrimStart('0') != "1";
     }
@@ -540,8 +686,13 @@ internal static class PolicyConfigurationV1Conformance
 
                 pendingPointer = current.Pointer + "/" + EscapePointerSegment(propertyName);
             }
-            else if (reader.TokenType is not JsonTokenType.Comment && pendingPointer is not null)
+            else if (reader.TokenType is not JsonTokenType.Comment)
             {
+                if (seen.TryPeek(out var current) && !current.IsObject)
+                {
+                    current.NextArrayIndex++;
+                }
+
                 pendingPointer = null;
             }
         }

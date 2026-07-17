@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    {
+      "id": "not-generated",
+      "priority": 0,
+      "decision": "forbidden",
+      "sourcePaths": { "exclude": ["generated/**"] }
+    }
+  ]
+}

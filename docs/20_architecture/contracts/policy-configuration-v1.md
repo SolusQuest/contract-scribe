@@ -14,6 +14,8 @@ V1 accepts one supplied JSON policy document encoded as UTF-8 without a BOM. It 
 
 The caller supplies `projectPath` and `sourcePath`, both required non-empty lexical paths. Establishing a repository root and relativizing filesystem paths are host responsibilities. Evaluation is pure lexical behavior.
 
+The public, normative conformance corpus is [`tests/fixtures/policy-configuration/v1/cases.json`](../../../tests/fixtures/policy-configuration/v1/cases.json). Every case has a unique non-empty `caseId`, one declared stage, one input pair, and exactly one expected outcome: either a permitted decision (with an optional matched rule ID) or an error. A non-missing case names exactly one payload beneath `policies/`: `policyFile` is read as raw bytes, while `payloadFile` may specify `payloadEncoding: "base64"` to preserve intentionally invalid byte sequences. Missing-document cases name no payload. The test-only oracle rejects malformed manifests, payloads outside `policies/`, unknown stages/error codes, and a declared stage that does not match the structured outcome.
+
 ## Policy model
 
 `schemaVersion` is the required integer `1`. `defaultDecision` is required and is one of:
@@ -27,6 +29,8 @@ These values are policy expectations, not M0.2 per-symbol audit-result reasons.
 `rules` is optional; omitted and `[]` are equivalent. A rule has a unique ID, a unique priority, a decision, and optional `projectPaths` and `sourcePaths` selectors. A rule with no selectors is global.
 
 A selector accepts when at least one `include` pattern matches, if `include` is present, and no `exclude` pattern matches. Exclude wins when both lists match. A rule applies only when every declared selector accepts. The applicable rule with the greatest priority wins; otherwise `defaultDecision` applies. Global priority uniqueness makes precedence statically decidable before evaluation.
+
+Duplicate patterns are allowed and do not change selector behavior. Shape constraints belong to the schema: selectors must contain at least one of non-empty `include` or `exclude` arrays. Semantic validation runs only after shape validation. It scans all rule IDs first, then all priorities, then patterns. A duplicate ID or priority reports the pointer of the current (second) rule member. Pattern validation scans rule index ascending, `projectPaths` before `sourcePaths`, `include` before `exclude`, then pattern index ascending; its pointer identifies that exact pattern. This ordering is part of the structured error contract.
 
 V1 intentionally has no symbol-category selector. M0.3 owns taxonomy vocabulary, and any future selector requires a separately versioned contract change.
 
@@ -57,6 +61,6 @@ Error outcomes contain `code`, an RFC 6901 `pointer` when an instance location e
 
 Any duplicate property, including `schemaVersion`, fails at stage 3. Stage 4 applies only to an object with exactly one integer `schemaVersion` other than `1`. Missing, null, string, Boolean, non-integral, and non-object schema-version cases fail at stage 5.
 
-Within a failing stage, the oracle selects a canonical outcome: a leading BOM wins over later encoding defects; lexical parsing uses the earliest byte-offset violation; schema leaf failures sort by ordinal instance pointer and then schema keyword; semantic checks scan duplicate IDs, then duplicate priorities, then patterns; and input validation checks `projectPath` before `sourcePath`.
+Within a failing stage, the oracle selects a canonical outcome: a leading BOM wins over later encoding defects; lexical parsing uses the earliest byte-offset violation; duplicate-property errors identify the current duplicate member with an RFC 6901 pointer; schema leaf failures sort by ordinal instance pointer and then schema keyword; semantic checks use the scan order above; and input validation checks `projectPath` before `sourcePath`, with pointer `/projectPath` or `/sourcePath`. `schemaKeyword` appears only for stage-5 errors.
 
 Policy errors are not M0.2 audit-result reasons and do not produce ordinary symbol audit results.

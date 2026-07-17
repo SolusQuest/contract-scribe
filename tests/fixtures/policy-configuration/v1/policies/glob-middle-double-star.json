@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    { "id": "middle", "priority": 0, "decision": "required", "sourcePaths": { "include": ["a/**/b"] } }
+  ]
+}
