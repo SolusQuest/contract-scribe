@@ -378,7 +378,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (kinds.Length != 1) return false;
         return kinds[0] switch
         {
-            "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString()),
+            "repository" => IsValidRepositoryLocator(locator.GetProperty("repository")),
             "metadata" => locator.GetProperty("metadata").GetProperty("assemblyIdentity").GetString() is { } assembly && System.Text.RegularExpressions.Regex.IsMatch(assembly, "^[a-z0-9][a-z0-9._-]{0,127}$"),
             "synthetic" => locator.GetProperty("synthetic").GetProperty("fixtureId").GetString() is { } fixture && System.Text.RegularExpressions.Regex.IsMatch(fixture, "^[a-z0-9][a-z0-9._-]{0,127}$"),
             _ => false
@@ -386,6 +386,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     private static bool IsLexicalRepositoryPath(string? path) => !string.IsNullOrEmpty(path) && !path.StartsWith('/') && !path.StartsWith('\\') && !path.Contains('\\') && !path.Split('/').Any(segment => segment is "" or "." or "..");
+
+    private static bool IsValidRepositoryLocator(JsonElement repository)
+    {
+        if (!IsLexicalRepositoryPath(repository.GetProperty("path").GetString())) return false;
+        return !repository.TryGetProperty("span", out var span) || span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32();
+    }
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
     private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
