@@ -3,6 +3,15 @@
   "registryVersion": 1,
   "evidenceBundleVersion": 1,
   "compilationContextRef": "synthetic.v1",
+  "compilationProfile": {
+    "languageVersion": "Preview",
+    "nullable": "enable",
+    "targetFramework": "net10.0",
+    "preprocessorSymbols": [],
+    "sourceEncoding": "utf-8",
+    "warningLevel": 9999,
+    "roslynPackageVersion": "4.14.0"
+  },
   "sources": ["SampleSymbols.cs"],
   "expectedDocumentationCommentIds": ["T:TaxonomyFixtures.IContract", "M:TaxonomyFixtures.IContract.Execute", "T:TaxonomyFixtures.SampleRecord", "P:TaxonomyFixtures.SampleRecord.Name", "M:TaxonomyFixtures.SampleRecord.Execute", "T:TaxonomyFixtures.Base", "M:TaxonomyFixtures.Base.ProtectedMember", "T:TaxonomyFixtures.SampleDelegate"]
 }

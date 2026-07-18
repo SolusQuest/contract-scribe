@@ -15,9 +15,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var root = FindRepositoryRoot();
         using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json")));
         Assert.Equal(1, registry.RootElement.GetProperty("registryVersion").GetInt32());
-        var identifiers = registry.RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray().Select(value => value.GetString()!)).ToArray();
+        var entries = registry.RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToArray();
+        var identifiers = entries.Select(entry => entry.GetProperty("id").GetString()!).ToArray();
         Assert.Equal(identifiers.Length, identifiers.Distinct(StringComparer.Ordinal).Count());
         Assert.All(identifiers, id => Assert.Matches("^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", id));
+        Assert.All(entries, entry =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
+            Assert.NotEqual(JsonValueKind.Undefined, entry.GetProperty("applicability").ValueKind);
+            Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
+            Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
+        });
     }
 
     [Fact]
@@ -78,12 +86,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var root = FindRepositoryRoot();
         var fixture = Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1");
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture, "manifest.json")));
-        var source = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, "SampleSymbols.cs")), new CSharpParseOptions(LanguageVersion.Preview));
+        var profile = manifest.RootElement.GetProperty("compilationProfile");
+        Assert.Equal("Preview", profile.GetProperty("languageVersion").GetString());
+        Assert.Equal("enable", profile.GetProperty("nullable").GetString());
+        Assert.Equal("4.14.0", profile.GetProperty("roslynPackageVersion").GetString());
+        Assert.Contains("Microsoft.CodeAnalysis.CSharp\" Version=\"4.14.0", File.ReadAllText(Path.Combine(root, "Directory.Packages.props")), StringComparison.Ordinal);
+        var source = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, "SampleSymbols.cs")), new CSharpParseOptions(LanguageVersion.Preview, preprocessorSymbols: profile.GetProperty("preprocessorSymbols").EnumerateArray().Select(value => value.GetString()!)));
         var compilation = CSharpCompilation.Create("taxonomy-fixture", [source], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var ids = manifest.RootElement.GetProperty("expectedDocumentationCommentIds").EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
-        var seen = compilation.Assembly.GlobalNamespace.GetNamespaceMembers().SelectMany(namespaceSymbol => namespaceSymbol.GetTypeMembers()).Select(symbol => symbol.GetDocumentationCommentId()).OfType<string>().ToHashSet(StringComparer.Ordinal);
-        Assert.True(ids.Overlaps(seen));
+        var seen = EnumerateSymbols(compilation.Assembly.GlobalNamespace).Select(symbol => symbol.GetDocumentationCommentId()).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        Assert.True(ids.IsSubsetOf(seen));
     }
 
     private static string FindRepositoryRoot()
@@ -93,6 +106,22 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx"))) return directory.FullName;
         }
         throw new InvalidOperationException("Repository root not found.");
+    }
+
+    private static IEnumerable<ISymbol> EnumerateSymbols(INamespaceSymbol @namespace)
+    {
+        foreach (var nestedNamespace in @namespace.GetNamespaceMembers()) foreach (var symbol in EnumerateSymbols(nestedNamespace)) yield return symbol;
+        foreach (var type in @namespace.GetTypeMembers()) foreach (var symbol in EnumerateSymbols(type)) yield return symbol;
+    }
+
+    private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
+    {
+        yield return type;
+        foreach (var member in type.GetMembers())
+        {
+            yield return member;
+            if (member is INamedTypeSymbol nested) foreach (var symbol in EnumerateSymbols(nested)) yield return symbol;
+        }
     }
 
     private static Evidence CreateEvidence(string id, int original, int included, int omitted, bool truncated) => new(id, original, included, omitted, truncated);
