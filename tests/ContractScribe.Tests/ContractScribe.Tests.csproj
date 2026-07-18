@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[10.0.2]" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

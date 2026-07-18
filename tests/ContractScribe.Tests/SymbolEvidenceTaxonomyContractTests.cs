@@ -282,9 +282,11 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var roots = new[] { Environment.GetEnvironmentVariable("DOTNET_ROOT"), Environment.GetEnvironmentVariable("DOTNET_ROOT_X64"), processRoot, runtimeRoot }
             .Where(root => !string.IsNullOrEmpty(root))
             .Distinct(StringComparer.Ordinal);
-        foreach (var root in roots)
+        var nugetPackages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+        var candidates = roots.Select(root => Path.Combine(root!, "packs", "Microsoft.NETCore.App.Ref", referencePackVersion, "ref", targetFramework))
+            .Append(Path.Combine(nugetPackages, "microsoft.netcore.app.ref", referencePackVersion, "ref", targetFramework));
+        foreach (var candidate in candidates)
         {
-            var candidate = Path.Combine(root!, "packs", "Microsoft.NETCore.App.Ref", referencePackVersion, "ref", targetFramework);
             if (Directory.Exists(candidate)) return candidate;
         }
         throw new InvalidOperationException($"Pinned reference pack {referencePackVersion}/{targetFramework} is unavailable from the configured .NET roots.");
