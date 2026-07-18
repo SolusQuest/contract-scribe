@@ -205,6 +205,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             Assert.Equal(precedenceCase.GetProperty("expected").GetString(), SelectOmissionReason(precedenceCase.GetProperty("hasTruncatedItem").GetBoolean(), precedenceCase.GetProperty("encountered").EnumerateArray().Select(condition => condition.GetString()!)));
         }
+        var evidenceItems = cases.RootElement.GetProperty("cases").EnumerateArray().Where(@case => @case.GetProperty("valid").GetBoolean()).SelectMany(@case => @case.GetProperty("bundle").GetProperty("items").EnumerateArray()).ToArray();
+        Assert.Equal(RegistryIds.Value["evidenceKinds"].OrderBy(id => id, StringComparer.Ordinal), evidenceItems.Select(item => item.GetProperty("kind").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(RegistryIds.Value["evidenceRelations"].OrderBy(id => id, StringComparer.Ordinal), evidenceItems.Select(item => item.GetProperty("relation").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
     }
 
     [Fact]

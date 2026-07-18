@@ -444,6 +444,156 @@
           }
         ]
       }
+    },
+    {
+      "caseId": "registry-kind-and-relation-coverage",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.registry00",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.00"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry01",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.implementation",
+            "relation": "evidence.documents",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.01"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry02",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.tests",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.02"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry03",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.attribute",
+            "relation": "evidence.references",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.03"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry04",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.test",
+            "relation": "evidence.constrains",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.04"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry05",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.repository-documentation",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.05"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.registry06",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.public-contract",
+            "relation": "evidence.documents",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "registry.06"
+              }
+            }
+          }
+        ]
+      }
     }
   ],
   "omissionPrecedenceCases": [
