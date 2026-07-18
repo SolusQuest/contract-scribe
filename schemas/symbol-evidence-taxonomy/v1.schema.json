@@ -25,6 +25,12 @@
       }
     },
     "symbolRef": { "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"], "properties": { "compilationContextRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "documentationCommentId": { "type": "string", "minLength": 1 } } },
-    "locator": { "oneOf": [ { "required": ["repository"], "properties": { "repository": { "type": "object" } } }, { "required": ["metadata"], "properties": { "metadata": { "type": "object" } } }, { "required": ["synthetic"], "properties": { "synthetic": { "type": "object" } } } ] }
+    "locator": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["repository"], "properties": { "repository": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 }, "span": { "type": "object" } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["metadata"], "properties": { "metadata": { "type": "object", "additionalProperties": false, "required": ["assemblyIdentity", "documentationCommentId"], "properties": { "assemblyIdentity": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "documentationCommentId": { "type": "string", "minLength": 1 } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["synthetic"], "properties": { "synthetic": { "type": "object", "additionalProperties": false, "required": ["fixtureId"], "properties": { "fixtureId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } } } } }
+      ]
+    }
   }
 }
