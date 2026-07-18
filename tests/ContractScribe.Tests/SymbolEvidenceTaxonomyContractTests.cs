@@ -188,6 +188,10 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             var semanticValid = IsSemanticallyValid(bundle, originals);
             Assert.True(item.GetProperty("valid").GetBoolean() == (schemaValid && semanticValid), $"{item.GetProperty("caseId").GetString()}: schema={schemaValid}, semantic={semanticValid}");
         }
+        foreach (var precedenceCase in cases.RootElement.GetProperty("omissionPrecedenceCases").EnumerateArray())
+        {
+            Assert.Equal(precedenceCase.GetProperty("expected").GetString(), SelectOmissionReason(precedenceCase.GetProperty("hasTruncatedItem").GetBoolean(), precedenceCase.GetProperty("encountered").EnumerateArray().Select(condition => condition.GetString()!)));
+        }
     }
 
     [Fact]
@@ -543,6 +547,15 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (item.Original != item.Included + item.Omitted || (item.Original == 0 && (item.Included != 0 || item.Omitted != 0 || item.Truncated)) || (item.Original > 0 && item.Included == 0) || item.Truncated != (item.Omitted > 0)) throw new InvalidOperationException();
             if (item.Truncated && (status != "evidence.bundle.partial" || omissionReason != "evidence.omission.budget-exhausted")) throw new InvalidOperationException();
         }
+    }
+
+    private static string SelectOmissionReason(bool hasTruncatedItem, IEnumerable<string> encountered)
+    {
+        if (hasTruncatedItem) return "evidence.omission.budget-exhausted";
+        var conditions = encountered.ToHashSet(StringComparer.Ordinal);
+        foreach (var omissionReason in new[] { "evidence.omission.access-not-permitted", "evidence.omission.source-unavailable", "evidence.omission.binary-content", "evidence.omission.budget-exhausted", "evidence.omission.not-provided" })
+            if (conditions.Contains(omissionReason)) return omissionReason;
+        throw new InvalidOperationException("An unavailable or partial bundle must have an encountered omission condition.");
     }
 
     private static bool IsSemanticallyValid(JsonElement bundle, IReadOnlyDictionary<string, string>? originalEvidenceTexts = null)

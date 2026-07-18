@@ -445,5 +445,51 @@
         ]
       }
     }
+  ],
+  "omissionPrecedenceCases": [
+    {
+      "caseId": "access-before-source",
+      "hasTruncatedItem": false,
+      "encountered": [
+        "evidence.omission.access-not-permitted",
+        "evidence.omission.source-unavailable"
+      ],
+      "expected": "evidence.omission.access-not-permitted"
+    },
+    {
+      "caseId": "source-before-binary",
+      "hasTruncatedItem": false,
+      "encountered": [
+        "evidence.omission.source-unavailable",
+        "evidence.omission.binary-content"
+      ],
+      "expected": "evidence.omission.source-unavailable"
+    },
+    {
+      "caseId": "binary-before-budget",
+      "hasTruncatedItem": false,
+      "encountered": [
+        "evidence.omission.binary-content",
+        "evidence.omission.budget-exhausted"
+      ],
+      "expected": "evidence.omission.binary-content"
+    },
+    {
+      "caseId": "budget-before-not-provided",
+      "hasTruncatedItem": false,
+      "encountered": [
+        "evidence.omission.budget-exhausted",
+        "evidence.omission.not-provided"
+      ],
+      "expected": "evidence.omission.budget-exhausted"
+    },
+    {
+      "caseId": "truncation-overrides-access",
+      "hasTruncatedItem": true,
+      "encountered": [
+        "evidence.omission.access-not-permitted"
+      ],
+      "expected": "evidence.omission.budget-exhausted"
+    }
   ]
 }
