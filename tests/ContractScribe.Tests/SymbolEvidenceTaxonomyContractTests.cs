@@ -347,10 +347,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if ((status == "evidence.bundle.complete" && (items.Length == 0 || hasOmission)) || (status == "evidence.bundle.partial" && (items.Length == 0 || !hasOmission)) || (status == "evidence.bundle.unavailable" && (items.Length != 0 || !hasOmission))) return false;
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var total = 0;
+        string? previousId = null;
         foreach (var item in items)
         {
             var id = item.GetProperty("evidenceId").GetString()!;
-            if (!ids.Add(id) || ids.Count > 1 && string.CompareOrdinal(ids.OrderBy(value => value, StringComparer.Ordinal).Last(), id) < 0) return false;
+            if (!ids.Add(id) || previousId is not null && string.CompareOrdinal(previousId, id) >= 0) return false;
+            previousId = id;
             if (!Known("evidenceKinds", item.GetProperty("kind").GetString()) || !Known("evidenceRelations", item.GetProperty("relation").GetString())) return false;
             if (!IsValidLocator(item.GetProperty("locator"))) return false;
             var excerpt = item.GetProperty("excerpt").GetString()!;
