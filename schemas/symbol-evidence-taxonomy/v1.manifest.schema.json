@@ -11,6 +11,7 @@
     "compilationContextRef",
     "compilationProfile",
     "sources",
+    "sourceProvenance",
     "classificationRecords",
     "unknownComponentScenarios",
     "unresolvedScenarios",
@@ -87,6 +88,16 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/classificationRecord"
+      }
+    },
+    "sourceProvenance": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": [
+          "origin.source",
+          "origin.source-generator",
+          "origin.tool-generated"
+        ]
       }
     },
     "unresolvedScenarios": {

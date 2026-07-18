@@ -57,6 +57,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.True(ManifestSchema.Value.Evaluate(manifest.RootElement).IsValid);
         var profile = manifest.RootElement.GetProperty("compilationProfile");
         Assert.Equal("10.0.2", profile.GetProperty("referencePackVersion").GetString());
+        var sources = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(source => source.GetString()!).OrderBy(source => source, StringComparer.Ordinal);
+        var provenanceSources = manifest.RootElement.GetProperty("sourceProvenance").EnumerateObject().Select(property => property.Name).OrderBy(source => source, StringComparer.Ordinal);
+        Assert.Equal(sources, provenanceSources);
         var records = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().ToArray();
         Assert.Equal(records.Length, records.Select(record => record.GetRawText()).Distinct(StringComparer.Ordinal).Count());
         foreach (var record in records)
@@ -112,7 +115,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         var root = FindRepositoryRoot();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var targetIds = ClassifyTargets(CreateFixtureCompilation()).Select(target => target.SymbolId).ToHashSet(StringComparer.Ordinal);
+        var targetIds = ClassifyTargets(CreateFixtureCompilation(), manifest.RootElement).Select(target => target.SymbolId).ToHashSet(StringComparer.Ordinal);
         foreach (var vector in manifest.RootElement.GetProperty("absenceVectors").EnumerateArray())
         {
             var id = vector.GetProperty("symbolRef").GetProperty("documentationCommentId").GetString()!;
@@ -263,7 +266,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var sourceEncoding = profile.GetProperty("sourceEncoding").GetString();
         if (sourceEncoding != "utf-8" || profile.GetProperty("targetFramework").GetString() != "net10.0" || profile.GetProperty("nullable").GetString() != "enable") throw new InvalidOperationException("The fixture profile must pin V1 compilation settings.");
         var parseOptions = new CSharpParseOptions(languageVersion, preprocessorSymbols: profile.GetProperty("preprocessorSymbols").EnumerateArray().Select(value => value.GetString()!));
-        var trees = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(value => CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, value.GetString()!)), parseOptions, encoding: System.Text.Encoding.UTF8)).ToArray();
+        var trees = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(value => CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, value.GetString()!)), parseOptions, path: value.GetString()!, encoding: System.Text.Encoding.UTF8)).ToArray();
         var referencePackVersion = profile.GetProperty("referencePackVersion").GetString()!;
         var targetFramework = profile.GetProperty("targetFramework").GetString()!;
         var referenceDirectory = FindPinnedReferenceDirectory(referencePackVersion, targetFramework);
@@ -344,49 +347,66 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
     }
 
-    private static IEnumerable<TargetRecord> ClassifyTargets(CSharpCompilation compilation)
+    private static IEnumerable<TargetRecord> ClassifyTargets(CSharpCompilation compilation, JsonElement manifest)
     {
+        var sourceProvenance = manifest.GetProperty("sourceProvenance").EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
         return EnumerateSymbols(compilation.Assembly.GlobalNamespace)
             .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
             .Where(symbol => !symbol.IsImplicitlyDeclared)
             .Where(symbol => symbol is not IPropertySymbol property || !IsRecordPositionalProperty(property))
             .Where(IsDocumentationTarget)
-            .Select(symbol => new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, "origin.source", "support.supported"))
+            .Select(symbol => CreateTargetRecord(symbol, sourceProvenance))
             .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
     }
 
-    private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation)
+    private static TargetRecord CreateTargetRecord(ISymbol symbol, IReadOnlyDictionary<string, string> sourceProvenance)
     {
+        var origin = ClassifySourceOrigin(symbol, sourceProvenance);
+        return origin != "origin.mixed"
+            ? new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, origin, "support.supported")
+            : new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, "origin.mixed", "support.ambiguous", "skip.ambiguous.mixed-origin");
+    }
+
+    private static string ClassifySourceOrigin(ISymbol symbol, IReadOnlyDictionary<string, string> sourceProvenance)
+    {
+        var origins = symbol.Locations.Where(location => location.IsInSource).Select(location => sourceProvenance[Path.GetFileName(location.SourceTree!.FilePath)]).Distinct(StringComparer.Ordinal).ToArray();
+        return origins.Length == 1 ? origins[0] : "origin.mixed";
+    }
+
+    private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation, JsonElement manifest)
+    {
+        var sourceProvenance = manifest.GetProperty("sourceProvenance").EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
+        ComponentRecord SourceComponent(string kind, ISymbol parent, string identity, string supportStatus = "support.supported", string? skipReason = null) => new(kind, parent.GetDocumentationCommentId()!, identity, ClassifySourceOrigin(parent, sourceProvenance), supportStatus, skipReason);
         foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method)))
         {
-            foreach (var parameter in method.Parameters) yield return new ComponentRecord("component.parameter", method.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
-            foreach (var typeParameter in method.TypeParameters) yield return new ComponentRecord("component.type-parameter", method.GetDocumentationCommentId()!, $"type-parameter/{typeParameter.Ordinal}");
-            if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return new ComponentRecord("component.return", method.GetDocumentationCommentId()!, "return");
+            foreach (var parameter in method.Parameters) yield return SourceComponent("component.parameter", method, $"parameter/{parameter.Ordinal}");
+            foreach (var typeParameter in method.TypeParameters) yield return SourceComponent("component.type-parameter", method, $"type-parameter/{typeParameter.Ordinal}");
+            if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return SourceComponent("component.return", method, "return");
         }
         foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property)))
         {
-            foreach (var parameter in property.Parameters) yield return new ComponentRecord("component.parameter", property.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
-            yield return new ComponentRecord("component.value", property.GetDocumentationCommentId()!, "value");
-            if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
-            if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+            foreach (var parameter in property.Parameters) yield return SourceComponent("component.parameter", property, $"parameter/{parameter.Ordinal}");
+            yield return SourceComponent("component.value", property, "value");
+            if (property.GetMethod is not null) yield return SourceComponent("component.accessor.get", property, "accessor/get", "support.not-applicable", "skip.not-applicable.non-documentation-component");
+            if (property.SetMethod is not null) yield return SourceComponent(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", "support.not-applicable", "skip.not-applicable.non-documentation-component");
         }
         foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => !@event.IsImplicitlyDeclared && IsDocumentationTarget(@event)))
         {
-            yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
-            yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+            yield return SourceComponent("component.accessor.add", @event, "accessor/add", "support.not-applicable", "skip.not-applicable.non-documentation-component");
+            yield return SourceComponent("component.accessor.remove", @event, "accessor/remove", "support.not-applicable", "skip.not-applicable.non-documentation-component");
         }
         foreach (var field in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IFieldSymbol>())
         {
             var parent = field.AssociatedSymbol;
             if (parent is IPropertySymbol property && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property))
-                yield return new ComponentRecord("component.backing-field", property.GetDocumentationCommentId()!, "backing-field", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+                yield return SourceComponent("component.backing-field", property, "backing-field", "support.not-applicable", "skip.not-applicable.non-documentation-component");
             if (parent is IEventSymbol @event && IsDocumentationTarget(@event))
-                yield return new ComponentRecord("component.backing-field", @event.GetDocumentationCommentId()!, "backing-field", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+                yield return SourceComponent("component.backing-field", @event, "backing-field", "support.not-applicable", "skip.not-applicable.non-documentation-component");
         }
         foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().Where(type => !type.IsImplicitlyDeclared && IsDocumentationTarget(type)))
         {
             var parentId = type.GetDocumentationCommentId()!;
-            foreach (var typeParameter in type.TypeParameters) yield return new ComponentRecord("component.type-parameter", parentId, $"type-parameter/{typeParameter.Ordinal}");
+            foreach (var typeParameter in type.TypeParameters) yield return SourceComponent("component.type-parameter", type, $"type-parameter/{typeParameter.Ordinal}");
             if (type.IsRecord)
                 foreach (var positional in type.GetMembers().OfType<IPropertySymbol>().Where(IsRecordPositionalProperty))
                     yield return Synthesized("component.synthesized.record-positional-property", parentId, $"synthesized/record-positional-property/{GetRecordPositionalParameter(positional)!.Ordinal}");
@@ -396,8 +416,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                     type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type) ? "synthesized/record-copy-constructor" : "synthesized/implicit-constructor");
             if (type.TypeKind == TypeKind.Delegate)
             {
-                foreach (var parameter in type.DelegateInvokeMethod!.Parameters) yield return new ComponentRecord("component.parameter", parentId, $"parameter/{parameter.Ordinal}");
-                yield return new ComponentRecord("component.return", parentId, "return");
+                foreach (var parameter in type.DelegateInvokeMethod!.Parameters) yield return SourceComponent("component.parameter", type, $"parameter/{parameter.Ordinal}");
+                yield return SourceComponent("component.return", type, "return");
                 foreach (var method in type.GetMembers().OfType<IMethodSymbol>().Where(method => method.IsImplicitlyDeclared && method.Name is "Invoke" or "BeginInvoke" or "EndInvoke"))
                     yield return Synthesized($"component.synthesized.delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}", parentId, $"synthesized/delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}");
             }
@@ -416,7 +436,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         var context = manifest.GetProperty("compilationContextRef").GetString()!;
         var records = new List<Dictionary<string, object>>();
-        foreach (var target in ClassifyTargets(compilation))
+        foreach (var target in ClassifyTargets(compilation, manifest))
         {
             var symbol = EnumerateSymbols(compilation.Assembly.GlobalNamespace).Single(candidate => candidate.GetDocumentationCommentId() == target.SymbolId);
             records.Add(new Dictionary<string, object>
@@ -428,8 +448,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["origin"] = target.Origin,
                 ["supportStatus"] = target.SupportStatus
             });
+            if (target.SkipReason is not null) records[^1]["skipReason"] = target.SkipReason;
         }
-        foreach (var component in ClassifyComponents(compilation).OrderBy(component => component.ParentSymbolId, StringComparer.Ordinal).ThenBy(component => component.Kind, StringComparer.Ordinal).ThenBy(component => component.Identity, StringComparer.Ordinal))
+        foreach (var component in ClassifyComponents(compilation, manifest).OrderBy(component => component.ParentSymbolId, StringComparer.Ordinal).ThenBy(component => component.Kind, StringComparer.Ordinal).ThenBy(component => component.Identity, StringComparer.Ordinal))
         {
             records.Add(new Dictionary<string, object>
             {
@@ -767,6 +788,6 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
-    private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
+    private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus, string? SkipReason = null);
     private sealed record ComponentRecord(string Kind, string ParentSymbolId, string Identity, string Origin = "origin.source", string SupportStatus = "support.supported", string? SkipReason = null);
 }

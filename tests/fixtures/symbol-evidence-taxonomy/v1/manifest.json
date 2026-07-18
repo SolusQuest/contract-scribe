@@ -14,7 +14,11 @@
     "referencePackVersion": "10.0.2"
   },
   "sources": [
-    "SampleSymbols.cs"
+    "SampleSymbols.cs",
+    "SourceGeneratedSymbols.cs",
+    "ToolGeneratedSymbols.cs",
+    "MixedTarget.Source.cs",
+    "MixedTarget.Tool.cs"
   ],
   "classificationRecords": [
     {
@@ -271,6 +275,28 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.SourceMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.ToolMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
       },
       "componentKind": "component.return",
@@ -375,6 +401,28 @@
       "componentKind": "component.parameter",
       "identity": "parameter/0",
       "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SourceGeneratedSymbol.GeneratedMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ToolGeneratedSymbol.GeneratedMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.tool-generated",
       "supportStatus": "support.supported"
     },
     {
@@ -740,6 +788,18 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.MultiInterfaceImplementation"
       },
       "componentKind": "component.synthesized.implicit-constructor",
@@ -954,6 +1014,30 @@
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.ShapeDerived"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SourceGeneratedSymbol"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
       },
       "componentKind": "component.synthesized.implicit-constructor",
       "identity": "synthesized/implicit-constructor",
@@ -1487,6 +1571,28 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.SourceMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.ToolMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
       },
       "primaryKind": "symbol.member.method",
@@ -1577,6 +1683,28 @@
       "primaryKind": "symbol.member.constructor",
       "traits": [],
       "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SourceGeneratedSymbol.GeneratedMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ToolGeneratedSymbol.GeneratedMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.tool-generated",
       "supportStatus": "support.supported"
     },
     {
@@ -1884,6 +2012,20 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.partial"
+      ],
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.MultiInterfaceImplementation"
       },
       "primaryKind": "symbol.type.class",
@@ -2059,6 +2201,28 @@
       "supportStatus": "support.supported"
     },
     {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SourceGeneratedSymbol"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
       "recordType": "UnresolvedClassification",
       "compilationContextRef": "synthetic.v1",
       "origin": "origin.source",
@@ -2158,5 +2322,12 @@
         }
       }
     }
-  ]
+  ],
+  "sourceProvenance": {
+    "SampleSymbols.cs": "origin.source",
+    "SourceGeneratedSymbols.cs": "origin.source-generator",
+    "ToolGeneratedSymbols.cs": "origin.tool-generated",
+    "MixedTarget.Source.cs": "origin.source",
+    "MixedTarget.Tool.cs": "origin.tool-generated"
+  }
 }
