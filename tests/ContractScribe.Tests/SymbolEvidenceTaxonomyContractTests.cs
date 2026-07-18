@@ -442,6 +442,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             });
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
+        foreach (var scenario in manifest.GetProperty("unknownComponentScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal).Select((scenario, ordinal) => (scenario, ordinal)))
+        {
+            records.Add(new Dictionary<string, object>
+            {
+                ["recordType"] = "ComponentClassification",
+                ["parentSymbolRef"] = SymbolRef(context, scenario.scenario.GetProperty("parentDocumentationCommentId").GetString()!),
+                ["componentKind"] = "component.unknown",
+                ["identity"] = $"unknown/{scenario.ordinal}",
+                ["origin"] = "origin.source",
+                ["supportStatus"] = "support.unsupported",
+                ["skipReason"] = "skip.unsupported.component-kind"
+            });
+        }
         foreach (var relation in ClassifyRelationRecords(compilation, context).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
         foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
         {

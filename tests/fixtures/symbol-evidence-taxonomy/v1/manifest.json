@@ -728,6 +728,18 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MemberShapes"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/0",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.MultiInterfaceImplementation"
       },
       "componentKind": "component.synthesized.implicit-constructor",
@@ -2132,6 +2144,17 @@
       "candidateLocator": {
         "synthetic": {
           "fixtureId": "missing-doc-id"
+        }
+      }
+    }
+  ],
+  "unknownComponentScenarios": [
+    {
+      "scenarioId": "unknown-member-shape",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.MemberShapes",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "unknown-member-shape"
         }
       }
     }

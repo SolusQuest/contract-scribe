@@ -12,6 +12,7 @@
     "compilationProfile",
     "sources",
     "classificationRecords",
+    "unknownComponentScenarios",
     "unresolvedScenarios",
     "absenceVectors"
   ],
@@ -121,6 +122,34 @@
               "skip.unavailable.generated-provenance",
               "skip.unavailable.semantic-context"
             ]
+          },
+          "candidateLocator": {
+            "$ref": "#/$defs/candidateLocator"
+          }
+        }
+      }
+    },
+    "unknownComponentScenarios": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId",
+          "parentDocumentationCommentId",
+          "candidateLocator"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          },
+          "parentDocumentationCommentId": {
+            "type": "string",
+            "minLength": 1
           },
           "candidateLocator": {
             "$ref": "#/$defs/candidateLocator"
