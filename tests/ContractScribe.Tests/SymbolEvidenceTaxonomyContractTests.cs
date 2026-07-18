@@ -108,6 +108,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void TestOnlyClassifier_MapsEveryManifestRelationKindInTheSyntheticCorpus()
+    {
+        var compilation = CreateFixtureCompilation();
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var actual = ClassifyRelations(compilation).ToHashSet(StringComparer.Ordinal);
+        var expected = manifest.RootElement.GetProperty("expectedRelationKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
+        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -192,6 +203,18 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (symbol is IPropertySymbol property && property.IsRequired) yield return "trait.required";
         if (symbol is IPropertySymbol { SetMethod.IsInitOnly: true }) yield return "trait.init-only";
         if (symbol.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is TypeDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.PartialKeyword))) yield return "trait.partial";
+    }
+
+    private static IEnumerable<string> ClassifyRelations(CSharpCompilation compilation)
+    {
+        var types = EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().ToArray();
+        foreach (var type in types)
+        {
+            if (type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Any(member => type.FindImplementationForInterfaceMember(member) is IMethodSymbol implementation && implementation.ExplicitInterfaceImplementations.Length == 0)) yield return "relation.implicit-interface-implementation";
+            if (type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Any(member => type.GetMembers().OfType<IMethodSymbol>().Any(method => method.ExplicitInterfaceImplementations.Any(implementation => SymbolEqualityComparer.Default.Equals(implementation, member))))) yield return "relation.explicit-interface-implementation";
+            if (type.TypeKind == TypeKind.Interface && type.Interfaces.Any()) yield return "relation.inherited-interface-member";
+            if (type.GetMembers().OfType<IMethodSymbol>().Any(method => method.OverriddenMethod is not null)) yield return "relation.overrides";
+        }
     }
 
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)

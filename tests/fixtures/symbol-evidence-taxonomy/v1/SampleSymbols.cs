@@ -9,12 +9,14 @@ public interface IContract
     void Execute();
 }
 
+public interface IDerivedContract : IContract { }
+
 public interface IStaticContract
 {
     static abstract int StaticMember();
 }
 
-public partial record SampleRecord(string Name) : IContract, IStaticContract
+public partial record SampleRecord(string Name) : IDerivedContract, IStaticContract
 {
     public required string Required { get; init; }
     public int this[int index] => index;
