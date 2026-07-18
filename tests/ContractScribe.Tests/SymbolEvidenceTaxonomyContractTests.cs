@@ -358,6 +358,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         return EnumerateSymbols(compilation.Assembly.GlobalNamespace)
             .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
+            .Where(symbol => !symbol.IsImplicitlyDeclared)
             .Where(IsDocumentationTarget)
             .Select(symbol => new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, "origin.source", "support.supported"))
             .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
@@ -365,23 +366,39 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation)
     {
-        foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => method.Locations.Any(location => location.IsInSource)))
+        foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method)))
         {
             foreach (var parameter in method.Parameters) yield return new ComponentRecord("component.parameter", method.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
             if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return new ComponentRecord("component.return", method.GetDocumentationCommentId()!, "return");
         }
-        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => property.Locations.Any(location => location.IsInSource)))
+        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && IsDocumentationTarget(property)))
         {
             yield return new ComponentRecord("component.value", property.GetDocumentationCommentId()!, "value");
             if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
             if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
         }
-        foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => @event.Locations.Any(location => location.IsInSource)))
+        foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => !@event.IsImplicitlyDeclared && IsDocumentationTarget(@event)))
         {
             yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
             yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
         }
+        foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().Where(type => !type.IsImplicitlyDeclared && IsDocumentationTarget(type)))
+        {
+            var parentId = type.GetDocumentationCommentId()!;
+            if (type.IsRecord)
+                foreach (var positional in type.GetMembers().OfType<IPropertySymbol>().Where(property => property.IsImplicitlyDeclared).Select((property, ordinal) => (property, ordinal)))
+                    yield return Synthesized("component.synthesized.record-positional-property", parentId, $"synthesized/record-positional-property/{positional.ordinal}");
+            foreach (var constructor in type.InstanceConstructors.Where(constructor => constructor.IsImplicitlyDeclared))
+                yield return Synthesized(type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type)
+                    ? "component.synthesized.record-copy-constructor" : "component.synthesized.implicit-constructor", parentId,
+                    type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type) ? "synthesized/record-copy-constructor" : "synthesized/implicit-constructor");
+            if (type.TypeKind == TypeKind.Delegate)
+                foreach (var method in type.GetMembers().OfType<IMethodSymbol>().Where(method => method.IsImplicitlyDeclared && method.Name is "Invoke" or "BeginInvoke" or "EndInvoke"))
+                    yield return Synthesized($"component.synthesized.delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}", parentId, $"synthesized/delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}");
+        }
     }
+
+    private static ComponentRecord Synthesized(string kind, string parentId, string identity) => new(kind, parentId, identity, "origin.compiler-synthesized", "support.not-applicable", "skip.not-applicable.synthesized-non-target");
 
     private static IReadOnlyList<Dictionary<string, object>> ClassifyCanonicalRecords(CSharpCompilation compilation, JsonElement manifest)
     {

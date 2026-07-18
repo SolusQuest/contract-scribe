@@ -95,7 +95,13 @@
     "component.accessor.set",
     "component.accessor.init",
     "component.accessor.add",
-    "component.accessor.remove"
+    "component.accessor.remove",
+    "component.synthesized.record-positional-property",
+    "component.synthesized.implicit-constructor",
+    "component.synthesized.record-copy-constructor",
+    "component.synthesized.delegate-invoke",
+    "component.synthesized.delegate-begin-invoke",
+    "component.synthesized.delegate-end-invoke"
   ],
   "expectedDocumentationCommentIds": [
     "T:TaxonomyFixtures.IContract",
@@ -521,17 +527,6 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Derived.ProtectedMember"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
       },
       "componentKind": "component.return",
@@ -587,17 +582,6 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.add_Changed(System.EventHandler)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)"
       },
       "componentKind": "component.parameter",
@@ -646,127 +630,6 @@
       },
       "componentKind": "component.return",
       "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.remove_Changed(System.EventHandler)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.set_Property(System.String)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.#ctor(System.Object,System.IntPtr)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.#ctor(System.Object,System.IntPtr)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.BeginInvoke(System.Int32,System.AsyncCallback,System.Object)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.BeginInvoke(System.Int32,System.AsyncCallback,System.Object)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.BeginInvoke(System.Int32,System.AsyncCallback,System.Object)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/2",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.BeginInvoke(System.Int32,System.AsyncCallback,System.Object)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.EndInvoke(System.IAsyncResult)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.EndInvoke(System.IAsyncResult)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.Invoke(System.Int32)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
       "origin": "origin.source",
       "supportStatus": "support.supported"
     },
@@ -807,117 +670,7 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.#ctor(TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Deconstruct(System.String@)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Deconstruct(System.String@)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(System.Object)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(System.Object)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Execute"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.GetHashCode"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.PrintMembers(System.Text.StringBuilder)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.PrintMembers(System.Text.StringBuilder)"
       },
       "componentKind": "component.return",
       "identity": "return",
@@ -939,127 +692,6 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.ToString"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.get_Item(System.Int32)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Equality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Equality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Equality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Inequality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Inequality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Inequality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.set_Name(System.String)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.set_Required(System.String)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.{Clone}$"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.#ctor(System.Int32)"
       },
       "componentKind": "component.parameter",
@@ -1071,204 +703,6 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Deconstruct(System.Int32@)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Deconstruct(System.Int32@)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(System.Object)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(System.Object)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.GetHashCode"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.PrintMembers(System.Text.StringBuilder)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.PrintMembers(System.Text.StringBuilder)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.ToString"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Equality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Equality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Equality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Inequality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Inequality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/1",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Inequality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.set_Value(System.Int32)"
-      },
-      "componentKind": "component.parameter",
-      "identity": "parameter/0",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SealedBase.NotReachable"
-      },
-      "componentKind": "component.return",
-      "identity": "return",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
       },
       "componentKind": "component.accessor.get",
@@ -1294,29 +728,6 @@
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
-      },
-      "componentKind": "component.value",
-      "identity": "value",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.EqualityContract"
-      },
-      "componentKind": "component.accessor.get",
-      "identity": "accessor/get",
-      "origin": "origin.source",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.non-documentation-component"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.EqualityContract"
       },
       "componentKind": "component.value",
       "identity": "value",
@@ -1450,6 +861,162 @@
       "identity": "value",
       "origin": "origin.source",
       "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Base"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Derived"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-begin-invoke",
+      "identity": "synthesized/delegate-begin-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-end-invoke",
+      "identity": "synthesized/delegate-end-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-invoke",
+      "identity": "synthesized/delegate-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleEnum"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
+      },
+      "componentKind": "component.synthesized.record-copy-constructor",
+      "identity": "synthesized/record-copy-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
+      },
+      "componentKind": "component.synthesized.record-positional-property",
+      "identity": "synthesized/record-positional-property/0",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecordStruct"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRefStruct`1"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleStruct"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SealedBase"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
     },
     {
       "recordType": "RelationObservation",
@@ -1730,34 +1297,12 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Base.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
       },
       "primaryKind": "symbol.member.method",
       "traits": [
         "trait.virtual"
       ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Derived.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
       "origin": "origin.source",
       "supportStatus": "support.supported"
     },
@@ -1877,54 +1422,6 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.#ctor(System.Object,System.IntPtr)"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.BeginInvoke(System.Int32,System.AsyncCallback,System.Object)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.virtual"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleDelegate.EndInvoke(System.IAsyncResult)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.virtual"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleEnum.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleExtensions.Extend``1(``0)"
       },
       "primaryKind": "symbol.member.method",
@@ -1953,88 +1450,10 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.#ctor(TaxonomyFixtures.SampleRecord)"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Deconstruct(System.String@)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(System.Object)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(TaxonomyFixtures.SampleRecord)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial",
-        "trait.virtual"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Execute"
       },
       "primaryKind": "symbol.member.method",
       "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.GetHashCode"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.PrintMembers(System.Text.StringBuilder)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial",
-        "trait.virtual"
-      ],
       "origin": "origin.source",
       "supportStatus": "support.supported"
     },
@@ -2055,187 +1474,7 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.ToString"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Equality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "primaryKind": "symbol.member.operator",
-      "traits": [
-        "trait.partial",
-        "trait.static"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.op_Inequality(TaxonomyFixtures.SampleRecord,TaxonomyFixtures.SampleRecord)"
-      },
-      "primaryKind": "symbol.member.operator",
-      "traits": [
-        "trait.partial",
-        "trait.static"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.{Clone}$"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [
-        "trait.partial",
-        "trait.virtual"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.#ctor(System.Int32)"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Deconstruct(System.Int32@)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(System.Object)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.GetHashCode"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.ToString"
-      },
-      "primaryKind": "symbol.member.method",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Equality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "primaryKind": "symbol.member.operator",
-      "traits": [
-        "trait.static"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.op_Inequality(TaxonomyFixtures.SampleRecordStruct,TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "primaryKind": "symbol.member.operator",
-      "traits": [
-        "trait.static"
-      ],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRefStruct`1.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleStruct.#ctor"
-      },
-      "primaryKind": "symbol.member.constructor",
-      "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SealedBase.#ctor"
       },
       "primaryKind": "symbol.member.constructor",
       "traits": [],
@@ -2250,19 +1489,6 @@
       },
       "primaryKind": "symbol.member.property",
       "traits": [],
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
-    },
-    {
-      "recordType": "TargetClassification",
-      "symbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.EqualityContract"
-      },
-      "primaryKind": "symbol.member.property",
-      "traits": [
-        "trait.virtual"
-      ],
       "origin": "origin.source",
       "supportStatus": "support.supported"
     },
@@ -2496,6 +1722,18 @@
       ],
       "origin": "origin.source",
       "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.unknown",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
     },
     {
       "recordType": "UnresolvedClassification",
