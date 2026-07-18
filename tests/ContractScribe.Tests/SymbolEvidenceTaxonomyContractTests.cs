@@ -75,6 +75,34 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void CanonicalRecords_RespectRegisteredComponentAndRelationDomains()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var kindsByDocumentationId = EnumerateSymbols(CreateFixtureCompilation().Assembly.GlobalNamespace)
+            .Select(symbol => (Id: symbol.GetDocumentationCommentId(), Kind: ClassifyPrimaryKind(symbol)))
+            .Where(value => value.Id is not null && value.Kind is not null)
+            .ToDictionary(value => value.Id!, value => value.Kind!, StringComparer.Ordinal);
+        foreach (var record in manifest.RootElement.GetProperty("classificationRecords").EnumerateArray())
+        {
+            if (record.GetProperty("recordType").GetString() == "ComponentClassification")
+            {
+                var parent = record.GetProperty("parentSymbolRef").GetProperty("documentationCommentId").GetString()!;
+                var kind = record.GetProperty("componentKind").GetString()!;
+                Assert.Contains(kindsByDocumentationId[parent], RegistryEntries.Value[kind].GetProperty("parentKinds").EnumerateArray().Select(value => value.GetString()));
+            }
+            if (record.GetProperty("recordType").GetString() == "RelationObservation")
+            {
+                var relation = RegistryEntries.Value[record.GetProperty("relationKind").GetString()!];
+                var source = record.GetProperty("sourceSymbolRef").GetProperty("documentationCommentId").GetString()!;
+                var target = record.GetProperty("targetSymbolRef").GetProperty("documentationCommentId").GetString()!;
+                Assert.Contains(kindsByDocumentationId.GetValueOrDefault(source, "symbol.member.method"), relation.GetProperty("sourceDomain").EnumerateArray().Select(value => value.GetString()));
+                Assert.Contains(kindsByDocumentationId[target], relation.GetProperty("targetDomain").EnumerateArray().Select(value => value.GetString()));
+            }
+        }
+    }
+
+    [Fact]
     public void Schema_ValidatesABoundedEvidenceBundle()
     {
         using var valid = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.not-provided\",\"items\":[]}");
@@ -313,7 +341,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (type.IsRecord)
                 foreach (var positional in type.GetMembers().OfType<IPropertySymbol>().Where(property => property.IsImplicitlyDeclared).Select((property, ordinal) => (property, ordinal)))
                     yield return Synthesized("component.synthesized.record-positional-property", parentId, $"synthesized/record-positional-property/{positional.ordinal}");
-            foreach (var constructor in type.InstanceConstructors.Where(constructor => constructor.IsImplicitlyDeclared))
+            foreach (var constructor in type.InstanceConstructors.Where(constructor => constructor.IsImplicitlyDeclared && (type.TypeKind is TypeKind.Class or TypeKind.Struct)))
                 yield return Synthesized(type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type)
                     ? "component.synthesized.record-copy-constructor" : "component.synthesized.implicit-constructor", parentId,
                     type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type) ? "synthesized/record-copy-constructor" : "synthesized/implicit-constructor");
@@ -367,7 +395,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>())
         {
-            foreach (var method in type.GetMembers().OfType<IMethodSymbol>())
+            foreach (var method in type.GetMembers().OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared))
             {
                 if (method.OverriddenMethod is { } overridden && method.GetDocumentationCommentId() is { } source && overridden.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
                 foreach (var implemented in method.ExplicitInterfaceImplementations)
@@ -377,7 +405,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 foreach (var inherited in type.Interfaces.SelectMany(@interface => @interface.GetMembers()).OfType<IMethodSymbol>())
                     if (type.GetDocumentationCommentId() is { } source && inherited.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
             foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).OfType<IMethodSymbol>())
-                if (type.FindImplementationForInterfaceMember(interfaceMember) is IMethodSymbol implementation && implementation.ExplicitInterfaceImplementations.Length == 0 && implementation.GetDocumentationCommentId() is { } source && interfaceMember.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+                if (interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is IMethodSymbol implementation && !implementation.IsImplicitlyDeclared && implementation.ExplicitInterfaceImplementations.Length == 0 && implementation.GetDocumentationCommentId() is { } source && interfaceMember.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
 

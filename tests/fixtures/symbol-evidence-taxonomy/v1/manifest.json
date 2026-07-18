@@ -455,30 +455,6 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
-      },
-      "componentKind": "component.synthesized.implicit-constructor",
-      "identity": "synthesized/implicit-constructor",
-      "origin": "origin.compiler-synthesized",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.synthesized-non-target"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "T:TaxonomyFixtures.SampleEnum"
-      },
-      "componentKind": "component.synthesized.implicit-constructor",
-      "identity": "synthesized/implicit-constructor",
-      "origin": "origin.compiler-synthesized",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.synthesized-non-target"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
       },
       "componentKind": "component.synthesized.record-copy-constructor",
@@ -564,107 +540,11 @@
       "relationKind": "relation.implicit-interface-implementation",
       "sourceSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Delegate.Clone"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.ICloneable.Clone"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Delegate.GetObjectData(System.Runtime.Serialization.SerializationInfo,System.Runtime.Serialization.StreamingContext)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Runtime.Serialization.ISerializable.GetObjectData(System.Runtime.Serialization.SerializationInfo,System.Runtime.Serialization.StreamingContext)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Enum.CompareTo(System.Object)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IComparable.CompareTo(System.Object)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Enum.GetTypeCode"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IConvertible.GetTypeCode"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Enum.ToString(System.IFormatProvider)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IConvertible.ToString(System.IFormatProvider)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Enum.ToString(System.String,System.IFormatProvider)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IFormattable.ToString(System.String,System.IFormatProvider)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(TaxonomyFixtures.SampleRecord)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IEquatable{TaxonomyFixtures.SampleRecord}.Equals(TaxonomyFixtures.SampleRecord)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.StaticMember"
       },
       "targetSymbolRef": {
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.implicit-interface-implementation",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(TaxonomyFixtures.SampleRecordStruct)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.IEquatable{TaxonomyFixtures.SampleRecordStruct}.Equals(TaxonomyFixtures.SampleRecordStruct)"
       }
     },
     {
@@ -689,78 +569,6 @@
       "targetSymbolRef": {
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(System.Object)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Object.Equals(System.Object)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.GetHashCode"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Object.GetHashCode"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.ToString"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.Object.ToString"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.Equals(System.Object)"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.ValueType.Equals(System.Object)"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.GetHashCode"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.ValueType.GetHashCode"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.ToString"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:System.ValueType.ToString"
       }
     },
     {
@@ -1251,6 +1059,750 @@
       ],
       "origin": "origin.source",
       "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
     },
     {
       "recordType": "UnresolvedClassification",

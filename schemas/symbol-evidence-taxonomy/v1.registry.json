@@ -809,17 +809,13 @@
           "symbol.member.method",
           "symbol.member.property",
           "symbol.member.indexer",
-          "symbol.member.event",
-          "symbol.member.operator",
-          "symbol.member.conversion"
+          "symbol.member.event"
         ],
         "targetDomain": [
           "symbol.member.method",
           "symbol.member.property",
           "symbol.member.indexer",
-          "symbol.member.event",
-          "symbol.member.operator",
-          "symbol.member.conversion"
+          "symbol.member.event"
         ]
       },
       {
