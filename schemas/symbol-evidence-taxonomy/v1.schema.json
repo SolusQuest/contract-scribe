@@ -8,7 +8,7 @@
   "properties": {
     "evidenceBundleVersion": { "const": 1 },
     "availabilityStatus": { "enum": ["evidence.bundle.complete", "evidence.bundle.partial", "evidence.bundle.unavailable"] },
-    "omissionReason": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$" },
+    "omissionReason": { "enum": ["evidence.omission.access-not-permitted", "evidence.omission.source-unavailable", "evidence.omission.binary-content", "evidence.omission.budget-exhausted", "evidence.omission.not-provided"] },
     "items": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/item" } }
   },
   "$defs": {
@@ -18,7 +18,7 @@
       "properties": {
         "evidenceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", "maxLength": 128 },
         "subject": { "$ref": "#/$defs/symbolRef" },
-        "kind": { "type": "string" }, "relation": { "type": "string" },
+        "kind": { "enum": ["evidence.source.declaration", "evidence.source.implementation", "evidence.source.xml-documentation", "evidence.source.attribute", "evidence.test", "evidence.repository-documentation", "evidence.public-contract"] }, "relation": { "enum": ["evidence.declares", "evidence.documents", "evidence.tests", "evidence.references", "evidence.constrains"] },
         "excerpt": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "originalUtf8ByteCount": { "type": "integer", "minimum": 0 }, "includedUtf8ByteCount": { "type": "integer", "minimum": 0 }, "omittedUtf8ByteCount": { "type": "integer", "minimum": 0 }, "isTruncated": { "type": "boolean" },
         "locator": { "$ref": "#/$defs/locator" }
