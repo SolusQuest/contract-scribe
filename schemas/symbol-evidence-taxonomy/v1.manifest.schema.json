@@ -14,6 +14,7 @@
     "sourceProvenance",
     "contextCollisionVectors",
     "targetScenarios",
+    "mixedComponentScenarios",
     "classificationRecords",
     "unknownComponentScenarios",
     "unresolvedScenarios",
@@ -156,6 +157,44 @@
               "symbol.member.enum-member",
               "symbol.member.event"
             ]
+          }
+        }
+      }
+    },
+    "mixedComponentScenarios": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId",
+          "parentDocumentationCommentId",
+          "componentKind",
+          "identity"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          },
+          "parentDocumentationCommentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "componentKind": {
+            "enum": [
+              "component.value",
+              "component.accessor.get",
+              "component.accessor.set",
+              "component.backing-field"
+            ]
+          },
+          "identity": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

@@ -643,6 +643,101 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorClass.Value"
       },
       "componentKind": "component.accessor.get",
@@ -974,6 +1069,18 @@
       "origin": "origin.source",
       "supportStatus": "support.unsupported",
       "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedComponentHost"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
     },
     {
       "recordType": "ComponentClassification",
@@ -2075,6 +2182,17 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorClass.Value"
       },
       "primaryKind": "symbol.member.property",
@@ -2401,6 +2519,17 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedComponentHost"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
       },
       "primaryKind": "symbol.type.class",
@@ -2663,6 +2792,18 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.UnknownPartial"
+      },
+      "primaryKind": "symbol.unknown",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.symbol-kind"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.UnknownPrimary"
       },
       "primaryKind": "symbol.unknown",
@@ -2907,6 +3048,38 @@
       "kindAvailable": true,
       "partialDeclaration": true,
       "candidatePrimaryKind": "symbol.type.class"
+    },
+    {
+      "scenarioId": "unknown-kind-over-partial",
+      "documentationCommentId": "T:TaxonomyFixtures.UnknownPartial",
+      "kindAvailable": false,
+      "partialDeclaration": true
+    }
+  ],
+  "mixedComponentScenarios": [
+    {
+      "scenarioId": "mixed-property-value",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.value",
+      "identity": "value"
+    },
+    {
+      "scenarioId": "mixed-property-get",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get"
+    },
+    {
+      "scenarioId": "mixed-property-set",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set"
+    },
+    {
+      "scenarioId": "mixed-property-backing",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.backing-field",
+      "identity": "backing-field"
     }
   ]
 }

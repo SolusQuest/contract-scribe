@@ -190,3 +190,8 @@ public class MemberShapes
 
     public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
 }
+
+public class MixedComponentHost
+{
+    public int Value { get; set; }
+}

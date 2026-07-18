@@ -489,7 +489,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             var kindAvailable = scenario.GetProperty("kindAvailable").GetBoolean();
             var partialDeclaration = scenario.GetProperty("partialDeclaration").GetBoolean();
-            if (kindAvailable != partialDeclaration) throw new InvalidOperationException("A target scenario must represent an unavailable kind or a partial declaration.");
+            if (kindAvailable && !partialDeclaration) throw new InvalidOperationException("A target scenario must represent an unavailable kind or a partial declaration.");
             records.Add(new Dictionary<string, object>
             {
                 ["recordType"] = "TargetClassification",
@@ -513,6 +513,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["supportStatus"] = component.SupportStatus
             });
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
+        }
+        foreach (var scenario in manifest.GetProperty("mixedComponentScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
+        {
+            records.Add(new Dictionary<string, object>
+            {
+                ["recordType"] = "ComponentClassification",
+                ["parentSymbolRef"] = SymbolRef(context, scenario.GetProperty("parentDocumentationCommentId").GetString()!),
+                ["componentKind"] = scenario.GetProperty("componentKind").GetString()!,
+                ["identity"] = scenario.GetProperty("identity").GetString()!,
+                ["origin"] = "origin.mixed",
+                ["supportStatus"] = "support.ambiguous",
+                ["skipReason"] = "skip.ambiguous.mixed-origin"
+            });
         }
         foreach (var parentGroup in manifest.GetProperty("unknownComponentScenarios").EnumerateArray().GroupBy(scenario => scenario.GetProperty("parentDocumentationCommentId").GetString()!, StringComparer.Ordinal))
         {
