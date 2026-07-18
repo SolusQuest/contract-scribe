@@ -272,7 +272,8 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unavailable-context"
+          "support.unavailable-context",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.constructor",
@@ -296,7 +297,8 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unavailable-context"
+          "support.unavailable-context",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.type.class",
@@ -319,7 +321,8 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unavailable-context"
+          "support.unavailable-context",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.method",
@@ -341,7 +344,8 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unavailable-context"
+          "support.unavailable-context",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.property",
@@ -360,7 +364,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.property",
@@ -380,7 +385,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.property",
@@ -400,7 +406,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.property",
@@ -420,7 +427,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.event"
@@ -439,7 +447,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.event"
@@ -458,7 +467,8 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.not-applicable"
+          "support.not-applicable",
+          "support.ambiguous"
         ],
         "parentKinds": [
           "symbol.member.property",
@@ -1118,11 +1128,13 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification"
+          "TargetClassification",
+          "ComponentClassification"
         ],
         "id": "skip.ambiguous.mixed-origin",
         "recordTypes": [
-          "TargetClassification"
+          "TargetClassification",
+          "ComponentClassification"
         ],
         "precedence": 6,
         "allowedSupportStatuses": [

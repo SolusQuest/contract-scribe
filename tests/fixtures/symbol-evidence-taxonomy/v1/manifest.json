@@ -275,7 +275,7 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.SourceMember"
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.SourceMember"
       },
       "componentKind": "component.return",
       "identity": "return",
@@ -286,7 +286,7 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.ToolMember"
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.ToolMember"
       },
       "componentKind": "component.return",
       "identity": "return",
@@ -788,13 +788,37 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget"
+        "documentationCommentId": "T:TaxonomyFixtures.MemberShapes"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/1",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
       },
       "componentKind": "component.synthesized.implicit-constructor",
       "identity": "synthesized/implicit-constructor",
       "origin": "origin.compiler-synthesized",
       "supportStatus": "support.not-applicable",
       "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
     },
     {
       "recordType": "ComponentClassification",
@@ -984,6 +1008,18 @@
       "origin": "origin.compiler-synthesized",
       "supportStatus": "support.not-applicable",
       "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleStruct"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/0",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
     },
     {
       "recordType": "ComponentClassification",
@@ -1571,7 +1607,7 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.SourceMember"
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.SourceMember"
       },
       "primaryKind": "symbol.member.method",
       "traits": [],
@@ -1582,7 +1618,7 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget.ToolMember"
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.ToolMember"
       },
       "primaryKind": "symbol.member.method",
       "traits": [],
@@ -2012,10 +2048,11 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget"
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
       },
       "primaryKind": "symbol.type.class",
       "traits": [
+        "trait.generic",
         "trait.partial"
       ],
       "origin": "origin.mixed",
@@ -2382,11 +2419,34 @@
   ],
   "unknownComponentScenarios": [
     {
-      "scenarioId": "unknown-member-shape",
+      "scenarioId": "unknown-member-repository",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.MemberShapes",
+      "candidateLocator": {
+        "repository": {
+          "path": "fixtures/unknown.cs",
+          "span": {
+            "start": 4,
+            "end": 6
+          }
+        }
+      }
+    },
+    {
+      "scenarioId": "unknown-member-synthetic",
       "parentDocumentationCommentId": "T:TaxonomyFixtures.MemberShapes",
       "candidateLocator": {
         "synthetic": {
           "fixtureId": "unknown-member-shape"
+        }
+      }
+    },
+    {
+      "scenarioId": "unknown-struct-generated",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.SampleStruct",
+      "candidateLocator": {
+        "generatedSource": {
+          "generatorId": "fixture.generator",
+          "hintNameId": "unknown-struct.g.cs"
         }
       }
     }

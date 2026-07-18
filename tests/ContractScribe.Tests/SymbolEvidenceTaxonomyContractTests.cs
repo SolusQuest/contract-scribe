@@ -379,7 +379,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation, JsonElement manifest)
     {
         var sourceProvenance = manifest.GetProperty("sourceProvenance").EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
-        ComponentRecord SourceComponent(string kind, ISymbol parent, string identity, string supportStatus = "support.supported", string? skipReason = null) => new(kind, parent.GetDocumentationCommentId()!, identity, ClassifySourceOrigin(parent, sourceProvenance), supportStatus, skipReason);
+        ComponentRecord SourceComponent(string kind, ISymbol parent, string identity, string supportStatus = "support.supported", string? skipReason = null)
+        {
+            var origin = ClassifySourceOrigin(parent, sourceProvenance);
+            return origin == "origin.mixed" && supportStatus == "support.supported"
+                ? new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, "support.ambiguous", "skip.ambiguous.mixed-origin")
+                : new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, supportStatus, skipReason);
+        }
         foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method)))
         {
             foreach (var parameter in method.Parameters) yield return SourceComponent("component.parameter", method, $"parameter/{parameter.Ordinal}");
@@ -466,18 +472,21 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             });
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
-        foreach (var scenario in manifest.GetProperty("unknownComponentScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal).Select((scenario, ordinal) => (scenario, ordinal)))
+        foreach (var parentGroup in manifest.GetProperty("unknownComponentScenarios").EnumerateArray().GroupBy(scenario => scenario.GetProperty("parentDocumentationCommentId").GetString()!, StringComparer.Ordinal))
         {
-            records.Add(new Dictionary<string, object>
+            foreach (var scenario in parentGroup.OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance).Select((scenario, ordinal) => (scenario, ordinal)))
             {
-                ["recordType"] = "ComponentClassification",
-                ["parentSymbolRef"] = SymbolRef(context, scenario.scenario.GetProperty("parentDocumentationCommentId").GetString()!),
-                ["componentKind"] = "component.unknown",
-                ["identity"] = $"unknown/{scenario.ordinal}",
-                ["origin"] = "origin.source",
-                ["supportStatus"] = "support.unsupported",
-                ["skipReason"] = "skip.unsupported.component-kind"
-            });
+                records.Add(new Dictionary<string, object>
+                {
+                    ["recordType"] = "ComponentClassification",
+                    ["parentSymbolRef"] = SymbolRef(context, scenario.scenario.GetProperty("parentDocumentationCommentId").GetString()!),
+                    ["componentKind"] = "component.unknown",
+                    ["identity"] = $"unknown/{scenario.ordinal}",
+                    ["origin"] = "origin.source",
+                    ["supportStatus"] = "support.unsupported",
+                    ["skipReason"] = "skip.unsupported.component-kind"
+                });
+            }
         }
         foreach (var relation in ClassifyRelationRecords(compilation, context).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
         foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance))
@@ -762,7 +771,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
         if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
         if (origin == "origin.unknown" && (status != "support.unavailable-context" || skip.GetString() is not ("skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
-        if (origin == "origin.mixed" && (status != "support.ambiguous" || skip.GetString() != "skip.ambiguous.mixed-origin")) return false;
+        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() == "skip.ambiguous.mixed-origin") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
         return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
     }
