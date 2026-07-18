@@ -229,14 +229,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         var root = FindRepositoryRoot();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var first = SerializeCanonicalRecords(ClassifyCanonicalRecords(CreateFixtureCompilation(), manifest.RootElement.GetProperty("compilationContextRef").GetString()!));
-        var second = SerializeCanonicalRecords(ClassifyCanonicalRecords(CreateFixtureCompilation(), manifest.RootElement.GetProperty("compilationContextRef").GetString()!));
+        var first = SerializeCanonicalRecords(ClassifyCanonicalRecords(CreateFixtureCompilation(), manifest.RootElement));
+        var second = SerializeCanonicalRecords(ClassifyCanonicalRecords(CreateFixtureCompilation(), manifest.RootElement));
         Assert.Equal(first, second);
-        using var actual = JsonDocument.Parse(first);
-        foreach (var expected in manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().Where(record => record.GetProperty("recordType").GetString() is "TargetClassification" or "ComponentClassification"))
-        {
-            Assert.True(actual.RootElement.EnumerateArray().Any(record => JsonElement.DeepEquals(expected, record)), expected.GetRawText());
-        }
+        var expected = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray()
+            .Select(record => JsonSerializer.Deserialize<Dictionary<string, object>>(record.GetRawText())!)
+            .OrderBy(record => record["recordType"].ToString(), StringComparer.Ordinal).ThenBy(record => JsonSerializer.Serialize(record), StringComparer.Ordinal).ToArray();
+        Assert.Equal(SerializeCanonicalRecords(expected), first);
     }
 
     [Fact]
@@ -377,8 +376,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
     }
 
-    private static IReadOnlyList<Dictionary<string, object>> ClassifyCanonicalRecords(CSharpCompilation compilation, string context)
+    private static IReadOnlyList<Dictionary<string, object>> ClassifyCanonicalRecords(CSharpCompilation compilation, JsonElement manifest)
     {
+        var context = manifest.GetProperty("compilationContextRef").GetString()!;
         var records = new List<Dictionary<string, object>>();
         foreach (var target in ClassifyTargets(compilation))
         {
@@ -407,6 +407,10 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
         foreach (var relation in ClassifyRelationRecords(compilation, context)) records.Add(relation);
+        foreach (var unresolved in manifest.GetProperty("classificationRecords").EnumerateArray().Where(record => record.GetProperty("recordType").GetString() == "UnresolvedClassification"))
+        {
+            records.Add(JsonSerializer.Deserialize<Dictionary<string, object>>(unresolved.GetRawText())!);
+        }
         return records.OrderBy(record => record["recordType"].ToString(), StringComparer.Ordinal).ThenBy(record => JsonSerializer.Serialize(record), StringComparer.Ordinal).ToArray();
     }
 
