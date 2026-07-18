@@ -60,6 +60,11 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var sources = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(source => source.GetString()!).OrderBy(source => source, StringComparer.Ordinal);
         var provenanceSources = manifest.RootElement.GetProperty("sourceProvenance").EnumerateObject().Select(property => property.Name).OrderBy(source => source, StringComparer.Ordinal);
         Assert.Equal(sources, provenanceSources);
+        var collisions = manifest.RootElement.GetProperty("contextCollisionVectors").EnumerateArray().OrderBy(vector => vector.GetProperty("compilationContextRef").GetString(), StringComparer.Ordinal).ThenBy(vector => vector.GetProperty("documentationCommentId").GetString(), StringComparer.Ordinal).ToArray();
+        Assert.Equal(new[] { "synthetic.v1", "synthetic.v2" }, collisions.Select(vector => vector.GetProperty("compilationContextRef").GetString()));
+        Assert.Equal("T:TaxonomyFixtures.IContract", collisions[0].GetProperty("documentationCommentId").GetString());
+        Assert.Equal(collisions[0].GetProperty("documentationCommentId").GetString(), collisions[1].GetProperty("documentationCommentId").GetString());
+        Assert.NotEqual(collisions[0].GetRawText(), collisions[1].GetRawText());
         var records = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().ToArray();
         Assert.Equal(records.Length, records.Select(record => record.GetRawText()).Distinct(StringComparer.Ordinal).Count());
         foreach (var record in records)
@@ -77,9 +82,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         using var knownUnsupported = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Example\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.unsupported\",\"skipReason\":\"skip.unsupported.symbol-kind\"}");
         using var unknownSupported = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Example\"},\"primaryKind\":\"symbol.unknown\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.supported\"}");
         using var unknownOrigin = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.v1\",\"origin\":\"origin.unknown\",\"supportStatus\":\"support.unavailable-context\",\"skipReason\":\"skip.unavailable.documentation-comment-id\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"x\"}}}");
+        using var unknownTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Unknown\"},\"primaryKind\":\"symbol.unknown\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.unsupported\",\"skipReason\":\"skip.unsupported.symbol-kind\"}");
+        using var partialTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Partial\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.ambiguous\",\"skipReason\":\"skip.ambiguous.partial-declaration\"}");
         Assert.False(IsValidClassificationRecord(knownUnsupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownSupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownOrigin.RootElement));
+        Assert.True(IsValidClassificationRecord(unknownTarget.RootElement));
+        Assert.True(IsValidClassificationRecord(partialTarget.RootElement));
     }
 
     [Fact]

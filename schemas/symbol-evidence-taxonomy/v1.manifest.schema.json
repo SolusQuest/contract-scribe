@@ -12,6 +12,7 @@
     "compilationProfile",
     "sources",
     "sourceProvenance",
+    "contextCollisionVectors",
     "classificationRecords",
     "unknownComponentScenarios",
     "unresolvedScenarios",
@@ -98,6 +99,14 @@
           "origin.source-generator",
           "origin.tool-generated"
         ]
+      }
+    },
+    "contextCollisionVectors": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/symbolRef"
       }
     },
     "unresolvedScenarios": {

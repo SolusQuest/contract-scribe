@@ -2714,5 +2714,15 @@
     "ToolGeneratedSymbols.cs": "origin.tool-generated",
     "MixedTarget.Source.cs": "origin.source",
     "MixedTarget.Tool.cs": "origin.tool-generated"
-  }
+  },
+  "contextCollisionVectors": [
+    {
+      "compilationContextRef": "synthetic.v2",
+      "documentationCommentId": "T:TaxonomyFixtures.IContract"
+    },
+    {
+      "compilationContextRef": "synthetic.v1",
+      "documentationCommentId": "T:TaxonomyFixtures.IContract"
+    }
+  ]
 }
