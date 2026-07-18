@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/symbol-evidence-taxonomy/v1.schema.json",
+  "title": "ContractScribe Symbol Evidence Bundle V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidenceBundleVersion", "availabilityStatus", "items"],
+  "properties": {
+    "evidenceBundleVersion": { "const": 1 },
+    "availabilityStatus": { "enum": ["evidence.bundle.complete", "evidence.bundle.partial", "evidence.bundle.unavailable"] },
+    "omissionReason": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$" },
+    "items": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/item" } }
+  },
+  "$defs": {
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidenceId", "subject", "kind", "relation", "excerpt", "sha256", "originalUtf8ByteCount", "includedUtf8ByteCount", "omittedUtf8ByteCount", "isTruncated", "locator"],
+      "properties": {
+        "evidenceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", "maxLength": 128 },
+        "subject": { "$ref": "#/$defs/symbolRef" },
+        "kind": { "type": "string" }, "relation": { "type": "string" },
+        "excerpt": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "originalUtf8ByteCount": { "type": "integer", "minimum": 0 }, "includedUtf8ByteCount": { "type": "integer", "minimum": 0 }, "omittedUtf8ByteCount": { "type": "integer", "minimum": 0 }, "isTruncated": { "type": "boolean" },
+        "locator": { "$ref": "#/$defs/locator" }
+      }
+    },
+    "symbolRef": { "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"], "properties": { "compilationContextRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "documentationCommentId": { "type": "string", "minLength": 1 } } },
+    "locator": { "oneOf": [ { "required": ["repository"], "properties": { "repository": { "type": "object" } } }, { "required": ["metadata"], "properties": { "metadata": { "type": "object" } } }, { "required": ["synthetic"], "properties": { "synthetic": { "type": "object" } } } ] }
+  }
+}

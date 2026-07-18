@@ -1,0 +1,18 @@
+{
+  "registryVersion": 1,
+  "idPattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+  "sections": {
+    "primaryKinds": ["symbol.type.class", "symbol.type.struct", "symbol.type.interface", "symbol.type.enum", "symbol.type.delegate", "symbol.member.constructor", "symbol.member.method", "symbol.member.operator", "symbol.member.conversion", "symbol.member.property", "symbol.member.indexer", "symbol.member.field", "symbol.member.enum-member", "symbol.member.event", "symbol.unknown"],
+    "componentKinds": ["component.parameter", "component.type-parameter", "component.return", "component.value", "component.accessor.get", "component.accessor.set", "component.accessor.init", "component.accessor.add", "component.accessor.remove", "component.backing-field", "component.synthesized.record-positional-property", "component.synthesized.implicit-constructor", "component.synthesized.record-copy-constructor", "component.synthesized.delegate-invoke", "component.synthesized.delegate-begin-invoke", "component.synthesized.delegate-end-invoke", "component.unknown"],
+    "traits": ["trait.generic", "trait.record-class", "trait.record-struct", "trait.ref-struct", "trait.static", "trait.abstract", "trait.virtual", "trait.sealed", "trait.extension", "trait.async", "trait.iterator", "trait.required", "trait.init-only", "trait.partial"],
+    "relationKinds": ["relation.overrides", "relation.implicit-interface-implementation", "relation.explicit-interface-implementation", "relation.inherited-interface-member"],
+    "origins": ["origin.source", "origin.source-generator", "origin.tool-generated", "origin.compiler-synthesized", "origin.mixed", "origin.unknown"],
+    "supportStatuses": ["support.supported", "support.unsupported", "support.ambiguous", "support.not-applicable", "support.unavailable-context"],
+    "skipReasons": ["skip.unsupported.symbol-kind", "skip.unsupported.component-kind", "skip.ambiguous.partial-declaration", "skip.ambiguous.mixed-origin", "skip.not-applicable.synthesized-non-target", "skip.not-applicable.non-documentation-component", "skip.unavailable.documentation-comment-id", "skip.unavailable.generated-provenance", "skip.unavailable.semantic-context"],
+    "evidenceKinds": ["evidence.source.declaration", "evidence.source.implementation", "evidence.source.xml-documentation", "evidence.source.attribute", "evidence.test", "evidence.repository-documentation", "evidence.public-contract"],
+    "evidenceRelations": ["evidence.declares", "evidence.documents", "evidence.tests", "evidence.references", "evidence.constrains"],
+    "locatorKinds": ["evidence.locator.repository", "evidence.locator.metadata", "evidence.locator.synthetic"],
+    "bundleAvailabilityStatuses": ["evidence.bundle.complete", "evidence.bundle.partial", "evidence.bundle.unavailable"],
+    "bundleOmissionReasons": ["evidence.omission.access-not-permitted", "evidence.omission.source-unavailable", "evidence.omission.binary-content", "evidence.omission.budget-exhausted", "evidence.omission.not-provided"]
+  }
+}

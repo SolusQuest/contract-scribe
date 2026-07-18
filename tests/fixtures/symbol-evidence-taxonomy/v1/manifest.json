@@ -1,0 +1,8 @@
+{
+  "conformanceManifestVersion": 1,
+  "registryVersion": 1,
+  "evidenceBundleVersion": 1,
+  "compilationContextRef": "synthetic.v1",
+  "sources": ["SampleSymbols.cs"],
+  "expectedDocumentationCommentIds": ["T:TaxonomyFixtures.IContract", "M:TaxonomyFixtures.IContract.Execute", "T:TaxonomyFixtures.SampleRecord", "P:TaxonomyFixtures.SampleRecord.Name", "M:TaxonomyFixtures.SampleRecord.Execute", "T:TaxonomyFixtures.Base", "M:TaxonomyFixtures.Base.ProtectedMember", "T:TaxonomyFixtures.SampleDelegate"]
+}
