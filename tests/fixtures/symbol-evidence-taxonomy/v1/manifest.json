@@ -2233,6 +2233,39 @@
           "fixtureId": "missing-doc-id"
         }
       }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.unknown",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.generated-provenance",
+      "candidateLocator": {
+        "generatedSource": {
+          "generatorId": "fixture.generator",
+          "hintNameId": "unavailable-provenance.g.cs",
+          "span": {
+            "start": 2,
+            "end": 4
+          }
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.unknown",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.semantic-context",
+      "candidateLocator": {
+        "repository": {
+          "path": "./fixtures//unavailable.cs",
+          "span": {
+            "start": 1,
+            "end": 3
+          }
+        }
+      }
     }
   ],
   "absenceVectors": [
@@ -2302,12 +2335,47 @@
   ],
   "unresolvedScenarios": [
     {
-      "scenarioId": "missing-doc-id",
-      "origin": "origin.source",
-      "skipReason": "skip.unavailable.documentation-comment-id",
+      "scenarioId": "synthetic-missing-documentation-id",
+      "documentationCommentIdAvailable": false,
+      "generatedProvenanceAvailable": true,
+      "semanticContextAvailable": true,
+      "observedOrigin": "origin.source",
       "candidateLocator": {
         "synthetic": {
           "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "scenarioId": "generated-provenance",
+      "documentationCommentIdAvailable": true,
+      "generatedProvenanceAvailable": false,
+      "semanticContextAvailable": true,
+      "observedOrigin": "origin.source-generator",
+      "candidateLocator": {
+        "generatedSource": {
+          "generatorId": "fixture.generator",
+          "hintNameId": "unavailable-provenance.g.cs",
+          "span": {
+            "start": 2,
+            "end": 4
+          }
+        }
+      }
+    },
+    {
+      "scenarioId": "repository-semantic-context",
+      "documentationCommentIdAvailable": true,
+      "generatedProvenanceAvailable": true,
+      "semanticContextAvailable": false,
+      "observedOrigin": "origin.source",
+      "candidateLocator": {
+        "repository": {
+          "path": "./fixtures//unavailable.cs",
+          "span": {
+            "start": 1,
+            "end": 3
+          }
         }
       }
     }

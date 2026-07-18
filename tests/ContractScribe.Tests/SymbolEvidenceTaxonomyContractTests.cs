@@ -68,6 +68,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
         var scenarioIds = manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()!).ToArray();
         Assert.Equal(scenarioIds.Length, scenarioIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(new[] { "repository-semantic-context", "generated-provenance", "synthetic-missing-documentation-id" }, manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance).Select(scenario => scenario.GetProperty("scenarioId").GetString()));
     }
 
     [Fact]
@@ -477,15 +478,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             });
         }
         foreach (var relation in ClassifyRelationRecords(compilation, context).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
-        foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
+        foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance))
         {
+            var skipReason = !scenario.GetProperty("documentationCommentIdAvailable").GetBoolean() ? "skip.unavailable.documentation-comment-id"
+                : !scenario.GetProperty("generatedProvenanceAvailable").GetBoolean() ? "skip.unavailable.generated-provenance"
+                : !scenario.GetProperty("semanticContextAvailable").GetBoolean() ? "skip.unavailable.semantic-context"
+                : throw new InvalidOperationException("An unresolved scenario must make at least one identity or context input unavailable.");
             records.Add(new Dictionary<string, object>
             {
                 ["recordType"] = "UnresolvedClassification",
                 ["compilationContextRef"] = context,
-                ["origin"] = scenario.GetProperty("origin").GetString()!,
+                ["origin"] = skipReason == "skip.unavailable.documentation-comment-id" ? scenario.GetProperty("observedOrigin").GetString()! : "origin.unknown",
                 ["supportStatus"] = "support.unavailable-context",
-                ["skipReason"] = scenario.GetProperty("skipReason").GetString()!,
+                ["skipReason"] = skipReason,
                 ["candidateLocator"] = JsonSerializer.Deserialize<Dictionary<string, object>>(scenario.GetProperty("candidateLocator").GetRawText())!
             });
         }
@@ -542,6 +547,53 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         ["compilationContextRef"] = context,
         ["documentationCommentId"] = documentationCommentId
     };
+
+    private sealed class CandidateLocatorComparer : IComparer<JsonElement>
+    {
+        public static readonly CandidateLocatorComparer Instance = new();
+
+        public int Compare(JsonElement left, JsonElement right)
+        {
+            var leftKind = CandidateLocatorKind(left);
+            var rightKind = CandidateLocatorKind(right);
+            var kindComparison = leftKind.CompareTo(rightKind);
+            if (kindComparison != 0) return kindComparison;
+            return leftKind switch
+            {
+                0 => CompareRepositoryLocators(left.GetProperty("repository"), right.GetProperty("repository")),
+                1 => CompareGeneratedLocators(left.GetProperty("generatedSource"), right.GetProperty("generatedSource")),
+                _ => string.CompareOrdinal(left.GetProperty("synthetic").GetProperty("fixtureId").GetString(), right.GetProperty("synthetic").GetProperty("fixtureId").GetString())
+            };
+        }
+
+        private static int CandidateLocatorKind(JsonElement locator) => locator.TryGetProperty("repository", out _) ? 0 : locator.TryGetProperty("generatedSource", out _) ? 1 : 2;
+
+        private static int CompareRepositoryLocators(JsonElement left, JsonElement right)
+        {
+            var pathComparison = string.CompareOrdinal(NormalizeRepositoryPath(left.GetProperty("path").GetString()!), NormalizeRepositoryPath(right.GetProperty("path").GetString()!));
+            return pathComparison != 0 ? pathComparison : CompareSpans(left, right);
+        }
+
+        private static int CompareGeneratedLocators(JsonElement left, JsonElement right)
+        {
+            var generatorComparison = string.CompareOrdinal(left.GetProperty("generatorId").GetString(), right.GetProperty("generatorId").GetString());
+            if (generatorComparison != 0) return generatorComparison;
+            var hintComparison = string.CompareOrdinal(left.GetProperty("hintNameId").GetString(), right.GetProperty("hintNameId").GetString());
+            return hintComparison != 0 ? hintComparison : CompareSpans(left, right);
+        }
+
+        private static int CompareSpans(JsonElement left, JsonElement right)
+        {
+            var hasLeft = left.TryGetProperty("span", out var leftSpan);
+            var hasRight = right.TryGetProperty("span", out var rightSpan);
+            if (hasLeft != hasRight) return hasLeft ? 1 : -1;
+            if (!hasLeft) return 0;
+            var startComparison = leftSpan.GetProperty("start").GetInt32().CompareTo(rightSpan.GetProperty("start").GetInt32());
+            return startComparison != 0 ? startComparison : leftSpan.GetProperty("end").GetInt32().CompareTo(rightSpan.GetProperty("end").GetInt32());
+        }
+
+        private static string NormalizeRepositoryPath(string path) => string.Join('/', path.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
+    }
 
     private static string SerializeCanonicalRecords(IReadOnlyList<Dictionary<string, object>> records) => JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = false });
 
@@ -748,7 +800,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var kinds = new[] { "repository", "generatedSource", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         return kinds.Length == 1 && kinds[0] switch
         {
-            "repository" => IsValidRepositoryLocator(locator.GetProperty("repository")),
+            "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString())
+                && (!locator.GetProperty("repository").TryGetProperty("span", out var repositorySpan) || repositorySpan.GetProperty("start").GetInt32() <= repositorySpan.GetProperty("end").GetInt32()),
             "generatedSource" => locator.GetProperty("generatedSource").TryGetProperty("generatorId", out var generator) && locator.GetProperty("generatedSource").TryGetProperty("hintNameId", out var hint)
                 && System.Text.RegularExpressions.Regex.IsMatch(generator.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$") && System.Text.RegularExpressions.Regex.IsMatch(hint.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$")
                 && (!locator.GetProperty("generatedSource").TryGetProperty("span", out var span) || span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32()),

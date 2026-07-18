@@ -109,8 +109,10 @@
         "additionalProperties": false,
         "required": [
           "scenarioId",
-          "origin",
-          "skipReason",
+          "documentationCommentIdAvailable",
+          "generatedProvenanceAvailable",
+          "semanticContextAvailable",
+          "observedOrigin",
           "candidateLocator"
         ],
         "properties": {
@@ -119,19 +121,20 @@
             "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
             "maxLength": 128
           },
-          "origin": {
+          "documentationCommentIdAvailable": {
+            "type": "boolean"
+          },
+          "generatedProvenanceAvailable": {
+            "type": "boolean"
+          },
+          "semanticContextAvailable": {
+            "type": "boolean"
+          },
+          "observedOrigin": {
             "enum": [
               "origin.source",
               "origin.source-generator",
-              "origin.tool-generated",
-              "origin.unknown"
-            ]
-          },
-          "skipReason": {
-            "enum": [
-              "skip.unavailable.documentation-comment-id",
-              "skip.unavailable.generated-provenance",
-              "skip.unavailable.semantic-context"
+              "origin.tool-generated"
             ]
           },
           "candidateLocator": {
