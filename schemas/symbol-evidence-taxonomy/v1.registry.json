@@ -267,11 +267,9 @@
           "TargetClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
-        ]
+          "support.unsupported"
+        ],
+        "requiredSkip": "skip.unsupported.symbol-kind"
       }
     ],
     "componentKinds": [
@@ -384,15 +382,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.set.",
@@ -406,15 +402,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.init.",
@@ -428,15 +422,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.add.",
@@ -450,14 +442,12 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.event"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.remove.",
@@ -471,14 +461,12 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.event"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.backing-field.",
@@ -492,15 +480,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.event"
-        ]
+        ],
+        "requiredSkip": "skip.not-applicable.non-documentation-component"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.record-positional-property.",
@@ -842,24 +828,20 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ],
         "targetDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ]
       },
       {
@@ -874,24 +856,20 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ],
         "targetDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ]
       },
       {
@@ -906,24 +884,20 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ],
         "targetDomain": [
-          "symbol.member.constructor",
           "symbol.member.method",
-          "symbol.member.operator",
-          "symbol.member.conversion",
-          "symbol.member.indexer",
           "symbol.member.property",
+          "symbol.member.indexer",
           "symbol.member.event",
-          "symbol.type.interface"
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ]
       },
       {
@@ -941,7 +915,12 @@
           "symbol.type.interface"
         ],
         "targetDomain": [
-          "symbol.type.interface"
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
         ]
       }
     ],
@@ -1027,10 +1006,14 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "origin.unknown",
         "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ]
       }
@@ -1095,10 +1078,14 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "support.unavailable-context",
         "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ]
       }
@@ -1221,10 +1208,14 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "skip.unavailable.generated-provenance",
         "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "precedence": 2,
@@ -1237,10 +1228,14 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "skip.unavailable.semantic-context",
         "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "precedence": 3,
@@ -1417,13 +1412,11 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "EvidenceItem",
-          "UnresolvedClassification"
+          "EvidenceItem"
         ],
         "id": "evidence.locator.metadata",
         "recordTypes": [
-          "EvidenceItem",
-          "UnresolvedClassification"
+          "EvidenceItem"
         ]
       },
       {
@@ -1491,9 +1484,7 @@
         "recordTypes": [
           "EvidenceBundle"
         ],
-        "precedence": [
-          "registry-order"
-        ]
+        "precedence": 1
       },
       {
         "definition": "Canonical evidence omission reason evidence.omission.source-unavailable.",
@@ -1506,9 +1497,7 @@
         "recordTypes": [
           "EvidenceBundle"
         ],
-        "precedence": [
-          "registry-order"
-        ]
+        "precedence": 2
       },
       {
         "definition": "Canonical evidence omission reason evidence.omission.binary-content.",
@@ -1521,9 +1510,7 @@
         "recordTypes": [
           "EvidenceBundle"
         ],
-        "precedence": [
-          "registry-order"
-        ]
+        "precedence": 3
       },
       {
         "definition": "Canonical evidence omission reason evidence.omission.budget-exhausted.",
@@ -1536,8 +1523,9 @@
         "recordTypes": [
           "EvidenceBundle"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 4,
+        "allowedBundleStatuses": [
+          "evidence.bundle.partial"
         ]
       },
       {
@@ -1551,9 +1539,7 @@
         "recordTypes": [
           "EvidenceBundle"
         ],
-        "precedence": [
-          "registry-order"
-        ]
+        "precedence": 5
       }
     ]
   }

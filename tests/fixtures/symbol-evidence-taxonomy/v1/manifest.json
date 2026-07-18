@@ -528,7 +528,8 @@
       "componentKind": "component.accessor.init",
       "identity": "accessor/init",
       "origin": "origin.source",
-      "supportStatus": "support.supported"
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
     },
     {
       "recordType": "RelationObservation",

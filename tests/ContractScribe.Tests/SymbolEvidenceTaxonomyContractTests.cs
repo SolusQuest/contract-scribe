@@ -12,6 +12,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static readonly Lazy<JsonSchema> EvidenceSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json"))));
     private static readonly Lazy<JsonSchema> ManifestSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.manifest.schema.json"))));
     private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
+    private static readonly Lazy<Dictionary<string, JsonElement>> RegistryEntries = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToDictionary(entry => entry.GetProperty("id").GetString()!, entry => entry.Clone(), StringComparer.Ordinal));
     [Fact]
     public void Registry_UsesClosedUniqueDottedIdentifiers()
     {
@@ -39,7 +40,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             Assert.Equal(new[] { "support.not-applicable" }, entry.GetProperty("allowedSupportStatuses").EnumerateArray().Select(value => value.GetString()));
         });
         var statuses = registry.RootElement.GetProperty("sections").GetProperty("supportStatuses").EnumerateArray().ToDictionary(entry => entry.GetProperty("id").GetString()!, StringComparer.Ordinal);
-        Assert.Equal(new[] { "UnresolvedClassification" }, statuses["support.unavailable-context"].GetProperty("recordTypes").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(new[] { "TargetClassification", "ComponentClassification", "UnresolvedClassification" }, statuses["support.unavailable-context"].GetProperty("recordTypes").EnumerateArray().Select(value => value.GetString()));
         Assert.DoesNotContain("UnresolvedClassification", statuses["support.supported"].GetProperty("recordTypes").EnumerateArray().Select(value => value.GetString()));
         var skips = registry.RootElement.GetProperty("sections").GetProperty("skipReasons").EnumerateArray().ToDictionary(entry => entry.GetProperty("id").GetString()!, StringComparer.Ordinal);
         Assert.Equal(1, skips["skip.unavailable.documentation-comment-id"].GetProperty("precedence").GetInt32());
@@ -366,13 +367,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => property.Locations.Any(location => location.IsInSource)))
         {
             yield return new ComponentRecord("component.value", property.GetDocumentationCommentId()!, "value");
-            if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get");
-            if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set");
+            if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+            if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
         }
         foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => @event.Locations.Any(location => location.IsInSource)))
         {
-            yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add");
-            yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove");
+            yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+            yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
         }
     }
 
@@ -400,9 +401,10 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["parentSymbolRef"] = SymbolRef(context, component.ParentSymbolId),
                 ["componentKind"] = component.Kind,
                 ["identity"] = component.Identity,
-                ["origin"] = "origin.source",
-                ["supportStatus"] = "support.supported"
+                ["origin"] = component.Origin,
+                ["supportStatus"] = component.SupportStatus
             });
+            if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
         foreach (var relation in ClassifyRelationRecords(compilation, context)) records.Add(relation);
         return records.OrderBy(record => record["recordType"].ToString(), StringComparer.Ordinal).ThenBy(record => JsonSerializer.Serialize(record), StringComparer.Ordinal).ToArray();
@@ -555,33 +557,65 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static bool IsValidClassificationRecord(JsonElement record)
     {
-        var recordType = record.GetProperty("recordType").GetString();
+        if (record.ValueKind != JsonValueKind.Object || !record.TryGetProperty("recordType", out var type)) return false;
+        var recordType = type.GetString();
         return recordType switch
         {
-            "TargetClassification" => record.TryGetProperty("symbolRef", out var target) && IsSymbolRef(target)
+            "TargetClassification" => HasOnlyProperties(record, "recordType", "symbolRef", "primaryKind", "traits", "origin", "supportStatus", "skipReason") && record.TryGetProperty("symbolRef", out var target) && IsSymbolRef(target)
                 && Known("primaryKinds", record.GetProperty("primaryKind").GetString())
                 && record.GetProperty("traits").EnumerateArray().All(value => Known("traits", value.GetString()))
-                && IsValidStatusAndSkip(record, "TargetClassification"),
-            "ComponentClassification" => record.TryGetProperty("parentSymbolRef", out var parent) && IsSymbolRef(parent)
+                && IsValidStatusAndSkip(record, "TargetClassification", record.GetProperty("primaryKind").GetString()!),
+            "ComponentClassification" => HasOnlyProperties(record, "recordType", "parentSymbolRef", "componentKind", "identity", "origin", "supportStatus", "skipReason") && record.TryGetProperty("parentSymbolRef", out var parent) && IsSymbolRef(parent)
                 && Known("componentKinds", record.GetProperty("componentKind").GetString())
-                && !string.IsNullOrEmpty(record.GetProperty("identity").GetString())
-                && IsValidStatusAndSkip(record, "ComponentClassification"),
-            "RelationObservation" => Known("relationKinds", record.GetProperty("relationKind").GetString())
+                && IsValidComponentIdentity(record.GetProperty("componentKind").GetString()!, record.GetProperty("identity").GetString())
+                && IsValidStatusAndSkip(record, "ComponentClassification", record.GetProperty("componentKind").GetString()!),
+            "RelationObservation" => HasOnlyProperties(record, "recordType", "relationKind", "sourceSymbolRef", "targetSymbolRef") && Known("relationKinds", record.GetProperty("relationKind").GetString())
                 && IsSymbolRef(record.GetProperty("sourceSymbolRef")) && IsSymbolRef(record.GetProperty("targetSymbolRef")),
-            "UnresolvedClassification" => record.GetProperty("supportStatus").GetString() == "support.unavailable-context"
+            "UnresolvedClassification" => HasOnlyProperties(record, "recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator") && record.GetProperty("supportStatus").GetString() == "support.unavailable-context"
                 && Known("origins", record.GetProperty("origin").GetString()) && Known("skipReasons", record.GetProperty("skipReason").GetString())
                 && IsValidCandidateLocator(record.GetProperty("candidateLocator")),
             _ => false
         };
     }
 
-    private static bool IsValidStatusAndSkip(JsonElement record, string recordType)
+    private static bool IsValidStatusAndSkip(JsonElement record, string recordType, string classifiedId)
     {
         var status = record.GetProperty("supportStatus").GetString();
-        if (!Known("supportStatuses", status) || !Known("origins", record.GetProperty("origin").GetString())) return false;
+        var origin = record.GetProperty("origin").GetString();
+        if (!Known("supportStatuses", status) || !Known("origins", origin) || !AllowsRecord(RegistryEntries.Value[status!], recordType) || !AllowsRecord(RegistryEntries.Value[origin!], recordType)) return false;
+        if (RegistryEntries.Value[classifiedId].TryGetProperty("allowedSupportStatuses", out var statuses) && !statuses.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal)) return false;
+        if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredOrigin", out var requiredOrigin) && origin != requiredOrigin.GetString()) return false;
         if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
-        return record.TryGetProperty("skipReason", out var skip) && Known("skipReasons", skip.GetString());
+        if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
+        if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
+        return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
     }
+
+    private static bool AllowsRecord(JsonElement entry, string recordType) => entry.GetProperty("recordTypes").EnumerateArray().Select(value => value.GetString()).Contains(recordType, StringComparer.Ordinal);
+
+    private static bool HasOnlyProperties(JsonElement value, params string[] properties) => value.EnumerateObject().All(property => properties.Contains(property.Name, StringComparer.Ordinal));
+
+    private static bool IsValidComponentIdentity(string kind, string? identity) => identity is not null && kind switch
+    {
+        "component.parameter" => System.Text.RegularExpressions.Regex.IsMatch(identity, "^parameter/[0-9]+$"),
+        "component.type-parameter" => System.Text.RegularExpressions.Regex.IsMatch(identity, "^type-parameter/[0-9]+$"),
+        "component.return" => identity == "return",
+        "component.value" => identity == "value",
+        "component.accessor.get" => identity == "accessor/get",
+        "component.accessor.set" => identity == "accessor/set",
+        "component.accessor.init" => identity == "accessor/init",
+        "component.accessor.add" => identity == "accessor/add",
+        "component.accessor.remove" => identity == "accessor/remove",
+        "component.backing-field" => identity == "backing-field",
+        "component.synthesized.record-positional-property" => System.Text.RegularExpressions.Regex.IsMatch(identity, "^synthesized/record-positional-property/[0-9]+$"),
+        "component.synthesized.implicit-constructor" => identity == "synthesized/implicit-constructor",
+        "component.synthesized.record-copy-constructor" => identity == "synthesized/record-copy-constructor",
+        "component.synthesized.delegate-invoke" => identity == "synthesized/delegate-invoke",
+        "component.synthesized.delegate-begin-invoke" => identity == "synthesized/delegate-begin-invoke",
+        "component.synthesized.delegate-end-invoke" => identity == "synthesized/delegate-end-invoke",
+        "component.unknown" => System.Text.RegularExpressions.Regex.IsMatch(identity, "^unknown/[0-9]+$"),
+        _ => false
+    };
 
     private static bool IsSymbolRef(JsonElement symbolRef) => symbolRef.ValueKind == JsonValueKind.Object
         && symbolRef.TryGetProperty("compilationContextRef", out var context) && System.Text.RegularExpressions.Regex.IsMatch(context.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$")
@@ -632,5 +666,5 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
     private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
-    private sealed record ComponentRecord(string Kind, string ParentSymbolId, string Identity);
+    private sealed record ComponentRecord(string Kind, string ParentSymbolId, string Identity, string Origin = "origin.source", string SupportStatus = "support.supported", string? SkipReason = null);
 }
