@@ -75,6 +75,18 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void EvidenceBundle_EnforcesExactItemAndUtf8ByteBoundaries()
+    {
+        Assert.True(IsSemanticallyValid(CreateBundle(Enumerable.Range(0, 32).Select(index => CreateEvidenceItem($"evidence.a{index:D2}", "x")))));
+        Assert.False(IsSemanticallyValid(CreateBundle(Enumerable.Range(0, 33).Select(index => CreateEvidenceItem($"evidence.a{index:D2}", "x")))));
+        Assert.True(IsSemanticallyValid(CreateBundle([CreateEvidenceItem("evidence.a", new string('x', 4096))])));
+        Assert.False(IsSemanticallyValid(CreateBundle([CreateEvidenceItem("evidence.a", new string('x', 4097))])));
+        Assert.True(IsSemanticallyValid(CreateBundle(Enumerable.Range(0, 8).Select(index => CreateEvidenceItem($"evidence.a{index}", new string('x', 4096))))));
+        Assert.False(IsSemanticallyValid(CreateBundle(Enumerable.Range(0, 8).Select(index => CreateEvidenceItem($"evidence.a{index}", new string('x', 4096))).Append(CreateEvidenceItem("evidence.z", "x")))));
+        Assert.True(IsSemanticallyValid(CreateBundle([CreateEvidenceItem("evidence.a", "é")]))) ;
+    }
+
+    [Fact]
     public void PublicEvidenceVectors_ValidateSchemaAndSemanticInvariants()
     {
         var root = FindRepositoryRoot();
@@ -351,6 +363,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var status = bundle.GetProperty("availabilityStatus").GetString();
         var hasOmission = bundle.TryGetProperty("omissionReason", out var omission);
         var items = bundle.GetProperty("items").EnumerateArray().ToArray();
+        if (items.Length > 32) return false;
         if (!Known("bundleAvailabilityStatuses", status) || hasOmission && !Known("bundleOmissionReasons", omission.GetString())) return false;
         if ((status == "evidence.bundle.complete" && (items.Length == 0 || hasOmission)) || (status == "evidence.bundle.partial" && (items.Length == 0 || !hasOmission)) || (status == "evidence.bundle.unavailable" && (items.Length != 0 || !hasOmission))) return false;
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -374,6 +387,36 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             total += included;
         }
         return total <= 32768;
+    }
+
+    private static JsonElement CreateBundle(IEnumerable<Dictionary<string, object>> items)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["evidenceBundleVersion"] = 1,
+            ["availabilityStatus"] = "evidence.bundle.complete",
+            ["items"] = items.ToArray()
+        }));
+        return document.RootElement.Clone();
+    }
+
+    private static Dictionary<string, object> CreateEvidenceItem(string id, string text)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        return new Dictionary<string, object>
+        {
+            ["evidenceId"] = id,
+            ["subject"] = new Dictionary<string, object> { ["compilationContextRef"] = "synthetic.v1", ["documentationCommentId"] = "T:TaxonomyFixtures.IContract" },
+            ["kind"] = "evidence.source.declaration",
+            ["relation"] = "evidence.declares",
+            ["excerpt"] = text,
+            ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            ["originalUtf8ByteCount"] = bytes.Length,
+            ["includedUtf8ByteCount"] = bytes.Length,
+            ["omittedUtf8ByteCount"] = 0,
+            ["isTruncated"] = false,
+            ["locator"] = new Dictionary<string, object> { ["repository"] = new Dictionary<string, object> { ["path"] = "src/Contract.cs" } }
+        };
     }
 
     private static bool Known(string section, string? id) => id is not null && RegistryIds.Value[section].Contains(id);
