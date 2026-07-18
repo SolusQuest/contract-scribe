@@ -1,0 +1,200 @@
+{
+  "cases": [
+    {
+      "caseId": "missing-document",
+      "stage": "document",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.input.missing-document" } }
+    },
+    {
+      "caseId": "utf8-bom",
+      "stage": "raw-bytes",
+      "payloadFile": "policies/utf8-bom.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.bom-not-allowed" } }
+    },
+    {
+      "caseId": "invalid-utf8",
+      "stage": "raw-bytes",
+      "payloadFile": "policies/invalid-utf8.base64",
+      "payloadEncoding": "base64",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.invalid-encoding" } }
+    },
+    {
+      "caseId": "minimal-default-fallback",
+      "stage": "resolution",
+      "policyFile": "policies/minimal-valid.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "decision": "optional", "matchedRuleId": null }
+    },
+    {
+      "caseId": "project-priority-wins",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/Generated/File.cs" },
+      "expected": { "decision": "required", "matchedRuleId": "project-required" }
+    },
+    {
+      "caseId": "exclude-allows-higher-generated-rule",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": "projects/Other/Other.csproj", "sourcePath": "src/App/Generated/File.cs" },
+      "expected": { "decision": "forbidden", "matchedRuleId": "generated-forbidden" }
+    },
+    {
+      "caseId": "windows-input-normalizes",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": ".\\projects\\Other\\Other.csproj", "sourcePath": ".\\src\\App\\File.cs" },
+      "expected": { "decision": "required", "matchedRuleId": "source-required" }
+    },
+    {
+      "caseId": "duplicate-rule-id",
+      "stage": "semantic",
+      "policyFile": "policies/duplicate-rule-id.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.duplicate-rule-id", "pointer": "/rules/1/id" } }
+    },
+    {
+      "caseId": "duplicate-priority",
+      "stage": "semantic",
+      "policyFile": "policies/duplicate-priority.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.duplicate-priority", "pointer": "/rules/1/priority" } }
+    },
+    {
+      "caseId": "invalid-pattern",
+      "stage": "semantic",
+      "policyFile": "policies/invalid-pattern.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include/0" } }
+    },
+    {
+      "caseId": "unknown-property",
+      "stage": "schema",
+      "policyFile": "policies/unknown-property.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.invalid-document", "pointer": "/unexpected", "schemaKeyword": "additionalProperties" } }
+    },
+    {
+      "caseId": "unsupported-version",
+      "stage": "version",
+      "policyFile": "policies/unsupported-version.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.unsupported-version", "pointer": "/schemaVersion" } }
+    },
+    {
+      "caseId": "invalid-json",
+      "stage": "json",
+      "policyFile": "policies/invalid-json.txt",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.invalid-json" } }
+    },
+    {
+      "caseId": "duplicate-property",
+      "stage": "json",
+      "policyFile": "policies/duplicate-property.txt",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.document.duplicate-property", "pointer": "/schemaVersion" } }
+    },
+    {
+      "caseId": "invalid-project-path",
+      "stage": "input",
+      "policyFile": "policies/minimal-valid.json",
+      "input": { "projectPath": "../outside/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.input.invalid-path", "pointer": "/projectPath" } }
+    },
+    {
+      "caseId": "global-rule-applies",
+      "stage": "resolution",
+      "policyFile": "policies/global-rule.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "any/path.cs" },
+      "expected": { "decision": "required", "matchedRuleId": "global-required" }
+    },
+    {
+      "caseId": "exclude-only-selector-accepts-when-no-pattern-matches",
+      "stage": "resolution",
+      "policyFile": "policies/exclude-only.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "decision": "forbidden", "matchedRuleId": "not-generated" }
+    },
+    {
+      "caseId": "empty-selector-is-schema-invalid",
+      "stage": "schema",
+      "policyFile": "policies/empty-selector.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.invalid-document", "pointer": "/rules/0/sourcePaths", "schemaKeyword": "minProperties" } }
+    },
+    {
+      "caseId": "empty-include-is-schema-invalid",
+      "stage": "schema",
+      "policyFile": "policies/empty-include.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.invalid-document", "pointer": "/rules/0/sourcePaths/include", "schemaKeyword": "minItems" } }
+    },
+    {
+      "caseId": "empty-exclude-is-schema-invalid",
+      "stage": "schema",
+      "policyFile": "policies/empty-exclude.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.schema.invalid-document", "pointer": "/rules/0/sourcePaths/exclude", "schemaKeyword": "minItems" } }
+    },
+    {
+      "caseId": "case-sensitive-path-comparison",
+      "stage": "resolution",
+      "policyFile": "policies/case-sensitive.json",
+      "input": { "projectPath": "projects/Other/Other.csproj", "sourcePath": "src/app/File.cs" },
+      "expected": { "decision": "optional", "matchedRuleId": null }
+    },
+    {
+      "caseId": "normalization-removes-dot-empty-and-trailing-segments",
+      "stage": "resolution",
+      "policyFile": "policies/priority-and-selectors.json",
+      "input": { "projectPath": "./projects//Other/Other.csproj/", "sourcePath": "./src//App/./File.cs/" },
+      "expected": { "decision": "required", "matchedRuleId": "source-required" }
+    },
+    {
+      "caseId": "glob-a-double-star-matches-a",
+      "stage": "resolution",
+      "policyFile": "policies/glob-a-double-star.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "a" },
+      "expected": { "decision": "required", "matchedRuleId": "a-tail" }
+    },
+    {
+      "caseId": "glob-a-double-star-b-matches-zero-segments",
+      "stage": "resolution",
+      "policyFile": "policies/glob-middle-double-star.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "a/b" },
+      "expected": { "decision": "required", "matchedRuleId": "middle" }
+    },
+    {
+      "caseId": "glob-double-star-a-matches-root-a",
+      "stage": "resolution",
+      "policyFile": "policies/glob-double-star-a.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "a" },
+      "expected": { "decision": "required", "matchedRuleId": "suffix-a" }
+    },
+    {
+      "caseId": "glob-double-star-matches-one-segment",
+      "stage": "resolution",
+      "policyFile": "policies/glob-double-star.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "one" },
+      "expected": { "decision": "required", "matchedRuleId": "all-paths" }
+    },
+    {
+      "caseId": "glob-double-star-matches-many-segments",
+      "stage": "resolution",
+      "policyFile": "policies/glob-double-star.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "one/two/three" },
+      "expected": { "decision": "required", "matchedRuleId": "all-paths" }
+    },
+    {
+      "caseId": "invalid-pattern-selects-the-first-invalid-index",
+      "stage": "semantic",
+      "policyFile": "policies/invalid-pattern-second.json",
+      "input": { "projectPath": "projects/App/App.csproj", "sourcePath": "src/App/File.cs" },
+      "expected": { "error": { "code": "policy.semantic.invalid-pattern", "pointer": "/rules/0/sourcePaths/include/1" } }
+    }
+  ]
+}

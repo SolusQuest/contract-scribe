@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    { "id": "invalid", "priority": 0, "decision": "required", "sourcePaths": { "exclude": [] } }
+  ]
+}

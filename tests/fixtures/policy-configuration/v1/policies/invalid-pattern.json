@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "optional",
+  "rules": [
+    {
+      "id": "invalid-pattern",
+      "priority": 1,
+      "decision": "required",
+      "sourcePaths": { "include": ["src/?/File.cs"] }
+    }
+  ]
+}
