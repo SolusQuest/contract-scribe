@@ -57,10 +57,14 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.True(ManifestSchema.Value.Evaluate(manifest.RootElement).IsValid);
         var profile = manifest.RootElement.GetProperty("compilationProfile");
         Assert.Equal("10.0.2", profile.GetProperty("referencePackVersion").GetString());
-        foreach (var record in manifest.RootElement.GetProperty("classificationRecords").EnumerateArray())
+        var records = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().ToArray();
+        Assert.Equal(records.Length, records.Select(record => record.GetRawText()).Distinct(StringComparer.Ordinal).Count());
+        foreach (var record in records)
         {
             Assert.True(IsValidClassificationRecord(record));
         }
+        var scenarioIds = manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()!).ToArray();
+        Assert.Equal(scenarioIds.Length, scenarioIds.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -384,9 +388,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
         foreach (var relation in ClassifyRelationRecords(compilation, context)) records.Add(relation);
-        foreach (var unresolved in manifest.GetProperty("classificationRecords").EnumerateArray().Where(record => record.GetProperty("recordType").GetString() == "UnresolvedClassification"))
+        foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
         {
-            records.Add(JsonSerializer.Deserialize<Dictionary<string, object>>(unresolved.GetRawText())!);
+            records.Add(new Dictionary<string, object>
+            {
+                ["recordType"] = "UnresolvedClassification",
+                ["compilationContextRef"] = context,
+                ["origin"] = scenario.GetProperty("origin").GetString()!,
+                ["supportStatus"] = "support.unavailable-context",
+                ["skipReason"] = scenario.GetProperty("skipReason").GetString()!,
+                ["candidateLocator"] = JsonSerializer.Deserialize<Dictionary<string, object>>(scenario.GetProperty("candidateLocator").GetRawText())!
+            });
         }
         return records.OrderBy(record => record["recordType"].ToString(), StringComparer.Ordinal).ThenBy(record => JsonSerializer.Serialize(record), StringComparer.Ordinal).ToArray();
     }

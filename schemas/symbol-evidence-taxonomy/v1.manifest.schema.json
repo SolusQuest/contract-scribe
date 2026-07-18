@@ -12,6 +12,7 @@
     "compilationProfile",
     "sources",
     "classificationRecords",
+    "unresolvedScenarios",
     "absenceVectors"
   ],
   "properties": {
@@ -82,8 +83,49 @@
     },
     "classificationRecords": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/classificationRecord"
+      }
+    },
+    "unresolvedScenarios": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId",
+          "origin",
+          "skipReason",
+          "candidateLocator"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          },
+          "origin": {
+            "enum": [
+              "origin.source",
+              "origin.source-generator",
+              "origin.tool-generated",
+              "origin.unknown"
+            ]
+          },
+          "skipReason": {
+            "enum": [
+              "skip.unavailable.documentation-comment-id",
+              "skip.unavailable.generated-provenance",
+              "skip.unavailable.semantic-context"
+            ]
+          },
+          "candidateLocator": {
+            "$ref": "#/$defs/candidateLocator"
+          }
+        }
       }
     },
     "absenceVectors": {
