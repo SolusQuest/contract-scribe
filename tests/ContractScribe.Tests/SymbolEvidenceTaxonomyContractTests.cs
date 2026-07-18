@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Json.Schema;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -48,6 +49,30 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void PublicEvidenceVectors_ValidateSchemaAndSemanticInvariants()
+    {
+        var root = FindRepositoryRoot();
+        using var cases = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "evidence-cases.json")));
+        foreach (var item in cases.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var bundle = item.GetProperty("bundle");
+            var schemaValid = EvidenceSchema.Value.Evaluate(bundle).IsValid;
+            var semanticValid = IsSemanticallyValid(bundle);
+            Assert.Equal(item.GetProperty("valid").GetBoolean(), schemaValid && semanticValid);
+        }
+    }
+
+    [Fact]
+    public void ProductionProjects_DoNotReferenceRoslynOrTaxonomyRuntimeTypes()
+    {
+        var root = FindRepositoryRoot();
+        var productionProjects = Directory.GetFiles(Path.Combine(root, "src"), "*.csproj", SearchOption.AllDirectories);
+        Assert.All(productionProjects, project => Assert.DoesNotContain("Microsoft.CodeAnalysis", File.ReadAllText(project), StringComparison.Ordinal));
+        var productionCode = Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText);
+        Assert.DoesNotContain(productionCode, content => content.Contains("SymbolEvidenceTaxonomy", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -83,6 +108,31 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (item.Original != item.Included + item.Omitted || (item.Original == 0 && (item.Included != 0 || item.Omitted != 0 || item.Truncated)) || (item.Original > 0 && item.Included == 0) || item.Truncated != (item.Omitted > 0)) throw new InvalidOperationException();
             if (item.Truncated && (status != "evidence.bundle.partial" || omissionReason != "evidence.omission.budget-exhausted")) throw new InvalidOperationException();
         }
+    }
+
+    private static bool IsSemanticallyValid(JsonElement bundle)
+    {
+        var status = bundle.GetProperty("availabilityStatus").GetString();
+        var hasOmission = bundle.TryGetProperty("omissionReason", out var omission);
+        var items = bundle.GetProperty("items").EnumerateArray().ToArray();
+        if ((status == "evidence.bundle.complete" && (items.Length == 0 || hasOmission)) || (status == "evidence.bundle.partial" && (items.Length == 0 || !hasOmission)) || (status == "evidence.bundle.unavailable" && (items.Length != 0 || !hasOmission))) return false;
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var total = 0;
+        foreach (var item in items)
+        {
+            var id = item.GetProperty("evidenceId").GetString()!;
+            if (!ids.Add(id)) return false;
+            var excerpt = item.GetProperty("excerpt").GetString()!;
+            var included = System.Text.Encoding.UTF8.GetByteCount(excerpt);
+            var original = item.GetProperty("originalUtf8ByteCount").GetInt32();
+            var omitted = item.GetProperty("omittedUtf8ByteCount").GetInt32();
+            var truncated = item.GetProperty("isTruncated").GetBoolean();
+            if (included != item.GetProperty("includedUtf8ByteCount").GetInt32() || original != included + omitted || truncated != (omitted > 0) || included > 4096 || original > 0 && included == 0) return false;
+            if (truncated && (status != "evidence.bundle.partial" || omission.GetString() != "evidence.omission.budget-exhausted")) return false;
+            if (!truncated && !string.Equals(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(excerpt))).ToLowerInvariant(), item.GetProperty("sha256").GetString(), StringComparison.Ordinal)) return false;
+            total += included;
+        }
+        return total <= 32768;
     }
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
