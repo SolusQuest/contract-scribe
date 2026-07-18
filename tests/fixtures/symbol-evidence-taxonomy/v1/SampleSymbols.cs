@@ -30,6 +30,12 @@ public interface IStaticContract
     static abstract int StaticMember();
 }
 
+public interface IDefaultContract
+{
+    void DefaultMember() { }
+    static virtual int StaticVirtualMember() => 0;
+}
+
 public interface IShapeContract
 {
     int Value { get; }
@@ -49,6 +55,21 @@ public partial record SampleRecord(string Name) : IDerivedContract, IStaticContr
 }
 
 public record struct SampleRecordStruct(int Value);
+
+public record ExplicitCopyRecord
+{
+    public ExplicitCopyRecord(ExplicitCopyRecord original) { }
+}
+
+public class PrimaryConstructorClass(int value)
+{
+    public int Value => value;
+}
+
+public struct PrimaryConstructorStruct(int value)
+{
+    public int Value => value;
+}
 
 public class Base
 {
