@@ -265,11 +265,25 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var parseOptions = new CSharpParseOptions(languageVersion, preprocessorSymbols: profile.GetProperty("preprocessorSymbols").EnumerateArray().Select(value => value.GetString()!));
         var trees = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(value => CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, value.GetString()!)), parseOptions, encoding: System.Text.Encoding.UTF8)).ToArray();
         var referencePackVersion = profile.GetProperty("referencePackVersion").GetString()!;
-        var dotnetRoot = Directory.GetParent(typeof(object).Assembly.Location)?.Parent?.Parent?.Parent?.FullName ?? throw new InvalidOperationException("The dotnet root is unavailable.");
-        var referenceDirectory = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref", referencePackVersion, "ref", profile.GetProperty("targetFramework").GetString()!);
-        if (!Directory.Exists(referenceDirectory)) throw new InvalidOperationException($"Pinned reference pack is unavailable: {referenceDirectory}");
+        var targetFramework = profile.GetProperty("targetFramework").GetString()!;
+        var referenceDirectory = FindPinnedReferenceDirectory(referencePackVersion, targetFramework);
         var references = Directory.GetFiles(referenceDirectory, "*.dll", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.Ordinal).Select(path => MetadataReference.CreateFromFile(path));
         return CSharpCompilation.Create("taxonomy-fixture", trees, references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, warningLevel: profile.GetProperty("warningLevel").GetInt32()));
+    }
+
+    private static string FindPinnedReferenceDirectory(string referencePackVersion, string targetFramework)
+    {
+        var runtimeRoot = Directory.GetParent(typeof(object).Assembly.Location)?.Parent?.Parent?.Parent?.FullName;
+        var processRoot = Environment.ProcessPath is { } processPath ? Path.GetDirectoryName(processPath) : null;
+        var roots = new[] { Environment.GetEnvironmentVariable("DOTNET_ROOT"), Environment.GetEnvironmentVariable("DOTNET_ROOT_X64"), processRoot, runtimeRoot }
+            .Where(root => !string.IsNullOrEmpty(root))
+            .Distinct(StringComparer.Ordinal);
+        foreach (var root in roots)
+        {
+            var candidate = Path.Combine(root!, "packs", "Microsoft.NETCore.App.Ref", referencePackVersion, "ref", targetFramework);
+            if (Directory.Exists(candidate)) return candidate;
+        }
+        throw new InvalidOperationException($"Pinned reference pack {referencePackVersion}/{targetFramework} is unavailable from the configured .NET roots.");
     }
 
     private static string? ClassifyPrimaryKind(ISymbol symbol) => symbol switch
