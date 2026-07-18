@@ -108,6 +108,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void AbsenceVectors_AreNotEmittedAsTargets()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var targetIds = ClassifyTargets(CreateFixtureCompilation()).Select(target => target.SymbolId).ToHashSet(StringComparer.Ordinal);
+        foreach (var vector in manifest.RootElement.GetProperty("absenceVectors").EnumerateArray())
+        {
+            var id = vector.GetProperty("symbolRef").GetProperty("documentationCommentId").GetString()!;
+            Assert.DoesNotContain(id, targetIds);
+        }
+    }
+
+    [Fact]
     public void Schema_ValidatesABoundedEvidenceBundle()
     {
         using var valid = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.not-provided\",\"items\":[]}");
@@ -318,6 +331,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         return EnumerateSymbols(compilation.Assembly.GlobalNamespace)
             .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
             .Where(symbol => !symbol.IsImplicitlyDeclared)
+            .Where(symbol => symbol is not IPropertySymbol property || !IsRecordPositionalProperty(property))
             .Where(IsDocumentationTarget)
             .Select(symbol => new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, "origin.source", "support.supported"))
             .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
@@ -328,10 +342,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method)))
         {
             foreach (var parameter in method.Parameters) yield return new ComponentRecord("component.parameter", method.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
+            foreach (var typeParameter in method.TypeParameters) yield return new ComponentRecord("component.type-parameter", method.GetDocumentationCommentId()!, $"type-parameter/{typeParameter.Ordinal}");
             if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return new ComponentRecord("component.return", method.GetDocumentationCommentId()!, "return");
         }
-        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && IsDocumentationTarget(property)))
+        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property)))
         {
+            foreach (var parameter in property.Parameters) yield return new ComponentRecord("component.parameter", property.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
             yield return new ComponentRecord("component.value", property.GetDocumentationCommentId()!, "value");
             if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
             if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
@@ -341,21 +357,40 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
             yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
         }
+        foreach (var field in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IFieldSymbol>())
+        {
+            var parent = field.AssociatedSymbol;
+            if (parent is IPropertySymbol property && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property))
+                yield return new ComponentRecord("component.backing-field", property.GetDocumentationCommentId()!, "backing-field", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+            if (parent is IEventSymbol @event && IsDocumentationTarget(@event))
+                yield return new ComponentRecord("component.backing-field", @event.GetDocumentationCommentId()!, "backing-field", SupportStatus: "support.not-applicable", SkipReason: "skip.not-applicable.non-documentation-component");
+        }
         foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().Where(type => !type.IsImplicitlyDeclared && IsDocumentationTarget(type)))
         {
             var parentId = type.GetDocumentationCommentId()!;
+            foreach (var typeParameter in type.TypeParameters) yield return new ComponentRecord("component.type-parameter", parentId, $"type-parameter/{typeParameter.Ordinal}");
             if (type.IsRecord)
-                foreach (var positional in type.GetMembers().OfType<IPropertySymbol>().Where(property => property.IsImplicitlyDeclared).Select((property, ordinal) => (property, ordinal)))
-                    yield return Synthesized("component.synthesized.record-positional-property", parentId, $"synthesized/record-positional-property/{positional.ordinal}");
+                foreach (var positional in type.GetMembers().OfType<IPropertySymbol>().Where(IsRecordPositionalProperty))
+                    yield return Synthesized("component.synthesized.record-positional-property", parentId, $"synthesized/record-positional-property/{GetRecordPositionalParameter(positional)!.Ordinal}");
             foreach (var constructor in type.InstanceConstructors.Where(constructor => constructor.IsImplicitlyDeclared && (type.TypeKind is TypeKind.Class or TypeKind.Struct)))
                 yield return Synthesized(type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type)
                     ? "component.synthesized.record-copy-constructor" : "component.synthesized.implicit-constructor", parentId,
                     type.IsRecord && constructor.Parameters.Length == 1 && SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, type) ? "synthesized/record-copy-constructor" : "synthesized/implicit-constructor");
             if (type.TypeKind == TypeKind.Delegate)
+            {
+                foreach (var parameter in type.DelegateInvokeMethod!.Parameters) yield return new ComponentRecord("component.parameter", parentId, $"parameter/{parameter.Ordinal}");
+                yield return new ComponentRecord("component.return", parentId, "return");
                 foreach (var method in type.GetMembers().OfType<IMethodSymbol>().Where(method => method.IsImplicitlyDeclared && method.Name is "Invoke" or "BeginInvoke" or "EndInvoke"))
                     yield return Synthesized($"component.synthesized.delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}", parentId, $"synthesized/delegate-{method.Name.Replace("Invoke", "invoke", StringComparison.Ordinal).Replace("Begininvoke", "begin-invoke", StringComparison.Ordinal).Replace("Endinvoke", "end-invoke", StringComparison.Ordinal)}");
+            }
         }
     }
+
+    private static bool IsRecordPositionalProperty(IPropertySymbol property) => GetRecordPositionalParameter(property) is not null;
+
+    private static IParameterSymbol? GetRecordPositionalParameter(IPropertySymbol property) => property.ContainingType.IsRecord
+        ? property.ContainingType.InstanceConstructors.SelectMany(constructor => constructor.Parameters).SingleOrDefault(parameter => parameter.Name == property.Name && SymbolEqualityComparer.Default.Equals(parameter.Type, property.Type) && parameter.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is ParameterSyntax syntax && syntax.Parent?.Parent is RecordDeclarationSyntax))
+        : null;
 
     private static ComponentRecord Synthesized(string kind, string parentId, string identity) => new(kind, parentId, identity, "origin.compiler-synthesized", "support.not-applicable", "skip.not-applicable.synthesized-non-target");
 
