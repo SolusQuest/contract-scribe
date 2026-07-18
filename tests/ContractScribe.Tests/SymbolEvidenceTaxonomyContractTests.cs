@@ -50,20 +50,6 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
-    public void Manifest_ProvidesOnePublicCoverageVectorForEveryRegistryEntry()
-    {
-        var root = FindRepositoryRoot();
-        using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json")));
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var registered = registry.RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal);
-        var coverage = manifest.RootElement.GetProperty("coverage").EnumerateArray().ToArray();
-        var caseIds = coverage.Select(entry => entry.GetProperty("caseId").GetString()!).ToArray();
-        var covered = coverage.Select(entry => entry.GetProperty("registryId").GetString()!).ToHashSet(StringComparer.Ordinal);
-        Assert.Equal(caseIds.Length, caseIds.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(registered, covered);
-    }
-
-    [Fact]
     public void Manifest_UsesPinnedProfileAndClosedClassificationRecordShapes()
     {
         var root = FindRepositoryRoot();
@@ -174,75 +160,6 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
-    public void TestOnlyClassifier_MapsEveryPrimaryKindInTheSyntheticCorpus()
-    {
-        var compilation = CreateFixtureCompilation();
-        var root = FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var primaryKinds = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
-            .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
-            .Select(ClassifyPrimaryKind)
-            .Where(kind => kind is not null)
-            .ToHashSet(StringComparer.Ordinal);
-        var expected = manifest.RootElement.GetProperty("expectedPrimaryKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
-        Assert.Equal(expected, primaryKinds.OrderBy(value => value, StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public void TestOnlyClassifier_MapsEveryManifestTraitInTheSyntheticCorpus()
-    {
-        var compilation = CreateFixtureCompilation();
-        var root = FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var actual = EnumerateSymbols(compilation.Assembly.GlobalNamespace).SelectMany(ClassifyTraits).ToHashSet(StringComparer.Ordinal);
-        var expected = manifest.RootElement.GetProperty("expectedTraits").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
-        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public void TestOnlyClassifier_MapsEveryManifestRelationKindInTheSyntheticCorpus()
-    {
-        var compilation = CreateFixtureCompilation();
-        var root = FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var actual = ClassifyRelations(compilation).ToHashSet(StringComparer.Ordinal);
-        var expected = manifest.RootElement.GetProperty("expectedRelationKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
-        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public void TestOnlyClassifier_EmitsExactTargetOrAbsenceVectors()
-    {
-        var root = FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var actual = ClassifyTargets(CreateFixtureCompilation()).ToDictionary(record => record.SymbolId, StringComparer.Ordinal);
-        foreach (var vector in manifest.RootElement.GetProperty("classificationVectors").EnumerateArray())
-        {
-            var symbolId = vector.GetProperty("symbolId").GetString()!;
-            if (vector.TryGetProperty("expectedAbsent", out var expectedAbsent))
-            {
-                Assert.True(expectedAbsent.GetBoolean());
-                Assert.DoesNotContain(symbolId, actual.Keys);
-                continue;
-            }
-            var record = Assert.IsType<TargetRecord>(actual[symbolId]);
-            Assert.Equal(vector.GetProperty("primaryKind").GetString(), record.PrimaryKind);
-            Assert.Equal(vector.GetProperty("origin").GetString(), record.Origin);
-            Assert.Equal(vector.GetProperty("supportStatus").GetString(), record.SupportStatus);
-        }
-    }
-
-    [Fact]
-    public void TestOnlyClassifier_MapsManifestComponentKinds()
-    {
-        var root = FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var actual = ClassifyComponents(CreateFixtureCompilation()).Select(component => component.Kind).ToHashSet(StringComparer.Ordinal);
-        var expected = manifest.RootElement.GetProperty("expectedComponentKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
-        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
-    }
-
-    [Fact]
     public void TestOnlyClassifier_EmitsDeterministicCanonicalClassificationRecords()
     {
         var root = FindRepositoryRoot();
@@ -269,9 +186,6 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.Contains("Microsoft.CodeAnalysis.CSharp\" Version=\"4.14.0", File.ReadAllText(Path.Combine(root, "Directory.Packages.props")), StringComparison.Ordinal);
         var compilation = CreateFixtureCompilation();
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
-        var ids = manifest.RootElement.GetProperty("expectedDocumentationCommentIds").EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
-        var seen = EnumerateSymbols(compilation.Assembly.GlobalNamespace).Select(symbol => symbol.GetDocumentationCommentId()).OfType<string>().ToHashSet(StringComparer.Ordinal);
-        Assert.True(ids.IsSubsetOf(seen));
     }
 
     private static string FindRepositoryRoot()

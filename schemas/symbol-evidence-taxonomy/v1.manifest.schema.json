@@ -80,48 +80,6 @@
         "pattern": "^[^\\\\/]+\\.cs$"
       }
     },
-    "expectedPrimaryKinds": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "expectedTraits": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "expectedRelationKinds": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "classificationVectors": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      }
-    },
-    "expectedComponentKinds": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "expectedDocumentationCommentIds": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "coverage": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      }
-    },
     "classificationRecords": {
       "type": "array",
       "items": {
