@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Json.Schema;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.Tests;
 
@@ -96,6 +97,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void TestOnlyClassifier_MapsEveryManifestTraitInTheSyntheticCorpus()
+    {
+        var compilation = CreateFixtureCompilation();
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var actual = EnumerateSymbols(compilation.Assembly.GlobalNamespace).SelectMany(ClassifyTraits).ToHashSet(StringComparer.Ordinal);
+        var expected = manifest.RootElement.GetProperty("expectedTraits").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
+        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -156,6 +168,31 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         IEventSymbol => "symbol.member.event",
         _ => null
     };
+
+    private static IEnumerable<string> ClassifyTraits(ISymbol symbol)
+    {
+        if (symbol is INamedTypeSymbol type)
+        {
+            if (type.TypeParameters.Length > 0) yield return "trait.generic";
+            if (type.IsRecord && type.TypeKind == TypeKind.Class) yield return "trait.record-class";
+            if (type.IsRecord && type.TypeKind == TypeKind.Struct) yield return "trait.record-struct";
+            if (type.IsRefLikeType) yield return "trait.ref-struct";
+        }
+        if (symbol is IMethodSymbol method)
+        {
+            if (method.TypeParameters.Length > 0) yield return "trait.generic";
+            if (method.IsExtensionMethod) yield return "trait.extension";
+            if (method.IsAsync) yield return "trait.async";
+            if (method.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is MethodDeclarationSyntax declaration && declaration.DescendantNodes().OfType<YieldStatementSyntax>().Any())) yield return "trait.iterator";
+        }
+        if (symbol.IsStatic) yield return "trait.static";
+        if (symbol.IsAbstract) yield return "trait.abstract";
+        if (symbol.IsVirtual) yield return "trait.virtual";
+        if (symbol.IsSealed) yield return "trait.sealed";
+        if (symbol is IPropertySymbol property && property.IsRequired) yield return "trait.required";
+        if (symbol is IPropertySymbol { SetMethod.IsInitOnly: true }) yield return "trait.init-only";
+        if (symbol.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is TypeDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.PartialKeyword))) yield return "trait.partial";
+    }
 
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
     {

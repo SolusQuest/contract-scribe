@@ -14,5 +14,6 @@
   },
   "sources": ["SampleSymbols.cs"],
   "expectedPrimaryKinds": ["symbol.type.class", "symbol.type.struct", "symbol.type.interface", "symbol.type.enum", "symbol.type.delegate", "symbol.member.constructor", "symbol.member.method", "symbol.member.operator", "symbol.member.conversion", "symbol.member.property", "symbol.member.indexer", "symbol.member.field", "symbol.member.enum-member", "symbol.member.event"],
+  "expectedTraits": ["trait.generic", "trait.record-class", "trait.record-struct", "trait.ref-struct", "trait.static", "trait.abstract", "trait.virtual", "trait.sealed", "trait.extension", "trait.async", "trait.iterator", "trait.required", "trait.init-only", "trait.partial"],
   "expectedDocumentationCommentIds": ["T:TaxonomyFixtures.IContract", "M:TaxonomyFixtures.IContract.Execute", "T:TaxonomyFixtures.SampleRecord", "P:TaxonomyFixtures.SampleRecord.Name", "M:TaxonomyFixtures.SampleRecord.Execute", "T:TaxonomyFixtures.Base", "M:TaxonomyFixtures.Base.ProtectedMember", "T:TaxonomyFixtures.SampleDelegate"]
 }

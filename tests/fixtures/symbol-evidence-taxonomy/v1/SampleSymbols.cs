@@ -23,9 +23,16 @@ public partial record SampleRecord(string Name) : IContract, IStaticContract
     void IContract.Execute() { }
 }
 
+public record struct SampleRecordStruct(int Value);
+
 public class Base
 {
     protected virtual void ProtectedMember() { }
+}
+
+public sealed class Derived : Base
+{
+    protected sealed override void ProtectedMember() { }
 }
 
 public sealed class SealedBase
@@ -34,6 +41,16 @@ public sealed class SealedBase
 }
 
 public delegate int SampleDelegate(int value);
+
+public ref struct SampleRefStruct<T>
+{
+    public T Value;
+}
+
+public static class SampleExtensions
+{
+    public static void Extend<T>(this T value) { }
+}
 
 public struct SampleStruct { }
 
