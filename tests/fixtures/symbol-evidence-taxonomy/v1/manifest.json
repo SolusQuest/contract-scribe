@@ -657,35 +657,11 @@
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
       },
-      "componentKind": "component.accessor.get",
-      "identity": "accessor/get",
-      "origin": "origin.source",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.non-documentation-component"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
-      },
       "componentKind": "component.accessor.set",
       "identity": "accessor/set",
       "origin": "origin.mixed",
       "supportStatus": "support.ambiguous",
       "skipReason": "skip.ambiguous.mixed-origin"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
-      },
-      "componentKind": "component.accessor.set",
-      "identity": "accessor/set",
-      "origin": "origin.source",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.non-documentation-component"
     },
     {
       "recordType": "ComponentClassification",
@@ -705,34 +681,11 @@
         "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
       },
-      "componentKind": "component.backing-field",
-      "identity": "backing-field",
-      "origin": "origin.source",
-      "supportStatus": "support.not-applicable",
-      "skipReason": "skip.not-applicable.non-documentation-component"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
-      },
       "componentKind": "component.value",
       "identity": "value",
       "origin": "origin.mixed",
       "supportStatus": "support.ambiguous",
       "skipReason": "skip.ambiguous.mixed-origin"
-    },
-    {
-      "recordType": "ComponentClassification",
-      "parentSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
-      },
-      "componentKind": "component.value",
-      "identity": "value",
-      "origin": "origin.source",
-      "supportStatus": "support.supported"
     },
     {
       "recordType": "ComponentClassification",

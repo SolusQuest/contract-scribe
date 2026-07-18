@@ -67,6 +67,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.NotEqual(collisions[0].GetRawText(), collisions[1].GetRawText());
         var records = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().ToArray();
         Assert.Equal(records.Length, records.Select(record => record.GetRawText()).Distinct(StringComparer.Ordinal).Count());
+        var componentKeys = records.Where(record => record.GetProperty("recordType").GetString() == "ComponentClassification").Select(record => string.Join("|", record.GetProperty("parentSymbolRef").GetProperty("compilationContextRef").GetString(), record.GetProperty("parentSymbolRef").GetProperty("documentationCommentId").GetString(), record.GetProperty("componentKind").GetString(), record.GetProperty("identity").GetString())).ToArray();
+        Assert.Equal(componentKeys.Length, componentKeys.Distinct(StringComparer.Ordinal).Count());
         foreach (var record in records)
         {
             Assert.True(IsValidClassificationRecord(record));
@@ -501,7 +503,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["skipReason"] = kindAvailable ? "skip.ambiguous.partial-declaration" : "skip.unsupported.symbol-kind"
             });
         }
-        foreach (var component in ClassifyComponents(compilation, manifest).OrderBy(component => component.ParentSymbolId, StringComparer.Ordinal).ThenBy(component => component.Kind, StringComparer.Ordinal).ThenBy(component => component.Identity, StringComparer.Ordinal))
+        var scenarioComponentParents = manifest.GetProperty("mixedComponentScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("parentDocumentationCommentId").GetString()!).ToHashSet(StringComparer.Ordinal);
+        foreach (var component in ClassifyComponents(compilation, manifest).Where(component => !scenarioComponentParents.Contains(component.ParentSymbolId)).OrderBy(component => component.ParentSymbolId, StringComparer.Ordinal).ThenBy(component => component.Kind, StringComparer.Ordinal).ThenBy(component => component.Identity, StringComparer.Ordinal))
         {
             records.Add(new Dictionary<string, object>
             {
