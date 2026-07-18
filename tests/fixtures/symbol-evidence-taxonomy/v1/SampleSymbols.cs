@@ -16,6 +16,15 @@ public interface IStaticContract
     static abstract int StaticMember();
 }
 
+public interface IShapeContract
+{
+    int Value { get; }
+    int this[int index] { get; }
+    event EventHandler? Changed;
+}
+
+public interface IDerivedShapeContract : IShapeContract { }
+
 public partial record SampleRecord(string Name) : IDerivedContract, IStaticContract
 {
     public required string Required { get; init; }
@@ -40,6 +49,35 @@ public sealed class Derived : Base
 public sealed class SealedBase
 {
     protected void NotReachable() { }
+}
+
+public class ShapeBase
+{
+    public virtual int Value => 0;
+    public virtual int this[int index] => index;
+    public virtual event EventHandler? Changed;
+}
+
+public sealed class ShapeDerived : ShapeBase, IShapeContract
+{
+    public override int Value => 1;
+    public override int this[int index] => index + 1;
+    public override event EventHandler? Changed
+    {
+        add { }
+        remove { }
+    }
+}
+
+public sealed class ExplicitShape : IShapeContract
+{
+    int IShapeContract.Value => 0;
+    int IShapeContract.this[int index] => index;
+    event EventHandler? IShapeContract.Changed
+    {
+        add { }
+        remove { }
+    }
 }
 
 public delegate int SampleDelegate(int value);

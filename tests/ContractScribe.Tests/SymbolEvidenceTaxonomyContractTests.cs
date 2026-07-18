@@ -100,7 +100,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 var relation = RegistryEntries.Value[record.GetProperty("relationKind").GetString()!];
                 var source = record.GetProperty("sourceSymbolRef").GetProperty("documentationCommentId").GetString()!;
                 var target = record.GetProperty("targetSymbolRef").GetProperty("documentationCommentId").GetString()!;
-                Assert.Contains(kindsByDocumentationId.GetValueOrDefault(source, "symbol.member.method"), relation.GetProperty("sourceDomain").EnumerateArray().Select(value => value.GetString()));
+                Assert.True(kindsByDocumentationId.TryGetValue(source, out var sourceKind), $"Missing source kind for {source}");
+                Assert.Contains(sourceKind, relation.GetProperty("sourceDomain").EnumerateArray().Select(value => value.GetString()));
                 Assert.Contains(kindsByDocumentationId[target], relation.GetProperty("targetDomain").EnumerateArray().Select(value => value.GetString()));
             }
         }
@@ -266,6 +267,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         IMethodSymbol { MethodKind: MethodKind.Conversion } => "symbol.member.conversion",
         IMethodSymbol { MethodKind: MethodKind.Destructor } => "symbol.member.method",
         IMethodSymbol { MethodKind: MethodKind.Ordinary } => "symbol.member.method",
+        IMethodSymbol { MethodKind: MethodKind.ExplicitInterfaceImplementation } => "symbol.member.method",
         IPropertySymbol { IsIndexer: true } => "symbol.member.indexer",
         IPropertySymbol => "symbol.member.property",
         IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } => "symbol.member.enum-member",
@@ -407,19 +409,38 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>())
         {
-            foreach (var method in type.GetMembers().OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared))
+            foreach (var member in type.GetMembers().Where(IsRelationMember))
             {
-                if (method.OverriddenMethod is { } overridden && method.GetDocumentationCommentId() is { } source && overridden.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
-                foreach (var implemented in method.ExplicitInterfaceImplementations)
-                    if (method.GetDocumentationCommentId() is { } explicitSource && implemented.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
+                if (GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
+                foreach (var implemented in GetExplicitInterfaceMembers(member))
+                    if (member.GetDocumentationCommentId() is { } explicitSource && implemented.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
             }
             if (type.TypeKind == TypeKind.Interface)
-                foreach (var inherited in type.Interfaces.SelectMany(@interface => @interface.GetMembers()).OfType<IMethodSymbol>())
+                foreach (var inherited in type.Interfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
                     if (type.GetDocumentationCommentId() is { } source && inherited.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
-            foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).OfType<IMethodSymbol>())
-                if (interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is IMethodSymbol implementation && !implementation.IsImplicitlyDeclared && implementation.ExplicitInterfaceImplementations.Length == 0 && implementation.GetDocumentationCommentId() is { } source && interfaceMember.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+            if (type.TypeKind != TypeKind.Interface)
+                foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
+                    if (interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
+
+    private static bool IsRelationMember(ISymbol symbol) => !symbol.IsImplicitlyDeclared && ClassifyPrimaryKind(symbol) is not null;
+
+    private static ISymbol? GetOverriddenMember(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol method => method.OverriddenMethod,
+        IPropertySymbol property => property.OverriddenProperty,
+        IEventSymbol @event => @event.OverriddenEvent,
+        _ => null
+    };
+
+    private static IEnumerable<ISymbol> GetExplicitInterfaceMembers(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol method => method.ExplicitInterfaceImplementations,
+        IPropertySymbol property => property.ExplicitInterfaceImplementations,
+        IEventSymbol @event => @event.ExplicitInterfaceImplementations,
+        _ => []
+    };
 
     private static Dictionary<string, object> Relation(string kind, string source, string target, string context) => new()
     {
