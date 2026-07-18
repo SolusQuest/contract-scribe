@@ -81,6 +81,23 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void TestOnlyClassifier_MapsEveryPrimaryKindInTheSyntheticCorpus()
+    {
+        var compilation = CreateFixtureCompilation();
+        var primaryKinds = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
+            .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
+            .Select(ClassifyPrimaryKind)
+            .Where(kind => kind is not null)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(new[]
+        {
+            "symbol.type.class", "symbol.type.struct", "symbol.type.interface", "symbol.type.enum", "symbol.type.delegate",
+            "symbol.member.constructor", "symbol.member.method", "symbol.member.operator", "symbol.member.conversion",
+            "symbol.member.property", "symbol.member.indexer", "symbol.member.field", "symbol.member.enum-member", "symbol.member.event"
+        }.OrderBy(value => value, StringComparer.Ordinal), primaryKinds.OrderBy(value => value, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -113,6 +130,34 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         foreach (var nestedNamespace in @namespace.GetNamespaceMembers()) foreach (var symbol in EnumerateSymbols(nestedNamespace)) yield return symbol;
         foreach (var type in @namespace.GetTypeMembers()) foreach (var symbol in EnumerateSymbols(type)) yield return symbol;
     }
+
+    private static CSharpCompilation CreateFixtureCompilation()
+    {
+        var root = FindRepositoryRoot();
+        var sourcePath = Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "SampleSymbols.cs");
+        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(sourcePath), new CSharpParseOptions(LanguageVersion.Preview));
+        var references = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location)).Select(assembly => MetadataReference.CreateFromFile(assembly.Location));
+        return CSharpCompilation.Create("taxonomy-fixture", [tree], references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    private static string? ClassifyPrimaryKind(ISymbol symbol) => symbol switch
+    {
+        INamedTypeSymbol { TypeKind: TypeKind.Class } => "symbol.type.class",
+        INamedTypeSymbol { TypeKind: TypeKind.Struct } => "symbol.type.struct",
+        INamedTypeSymbol { TypeKind: TypeKind.Interface } => "symbol.type.interface",
+        INamedTypeSymbol { TypeKind: TypeKind.Enum } => "symbol.type.enum",
+        INamedTypeSymbol { TypeKind: TypeKind.Delegate } => "symbol.type.delegate",
+        IMethodSymbol { MethodKind: MethodKind.Constructor } => "symbol.member.constructor",
+        IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } => "symbol.member.operator",
+        IMethodSymbol { MethodKind: MethodKind.Conversion } => "symbol.member.conversion",
+        IMethodSymbol { MethodKind: MethodKind.Ordinary } => "symbol.member.method",
+        IPropertySymbol { IsIndexer: true } => "symbol.member.indexer",
+        IPropertySymbol => "symbol.member.property",
+        IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } => "symbol.member.enum-member",
+        IFieldSymbol => "symbol.member.field",
+        IEventSymbol => "symbol.member.event",
+        _ => null
+    };
 
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
     {
