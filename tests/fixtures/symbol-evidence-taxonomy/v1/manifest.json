@@ -60,6 +60,7 @@
     { "caseId": "explicit-interface-is-absent", "symbolId": "M:TaxonomyFixtures.SampleRecord.TaxonomyFixtures#IContract#Execute", "expectedAbsent": true },
     { "caseId": "operator", "symbolId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)", "primaryKind": "symbol.member.operator", "origin": "origin.source", "supportStatus": "support.supported" }
   ],
+  "expectedComponentKinds": ["component.parameter", "component.return", "component.value", "component.accessor.get", "component.accessor.set", "component.accessor.init", "component.accessor.add", "component.accessor.remove"],
   "expectedDocumentationCommentIds": [
     "T:TaxonomyFixtures.IContract",
     "M:TaxonomyFixtures.IContract.Execute",

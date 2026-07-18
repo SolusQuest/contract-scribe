@@ -155,6 +155,16 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void TestOnlyClassifier_MapsManifestComponentKinds()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var actual = ClassifyComponents(CreateFixtureCompilation()).Select(component => component.Kind).ToHashSet(StringComparer.Ordinal);
+        var expected = manifest.RootElement.GetProperty("expectedComponentKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
+        Assert.Equal(expected, actual.OrderBy(value => value, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -262,6 +272,26 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
     }
 
+    private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation)
+    {
+        foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => method.Locations.Any(location => location.IsInSource)))
+        {
+            foreach (var parameter in method.Parameters) yield return new ComponentRecord("component.parameter", method.GetDocumentationCommentId()!, $"parameter/{parameter.Ordinal}");
+            if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return new ComponentRecord("component.return", method.GetDocumentationCommentId()!, "return");
+        }
+        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => property.Locations.Any(location => location.IsInSource)))
+        {
+            yield return new ComponentRecord("component.value", property.GetDocumentationCommentId()!, "value");
+            if (property.GetMethod is not null) yield return new ComponentRecord("component.accessor.get", property.GetDocumentationCommentId()!, "accessor/get");
+            if (property.SetMethod is not null) yield return new ComponentRecord(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property.GetDocumentationCommentId()!, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set");
+        }
+        foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => @event.Locations.Any(location => location.IsInSource)))
+        {
+            yield return new ComponentRecord("component.accessor.add", @event.GetDocumentationCommentId()!, "accessor/add");
+            yield return new ComponentRecord("component.accessor.remove", @event.GetDocumentationCommentId()!, "accessor/remove");
+        }
+    }
+
     private static bool IsDocumentationTarget(ISymbol symbol)
     {
         if (symbol.GetDocumentationCommentId() is null || ClassifyPrimaryKind(symbol) is null || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }) return false;
@@ -334,4 +364,5 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
     private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
+    private sealed record ComponentRecord(string Kind, string ParentSymbolId, string Identity);
 }
