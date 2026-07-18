@@ -134,6 +134,20 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void CanonicalClassificationRecords_ExerciseTheClosedRegistry()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var records = manifest.RootElement.GetProperty("classificationRecords").EnumerateArray().ToArray();
+        Assert.Equal(RegistryIds.Value["primaryKinds"].OrderBy(id => id, StringComparer.Ordinal), records.Where(record => record.GetProperty("recordType").GetString() == "TargetClassification").Select(record => record.GetProperty("primaryKind").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(RegistryIds.Value["traits"].OrderBy(id => id, StringComparer.Ordinal), records.Where(record => record.GetProperty("recordType").GetString() == "TargetClassification").SelectMany(record => record.GetProperty("traits").EnumerateArray()).Select(trait => trait.GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(RegistryIds.Value["componentKinds"].OrderBy(id => id, StringComparer.Ordinal), records.Where(record => record.GetProperty("recordType").GetString() == "ComponentClassification").Select(record => record.GetProperty("componentKind").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(RegistryIds.Value["relationKinds"].OrderBy(id => id, StringComparer.Ordinal), records.Where(record => record.GetProperty("recordType").GetString() == "RelationObservation").Select(record => record.GetProperty("relationKind").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+        foreach (var section in new[] { "origins", "supportStatuses", "skipReasons" })
+            Assert.Equal(RegistryIds.Value[section].OrderBy(id => id, StringComparer.Ordinal), records.Where(record => record.TryGetProperty(section == "origins" ? "origin" : section == "supportStatuses" ? "supportStatus" : "skipReason", out _)).Select(record => record.GetProperty(section == "origins" ? "origin" : section == "supportStatuses" ? "supportStatus" : "skipReason").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void Schema_ValidatesABoundedEvidenceBundle()
     {
         using var valid = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.not-provided\",\"items\":[]}");
@@ -470,6 +484,22 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["supportStatus"] = target.SupportStatus
             });
             if (target.SkipReason is not null) records[^1]["skipReason"] = target.SkipReason;
+        }
+        foreach (var scenario in manifest.GetProperty("targetScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
+        {
+            var kindAvailable = scenario.GetProperty("kindAvailable").GetBoolean();
+            var partialDeclaration = scenario.GetProperty("partialDeclaration").GetBoolean();
+            if (kindAvailable != partialDeclaration) throw new InvalidOperationException("A target scenario must represent an unavailable kind or a partial declaration.");
+            records.Add(new Dictionary<string, object>
+            {
+                ["recordType"] = "TargetClassification",
+                ["symbolRef"] = SymbolRef(context, scenario.GetProperty("documentationCommentId").GetString()!),
+                ["primaryKind"] = kindAvailable ? scenario.GetProperty("candidatePrimaryKind").GetString()! : "symbol.unknown",
+                ["traits"] = Array.Empty<string>(),
+                ["origin"] = "origin.source",
+                ["supportStatus"] = kindAvailable ? "support.ambiguous" : "support.unsupported",
+                ["skipReason"] = kindAvailable ? "skip.ambiguous.partial-declaration" : "skip.unsupported.symbol-kind"
+            });
         }
         foreach (var component in ClassifyComponents(compilation, manifest).OrderBy(component => component.ParentSymbolId, StringComparer.Ordinal).ThenBy(component => component.Kind, StringComparer.Ordinal).ThenBy(component => component.Identity, StringComparer.Ordinal))
         {

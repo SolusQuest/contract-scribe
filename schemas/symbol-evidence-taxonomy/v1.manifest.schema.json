@@ -13,6 +13,7 @@
     "sources",
     "sourceProvenance",
     "contextCollisionVectors",
+    "targetScenarios",
     "classificationRecords",
     "unknownComponentScenarios",
     "unresolvedScenarios",
@@ -107,6 +108,56 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/symbolRef"
+      }
+    },
+    "targetScenarios": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId",
+          "documentationCommentId",
+          "kindAvailable",
+          "partialDeclaration"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          },
+          "documentationCommentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kindAvailable": {
+            "type": "boolean"
+          },
+          "partialDeclaration": {
+            "type": "boolean"
+          },
+          "candidatePrimaryKind": {
+            "enum": [
+              "symbol.type.class",
+              "symbol.type.struct",
+              "symbol.type.interface",
+              "symbol.type.enum",
+              "symbol.type.delegate",
+              "symbol.member.constructor",
+              "symbol.member.method",
+              "symbol.member.operator",
+              "symbol.member.conversion",
+              "symbol.member.property",
+              "symbol.member.indexer",
+              "symbol.member.field",
+              "symbol.member.enum-member",
+              "symbol.member.event"
+            ]
+          }
+        }
       }
     },
     "unresolvedScenarios": {

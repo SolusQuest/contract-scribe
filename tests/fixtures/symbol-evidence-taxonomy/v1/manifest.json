@@ -2462,6 +2462,18 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.PartialAmbiguity"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.partial-declaration"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.PrimaryConstructorClass"
       },
       "primaryKind": "symbol.type.class",
@@ -2646,6 +2658,18 @@
       "traits": [],
       "origin": "origin.tool-generated",
       "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.UnknownPrimary"
+      },
+      "primaryKind": "symbol.unknown",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.symbol-kind"
     },
     {
       "recordType": "UnresolvedClassification",
@@ -2868,6 +2892,21 @@
     {
       "compilationContextRef": "synthetic.v1",
       "documentationCommentId": "T:TaxonomyFixtures.IContract"
+    }
+  ],
+  "targetScenarios": [
+    {
+      "scenarioId": "unknown-primary-kind",
+      "documentationCommentId": "T:TaxonomyFixtures.UnknownPrimary",
+      "kindAvailable": false,
+      "partialDeclaration": false
+    },
+    {
+      "scenarioId": "partial-declaration",
+      "documentationCommentId": "T:TaxonomyFixtures.PartialAmbiguity",
+      "kindAvailable": true,
+      "partialDeclaration": true,
+      "candidatePrimaryKind": "symbol.type.class"
     }
   ]
 }
