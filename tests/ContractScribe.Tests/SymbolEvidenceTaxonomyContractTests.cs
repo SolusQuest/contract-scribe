@@ -178,8 +178,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.Equal("enable", profile.GetProperty("nullable").GetString());
         Assert.Equal("4.14.0", profile.GetProperty("roslynPackageVersion").GetString());
         Assert.Contains("Microsoft.CodeAnalysis.CSharp\" Version=\"4.14.0", File.ReadAllText(Path.Combine(root, "Directory.Packages.props")), StringComparison.Ordinal);
-        var source = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, "SampleSymbols.cs")), new CSharpParseOptions(LanguageVersion.Preview, preprocessorSymbols: profile.GetProperty("preprocessorSymbols").EnumerateArray().Select(value => value.GetString()!)));
-        var compilation = CSharpCompilation.Create("taxonomy-fixture", [source], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var compilation = CreateFixtureCompilation();
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var ids = manifest.RootElement.GetProperty("expectedDocumentationCommentIds").EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
         var seen = EnumerateSymbols(compilation.Assembly.GlobalNamespace).Select(symbol => symbol.GetDocumentationCommentId()).OfType<string>().ToHashSet(StringComparer.Ordinal);
@@ -204,10 +203,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static CSharpCompilation CreateFixtureCompilation()
     {
         var root = FindRepositoryRoot();
-        var sourcePath = Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "SampleSymbols.cs");
-        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(sourcePath), new CSharpParseOptions(LanguageVersion.Preview));
-        var references = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location)).Select(assembly => MetadataReference.CreateFromFile(assembly.Location));
-        return CSharpCompilation.Create("taxonomy-fixture", [tree], references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var fixture = Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1");
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture, "manifest.json")));
+        var profile = manifest.RootElement.GetProperty("compilationProfile");
+        var languageVersion = Enum.Parse<LanguageVersion>(profile.GetProperty("languageVersion").GetString()!, ignoreCase: false);
+        var sourceEncoding = profile.GetProperty("sourceEncoding").GetString();
+        if (sourceEncoding != "utf-8" || profile.GetProperty("targetFramework").GetString() != "net10.0" || profile.GetProperty("nullable").GetString() != "enable") throw new InvalidOperationException("The fixture profile must pin V1 compilation settings.");
+        var parseOptions = new CSharpParseOptions(languageVersion, preprocessorSymbols: profile.GetProperty("preprocessorSymbols").EnumerateArray().Select(value => value.GetString()!));
+        var trees = manifest.RootElement.GetProperty("sources").EnumerateArray().Select(value => CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(fixture, value.GetString()!)), parseOptions, encoding: System.Text.Encoding.UTF8)).ToArray();
+        var trustedAssemblies = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
+        var references = trustedAssemblies.Select(path => MetadataReference.CreateFromFile(path));
+        return CSharpCompilation.Create("taxonomy-fixture", trees, references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, warningLevel: profile.GetProperty("warningLevel").GetInt32()));
     }
 
     private static string? ClassifyPrimaryKind(ISymbol symbol) => symbol switch
