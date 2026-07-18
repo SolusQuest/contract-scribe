@@ -36,6 +36,12 @@ public interface IDefaultContract
     static virtual int StaticVirtualMember() => 0;
 }
 
+public interface IOperatorContract<TSelf> where TSelf : IOperatorContract<TSelf>
+{
+    static abstract TSelf operator +(TSelf left, TSelf right);
+    static abstract implicit operator int(TSelf value);
+}
+
 public interface IShapeContract
 {
     int Value { get; }

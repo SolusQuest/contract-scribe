@@ -370,8 +370,7 @@
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.set.",
@@ -391,8 +390,7 @@
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.init.",
@@ -412,8 +410,7 @@
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.indexer"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.add.",
@@ -432,8 +429,7 @@
         ],
         "parentKinds": [
           "symbol.member.event"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.accessor.remove.",
@@ -452,8 +448,7 @@
         ],
         "parentKinds": [
           "symbol.member.event"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.backing-field.",
@@ -473,8 +468,7 @@
         "parentKinds": [
           "symbol.member.property",
           "symbol.member.event"
-        ],
-        "requiredSkip": "skip.not-applicable.non-documentation-component"
+        ]
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.record-positional-property.",

@@ -209,6 +209,61 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/1",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
       },
       "componentKind": "component.return",
@@ -884,6 +939,17 @@
       "origin": "origin.compiler-synthesized",
       "supportStatus": "support.not-applicable",
       "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IOperatorContract`1"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
     },
     {
       "recordType": "ComponentClassification",
@@ -1683,6 +1749,34 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "primaryKind": "symbol.member.operator",
+      "traits": [
+        "trait.abstract",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "primaryKind": "symbol.member.conversion",
+      "traits": [
+        "trait.abstract",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
       },
       "primaryKind": "symbol.member.method",
@@ -2235,6 +2329,20 @@
       "primaryKind": "symbol.type.interface",
       "traits": [
         "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IOperatorContract`1"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract",
+        "trait.generic"
       ],
       "origin": "origin.source",
       "supportStatus": "support.supported"

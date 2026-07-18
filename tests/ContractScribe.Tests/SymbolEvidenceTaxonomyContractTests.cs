@@ -394,7 +394,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         ComponentRecord SourceComponent(string kind, ISymbol parent, string identity, string supportStatus = "support.supported", string? skipReason = null)
         {
             var origin = ClassifySourceOrigin(parent, sourceProvenance);
-            return origin == "origin.mixed" && supportStatus == "support.supported"
+            return origin == "origin.mixed"
                 ? new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, "support.ambiguous", "skip.ambiguous.mixed-origin")
                 : new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, supportStatus, skipReason);
         }
