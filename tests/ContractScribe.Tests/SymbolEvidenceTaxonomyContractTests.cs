@@ -84,17 +84,15 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     public void TestOnlyClassifier_MapsEveryPrimaryKindInTheSyntheticCorpus()
     {
         var compilation = CreateFixtureCompilation();
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
         var primaryKinds = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
             .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
             .Select(ClassifyPrimaryKind)
             .Where(kind => kind is not null)
             .ToHashSet(StringComparer.Ordinal);
-        Assert.Equal(new[]
-        {
-            "symbol.type.class", "symbol.type.struct", "symbol.type.interface", "symbol.type.enum", "symbol.type.delegate",
-            "symbol.member.constructor", "symbol.member.method", "symbol.member.operator", "symbol.member.conversion",
-            "symbol.member.property", "symbol.member.indexer", "symbol.member.field", "symbol.member.enum-member", "symbol.member.event"
-        }.OrderBy(value => value, StringComparer.Ordinal), primaryKinds.OrderBy(value => value, StringComparer.Ordinal));
+        var expected = manifest.RootElement.GetProperty("expectedPrimaryKinds").EnumerateArray().Select(value => value.GetString()!).OrderBy(value => value, StringComparer.Ordinal);
+        Assert.Equal(expected, primaryKinds.OrderBy(value => value, StringComparer.Ordinal));
     }
 
     [Fact]

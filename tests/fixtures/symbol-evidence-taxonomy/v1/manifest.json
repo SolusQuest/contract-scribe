@@ -13,5 +13,6 @@
     "roslynPackageVersion": "4.14.0"
   },
   "sources": ["SampleSymbols.cs"],
+  "expectedPrimaryKinds": ["symbol.type.class", "symbol.type.struct", "symbol.type.interface", "symbol.type.enum", "symbol.type.delegate", "symbol.member.constructor", "symbol.member.method", "symbol.member.operator", "symbol.member.conversion", "symbol.member.property", "symbol.member.indexer", "symbol.member.field", "symbol.member.enum-member", "symbol.member.event"],
   "expectedDocumentationCommentIds": ["T:TaxonomyFixtures.IContract", "M:TaxonomyFixtures.IContract.Execute", "T:TaxonomyFixtures.SampleRecord", "P:TaxonomyFixtures.SampleRecord.Name", "M:TaxonomyFixtures.SampleRecord.Execute", "T:TaxonomyFixtures.Base", "M:TaxonomyFixtures.Base.ProtectedMember", "T:TaxonomyFixtures.SampleDelegate"]
 }
