@@ -40,7 +40,12 @@ An override points from overriding member to original-definition base member. In
 | `component.accessor.get`, `set`, `init` | property, indexer | `accessor/get`, `accessor/set`, `accessor/init` |
 | `component.accessor.add`, `remove` | event | `accessor/add`, `accessor/remove` |
 | `component.backing-field` | property, event | `backing-field` |
-| registered synthesized record/delegate members | owning record, type, or delegate | registry-defined `synthesized/...` value |
+| record positional property | owning record | `synthesized/record-positional-property/N` |
+| implicit constructor | owning type | `synthesized/implicit-constructor` |
+| record copy constructor | owning record | `synthesized/record-copy-constructor` |
+| delegate Invoke | owning delegate | `synthesized/delegate-invoke` |
+| delegate BeginInvoke | owning delegate | `synthesized/delegate-begin-invoke` |
+| delegate EndInvoke | owning delegate | `synthesized/delegate-end-invoke` |
 
 `N` is the zero-based ordinal within the parent. Unknown components use `unknown/N`, ordered by candidate locator. A source-declared primary constructor is a constructor target; its parameters are ordinary parameter components. Positional record properties, implicit constructors, compiler-generated copy constructors, and `Invoke`/`BeginInvoke`/`EndInvoke` use only their named synthesized component kinds with compiler-synthesized origin and not-applicable status. All other compiler-generated symbols are outside V1 and produce no record.
 
@@ -63,7 +68,7 @@ Registry identifiers are lowercase ASCII dotted identifiers, compare ordinally, 
 
 When several conditions apply, choose exactly one skip in this order: missing documentation comment ID; unavailable generated provenance; unavailable semantic context; unknown primary/component kind; ambiguous partial declaration; mixed origin; synthesized non-target; non-documentation component. `origin.unknown` is valid only for unavailable-context with a generated-provenance or semantic-context skip; `origin.mixed` with ambiguity uses the mixed-origin skip.
 
-An unresolved candidate has its compilation context, origin, status, skip, and exactly one candidate locator. Candidate locators are repository, generated-source, or synthetic; their order is repository, generated-source, synthetic. A generated-source locator contains manifest-supplied generator and hint-name IDs (both `^[a-z0-9][a-z0-9._-]{0,127}$`) plus an optional span. Metadata locators never represent an unresolved candidate.
+An unresolved candidate has its compilation context, origin, status, skip, and exactly one candidate locator. Candidate locators are repository, generated-source, or synthetic; their order is repository, generated-source, synthetic. Within one variant comparisons are ordinal: repository is normalized `path`, then an absent span before a present span, then `start`, then `end`; generated source is `generatorId`, `hintNameId`, absent span before present span, `start`, then `end`; synthetic is `fixtureId`. A generated-source locator contains manifest-supplied generator and hint-name IDs (both `^[a-z0-9][a-z0-9._-]{0,127}$`) plus an optional span. Metadata locators never represent an unresolved candidate.
 
 ## Evidence bundle
 

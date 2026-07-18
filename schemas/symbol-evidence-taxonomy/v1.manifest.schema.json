@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/symbol-evidence-taxonomy/v1.manifest.schema.json",
+  "title": "ContractScribe Symbol Evidence Taxonomy V1 Conformance Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["conformanceManifestVersion", "registryVersion", "evidenceBundleVersion", "compilationContextRef", "compilationProfile", "sources", "classificationRecords", "absenceVectors"],
+  "properties": {
+    "conformanceManifestVersion": { "const": 1 },
+    "registryVersion": { "const": 1 },
+    "evidenceBundleVersion": { "const": 1 },
+    "compilationContextRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+    "compilationProfile": { "type": "object", "additionalProperties": false, "required": ["languageVersion", "nullable", "targetFramework", "referencePackVersion", "preprocessorSymbols", "sourceEncoding", "warningLevel", "roslynPackageVersion"], "properties": { "languageVersion": { "const": "Preview" }, "nullable": { "const": "enable" }, "targetFramework": { "const": "net10.0" }, "referencePackVersion": { "type": "string", "pattern": "^10\\.0\\.[0-9]+$" }, "preprocessorSymbols": { "type": "array", "items": { "type": "string" } }, "sourceEncoding": { "const": "utf-8" }, "warningLevel": { "const": 9999 }, "roslynPackageVersion": { "const": "4.14.0" } } },
+    "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[^\\\\/]+\\.cs$" } },
+    "expectedPrimaryKinds": { "type": "array", "items": { "type": "string" } },
+    "expectedTraits": { "type": "array", "items": { "type": "string" } },
+    "expectedRelationKinds": { "type": "array", "items": { "type": "string" } },
+    "classificationVectors": { "type": "array", "items": { "type": "object" } },
+    "expectedComponentKinds": { "type": "array", "items": { "type": "string" } },
+    "expectedDocumentationCommentIds": { "type": "array", "items": { "type": "string" } },
+    "coverage": { "type": "array", "items": { "type": "object" } },
+    "classificationRecords": { "type": "array", "items": { "type": "object" } },
+    "absenceVectors": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["symbolRef", "reason"], "properties": { "symbolRef": { "type": "object" }, "reason": { "type": "string" } } } }
+  }
+}

@@ -289,11 +289,16 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.type.delegate"
         ]
       },
       {
@@ -310,11 +315,15 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.type.class",
+          "symbol.type.struct",
+          "symbol.type.interface",
+          "symbol.type.delegate",
+          "symbol.member.method"
         ]
       },
       {
@@ -331,11 +340,14 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.type.delegate"
         ]
       },
       {
@@ -352,11 +364,12 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.property",
+          "symbol.member.indexer"
         ]
       },
       {
@@ -373,11 +386,12 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.property",
+          "symbol.member.indexer"
         ]
       },
       {
@@ -394,11 +408,12 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.property",
+          "symbol.member.indexer"
         ]
       },
       {
@@ -415,11 +430,12 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.property",
+          "symbol.member.indexer"
         ]
       },
       {
@@ -436,11 +452,11 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.event"
         ]
       },
       {
@@ -457,11 +473,11 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.event"
         ]
       },
       {
@@ -478,11 +494,12 @@
         "allowedSupportStatuses": [
           "support.supported",
           "support.unsupported",
-          "support.not-applicable",
+          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
-          "registry-defined"
+          "symbol.member.property",
+          "symbol.member.event"
         ]
       },
       {
@@ -497,14 +514,14 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.implicit-constructor.",
@@ -518,14 +535,14 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.record-copy-constructor.",
@@ -539,14 +556,14 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-invoke.",
@@ -560,14 +577,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-begin-invoke.",
@@ -581,14 +597,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-end-invoke.",
@@ -602,14 +617,13 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.not-applicable"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
       },
       {
         "definition": "Subordinate XML documentation component classified as component.unknown.",
@@ -623,14 +637,26 @@
           "ComponentClassification"
         ],
         "allowedSupportStatuses": [
-          "support.supported",
-          "support.unsupported",
-          "support.not-applicable",
-          "support.unavailable-context"
+          "support.unsupported"
         ],
         "parentKinds": [
-          "registry-defined"
-        ]
+          "symbol.type.class",
+          "symbol.type.struct",
+          "symbol.type.interface",
+          "symbol.type.enum",
+          "symbol.type.delegate",
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.field",
+          "symbol.member.enum-member",
+          "symbol.member.event",
+          "symbol.unknown"
+        ],
+        "requiredSkip": "skip.unsupported.component-kind"
       }
     ],
     "traits": [
@@ -816,10 +842,24 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ],
         "targetDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ]
       },
       {
@@ -834,10 +874,24 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ],
         "targetDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ]
       },
       {
@@ -852,10 +906,24 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ],
         "targetDomain": [
-          "registry-defined"
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.member.property",
+          "symbol.member.event",
+          "symbol.type.interface"
         ]
       },
       {
@@ -870,10 +938,10 @@
           "RelationObservation"
         ],
         "sourceDomain": [
-          "registry-defined"
+          "symbol.type.interface"
         ],
         "targetDomain": [
-          "registry-defined"
+          "symbol.type.interface"
         ]
       }
     ],
@@ -931,15 +999,11 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "origin.compiler-synthesized",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ]
       },
       {
@@ -963,14 +1027,10 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "origin.unknown",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ]
       }
@@ -982,14 +1042,12 @@
         "replacementId": null,
         "applicability": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "support.supported",
         "recordTypes": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ]
       },
       {
@@ -998,14 +1056,12 @@
         "replacementId": null,
         "applicability": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "support.unsupported",
         "recordTypes": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ]
       },
       {
@@ -1014,14 +1070,12 @@
         "replacementId": null,
         "applicability": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "support.ambiguous",
         "recordTypes": [
           "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ]
       },
       {
@@ -1029,15 +1083,11 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "support.not-applicable",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ]
       },
       {
@@ -1045,14 +1095,10 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "support.unavailable-context",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ]
       }
@@ -1063,18 +1109,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
         "id": "skip.unsupported.symbol-kind",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 4,
+        "allowedSupportStatuses": [
+          "support.unsupported"
         ]
       },
       {
@@ -1082,18 +1125,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "skip.unsupported.component-kind",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 4,
+        "allowedSupportStatuses": [
+          "support.unsupported"
         ]
       },
       {
@@ -1101,18 +1141,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
         "id": "skip.ambiguous.partial-declaration",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 5,
+        "allowedSupportStatuses": [
+          "support.ambiguous"
         ]
       },
       {
@@ -1120,18 +1157,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
         "id": "skip.ambiguous.mixed-origin",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "TargetClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 6,
+        "allowedSupportStatuses": [
+          "support.ambiguous"
         ]
       },
       {
@@ -1139,18 +1173,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "skip.not-applicable.synthesized-non-target",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 7,
+        "allowedSupportStatuses": [
+          "support.not-applicable"
         ]
       },
       {
@@ -1158,18 +1189,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
         "id": "skip.not-applicable.non-documentation-component",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
-          "UnresolvedClassification"
+          "ComponentClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 8,
+        "allowedSupportStatuses": [
+          "support.not-applicable"
         ]
       },
       {
@@ -1177,18 +1205,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "skip.unavailable.documentation-comment-id",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 1,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
         ]
       },
       {
@@ -1196,18 +1221,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "skip.unavailable.generated-provenance",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 2,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
         ]
       },
       {
@@ -1215,18 +1237,15 @@
         "deprecated": null,
         "replacementId": null,
         "applicability": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
         "id": "skip.unavailable.semantic-context",
         "recordTypes": [
-          "TargetClassification",
-          "ComponentClassification",
           "UnresolvedClassification"
         ],
-        "precedence": [
-          "registry-order"
+        "precedence": 3,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
         ]
       }
     ],

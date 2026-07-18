@@ -33,6 +33,9 @@
     {
       "caseId": "partial-truncated",
       "valid": true,
+      "originalEvidenceTexts": {
+        "evidence.a": "ab"
+      },
       "bundle": {
         "evidenceBundleVersion": 1,
         "availabilityStatus": "evidence.bundle.partial",
@@ -47,7 +50,7 @@
             "kind": "evidence.source.declaration",
             "relation": "evidence.declares",
             "excerpt": "a",
-            "sha256": "fb8e20fc2e4c3f248c60c39bd652f3c134729bacec3f1e9b618c0f7f6f9e5f7b",
+            "sha256": "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
             "originalUtf8ByteCount": 2,
             "includedUtf8ByteCount": 1,
             "omittedUtf8ByteCount": 1,
@@ -221,6 +224,151 @@
             }
           }
         ]
+      }
+    },
+    {
+      "caseId": "normalized-repository-span",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "./src//Contract.cs",
+                "span": {
+                  "start": 0,
+                  "end": 1
+                }
+              }
+            }
+          }
+        ]
+      },
+      "originalEvidenceTexts": {
+        "evidence.a": "x",
+        "path:./src//Contract.cs": "x"
+      }
+    },
+    {
+      "caseId": "out-of-range-repository-span",
+      "valid": false,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "./src//Contract.cs",
+                "span": {
+                  "start": 0,
+                  "end": 2
+                }
+              }
+            }
+          }
+        ]
+      },
+      "originalEvidenceTexts": {
+        "evidence.a": "x",
+        "path:./src//Contract.cs": "x"
+      }
+    },
+    {
+      "caseId": "metadata-locator",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "metadata": {
+                "assemblyIdentity": "fixture.v1",
+                "documentationCommentId": "T:TaxonomyFixtures.IContract"
+              }
+            }
+          }
+        ]
+      },
+      "originalEvidenceTexts": {
+        "evidence.a": "x",
+        "path:./src//Contract.cs": "x"
+      }
+    },
+    {
+      "caseId": "synthetic-locator",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "fixture.v1"
+              }
+            }
+          }
+        ]
+      },
+      "originalEvidenceTexts": {
+        "evidence.a": "x",
+        "path:./src//Contract.cs": "x"
       }
     }
   ]

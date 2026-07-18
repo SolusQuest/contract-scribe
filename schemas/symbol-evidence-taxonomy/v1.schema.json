@@ -25,12 +25,25 @@
       }
     },
     "symbolRef": { "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"], "properties": { "compilationContextRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "documentationCommentId": { "type": "string", "minLength": 1 } } },
+    "span": { "type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 } } },
     "locator": {
       "oneOf": [
         { "type": "object", "additionalProperties": false, "required": ["repository"], "properties": { "repository": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 }, "span": { "type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 } } } } } } },
         { "type": "object", "additionalProperties": false, "required": ["metadata"], "properties": { "metadata": { "type": "object", "additionalProperties": false, "required": ["assemblyIdentity", "documentationCommentId"], "properties": { "assemblyIdentity": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "documentationCommentId": { "type": "string", "minLength": 1 } } } } },
         { "type": "object", "additionalProperties": false, "required": ["synthetic"], "properties": { "synthetic": { "type": "object", "additionalProperties": false, "required": ["fixtureId"], "properties": { "fixtureId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } } } } }
       ]
-    }
+    },
+    "candidateLocator": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["repository"], "properties": { "repository": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 }, "span": { "$ref": "#/$defs/span" } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["generatedSource"], "properties": { "generatedSource": { "type": "object", "additionalProperties": false, "required": ["generatorId", "hintNameId"], "properties": { "generatorId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "hintNameId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "span": { "$ref": "#/$defs/span" } } } } },
+        { "type": "object", "additionalProperties": false, "required": ["synthetic"], "properties": { "synthetic": { "type": "object", "additionalProperties": false, "required": ["fixtureId"], "properties": { "fixtureId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } } } } }
+      ]
+    },
+    "targetClassification": { "type": "object", "additionalProperties": false, "required": ["recordType", "symbolRef", "primaryKind", "traits", "origin", "supportStatus"], "properties": { "recordType": { "const": "TargetClassification" }, "symbolRef": { "$ref": "#/$defs/symbolRef" }, "primaryKind": { "type": "string", "pattern": "^(symbol\\.(type|member)\\.|symbol\\.unknown$)" }, "traits": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^trait\\." } }, "origin": { "type": "string", "pattern": "^origin\\." }, "supportStatus": { "type": "string", "pattern": "^support\\." }, "skipReason": { "type": "string", "pattern": "^skip\\." } } },
+    "componentClassification": { "type": "object", "additionalProperties": false, "required": ["recordType", "parentSymbolRef", "componentKind", "identity", "origin", "supportStatus"], "properties": { "recordType": { "const": "ComponentClassification" }, "parentSymbolRef": { "$ref": "#/$defs/symbolRef" }, "componentKind": { "type": "string", "pattern": "^component\\." }, "identity": { "type": "string", "minLength": 1 }, "origin": { "type": "string", "pattern": "^origin\\." }, "supportStatus": { "type": "string", "pattern": "^support\\." }, "skipReason": { "type": "string", "pattern": "^skip\\." } } },
+    "relationObservation": { "type": "object", "additionalProperties": false, "required": ["recordType", "relationKind", "sourceSymbolRef", "targetSymbolRef"], "properties": { "recordType": { "const": "RelationObservation" }, "relationKind": { "type": "string", "pattern": "^relation\\." }, "sourceSymbolRef": { "$ref": "#/$defs/symbolRef" }, "targetSymbolRef": { "$ref": "#/$defs/symbolRef" } } },
+    "unresolvedClassification": { "type": "object", "additionalProperties": false, "required": ["recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator"], "properties": { "recordType": { "const": "UnresolvedClassification" }, "compilationContextRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }, "origin": { "type": "string", "pattern": "^origin\\." }, "supportStatus": { "const": "support.unavailable-context" }, "skipReason": { "type": "string", "pattern": "^skip\\.unavailable\\." }, "candidateLocator": { "$ref": "#/$defs/candidateLocator" } } },
+    "classificationRecord": { "oneOf": [ { "$ref": "#/$defs/targetClassification" }, { "$ref": "#/$defs/componentClassification" }, { "$ref": "#/$defs/relationObservation" }, { "$ref": "#/$defs/unresolvedClassification" } ] }
   }
 }
