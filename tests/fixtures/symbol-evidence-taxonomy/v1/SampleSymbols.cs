@@ -11,6 +11,20 @@ public interface IContract
 
 public interface IDerivedContract : IContract { }
 
+public interface ILeftContract : IContract { }
+public interface IRightContract : IContract { }
+public interface IDiamondContract : ILeftContract, IRightContract { }
+
+public interface IAlphaContract
+{
+    void Execute();
+}
+
+public interface IBetaContract
+{
+    void Execute();
+}
+
 public interface IStaticContract
 {
     static abstract int StaticMember();
@@ -49,6 +63,34 @@ public sealed class Derived : Base
 public sealed class SealedBase
 {
     protected void NotReachable() { }
+}
+
+public class NestedReachability
+{
+    protected class ProtectedNested
+    {
+        public void ReachableMember() { }
+    }
+
+    protected internal class ProtectedInternalNested
+    {
+        public void ReachableMember() { }
+    }
+
+    private protected class PrivateProtectedNested
+    {
+        public void NotReachableMember() { }
+    }
+}
+
+public sealed class DiamondImplementation : IDiamondContract
+{
+    public void Execute() { }
+}
+
+public sealed class MultiInterfaceImplementation : IAlphaContract, IBetaContract
+{
+    public void Execute() { }
 }
 
 public class ShapeBase

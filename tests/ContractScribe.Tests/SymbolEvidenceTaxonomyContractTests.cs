@@ -424,7 +424,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             });
             if (component.SkipReason is not null) records[^1]["skipReason"] = component.SkipReason;
         }
-        foreach (var relation in ClassifyRelationRecords(compilation, context)) records.Add(relation);
+        foreach (var relation in ClassifyRelationRecords(compilation, context).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
         foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
         {
             records.Add(new Dictionary<string, object>
@@ -446,16 +446,16 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             foreach (var member in type.GetMembers().Where(IsRelationMember))
             {
-                if (GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
+                if (GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
                 foreach (var implemented in GetExplicitInterfaceMembers(member))
-                    if (member.GetDocumentationCommentId() is { } explicitSource && implemented.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
+                    if (ContainingTypesReachable(member.ContainingType) && IsDocumentationTarget(implemented) && member.GetDocumentationCommentId() is { } explicitSource && implemented.OriginalDefinition.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
             }
             if (type.TypeKind == TypeKind.Interface)
-                foreach (var inherited in type.Interfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
-                    if (type.GetDocumentationCommentId() is { } source && inherited.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
+                foreach (var inherited in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(IsDocumentationTarget))
+                    if (type.GetDocumentationCommentId() is { } source && inherited.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
             if (type.TypeKind != TypeKind.Interface)
                 foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
-                    if (interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+                    if (IsDocumentationTarget(interfaceMember) && interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
 
@@ -497,7 +497,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         if (symbol.GetDocumentationCommentId() is null || ClassifyPrimaryKind(symbol) is null || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }) return false;
         if (symbol is IMethodSymbol { ExplicitInterfaceImplementations.Length: > 0 }) return false;
-        if (symbol is INamedTypeSymbol type) return type.DeclaredAccessibility == Accessibility.Public && ContainingTypesReachable(type);
+        if (symbol is INamedTypeSymbol type) return IsReachableType(type);
         var containing = symbol.ContainingType;
         if (containing is null || !ContainingTypesReachable(containing)) return false;
         return symbol.DeclaredAccessibility == Accessibility.Public
@@ -506,11 +506,15 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static bool ContainingTypesReachable(INamedTypeSymbol type)
     {
-        for (var current = type; current is not null; current = current.ContainingType)
-        {
-            if (current.DeclaredAccessibility != Accessibility.Public) return false;
-        }
-        return true;
+        return IsReachableType(type);
+    }
+
+    private static bool IsReachableType(INamedTypeSymbol type)
+    {
+        if (type.ContainingType is null) return type.DeclaredAccessibility == Accessibility.Public;
+        if (!IsReachableType(type.ContainingType)) return false;
+        return type.DeclaredAccessibility == Accessibility.Public
+            || type.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && type.ContainingType.TypeKind == TypeKind.Class && !type.ContainingType.IsSealed;
     }
 
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
@@ -518,8 +522,11 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         yield return type;
         foreach (var member in type.GetMembers())
         {
-            yield return member;
-            if (member is INamedTypeSymbol nested) foreach (var symbol in EnumerateSymbols(nested)) yield return symbol;
+            if (member is INamedTypeSymbol nested)
+            {
+                foreach (var symbol in EnumerateSymbols(nested)) yield return symbol;
+            }
+            else yield return member;
         }
     }
 
