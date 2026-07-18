@@ -613,6 +613,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 && IsSymbolRef(record.GetProperty("sourceSymbolRef")) && IsSymbolRef(record.GetProperty("targetSymbolRef")),
             "UnresolvedClassification" => HasOnlyProperties(record, "recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator") && record.GetProperty("supportStatus").GetString() == "support.unavailable-context"
                 && Known("origins", record.GetProperty("origin").GetString()) && Known("skipReasons", record.GetProperty("skipReason").GetString())
+                && (record.GetProperty("origin").GetString() != "origin.unknown" || record.GetProperty("skipReason").GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context")
                 && IsValidCandidateLocator(record.GetProperty("candidateLocator")),
             _ => false
         };
