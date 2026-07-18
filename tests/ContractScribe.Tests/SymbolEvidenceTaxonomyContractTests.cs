@@ -24,7 +24,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.All(entries, entry =>
         {
             Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
-            Assert.NotEqual(JsonValueKind.Undefined, entry.GetProperty("applicability").ValueKind);
+            Assert.Equal(JsonValueKind.Array, entry.GetProperty("applicability").ValueKind);
+            Assert.Equal(JsonValueKind.Array, entry.GetProperty("recordTypes").ValueKind);
+            Assert.NotEmpty(entry.GetProperty("recordTypes").EnumerateArray());
             Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
             Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
         });
