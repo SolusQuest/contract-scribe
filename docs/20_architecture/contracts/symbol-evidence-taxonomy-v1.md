@@ -14,11 +14,44 @@ A top-level type is reachable only when public. A nested type needs every contai
 
 Compiler-synthesized symbols never create targets. Source-generator and tool-generated declarations may. Origins aggregate to source, source-generator, tool-generated, mixed, compiler-synthesized, or unknown. Unknown origin is allowed only with unavailable context. Only synthesized forms named by the V1 registry create components; all other synthesized forms create no record.
 
+| Declaration provenance | Aggregated origin |
+| --- | --- |
+| all handwritten source | `origin.source` |
+| all manifest-marked source-generator source | `origin.source-generator` |
+| all manifest-marked tool-generated source | `origin.tool-generated` |
+| more than one source provenance | `origin.mixed` |
+| no source declaration | `origin.compiler-synthesized` |
+| required provenance unavailable | `origin.unknown` with unavailable-context |
+
+The manifest supplies fixture provenance; the test-only classifier never infers it from names, headers, or filesystem paths.
+
 ## Components and relations
 
 Parameters belong to methods, constructors, operators, conversions, indexers, or delegates; type parameters to named types, delegates, or methods; returns to methods/operators/conversions/delegates; values/getters/setters/init to properties/indexers; add/remove to events; backing fields to properties/events. Component identities are `parameter/N`, `type-parameter/N`, `return`, `value`, and `accessor/<name>`, where `N` is a zero-based ordinal. Explicit source record-copy constructors are ordinary constructor targets; synthesized copy/default constructors and registered delegate/record members are non-target components.
 
 An override points from overriding member to original-definition base member. Interface relations point from implementation to interface member; a derived interface points to its inherited original member. Multiple observations sort by relation ID then full target `SymbolRef`.
+
+| Component kind | Parent primary kind | Identity |
+| --- | --- | --- |
+| `component.parameter` | method, constructor, operator, conversion, indexer, delegate | `parameter/N` |
+| `component.type-parameter` | class, struct, interface, delegate, method | `type-parameter/N` |
+| `component.return` | method, operator, conversion, delegate | `return` |
+| `component.value` | property, indexer | `value` |
+| `component.accessor.get`, `set`, `init` | property, indexer | `accessor/get`, `accessor/set`, `accessor/init` |
+| `component.accessor.add`, `remove` | event | `accessor/add`, `accessor/remove` |
+| `component.backing-field` | property, event | `backing-field` |
+| registered synthesized record/delegate members | owning record, type, or delegate | registry-defined `synthesized/...` value |
+
+`N` is the zero-based ordinal within the parent. Unknown components use `unknown/N`, ordered by candidate locator. A source-declared primary constructor is a constructor target; its parameters are ordinary parameter components. Positional record properties, implicit constructors, compiler-generated copy constructors, and `Invoke`/`BeginInvoke`/`EndInvoke` use only their named synthesized component kinds with compiler-synthesized origin and not-applicable status. All other compiler-generated symbols are outside V1 and produce no record.
+
+| Relation kind | Source | Target |
+| --- | --- | --- |
+| `relation.overrides` | overriding member | overridden original-definition member |
+| `relation.implicit-interface-implementation` | implementing member | implemented interface member |
+| `relation.explicit-interface-implementation` | explicit implementation declaration | implemented reachable interface member |
+| `relation.inherited-interface-member` | derived interface type | inherited original-definition interface member |
+
+An explicit implementation never emits a target record. One source may have multiple observations, sorted ordinally by relation ID then target `SymbolRef`.
 
 All valid interface member forms keep their normal primary kind. Default body-bearing instance members add `trait.virtual`; static abstract members add `trait.static` and `trait.abstract`; static virtual/default members add `trait.static` and `trait.virtual`. A reachable source destructor is a supported method target; one in a non-derivable container is not reachable.
 
