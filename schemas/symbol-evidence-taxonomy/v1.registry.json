@@ -16,7 +16,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -34,7 +33,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -52,7 +50,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -70,7 +67,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -88,7 +84,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -106,7 +101,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -124,7 +118,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -142,7 +135,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -160,7 +152,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -178,7 +169,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -196,7 +186,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -214,7 +203,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -232,7 +220,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -250,7 +237,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
           "support.ambiguous",
           "support.unavailable-context"
         ]
@@ -286,8 +272,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
@@ -312,8 +296,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
@@ -337,8 +319,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [
@@ -361,8 +341,6 @@
         ],
         "allowedSupportStatuses": [
           "support.supported",
-          "support.unsupported",
-          "support.ambiguous",
           "support.unavailable-context"
         ],
         "parentKinds": [

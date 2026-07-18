@@ -1726,7 +1726,7 @@
     {
       "recordType": "UnresolvedClassification",
       "compilationContextRef": "synthetic.v1",
-      "origin": "origin.unknown",
+      "origin": "origin.source",
       "supportStatus": "support.unavailable-context",
       "skipReason": "skip.unavailable.documentation-comment-id",
       "candidateLocator": {
@@ -1738,7 +1738,7 @@
     {
       "recordType": "UnresolvedClassification",
       "compilationContextRef": "synthetic.v1",
-      "origin": "origin.unknown",
+      "origin": "origin.source",
       "supportStatus": "support.unavailable-context",
       "skipReason": "skip.unavailable.documentation-comment-id",
       "candidateLocator": {

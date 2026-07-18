@@ -78,6 +78,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void ClassificationRecords_RejectForbiddenStatusOriginAndSkipPairs()
+    {
+        using var knownUnsupported = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Example\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.unsupported\",\"skipReason\":\"skip.unsupported.symbol-kind\"}");
+        using var unknownSupported = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Example\"},\"primaryKind\":\"symbol.unknown\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.supported\"}");
+        using var unknownOrigin = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.v1\",\"origin\":\"origin.unknown\",\"supportStatus\":\"support.unavailable-context\",\"skipReason\":\"skip.unavailable.documentation-comment-id\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"x\"}}}");
+        Assert.False(IsValidClassificationRecord(knownUnsupported.RootElement));
+        Assert.False(IsValidClassificationRecord(unknownSupported.RootElement));
+        Assert.False(IsValidClassificationRecord(unknownOrigin.RootElement));
+    }
+
+    [Fact]
     public void Schema_ValidatesABoundedEvidenceBundle()
     {
         using var valid = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.not-provided\",\"items\":[]}");
@@ -612,10 +623,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var status = record.GetProperty("supportStatus").GetString();
         var origin = record.GetProperty("origin").GetString();
         if (!Known("supportStatuses", status) || !Known("origins", origin) || !AllowsRecord(RegistryEntries.Value[status!], recordType) || !AllowsRecord(RegistryEntries.Value[origin!], recordType)) return false;
+        if ((classifiedId == "symbol.unknown" || classifiedId == "component.unknown") != (status == "support.unsupported")) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("allowedSupportStatuses", out var statuses) && !statuses.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal)) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredOrigin", out var requiredOrigin) && origin != requiredOrigin.GetString()) return false;
         if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
         if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
+        if (origin == "origin.unknown" && (status != "support.unavailable-context" || skip.GetString() is not ("skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
+        if (origin == "origin.mixed" && (status != "support.ambiguous" || skip.GetString() != "skip.ambiguous.mixed-origin")) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
         return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
     }
