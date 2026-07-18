@@ -133,6 +133,28 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void TestOnlyClassifier_EmitsExactTargetOrAbsenceVectors()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var actual = ClassifyTargets(CreateFixtureCompilation()).ToDictionary(record => record.SymbolId, StringComparer.Ordinal);
+        foreach (var vector in manifest.RootElement.GetProperty("classificationVectors").EnumerateArray())
+        {
+            var symbolId = vector.GetProperty("symbolId").GetString()!;
+            if (vector.TryGetProperty("expectedAbsent", out var expectedAbsent))
+            {
+                Assert.True(expectedAbsent.GetBoolean());
+                Assert.DoesNotContain(symbolId, actual.Keys);
+                continue;
+            }
+            var record = Assert.IsType<TargetRecord>(actual[symbolId]);
+            Assert.Equal(vector.GetProperty("primaryKind").GetString(), record.PrimaryKind);
+            Assert.Equal(vector.GetProperty("origin").GetString(), record.Origin);
+            Assert.Equal(vector.GetProperty("supportStatus").GetString(), record.SupportStatus);
+        }
+    }
+
+    [Fact]
     public void SyntheticCorpus_CompilesAndExposesManifestSymbols()
     {
         var root = FindRepositoryRoot();
@@ -231,6 +253,35 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
     }
 
+    private static IEnumerable<TargetRecord> ClassifyTargets(CSharpCompilation compilation)
+    {
+        return EnumerateSymbols(compilation.Assembly.GlobalNamespace)
+            .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
+            .Where(IsDocumentationTarget)
+            .Select(symbol => new TargetRecord(symbol.GetDocumentationCommentId()!, ClassifyPrimaryKind(symbol)!, "origin.source", "support.supported"))
+            .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
+    }
+
+    private static bool IsDocumentationTarget(ISymbol symbol)
+    {
+        if (symbol.GetDocumentationCommentId() is null || ClassifyPrimaryKind(symbol) is null || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }) return false;
+        if (symbol is IMethodSymbol { ExplicitInterfaceImplementations.Length: > 0 }) return false;
+        if (symbol is INamedTypeSymbol type) return type.DeclaredAccessibility == Accessibility.Public && ContainingTypesReachable(type);
+        var containing = symbol.ContainingType;
+        if (containing is null || !ContainingTypesReachable(containing)) return false;
+        return symbol.DeclaredAccessibility == Accessibility.Public
+            || symbol.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && containing.TypeKind == TypeKind.Class && !containing.IsSealed;
+    }
+
+    private static bool ContainingTypesReachable(INamedTypeSymbol type)
+    {
+        for (var current = type; current is not null; current = current.ContainingType)
+        {
+            if (current.DeclaredAccessibility != Accessibility.Public) return false;
+        }
+        return true;
+    }
+
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
     {
         yield return type;
@@ -282,4 +333,5 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
+    private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
 }

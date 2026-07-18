@@ -53,6 +53,13 @@
     "relation.explicit-interface-implementation",
     "relation.inherited-interface-member"
   ],
+  "classificationVectors": [
+    { "caseId": "public-interface", "symbolId": "T:TaxonomyFixtures.IContract", "primaryKind": "symbol.type.interface", "origin": "origin.source", "supportStatus": "support.supported" },
+    { "caseId": "protected-base-member", "symbolId": "M:TaxonomyFixtures.Base.ProtectedMember", "primaryKind": "symbol.member.method", "origin": "origin.source", "supportStatus": "support.supported" },
+    { "caseId": "sealed-protected-is-absent", "symbolId": "M:TaxonomyFixtures.SealedBase.NotReachable", "expectedAbsent": true },
+    { "caseId": "explicit-interface-is-absent", "symbolId": "M:TaxonomyFixtures.SampleRecord.TaxonomyFixtures#IContract#Execute", "expectedAbsent": true },
+    { "caseId": "operator", "symbolId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)", "primaryKind": "symbol.member.operator", "origin": "origin.source", "supportStatus": "support.supported" }
+  ],
   "expectedDocumentationCommentIds": [
     "T:TaxonomyFixtures.IContract",
     "M:TaxonomyFixtures.IContract.Execute",
