@@ -1,7 +1,227 @@
 {
   "cases": [
-    { "caseId": "complete-repository", "valid": true, "bundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [{ "evidenceId": "evidence.a", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:TaxonomyFixtures.IContract" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/Contract.cs" } } }] } },
-    { "caseId": "partial-truncated", "valid": true, "bundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.partial", "omissionReason": "evidence.omission.budget-exhausted", "items": [{ "evidenceId": "evidence.a", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:TaxonomyFixtures.IContract" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "a", "sha256": "fb8e20fc2e4c3f248c60c39bd652f3c134729bacec3f1e9b618c0f7f6f9e5f7b", "originalUtf8ByteCount": 2, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 1, "isTruncated": true, "locator": { "synthetic": { "fixtureId": "fixture.v1" } } }] } },
-    { "caseId": "duplicate-id", "valid": false, "bundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.partial", "omissionReason": "evidence.omission.not-provided", "items": [{ "evidenceId": "evidence.a", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:TaxonomyFixtures.IContract" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "metadata": { "assemblyIdentity": "fixture.v1", "documentationCommentId": "T:TaxonomyFixtures.IContract" } } }, { "evidenceId": "evidence.a", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:TaxonomyFixtures.IContract" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "synthetic": { "fixtureId": "fixture.v1" } } }] } }
+    {
+      "caseId": "complete-repository",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Contract.cs"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "partial-truncated",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.partial",
+        "omissionReason": "evidence.omission.budget-exhausted",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "a",
+            "sha256": "fb8e20fc2e4c3f248c60c39bd652f3c134729bacec3f1e9b618c0f7f6f9e5f7b",
+            "originalUtf8ByteCount": 2,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 1,
+            "isTruncated": true,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "fixture.v1"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "duplicate-id",
+      "valid": false,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.partial",
+        "omissionReason": "evidence.omission.not-provided",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "metadata": {
+                "assemblyIdentity": "fixture.v1",
+                "documentationCommentId": "T:TaxonomyFixtures.IContract"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "fixture.v1"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "valid": false,
+      "caseId": "unknown-kind",
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.unknown",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Contract.cs"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "valid": false,
+      "caseId": "traversal-path",
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "../private.cs"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "valid": false,
+      "caseId": "unsorted-ids",
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.z",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Contract.cs"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "x",
+            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "originalUtf8ByteCount": 1,
+            "includedUtf8ByteCount": 1,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Contract.cs"
+              }
+            }
+          }
+        ]
+      }
+    }
   ]
 }

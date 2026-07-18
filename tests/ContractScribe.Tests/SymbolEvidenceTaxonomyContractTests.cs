@@ -10,6 +10,7 @@ namespace ContractScribe.Tests;
 public sealed class SymbolEvidenceTaxonomyContractTests
 {
     private static readonly Lazy<JsonSchema> EvidenceSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json"))));
+    private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
     [Fact]
     public void Registry_UsesClosedUniqueDottedIdentifiers()
     {
@@ -342,13 +343,16 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var status = bundle.GetProperty("availabilityStatus").GetString();
         var hasOmission = bundle.TryGetProperty("omissionReason", out var omission);
         var items = bundle.GetProperty("items").EnumerateArray().ToArray();
+        if (!Known("bundleAvailabilityStatuses", status) || hasOmission && !Known("bundleOmissionReasons", omission.GetString())) return false;
         if ((status == "evidence.bundle.complete" && (items.Length == 0 || hasOmission)) || (status == "evidence.bundle.partial" && (items.Length == 0 || !hasOmission)) || (status == "evidence.bundle.unavailable" && (items.Length != 0 || !hasOmission))) return false;
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var total = 0;
         foreach (var item in items)
         {
             var id = item.GetProperty("evidenceId").GetString()!;
-            if (!ids.Add(id)) return false;
+            if (!ids.Add(id) || ids.Count > 1 && string.CompareOrdinal(ids.OrderBy(value => value, StringComparer.Ordinal).Last(), id) < 0) return false;
+            if (!Known("evidenceKinds", item.GetProperty("kind").GetString()) || !Known("evidenceRelations", item.GetProperty("relation").GetString())) return false;
+            if (!IsValidLocator(item.GetProperty("locator"))) return false;
             var excerpt = item.GetProperty("excerpt").GetString()!;
             var included = System.Text.Encoding.UTF8.GetByteCount(excerpt);
             var original = item.GetProperty("originalUtf8ByteCount").GetInt32();
@@ -361,6 +365,23 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
         return total <= 32768;
     }
+
+    private static bool Known(string section, string? id) => id is not null && RegistryIds.Value[section].Contains(id);
+
+    private static bool IsValidLocator(JsonElement locator)
+    {
+        var kinds = new[] { "repository", "metadata", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
+        if (kinds.Length != 1) return false;
+        return kinds[0] switch
+        {
+            "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString()),
+            "metadata" => locator.GetProperty("metadata").GetProperty("assemblyIdentity").GetString() is { } assembly && System.Text.RegularExpressions.Regex.IsMatch(assembly, "^[a-z0-9][a-z0-9._-]{0,127}$"),
+            "synthetic" => locator.GetProperty("synthetic").GetProperty("fixtureId").GetString() is { } fixture && System.Text.RegularExpressions.Regex.IsMatch(fixture, "^[a-z0-9][a-z0-9._-]{0,127}$"),
+            _ => false
+        };
+    }
+
+    private static bool IsLexicalRepositoryPath(string? path) => !string.IsNullOrEmpty(path) && !path.StartsWith('/') && !path.StartsWith('\\') && !path.Contains('\\') && !path.Split('/').Any(segment => segment is "" or "." or "..");
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
     private sealed record TargetRecord(string SymbolId, string PrimaryKind, string Origin, string SupportStatus);
