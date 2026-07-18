@@ -1198,6 +1198,18 @@
       "recordType": "ComponentClassification",
       "parentSymbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.StaticConstructorShape"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
       },
       "componentKind": "component.synthesized.implicit-constructor",
@@ -2509,6 +2521,17 @@
       "recordType": "TargetClassification",
       "symbolRef": {
         "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.StaticConstructorShape"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
       },
       "primaryKind": "symbol.type.class",
@@ -2625,6 +2648,20 @@
         "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.<Clone>$"
       },
       "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SealedBase.Finalize"
+      },
+      "reason": "non-reachable-constructor-or-destructor"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.StaticConstructorShape.#cctor"
+      },
+      "reason": "non-reachable-constructor-or-destructor"
     }
   ],
   "unresolvedScenarios": [

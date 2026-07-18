@@ -84,6 +84,12 @@ public sealed class Derived : Base
 public sealed class SealedBase
 {
     protected void NotReachable() { }
+    ~SealedBase() { }
+}
+
+public class StaticConstructorShape
+{
+    static StaticConstructorShape() { }
 }
 
 public class NestedReachability
