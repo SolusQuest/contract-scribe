@@ -370,6 +370,80 @@
         "evidence.a": "x",
         "path:./src//Contract.cs": "x"
       }
+    },
+    {
+      "caseId": "empty-content-sha256",
+      "valid": true,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "originalUtf8ByteCount": 0,
+            "includedUtf8ByteCount": 0,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "empty.v1"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "unavailable-budget-exhausted",
+      "valid": false,
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.unavailable",
+        "items": [],
+        "omissionReason": "evidence.omission.budget-exhausted"
+      }
+    },
+    {
+      "caseId": "supplementary-scalar-truncation",
+      "valid": true,
+      "originalEvidenceTexts": {
+        "evidence.a": "😀x"
+      },
+      "bundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.partial",
+        "omissionReason": "evidence.omission.budget-exhausted",
+        "items": [
+          {
+            "evidenceId": "evidence.a",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:TaxonomyFixtures.IContract"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "😀",
+            "sha256": "10f5e9cdd01d869815a52f43599f9c372ffa4b41cda11b5180da85dc0928333c",
+            "originalUtf8ByteCount": 5,
+            "includedUtf8ByteCount": 4,
+            "omittedUtf8ByteCount": 1,
+            "isTruncated": true,
+            "locator": {
+              "synthetic": {
+                "fixtureId": "fixture.v1"
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

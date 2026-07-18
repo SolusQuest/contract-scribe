@@ -143,7 +143,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ? texts.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal)
                 : new Dictionary<string, string>(StringComparer.Ordinal);
             var semanticValid = IsSemanticallyValid(bundle, originals);
-            Assert.Equal(item.GetProperty("valid").GetBoolean(), schemaValid && semanticValid);
+            Assert.True(item.GetProperty("valid").GetBoolean() == (schemaValid && semanticValid), $"{item.GetProperty("caseId").GetString()}: schema={schemaValid}, semantic={semanticValid}");
         }
     }
 
