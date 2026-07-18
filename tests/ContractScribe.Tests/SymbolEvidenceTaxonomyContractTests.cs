@@ -30,6 +30,20 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void Manifest_ProvidesOnePublicCoverageVectorForEveryRegistryEntry()
+    {
+        var root = FindRepositoryRoot();
+        using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json")));
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
+        var registered = registry.RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal);
+        var coverage = manifest.RootElement.GetProperty("coverage").EnumerateArray().ToArray();
+        var caseIds = coverage.Select(entry => entry.GetProperty("caseId").GetString()!).ToArray();
+        var covered = coverage.Select(entry => entry.GetProperty("registryId").GetString()!).ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(caseIds.Length, caseIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(registered, covered);
+    }
+
+    [Fact]
     public void Schema_ValidatesABoundedEvidenceBundle()
     {
         using var valid = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.not-provided\",\"items\":[]}");
