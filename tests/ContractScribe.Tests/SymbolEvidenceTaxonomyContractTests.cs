@@ -106,6 +106,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void EvidenceBundle_RejectsBudgetExhaustedOutsidePartialState()
+    {
+        using var unavailable = JsonDocument.Parse("{\"evidenceBundleVersion\":1,\"availabilityStatus\":\"evidence.bundle.unavailable\",\"omissionReason\":\"evidence.omission.budget-exhausted\",\"items\":[]}");
+        Assert.False(IsSemanticallyValid(unavailable.RootElement));
+    }
+
+    [Fact]
     public void EvidenceBundle_EnforcesExactItemAndUtf8ByteBoundaries()
     {
         Assert.True(IsSemanticallyValid(CreateBundle(Enumerable.Range(0, 32).Select(index => CreateEvidenceItem($"evidence.a{index:D2}", "x")))));
@@ -500,6 +507,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var items = bundle.GetProperty("items").EnumerateArray().ToArray();
         if (items.Length > 32) return false;
         if (!Known("bundleAvailabilityStatuses", status) || hasOmission && !Known("bundleOmissionReasons", omission.GetString())) return false;
+        if (hasOmission && omission.GetString() == "evidence.omission.budget-exhausted" && status != "evidence.bundle.partial") return false;
         if ((status == "evidence.bundle.complete" && (items.Length == 0 || hasOmission)) || (status == "evidence.bundle.partial" && (items.Length == 0 || !hasOmission)) || (status == "evidence.bundle.unavailable" && (items.Length != 0 || !hasOmission))) return false;
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var total = 0;
@@ -632,7 +640,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             "repository" => IsValidRepositoryLocator(locator.GetProperty("repository")),
             "generatedSource" => locator.GetProperty("generatedSource").TryGetProperty("generatorId", out var generator) && locator.GetProperty("generatedSource").TryGetProperty("hintNameId", out var hint)
-                && System.Text.RegularExpressions.Regex.IsMatch(generator.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$") && System.Text.RegularExpressions.Regex.IsMatch(hint.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$"),
+                && System.Text.RegularExpressions.Regex.IsMatch(generator.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$") && System.Text.RegularExpressions.Regex.IsMatch(hint.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$")
+                && (!locator.GetProperty("generatedSource").TryGetProperty("span", out var span) || span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32()),
             "synthetic" => locator.GetProperty("synthetic").TryGetProperty("fixtureId", out var fixture) && System.Text.RegularExpressions.Regex.IsMatch(fixture.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$"),
             _ => false
         };
@@ -665,7 +674,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var start = span.GetProperty("start").GetInt32();
         var end = span.GetProperty("end").GetInt32();
         if (start > end) return false;
-        return originalEvidenceTexts is null || !originalEvidenceTexts.TryGetValue($"path:{repository.GetProperty("path").GetString()}", out var payload) || end <= payload.Length;
+        return originalEvidenceTexts is not null && originalEvidenceTexts.TryGetValue($"path:{repository.GetProperty("path").GetString()}", out var payload) && end <= payload.Length;
     }
 
     private sealed record Evidence(string Id, int Original, int Included, int Omitted, bool Truncated);
