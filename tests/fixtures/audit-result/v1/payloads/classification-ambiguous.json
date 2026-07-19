@@ -4,7 +4,7 @@
   "taxonomyRegistryVersion": 1,
   "results": [
     {
-      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.ambiguous", "documentationCommentId": "T:AuditFixtures.AmbiguousWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.mixed", "supportStatus": "support.ambiguous", "skipReason": "skip.ambiguous.partial-declaration" },
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.ambiguous", "documentationCommentId": "T:AuditFixtures.AmbiguousWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.mixed", "supportStatus": "support.ambiguous", "skipReason": "skip.ambiguous.mixed-origin" },
       "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "generated/AmbiguousWidget.cs", "policyExpectation": "forbidden", "matchedRuleId": "generated-forbidden" }, { "projectPath": "src/Audit.csproj", "sourcePath": "src/AmbiguousWidget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
       "policyExpectation": null,
       "policyResolution": "unavailable",
