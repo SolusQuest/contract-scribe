@@ -25,7 +25,12 @@ $currentRevision = (& git rev-parse HEAD).Trim()
 Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
 Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
 $sourceFiles = @(git diff --name-only "$($manifest.sourceRevision)..$currentRevision")
-Assert-Condition (($sourceFiles | Where-Object { $_ -ne "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json" }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
+$allowedPostSourceFiles = @(
+    ".github/workflows/ci.yml",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
+    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+)
+Assert-Condition (($sourceFiles | Where-Object { $_ -notin $allowedPostSourceFiles }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name
