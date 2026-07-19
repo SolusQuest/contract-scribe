@@ -186,7 +186,7 @@ public sealed class RoslynExperimentTests
     public async Task MissingSolutionIsAnInvalidInputFailure()
     {
         var execution = await new FrameworkDependentExperiment().RunAsync(
-            Path.Combine(FixtureRoot, "missing.sln"));
+            Path.Join(FixtureRoot, "missing.sln"));
 
         Assert.Equal(ExperimentStatus.InvalidInput, execution.Result.Status);
         Assert.Equal(FailurePhase.Input, execution.Result.FailurePhase);
