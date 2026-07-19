@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.forbidden", "documentationCommentId": "T:AuditFixtures.ForbiddenWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/ForbiddenWidget.cs", "policyExpectation": "forbidden", "matchedRuleId": "forbidden-docs" } ],
+      "policyExpectation": "forbidden",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.absent",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.forbidden-absent",
+      "evidenceIds": [ "evidence.declaration" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.declaration", "subject": { "compilationContextRef": "synthetic.forbidden", "documentationCommentId": "T:AuditFixtures.ForbiddenWidget" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "public sealed class Widget {}", "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad", "originalUtf8ByteCount": 29, "includedUtf8ByteCount": 29, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/ForbiddenWidget.cs" } } } ] }
+    }
+  ]
+}

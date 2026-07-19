@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.policy", "documentationCommentId": "T:AuditFixtures.PolicyWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [],
+      "policyExpectation": null,
+      "policyResolution": "unavailable",
+      "documentationObservation": null,
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.policy-unavailable",
+      "evidenceIds": [],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    }
+  ]
+}

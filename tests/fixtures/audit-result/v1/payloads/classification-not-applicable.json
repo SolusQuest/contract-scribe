@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "ComponentClassification", "parentSymbolRef": { "compilationContextRef": "synthetic.notapplicable", "documentationCommentId": "T:AuditFixtures.NotApplicableWidget" }, "componentKind": "component.synthesized.record-positional-property", "identity": "synthesized/record-positional-property/0", "origin": "origin.compiler-synthesized", "supportStatus": "support.not-applicable", "skipReason": "skip.not-applicable.non-documentation-component" },
+      "policyContributions": [],
+      "policyExpectation": null,
+      "policyResolution": "unavailable",
+      "documentationObservation": null,
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.classification-skipped",
+      "evidenceIds": [],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    }
+  ]
+}

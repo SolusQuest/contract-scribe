@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.agree", "documentationCommentId": "T:AuditFixtures.AgreeWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "generated/AgreeWidget.cs", "policyExpectation": "required", "matchedRuleId": null }, { "projectPath": "src/Audit.csproj", "sourcePath": "src/AgreeWidget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required",
+      "policyResolution": "all-declarations-agree",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.required-present",
+      "evidenceIds": [ "evidence.xml-doc" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.xml-doc", "subject": { "compilationContextRef": "synthetic.agree", "documentationCommentId": "T:AuditFixtures.AgreeWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/AgreeWidget.cs" } } } ] }
+    }
+  ]
+}
