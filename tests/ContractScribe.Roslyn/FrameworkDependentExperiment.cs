@@ -261,9 +261,16 @@ public sealed class FrameworkDependentExperiment
 
     private static string? GetSdkVersion(VisualStudioInstance instance)
     {
-        var path = instance.VisualStudioRootPath ?? instance.MSBuildPath;
-        var match = Regex.Match(path, @"(?:^|[\\/])(?<version>\d+\.\d+\.\d+)(?:[\\/]|$)");
-        return match.Success ? match.Groups["version"].Value : null;
+        foreach (var path in new[] { instance.VisualStudioRootPath, instance.MSBuildPath }.Where(path => path is not null))
+        {
+            var match = Regex.Match(path!, @"(?:^|[\\/])(?<version>\d+\.\d+\.\d+)(?:[\\/]|$)");
+            if (match.Success)
+            {
+                return match.Groups["version"].Value;
+            }
+        }
+
+        return null;
     }
 
     private static (FailurePhase Phase, string Code) SelectWorkspaceFailure(
