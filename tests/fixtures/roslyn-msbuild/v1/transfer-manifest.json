@@ -19,9 +19,14 @@
     "rollForward": "latestFeature"
   },
   "packages": {
+    "Microsoft.Build": "17.14.28",
+    "Microsoft.Build.Framework": "17.14.28",
     "Microsoft.Build.Locator": "1.9.1",
+    "Microsoft.Build.Tasks.Core": "17.14.28",
+    "Microsoft.Build.Utilities.Core": "17.14.28",
     "Microsoft.CodeAnalysis.CSharp.Workspaces": "4.14.0",
-    "Microsoft.CodeAnalysis.Workspaces.MSBuild": "4.14.0"
+    "Microsoft.CodeAnalysis.Workspaces.MSBuild": "4.14.0",
+    "System.Security.Cryptography.Xml": "9.0.15"
   },
   "requiredMatrix": ["ubuntu-latest", "windows-latest"],
   "commands": [
