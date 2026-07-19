@@ -1,7 +1,7 @@
 {
   "formatVersion": "m0.4-transfer-manifest-v1",
   "fixtureId": "roslyn-msbuild-v1",
-  "sourceRevision": "ff1cd8d1e20e440f1dd20e12120b1f357fd897f2",
+  "sourceRevision": "99ceeaacd5923a2b62479ce202e9b093a8fc6523",
   "solution": "Sample.sln",
   "projectGraph": {
     "projects": ["SampleApp", "SampleLibrary"],
