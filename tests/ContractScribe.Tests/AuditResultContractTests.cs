@@ -251,6 +251,9 @@ public sealed class AuditResultContractTests
         var supportedMixed = supportedUnknown.Replace("origin.unknown", "origin.mixed", StringComparison.Ordinal);
         using var supportedMixedDocument = JsonDocument.Parse(supportedMixed);
         Assert.False(IsSemanticallyValid(supportedMixedDocument.RootElement));
+        var wrongMixedOrigin = File.ReadAllText(FixturePath("payloads", "classification-ambiguous.json")).Replace("\"origin\": \"origin.mixed\"", "\"origin\": \"origin.source\"", StringComparison.Ordinal);
+        using var wrongMixedOriginDocument = JsonDocument.Parse(wrongMixedOrigin);
+        Assert.False(IsSemanticallyValid(wrongMixedOriginDocument.RootElement));
 
         var absent = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-absent.json")))!.AsObject();
         var xmlEvidence = (JsonObject)absent["results"]![0]!["evidenceBundle"]!["items"]![0]!.DeepClone();
@@ -260,6 +263,18 @@ public sealed class AuditResultContractTests
         absent["results"]![0]!["evidenceBundle"]!["items"]!.AsArray().Add(xmlEvidence);
         using var contradictoryDocumentation = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(absent));
         Assert.False(IsSemanticallyValid(contradictoryDocumentation.RootElement));
+
+        using var overflowCounts = BuildEvidenceBoundaryDocument(2, 1);
+        var overflowPayload = (JsonObject)overflowCounts.RootElement.Deserialize<JsonObject>()!;
+        var overflowResult = ((JsonArray)overflowPayload["results"]!)[0]!.AsObject();
+        foreach (var evidenceItem in overflowResult["evidenceBundle"]!["items"]!.AsArray().OfType<JsonObject>())
+        {
+            evidenceItem["includedUtf8ByteCount"] = int.MaxValue;
+            evidenceItem["originalUtf8ByteCount"] = int.MaxValue;
+            evidenceItem["omittedUtf8ByteCount"] = 0;
+        }
+        using var overflowDocument = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(overflowPayload));
+        Assert.False(IsSemanticallyValid(overflowDocument.RootElement));
     }
 
     [Fact]
@@ -499,6 +514,8 @@ public sealed class AuditResultContractTests
                 || supportStatus == "support.unavailable-context" && skipReason is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context",
                 $"Invalid origin.mixed combination for {recordType}.");
         }
+
+        if (skipReason == "skip.ambiguous.mixed-origin") Assert.Equal("origin.mixed", origin);
     }
 
     private static void ValidateTaxonomyEntry(string section, string? id, string? recordType, string? supportStatus = null, string? origin = null, string? skipReason = null)
@@ -564,7 +581,7 @@ public sealed class AuditResultContractTests
         Assert.Equal(referenced.Length, referenced.Distinct(StringComparer.Ordinal).Count());
         Assert.All(referenced, id => Assert.Contains(items, item => item.GetProperty("evidenceId").GetString() == id && !item.GetProperty("isTruncated").GetBoolean()));
         Assert.True(items.Length <= 32);
-        Assert.True(items.Sum(item => item.GetProperty("includedUtf8ByteCount").GetInt32()) <= 32768);
+        Assert.True(items.Sum(item => (long)item.GetProperty("includedUtf8ByteCount").GetInt32()) <= 32768);
         foreach (var item in items)
         {
             var excerpt = item.GetProperty("excerpt").GetString()!;
