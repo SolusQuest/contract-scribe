@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ContractScribe.Core\ContractScribe.Core.csproj" />
     <ProjectReference Include="..\..\src\ContractScribe.Cli\ContractScribe.Cli.csproj" />
+    <ProjectReference Include="..\ContractScribe.Roslyn\ContractScribe.Roslyn.csproj" />
   </ItemGroup>
 
 </Project>

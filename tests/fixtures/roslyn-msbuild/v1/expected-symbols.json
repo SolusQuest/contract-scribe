@@ -1,0 +1,60 @@
+{
+  "formatVersion": "m0.4-expected-symbols-v1",
+  "projects": [
+    {
+      "projectId": "SampleApp",
+      "symbols": [
+        {
+          "documentationCommentId": "M:SampleApp.AppType.Run",
+          "kind": "Method",
+          "name": "Run"
+        },
+        {
+          "documentationCommentId": "T:SampleApp.AppType",
+          "kind": "NamedType",
+          "name": "AppType"
+        }
+      ]
+    },
+    {
+      "projectId": "SampleLibrary",
+      "symbols": [
+        {
+          "documentationCommentId": "M:SampleLibrary.Api.RootType.Process(System.Int32)",
+          "kind": "Method",
+          "name": "Process"
+        },
+        {
+          "documentationCommentId": "M:SampleLibrary.Api.RootType.Process(System.String)",
+          "kind": "Method",
+          "name": "Process"
+        },
+        {
+          "documentationCommentId": "M:SampleLibrary.Api.RootType.get_Value",
+          "kind": "Method",
+          "name": "get_Value"
+        },
+        {
+          "documentationCommentId": "M:SampleLibrary.Api.RootType.set_Value(System.Int32)",
+          "kind": "Method",
+          "name": "set_Value"
+        },
+        {
+          "documentationCommentId": "P:SampleLibrary.Api.RootType.Value",
+          "kind": "Property",
+          "name": "Value"
+        },
+        {
+          "documentationCommentId": "T:SampleLibrary.Api.RootType",
+          "kind": "NamedType",
+          "name": "RootType"
+        },
+        {
+          "documentationCommentId": "T:SampleLibrary.Api.RootType.NestedType",
+          "kind": "NamedType",
+          "name": "NestedType"
+        }
+      ]
+    }
+  ]
+}

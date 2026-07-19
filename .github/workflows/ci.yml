@@ -19,11 +19,14 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help

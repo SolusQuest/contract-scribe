@@ -1,0 +1,12 @@
+{
+  "formatVersion": "m0.4-failure-registry-v1",
+  "phases": {
+    "input": ["input.solution-not-found", "input.solution-not-supported"],
+    "msbuild-environment": ["msbuild.sdk-unavailable", "msbuild.registration-failed"],
+    "workspace-load": ["workspace.solution-load-failed", "workspace.project-graph-mismatch"],
+    "compilation": ["compilation.errors", "compilation.reference-missing"],
+    "symbol-identity": ["symbol.missing-documentation-id", "symbol.duplicate-identity"],
+    "serialization": ["serialization.semantic-payload-failed"]
+  },
+  "unknownCodeBehavior": "fail-closed"
+}
