@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "generated/Widget.cs", "policyExpectation": "forbidden", "matchedRuleId": "generated-forbidden" }, { "projectPath": "src/Audit.csproj", "sourcePath": "src/Widget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": null,
+      "policyResolution": "conflict",
+      "documentationObservation": null,
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.policy-conflict",
+      "evidenceIds": [],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    }
+  ]
+}

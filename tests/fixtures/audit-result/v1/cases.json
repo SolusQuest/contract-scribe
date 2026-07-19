@@ -1,0 +1,13 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    { "caseId": "required-present", "payloadFile": "payloads/required-present.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.required-present" },
+    { "caseId": "required-absent", "payloadFile": "payloads/required-absent.json", "outcome": "audit.outcome.violation", "reason": "audit.reason.required-absent" },
+    { "caseId": "optional-absent", "payloadFile": "payloads/optional-absent.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.optional-absent" },
+    { "caseId": "forbidden-present", "payloadFile": "payloads/forbidden-present.json", "outcome": "audit.outcome.violation", "reason": "audit.reason.forbidden-present" },
+    { "caseId": "classification-skipped", "payloadFile": "payloads/classification-skipped.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.classification-skipped" },
+    { "caseId": "policy-conflict", "payloadFile": "payloads/policy-conflict.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.policy-conflict" },
+    { "caseId": "evidence-incomplete", "payloadFile": "payloads/evidence-incomplete.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.evidence-incomplete" },
+    { "caseId": "unresolved-classification", "payloadFile": "payloads/unresolved-classification.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.classification-skipped" }
+  ]
+}

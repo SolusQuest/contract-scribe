@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/Widget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.unavailable",
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.evidence-incomplete",
+      "evidenceIds": [],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.partial", "omissionReason": "evidence.omission.budget-exhausted", "items": [ { "evidenceId": "evidence.partial", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/Widget.cs" } } } ] }
+    }
+  ]
+}

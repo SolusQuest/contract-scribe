@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/audit-result/v1.schema.json",
+  "title": "ContractScribe Audit Result V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["auditResultVersion", "policyConfigurationVersion", "taxonomyRegistryVersion", "results"],
+  "properties": {
+    "auditResultVersion": { "const": 1 },
+    "policyConfigurationVersion": { "const": 1 },
+    "taxonomyRegistryVersion": { "const": 1 },
+    "results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/result" }
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "policyContributions", "policyExpectation", "policyResolution", "documentationObservation", "auditOutcome", "reasonCode", "evidenceIds", "evidenceBundle"],
+      "properties": {
+        "classification": {
+          "type": "object",
+          "required": ["recordType"],
+          "properties": {
+            "recordType": { "enum": ["TargetClassification", "ComponentClassification", "UnresolvedClassification"] }
+          }
+        },
+        "policyContributions": { "type": "array", "items": { "$ref": "#/$defs/policyContribution" } },
+        "policyExpectation": { "type": ["string", "null"], "enum": ["required", "optional", "forbidden", null] },
+        "policyResolution": { "enum": ["single", "all-declarations-agree", "conflict", "unavailable"] },
+        "documentationObservation": { "type": ["string", "null"], "enum": ["documentation.present", "documentation.absent", "documentation.unavailable", null] },
+        "auditOutcome": { "enum": ["audit.outcome.compliant", "audit.outcome.violation", "audit.outcome.skipped"] },
+        "reasonCode": { "enum": ["audit.reason.required-present", "audit.reason.required-absent", "audit.reason.optional-present", "audit.reason.optional-absent", "audit.reason.forbidden-present", "audit.reason.forbidden-absent", "audit.reason.classification-skipped", "audit.reason.policy-conflict", "audit.reason.policy-unavailable", "audit.reason.documentation-unavailable", "audit.reason.evidence-incomplete"] },
+        "evidenceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", "maxLength": 128 } },
+        "evidenceBundle": { "$ref": "#/$defs/evidenceBundle" }
+      }
+    },
+    "policyContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectPath", "sourcePath", "policyExpectation", "matchedRuleId"],
+      "properties": {
+        "projectPath": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "policyExpectation": { "enum": ["required", "optional", "forbidden"] },
+        "matchedRuleId": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "evidenceBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceBundleVersion", "availabilityStatus", "items"],
+      "properties": {
+        "evidenceBundleVersion": { "const": 1 },
+        "availabilityStatus": { "enum": ["evidence.bundle.complete", "evidence.bundle.partial", "evidence.bundle.unavailable"] },
+        "omissionReason": { "enum": ["evidence.omission.access-not-permitted", "evidence.omission.source-unavailable", "evidence.omission.binary-content", "evidence.omission.budget-exhausted", "evidence.omission.not-provided"] },
+        "items": { "type": "array", "maxItems": 32, "items": { "type": "object" } }
+      }
+    }
+  }
+}
