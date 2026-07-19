@@ -78,6 +78,17 @@ public sealed class M05NativeAotContractTests
     }
 
     [Fact]
+    public void ReproductionSupportsSquashedHistoryAndAggregatePreservesMixedWarnings()
+    {
+        var root = FindRepositoryRoot();
+        var verifier = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "verify-m0.5.ps1"));
+        var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
+        Assert.Contains("cat-file", verifier, StringComparison.Ordinal);
+        Assert.Contains("m04FrozenSourceRevision", verifier, StringComparison.Ordinal);
+        Assert.Contains("$aggregateOutcome -eq \"feasible-clean\"", aggregate, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistryClosesCellAndProtocolCodes()
     {
         var root = FindRepositoryRoot();

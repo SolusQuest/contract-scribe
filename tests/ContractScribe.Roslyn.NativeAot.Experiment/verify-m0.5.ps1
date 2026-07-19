@@ -411,11 +411,22 @@ if ($EvidenceReproduction) {
     Assert-Condition (Test-Path -LiteralPath $committedEvidencePath) "The committed cell evidence is missing for reproduction."
     $currentRevision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
     Assert-Condition ($manifest.implementationRevision -match "^[0-9a-f]{40}$") "The implementation revision is not a full commit hash."
+    & git -C $repositoryRoot cat-file -e "$($manifest.implementationRevision)^{commit}"
+    $implementationCommitExists = ($LASTEXITCODE -eq 0)
     & git -C $repositoryRoot merge-base --is-ancestor $manifest.implementationRevision $currentRevision
-    Assert-Condition ($LASTEXITCODE -eq 0) "The implementation revision is not an ancestor of the reproduction head."
-    $changedFiles = @(& git -C $repositoryRoot diff --name-only "$($manifest.implementationRevision)..$currentRevision")
-    $allowedFiles = @($manifest.allowedPostImplementationFiles)
-    Assert-Condition (@($changedFiles | Where-Object { $allowedFiles -notcontains $_ }).Count -eq 0) "The reproduction head contains changes outside the post-implementation evidence allowlist."
+    $implementationRevisionIsAncestor = ($LASTEXITCODE -eq 0)
+    if ($implementationCommitExists -and $implementationRevisionIsAncestor) {
+        $changedFiles = @(& git -C $repositoryRoot diff --name-only "$($manifest.implementationRevision)..$currentRevision")
+        $allowedFiles = @($manifest.allowedPostImplementationFiles)
+        Assert-Condition (@($changedFiles | Where-Object { $allowedFiles -notcontains $_ }).Count -eq 0) "The reproduction head contains changes outside the post-implementation evidence allowlist."
+    }
+    else {
+        & git -C $repositoryRoot merge-base --is-ancestor $manifest.m04FrozenSourceRevision $currentRevision
+        Assert-Condition ($LASTEXITCODE -eq 0) "Neither the implementation revision nor the frozen M0.4 source revision is in the reproduction history."
+        $historyFiles = @(& git -C $repositoryRoot diff --name-only "$($manifest.m04FrozenSourceRevision)..$currentRevision")
+        $allowedHistoryFiles = @($manifest.allowedPostSourceFiles) + @($manifest.allowedPostImplementationFiles)
+        Assert-Condition (@($historyFiles | Where-Object { $allowedHistoryFiles -notcontains $_ }).Count -eq 0) "The squashed reproduction history contains files outside the closed M0.5 provenance allowlist."
+    }
     $recordOutputPath = Join-Path $protocolRoot "reproduction-evidence.json"
 }
 

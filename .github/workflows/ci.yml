@@ -62,6 +62,9 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
+      - name: Remove stale M0.5 cell evidence
+        shell: pwsh
+        run: Remove-Item -LiteralPath tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-${{ matrix.rid }}-evidence-v1.json -Force -ErrorAction SilentlyContinue
       - name: Run M0.5 closure cell
         shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1 -RuntimeIdentifier ${{ matrix.rid }} -Configuration Release

@@ -86,11 +86,11 @@
     "tests/ContractScribe.Roslyn/ExperimentResultSerializer.cs": "b52c67b5377639ed48c8dde2d1af463ec8870af5c2ed605012180a93af898da8",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj": "820f16d093875a7ecd74a0fdab54e37ea784a2422c0fac0274d46267b8a58170",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs": "3ce25ee736cad42129f28bec473101be24dddd6e1c4fc24a1cc7e4779d469ab5",
-    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "e2ec6194a566558ff291d88424091da52ecb28634a500e0a8ec83317d5e9c9d9",
-    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "a66a36568867c2c8c4d25969d67cdea6d3a22c753d7160bf6bd8807139bb8f10",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "26454efd5b093d692f9ff2dc25093d57fddada44d82e5a2eea86bb92e23b3e18",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "9d353e57cfe403522e2b75e4f95e789832d1e800e8817082a3f0ea10786c4f84",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "8c1cb905fd1d2db79aece7f787c016a2e08859e0dfaebd0bade2bceb8cf69e75",
-    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs": "af0cebff811cd542cea9f25e45aa70719c7ddbadf3880b6d1908b5530024ec00",
-    ".github/workflows/ci.yml": "9afecbd51f8f7c859b8191c5a44ecb7fecc6d5fb2656a5b024a05f0edd5d01c7",
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs": "48048df415a270be39d1d868edb4e5e21bc7806c9ac0e481a0d6d2c95af4fd81",
+    ".github/workflows/ci.yml": "a482779711b27458b326fcc91130d06f31b53b6fe4e88686258aeb092c76989b",
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json": "6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4",
     "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json": "e0d96e9f73d0e0b13f15172ce455d90bcd80fcd149b7ae7d4f6827f655d4f4b7"
   }

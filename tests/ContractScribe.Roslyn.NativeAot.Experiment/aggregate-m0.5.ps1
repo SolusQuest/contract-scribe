@@ -103,7 +103,7 @@ if ($aggregateOutcome -ne "inconclusive" -and ($outcomes -contains "not-feasible
 if ($aggregateOutcome -ne "inconclusive" -and ($outcomes | Where-Object { $_ -eq "not-feasible" }).Count -eq 2) {
     $aggregateOutcome = "not-feasible"
 }
-if ($aggregateOutcome -ne "inconclusive" -and $outcomes -contains "feasible-with-warnings") {
+if ($aggregateOutcome -eq "feasible-clean" -and $outcomes -contains "feasible-with-warnings") {
     $aggregateOutcome = "feasible-with-warnings"
 }
 
