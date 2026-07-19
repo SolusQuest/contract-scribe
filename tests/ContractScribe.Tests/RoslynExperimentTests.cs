@@ -21,7 +21,7 @@ public sealed class RoslynExperimentTests
         Assert.NotNull(execution.SemanticPayloadBytes);
 
         var expected = JsonSerializer.Deserialize<SemanticPayload>(
-            File.ReadAllText(Path.Combine(FixtureRoot, "expected-symbols.json")),
+            File.ReadAllText(Path.Join(FixtureRoot, "expected-symbols.json")),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidOperationException("The committed expected-symbols oracle could not be read.");
 
@@ -88,8 +88,8 @@ public sealed class RoslynExperimentTests
     public async Task RunnerClassifiesWorkspaceGraphMismatchFromRealSolution()
     {
         var fixture = CopyFixtureToTestDirectory();
-        var solution = Path.Combine(fixture, "Sample.sln");
-        var appProject = Path.Combine(fixture, "SampleApp", "SampleApp.csproj");
+        var solution = Path.Join(fixture, "Sample.sln");
+        var appProject = Path.Join(fixture, "SampleApp", "SampleApp.csproj");
         File.WriteAllText(appProject, File.ReadAllText(appProject).Replace(
             "    <ProjectReference Include=\"..\\SampleLibrary\\SampleLibrary.csproj\" />",
             string.Empty,
@@ -106,9 +106,9 @@ public sealed class RoslynExperimentTests
     public async Task RunnerClassifiesCompilationErrorsFromRealSolution()
     {
         var fixture = CopyFixtureToTestDirectory();
-        File.AppendAllText(Path.Combine(fixture, "SampleApp", "App.cs"), "\npublic syntax error\n");
+        File.AppendAllText(Path.Join(fixture, "SampleApp", "App.cs"), "\npublic syntax error\n");
 
-        var execution = await new FrameworkDependentExperiment().RunAsync(Path.Combine(fixture, "Sample.sln"));
+        var execution = await new FrameworkDependentExperiment().RunAsync(Path.Join(fixture, "Sample.sln"));
 
         Assert.Equal(ExperimentStatus.ClassifiedFailure, execution.Result.Status);
         Assert.Equal(FailurePhase.Compilation, execution.Result.FailurePhase);
@@ -119,7 +119,7 @@ public sealed class RoslynExperimentTests
     public async Task RunnerClassifiesSerializationFailureOnRealRunPath()
     {
         var execution = await new FrameworkDependentExperiment(_ => throw new InvalidOperationException())
-            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+            .RunAsync(Path.Join(FixtureRoot, "Sample.sln"));
 
         Assert.Equal(ExperimentStatus.ClassifiedFailure, execution.Result.Status);
         Assert.Equal(FailurePhase.Serialization, execution.Result.FailurePhase);
@@ -142,9 +142,9 @@ public sealed class RoslynExperimentTests
         }
 
         var missing = await new FrameworkDependentExperiment(symbolEnumerator: MissingDocumentationId)
-            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+            .RunAsync(Path.Join(FixtureRoot, "Sample.sln"));
         var duplicate = await new FrameworkDependentExperiment(symbolEnumerator: DuplicateIdentity)
-            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+            .RunAsync(Path.Join(FixtureRoot, "Sample.sln"));
 
         Assert.Equal((FailurePhase.SymbolIdentity, "symbol.missing-documentation-id"),
             (missing.Result.FailurePhase, missing.Result.FailureCode));
@@ -161,16 +161,16 @@ public sealed class RoslynExperimentTests
         var outputDirectory = CreateTestOutputDirectory();
         try
         {
-            var run = await RunHostAsync(outputDirectory, Path.Combine(fixture, "Sample.sln"));
+            var run = await RunHostAsync(outputDirectory, Path.Join(fixture, "Sample.sln"));
 
             Assert.Equal(1, run.ExitCode);
             Assert.Empty(run.Stderr);
             Assert.DoesNotContain("\\", run.Stdout + run.Stderr);
             Assert.DoesNotContain("/home/", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("token", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
-            Assert.False(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+            Assert.False(File.Exists(Path.Join(outputDirectory, "semantic-payload.json")));
 
-            using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "result.json")));
+            using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Join(outputDirectory, "result.json")));
             Assert.Equal("classified-failure", result.RootElement.GetProperty("status").GetString());
             Assert.Equal("msbuild-environment", result.RootElement.GetProperty("failurePhase").GetString());
             Assert.Equal("msbuild.sdk-unavailable", result.RootElement.GetProperty("failureCode").GetString());
@@ -211,7 +211,7 @@ public sealed class RoslynExperimentTests
     {
         var root = FindRepositoryRoot();
         using var document = JsonDocument.Parse(File.ReadAllText(
-            Path.Combine(root, "docs", "20_architecture", "experiments", "m0.4-failure-registry-v1.json")));
+            Path.Join(root, "docs", "20_architecture", "experiments", "m0.4-failure-registry-v1.json")));
         var committed = document.RootElement.GetProperty("phases");
 
         foreach (var phase in FailureRegistry.Snapshot())
@@ -316,7 +316,7 @@ public sealed class RoslynExperimentTests
     public void ExperimentArtifactsContainNoMachinePathPlaceholders()
     {
         var root = FindRepositoryRoot();
-        var files = Directory.GetFiles(Path.Combine(root, "docs", "20_architecture", "experiments"), "*", SearchOption.AllDirectories)
+        var files = Directory.GetFiles(Path.Join(root, "docs", "20_architecture", "experiments"), "*", SearchOption.AllDirectories)
             .Concat(Directory.GetFiles(FixtureRoot, "*.json", SearchOption.AllDirectories))
             .Distinct(StringComparer.OrdinalIgnoreCase);
         foreach (var content in files.Select(File.ReadAllText))
@@ -357,12 +357,12 @@ public sealed class RoslynExperimentTests
     private static async Task<ExperimentExecution> RunExperimentAsync()
     {
         return await new FrameworkDependentExperiment().RunAsync(
-            Path.Combine(FixtureRoot, "Sample.sln"));
+            Path.Join(FixtureRoot, "Sample.sln"));
     }
 
     private static async Task<HostRun> RunHostAsync(string outputDirectory, string? solutionPath = null)
     {
-        var host = Path.Combine(
+        var host = Path.Join(
             FindRepositoryRoot(),
             "tests",
             "ContractScribe.Roslyn.Experiment",
@@ -378,7 +378,7 @@ public sealed class RoslynExperimentTests
             RedirectStandardError = true,
         };
         startInfo.ArgumentList.Add(host);
-        startInfo.ArgumentList.Add(solutionPath ?? Path.Combine(FixtureRoot, "Sample.sln"));
+        startInfo.ArgumentList.Add(solutionPath ?? Path.Join(FixtureRoot, "Sample.sln"));
         startInfo.ArgumentList.Add(outputDirectory);
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The experiment host did not start.");
@@ -391,21 +391,21 @@ public sealed class RoslynExperimentTests
 
     private static string CreateTestOutputDirectory()
     {
-        var directory = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-host-tests", Guid.NewGuid().ToString("N"));
+        var directory = Path.Join(FindRepositoryRoot(), "TestResults", "m0.4-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         return directory;
     }
 
     private static string CopyFixtureToTestDirectory()
     {
-        var target = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-fixture-tests", Guid.NewGuid().ToString("N"));
+        var target = Path.Join(FindRepositoryRoot(), "TestResults", "m0.4-fixture-tests", Guid.NewGuid().ToString("N"));
         CopyDirectory(FixtureRoot, target);
         return target;
     }
 
     private static string CopyFixtureOutsideRepository()
     {
-        var target = Path.Combine(Path.GetTempPath(), "contract-scribe-m0.4", Guid.NewGuid().ToString("N"));
+        var target = Path.Join(Path.GetTempPath(), "contract-scribe-m0.4", Guid.NewGuid().ToString("N"));
         CopyDirectory(FixtureRoot, target);
         return target;
     }
@@ -415,12 +415,12 @@ public sealed class RoslynExperimentTests
         Directory.CreateDirectory(target);
         foreach (var file in Directory.GetFiles(source))
         {
-            File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+            File.Copy(file, Path.Join(target, Path.GetFileName(file)));
         }
 
         foreach (var directory in Directory.GetDirectories(source))
         {
-            CopyDirectory(directory, Path.Combine(target, Path.GetFileName(directory)));
+            CopyDirectory(directory, Path.Join(target, Path.GetFileName(directory)));
         }
     }
 
@@ -428,13 +428,13 @@ public sealed class RoslynExperimentTests
 
     private static string FixtureRoot
     {
-        get => Path.Combine(FindRepositoryRoot(), "tests", "fixtures", "roslyn-msbuild", "v1");
+        get => Path.Join(FindRepositoryRoot(), "tests", "fixtures", "roslyn-msbuild", "v1");
     }
 
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+        while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
         {
             directory = directory.Parent;
         }
