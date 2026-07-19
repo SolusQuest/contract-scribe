@@ -35,7 +35,7 @@ public sealed class FrameworkDependentExperiment
             {
                 var isFailure = eventArgs.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure;
                 workspaceDiagnostics.Add(new DiagnosticRecord(
-                    ClassifyWorkspaceDiagnostic(eventArgs.Diagnostic.Message),
+                    FailureClassifier.ClassifyWorkspaceDiagnostic(eventArgs.Diagnostic.Message),
                     isFailure ? "failure" : "warning"));
             };
 
@@ -100,6 +100,21 @@ public sealed class FrameworkDependentExperiment
                     throw new ExperimentFailureException(
                         FailurePhase.Compilation,
                         "compilation.errors");
+                }
+
+                if (project.Name == "SampleApp")
+                {
+                    var referencedAssemblyNames = compilation.References
+                        .Select(reference => compilation.GetAssemblyOrModuleSymbol(reference))
+                        .OfType<IAssemblySymbol>()
+                        .Select(assembly => assembly.Name)
+                        .ToHashSet(Ordinal);
+                    if (!referencedAssemblyNames.Contains("SampleLibrary"))
+                    {
+                        throw new ExperimentFailureException(
+                            FailurePhase.Compilation,
+                            "compilation.reference-missing");
+                    }
                 }
 
                 var sourceSymbols = EnumeratePublicSourceSymbols(compilation.Assembly.GlobalNamespace);
@@ -275,14 +290,6 @@ public sealed class FrameworkDependentExperiment
         }
 
         return true;
-    }
-
-    private static string ClassifyWorkspaceDiagnostic(string message)
-    {
-        return message.Contains("SDK", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("targeting pack", StringComparison.OrdinalIgnoreCase)
-            ? "msbuild.sdk-unavailable"
-            : "workspace.solution-load-failed";
     }
 
     private static ExperimentExecution Failure(
