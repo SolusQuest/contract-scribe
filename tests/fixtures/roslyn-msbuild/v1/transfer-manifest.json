@@ -33,7 +33,7 @@
   "commands": [
     "dotnet restore ContractScribe.slnx",
     "dotnet build ContractScribe.slnx --configuration Release --no-restore",
-    "pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release -EvidenceReproduction",
+    "pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release",
     "dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore"
   ],
   "comparison": {
