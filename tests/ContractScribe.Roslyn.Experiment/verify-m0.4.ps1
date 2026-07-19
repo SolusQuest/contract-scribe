@@ -21,6 +21,11 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $resolvedSdkVersion = (& dotnet --version).Trim()
 Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."
 $isLocalEvidence = [string]::IsNullOrWhiteSpace($env:RUNNER_OS)
+$currentRevision = (& git rev-parse HEAD).Trim()
+Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
+Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
+$sourceFiles = @(git diff --name-only "$($manifest.sourceRevision)..$currentRevision")
+Assert-Condition (($sourceFiles | Where-Object { $_ -ne "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json" }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name
