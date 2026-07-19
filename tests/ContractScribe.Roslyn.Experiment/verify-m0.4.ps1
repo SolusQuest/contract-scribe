@@ -28,7 +28,10 @@ $isRecordedWindowsEvidence = $EvidenceReproduction -and (
 $currentRevision = (& git rev-parse HEAD).Trim()
 Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
 Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
-$sourceFiles = @(git diff --name-only "$($manifest.sourceRevision)..$currentRevision")
+$sourceRange = "$($manifest.sourceRevision)..$currentRevision"
+$sourceFiles = @(git diff --name-only $sourceRange)
+$sourceDiffExitCode = $LASTEXITCODE
+Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
 $allowedPostSourceFiles = @(
     ".github/workflows/ci.yml",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
@@ -70,6 +73,8 @@ for ($run = 1; $run -le 2; $run++) {
     if ($isRecordedWindowsEvidence) {
         Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.observedEvidence.toolchain.sdkVersion) "Observed SDK evidence does not match the run: $($result.toolchain.sdkVersion)."
         Assert-Condition ($result.toolchain.msbuildVersion -eq $manifest.observedEvidence.toolchain.msbuildVersion) "Observed MSBuild evidence does not match the run: $($result.toolchain.msbuildVersion)."
+        Assert-Condition ($result.toolchain.runtimeVersion -eq $manifest.observedEvidence.toolchain.runtimeVersion) "Observed runtime evidence does not match the run: $($result.toolchain.runtimeVersion)."
+        Assert-Condition ($result.toolchain.processArchitecture -eq $manifest.observedEvidence.toolchain.processArchitecture) "Observed process architecture evidence does not match the run: $($result.toolchain.processArchitecture)."
     }
     $payloadPaths += $payloadPath
 
