@@ -75,7 +75,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
         var scenarioIds = manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()!).ToArray();
         Assert.Equal(scenarioIds.Length, scenarioIds.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(new[] { "repository-semantic-context", "generated-provenance", "synthetic-missing-documentation-id" }, manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance).Select(scenario => scenario.GetProperty("scenarioId").GetString()));
+        Assert.Equal(new[] { "repository-semantic-context", "synthetic-missing-documentation-id" }, manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance).Select(scenario => scenario.GetProperty("scenarioId").GetString()));
+        Assert.Equal(new[] { "generated-provenance" }, manifest.RootElement.GetProperty("unavailableTargetScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()));
     }
 
     [Fact]
@@ -98,10 +99,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     {
         var root = FindRepositoryRoot();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")));
-        var kindsByDocumentationId = EnumerateSymbols(CreateFixtureCompilation().Assembly.GlobalNamespace)
+        var compilation = CreateFixtureCompilation();
+        var kindsByDocumentationId = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
+            .Concat(compilation.References.Select(compilation.GetAssemblyOrModuleSymbol).OfType<IAssemblySymbol>().SelectMany(assembly => EnumerateSymbols(assembly.GlobalNamespace)))
             .Select(symbol => (Id: symbol.GetDocumentationCommentId(), Kind: ClassifyPrimaryKind(symbol)))
             .Where(value => value.Id is not null && value.Kind is not null)
-            .ToDictionary(value => value.Id!, value => value.Kind!, StringComparer.Ordinal);
+            .GroupBy(value => value.Id!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Kind!, StringComparer.Ordinal);
         foreach (var record in manifest.RootElement.GetProperty("classificationRecords").EnumerateArray())
         {
             if (record.GetProperty("recordType").GetString() == "ComponentClassification")
@@ -361,9 +365,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (symbol.IsAbstract) yield return "trait.abstract";
         if (symbol.IsVirtual) yield return "trait.virtual";
         if (symbol.IsSealed) yield return "trait.sealed";
-        if (symbol is IPropertySymbol property && property.IsRequired) yield return "trait.required";
+        if (symbol is IPropertySymbol { IsRequired: true } or IFieldSymbol { IsRequired: true }) yield return "trait.required";
         if (symbol is IPropertySymbol { SetMethod.IsInitOnly: true }) yield return "trait.init-only";
-        if (symbol.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is TypeDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.PartialKeyword))) yield return "trait.partial";
+        if (IsPartialDeclaration(symbol)) yield return "trait.partial";
     }
 
     private static IEnumerable<string> ClassifyRelations(CSharpCompilation compilation)
@@ -461,7 +465,14 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         }
     }
 
-    private static bool IsRecordPositionalProperty(IPropertySymbol property) => GetRecordPositionalParameter(property) is not null;
+    private static bool IsRecordPositionalProperty(IPropertySymbol property) => !property.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is PropertyDeclarationSyntax) && GetRecordPositionalParameter(property) is not null;
+
+    private static bool IsPartialDeclaration(ISymbol symbol) => symbol switch
+    {
+        INamedTypeSymbol => symbol.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is TypeDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
+        IMethodSymbol { MethodKind: MethodKind.Ordinary } => symbol.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is MethodDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
+        _ => false
+    };
 
     private static IParameterSymbol? GetRecordPositionalParameter(IPropertySymbol property) => property.ContainingType.IsRecord
         ? property.ContainingType.InstanceConstructors.SelectMany(constructor => constructor.Parameters).SingleOrDefault(parameter => parameter.Name == property.Name && SymbolEqualityComparer.Default.Equals(parameter.Type, property.Type) && parameter.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is ParameterSyntax syntax && syntax.Parent?.Parent is RecordDeclarationSyntax))
@@ -501,6 +512,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ["origin"] = "origin.source",
                 ["supportStatus"] = kindAvailable ? "support.ambiguous" : "support.unsupported",
                 ["skipReason"] = kindAvailable ? "skip.ambiguous.partial-declaration" : "skip.unsupported.symbol-kind"
+            });
+        }
+        foreach (var scenario in manifest.GetProperty("unavailableTargetScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("scenarioId").GetString(), StringComparer.Ordinal))
+        {
+            records.Add(new Dictionary<string, object>
+            {
+                ["recordType"] = "TargetClassification",
+                ["symbolRef"] = SymbolRef(context, scenario.GetProperty("documentationCommentId").GetString()!),
+                ["primaryKind"] = scenario.GetProperty("primaryKind").GetString()!,
+                ["traits"] = Array.Empty<string>(),
+                ["origin"] = "origin.unknown",
+                ["supportStatus"] = "support.unavailable-context",
+                ["skipReason"] = "skip.unavailable.generated-provenance"
             });
         }
         var scenarioComponentParents = manifest.GetProperty("mixedComponentScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("parentDocumentationCommentId").GetString()!).ToHashSet(StringComparer.Ordinal);
@@ -581,7 +605,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                     if (type.GetDocumentationCommentId() is { } source && inherited.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
             if (type.TypeKind != TypeKind.Interface)
                 foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
-                    if (IsDocumentationTarget(interfaceMember) && interfaceMember.Locations.Any(location => location.IsInSource) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+                    if (IsDocumentationTarget(interfaceMember) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && implementation.Locations.Any(location => location.IsInSource) && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
 
@@ -674,8 +698,10 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var containing = symbol.ContainingType;
         if (containing is null || !ContainingTypesReachable(containing)) return false;
         return symbol.DeclaredAccessibility == Accessibility.Public
-            || symbol.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && containing.TypeKind == TypeKind.Class && !containing.IsSealed;
+            || symbol.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && IsExternallyDerivableContainer(containing);
     }
+
+    private static bool IsExternallyDerivableContainer(INamedTypeSymbol type) => type.TypeKind == TypeKind.Interface || type.TypeKind == TypeKind.Class && !type.IsSealed;
 
     private static bool ContainingTypesReachable(INamedTypeSymbol type)
     {

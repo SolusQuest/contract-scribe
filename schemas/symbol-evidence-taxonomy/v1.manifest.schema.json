@@ -18,6 +18,7 @@
     "classificationRecords",
     "unknownComponentScenarios",
     "unresolvedScenarios",
+    "unavailableTargetScenarios",
     "absenceVectors"
   ],
   "properties": {
@@ -141,6 +142,49 @@
             "type": "boolean"
           },
           "candidatePrimaryKind": {
+            "enum": [
+              "symbol.type.class",
+              "symbol.type.struct",
+              "symbol.type.interface",
+              "symbol.type.enum",
+              "symbol.type.delegate",
+              "symbol.member.constructor",
+              "symbol.member.method",
+              "symbol.member.operator",
+              "symbol.member.conversion",
+              "symbol.member.property",
+              "symbol.member.indexer",
+              "symbol.member.field",
+              "symbol.member.enum-member",
+              "symbol.member.event"
+            ]
+          }
+        }
+      }
+    },
+    "unavailableTargetScenarios": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId",
+          "documentationCommentId",
+          "primaryKind"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          },
+          "documentationCommentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "primaryKind": {
             "enum": [
               "symbol.type.class",
               "symbol.type.struct",

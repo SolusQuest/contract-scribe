@@ -10,7 +10,7 @@ This provisional M0 contract defines taxonomy semantics and compatibility. The [
 
 `SymbolRef` is an ordinal pair of opaque `compilationContextRef` (`^[a-z0-9][a-z0-9._-]{0,127}$`) and an exact, non-empty, original-definition XML documentation comment ID. The latter is never normalized. Its ordering is context then documentation ID. Every relation and evidence subject uses the full pair.
 
-A top-level type is reachable only when public. A nested type needs every containing type reachable. Public members are reachable; protected and protected-internal members additionally need an externally derivable containing type. Private-protected members, protected members of structs/sealed classes, and static constructors are not reachable. Explicit interface implementations are relation-only; the reachable interface member is the target. Inherited interface members do not create duplicate targets.
+A top-level type is reachable only when public. A nested type needs every containing type reachable. Public members are reachable; protected and protected-internal members additionally need an externally derivable containing class (not sealed) or interface. Private-protected members, protected members of structs/sealed classes, and static constructors are not reachable. Explicit interface implementations are relation-only; the reachable interface member is the target. Inherited interface members do not create duplicate targets.
 
 Compiler-synthesized symbols never create targets. Source-generator and tool-generated declarations may. Origins aggregate to source, source-generator, tool-generated, mixed, compiler-synthesized, or unknown. Unknown origin is allowed only with unavailable context. Only synthesized forms named by the V1 registry create components; all other synthesized forms create no record.
 
@@ -27,15 +27,15 @@ The manifest supplies fixture provenance; the test-only classifier never infers 
 
 ## Components and relations
 
-Parameters belong to methods, constructors, operators, conversions, indexers, or delegates; type parameters to named types, delegates, or methods; returns to methods/operators/conversions/delegates; values/getters/setters/init to properties/indexers; add/remove to events; backing fields to properties/events. Component identities are `parameter/N`, `type-parameter/N`, `return`, `value`, and `accessor/<name>`, where `N` is a zero-based ordinal. Explicit source record-copy constructors are ordinary constructor targets; synthesized copy/default constructors and registered delegate/record members are non-target components.
+Parameters belong to methods, constructors, operators, conversions, indexers, or delegates; type parameters to named types, delegates, or methods; returns to ordinary methods/operators/conversions/delegates; values/getters/setters/init to properties/indexers; add/remove to events; backing fields to properties/events. Destructors are method targets but have no return component. Component identities are `parameter/N`, `type-parameter/N`, `return`, `value`, and `accessor/<name>`, where `N` is a zero-based ordinal. Explicit source record-copy constructors are ordinary constructor targets; synthesized copy/default constructors and registered delegate/record members are non-target components.
 
-An override points from overriding member to original-definition base member. Interface relations point from implementation to interface member; a derived interface points to its inherited original member. Multiple observations sort by relation ID then full target `SymbolRef`.
+An override points from overriding member to original-definition base member. Interface relations point from implementation to interface member; a derived interface points to its inherited original member. A relation target may be a source or metadata symbol when its full `SymbolRef` is formable. Multiple observations sort by relation ID then full target `SymbolRef`.
 
 | Component kind | Parent primary kind | Identity |
 | --- | --- | --- |
 | `component.parameter` | method, constructor, operator, conversion, indexer, delegate | `parameter/N` |
 | `component.type-parameter` | class, struct, interface, delegate, method | `type-parameter/N` |
-| `component.return` | method, operator, conversion, delegate | `return` |
+| `component.return` | ordinary method, operator, conversion, delegate | `return` |
 | `component.value` | property, indexer | `value` |
 | `component.accessor.get`, `set`, `init` | property, indexer | `accessor/get`, `accessor/set`, `accessor/init` |
 | `component.accessor.add`, `remove` | event | `accessor/add`, `accessor/remove` |

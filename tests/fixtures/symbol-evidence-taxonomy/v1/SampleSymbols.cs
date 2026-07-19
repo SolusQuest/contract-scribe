@@ -36,6 +36,13 @@ public interface IDefaultContract
     static virtual int StaticVirtualMember() => 0;
 }
 
+public interface IProtectedContract
+{
+    protected void Execute() { }
+}
+
+public interface IDerivedProtectedContract : IProtectedContract { }
+
 public interface IOperatorContract<TSelf> where TSelf : IOperatorContract<TSelf>
 {
     static abstract TSelf operator +(TSelf left, TSelf right);
@@ -54,10 +61,16 @@ public interface IDerivedShapeContract : IShapeContract { }
 public partial record SampleRecord(string Name) : IDerivedContract, IStaticContract
 {
     public required string Required { get; init; }
+    public required string RequiredField = null!;
     public int this[int index] => index;
     public static int StaticMember() => 0;
     public void Execute() { }
     void IContract.Execute() { }
+}
+
+public record ExplicitPositionalPropertyRecord(int Value)
+{
+    public int Value { get; init; }
 }
 
 public record struct SampleRecordStruct(int Value);
@@ -124,6 +137,11 @@ public sealed class DiamondImplementation : IDiamondContract
 public sealed class MultiInterfaceImplementation : IAlphaContract, IBetaContract
 {
     public void Execute() { }
+}
+
+public sealed class MetadataInterfaceImplementation : IDisposable
+{
+    public void Dispose() { }
 }
 
 public class ShapeBase
