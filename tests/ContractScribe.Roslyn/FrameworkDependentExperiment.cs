@@ -201,10 +201,12 @@ public sealed class FrameworkDependentExperiment
         try
         {
             var expectedSdkVersion = ReadExpectedSdkVersion(solutionPath);
+            var resolvedSdkVersion = ResolveDotnetSdkVersion(solutionPath);
             MSBuildLocator.AllowQueryAllDotnetLocations = true;
             var selected = MSBuildLocator.QueryVisualStudioInstances()
                 .Where(instance => instance.DiscoveryType == DiscoveryType.DotNetSdk)
-                .Where(instance => string.Equals(GetSdkVersion(instance), expectedSdkVersion, StringComparison.Ordinal))
+                .Where(instance => string.Equals(GetSdkVersion(instance), expectedSdkVersion, StringComparison.Ordinal)
+                    || string.Equals(GetSdkVersion(instance), resolvedSdkVersion, StringComparison.Ordinal))
                 .OrderByDescending(instance => instance.Version)
                 .FirstOrDefault();
             if (selected is null)
@@ -216,7 +218,7 @@ public sealed class FrameworkDependentExperiment
 
             MSBuildLocator.RegisterInstance(selected);
             registeredToolchain = new ToolchainIdentity(
-                expectedSdkVersion,
+                GetSdkVersion(selected) ?? resolvedSdkVersion,
                 FileVersionInfo.GetVersionInfo(Path.Combine(selected.MSBuildPath, "Microsoft.Build.dll")).FileVersion
                     ?? "unknown",
                 selected.DiscoveryType.ToString(),
@@ -257,6 +259,30 @@ public sealed class FrameworkDependentExperiment
         throw new ExperimentFailureException(
             FailurePhase.MsbuildEnvironment,
             "msbuild.sdk-unavailable");
+    }
+
+    private static string ResolveDotnetSdkVersion(string solutionPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = Path.GetDirectoryName(solutionPath)!,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("--version");
+        using var process = Process.Start(startInfo)
+            ?? throw new ExperimentFailureException(
+                FailurePhase.MsbuildEnvironment,
+                "msbuild.sdk-unavailable");
+        var version = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return process.ExitCode == 0 && Regex.IsMatch(version, @"^\d+\.\d+\.\d+$")
+            ? version
+            : throw new ExperimentFailureException(
+                FailurePhase.MsbuildEnvironment,
+                "msbuild.sdk-unavailable");
     }
 
     private static string? GetSdkVersion(VisualStudioInstance instance)

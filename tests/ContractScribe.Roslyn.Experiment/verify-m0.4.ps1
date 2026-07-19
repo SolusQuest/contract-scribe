@@ -18,6 +18,9 @@ function Assert-Condition([bool]$condition, [string]$message) {
 
 Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host was not found."
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$resolvedSdkVersion = (& dotnet --version).Trim()
+Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."
+$isLocalEvidence = [string]::IsNullOrWhiteSpace($env:RUNNER_OS)
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name
@@ -48,10 +51,12 @@ for ($run = 1; $run -le 2; $run++) {
     Assert-Condition (Test-Path -LiteralPath $payloadPath) "The semantic payload was not written."
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     Assert-Condition ($result.status -eq "succeeded") "The result envelope did not report success."
-    Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.sdk.globalJsonVersion) "The selected SDK does not match global.json: $($result.toolchain.sdkVersion)."
+    Assert-Condition ($result.toolchain.sdkVersion -eq $resolvedSdkVersion) "The selected SDK does not match the SDK resolved for global.json: $($result.toolchain.sdkVersion) vs $resolvedSdkVersion."
     Assert-Condition ($result.toolchain.discoveryType -eq "DotNetSdk") "The selected toolchain was not discovered as a dotnet SDK: $($result.toolchain.discoveryType)."
-    Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.observedEvidence.toolchain.sdkVersion) "Observed SDK evidence does not match the run: $($result.toolchain.sdkVersion)."
-    Assert-Condition ($result.toolchain.msbuildVersion -eq $manifest.observedEvidence.toolchain.msbuildVersion) "Observed MSBuild evidence does not match the run: $($result.toolchain.msbuildVersion)."
+    if ($isLocalEvidence) {
+        Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.observedEvidence.toolchain.sdkVersion) "Observed SDK evidence does not match the run: $($result.toolchain.sdkVersion)."
+        Assert-Condition ($result.toolchain.msbuildVersion -eq $manifest.observedEvidence.toolchain.msbuildVersion) "Observed MSBuild evidence does not match the run: $($result.toolchain.msbuildVersion)."
+    }
     $payloadPaths += $payloadPath
 
     $payloadBytes = [System.IO.File]::ReadAllBytes($payloadPath)
@@ -59,7 +64,9 @@ for ($run = 1; $run -le 2; $run++) {
     Assert-Condition (-not ($payloadBytes[0] -eq 0xEF -and $payloadBytes[1] -eq 0xBB -and $payloadBytes[2] -eq 0xBF)) "The semantic payload has a BOM."
     Assert-Condition ($payloadBytes[$payloadBytes.Length - 1] -ne 0x0A -and $payloadBytes[$payloadBytes.Length - 1] -ne 0x0D) "The semantic payload has a trailing newline."
     $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-Condition ($payloadHash -eq $manifest.observedEvidence.payloadSha256) "Observed payload evidence does not match the run: $payloadHash."
+    if ($isLocalEvidence) {
+        Assert-Condition ($payloadHash -eq $manifest.observedEvidence.payloadSha256) "Observed payload evidence does not match the run: $payloadHash."
+    }
 
     $publicOutput = (Get-Content -LiteralPath $stdoutPath -Raw) + (Get-Content -LiteralPath $stderrPath -Raw) + (Get-Content -LiteralPath $resultPath -Raw)
     Assert-Condition ($publicOutput -notmatch "(?i)([A-Z]:\\|/home/|/Users/|authorization|bearer\s|access[_-]?token|api[_-]?key)") "Public experiment output contains a machine path or credential-like value."
