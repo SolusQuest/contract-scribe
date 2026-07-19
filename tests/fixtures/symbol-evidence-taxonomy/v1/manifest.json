@@ -1,0 +1,3255 @@
+{
+  "conformanceManifestVersion": 1,
+  "registryVersion": 1,
+  "evidenceBundleVersion": 1,
+  "compilationContextRef": "synthetic.v1",
+  "compilationProfile": {
+    "languageVersion": "Preview",
+    "nullable": "enable",
+    "targetFramework": "net10.0",
+    "preprocessorSymbols": [],
+    "sourceEncoding": "utf-8",
+    "warningLevel": 9999,
+    "roslynPackageVersion": "4.14.0",
+    "referencePackVersion": "10.0.2"
+  },
+  "sources": [
+    "SampleSymbols.cs",
+    "SourceGeneratedSymbols.cs",
+    "ToolGeneratedSymbols.cs",
+    "MixedTarget.Source.cs",
+    "MixedTarget.Tool.cs"
+  ],
+  "classificationRecords": [
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      },
+      "componentKind": "component.accessor.add",
+      "identity": "accessor/add",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      },
+      "componentKind": "component.accessor.remove",
+      "identity": "accessor/remove",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.MemberShapes.Changed"
+      },
+      "componentKind": "component.accessor.add",
+      "identity": "accessor/add",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.MemberShapes.Changed"
+      },
+      "componentKind": "component.accessor.remove",
+      "identity": "accessor/remove",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeBase.Changed"
+      },
+      "componentKind": "component.accessor.add",
+      "identity": "accessor/add",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeBase.Changed"
+      },
+      "componentKind": "component.accessor.remove",
+      "identity": "accessor/remove",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeDerived.Changed"
+      },
+      "componentKind": "component.accessor.add",
+      "identity": "accessor/add",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeDerived.Changed"
+      },
+      "componentKind": "component.accessor.remove",
+      "identity": "accessor/remove",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.DiamondImplementation.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ExplicitCopyRecord.#ctor(TaxonomyFixtures.ExplicitCopyRecord)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ExplicitPositionalPropertyRecord.#ctor(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IAlphaContract.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IBetaContract.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IDefaultContract.DefaultMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IDefaultContract.StaticVirtualMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/1",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IProtectedContract.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.AsyncMethod"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.IteratorMethod"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.Raise"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/1",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Implicit(TaxonomyFixtures.MemberShapes)~System.Int32"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Implicit(TaxonomyFixtures.MemberShapes)~System.Int32"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MetadataInterfaceImplementation.Dispose"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.SourceMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.ToolMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.NestedReachability.ProtectedInternalNested.ReachableMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.NestedReachability.ProtectedNested.ReachableMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.PrimaryConstructorClass.#ctor(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.PrimaryConstructorStruct.#ctor(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleExtensions.Extend``1(``0)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleExtensions.Extend``1(``0)"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleExtensions.Extend``1(``0)"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.#ctor(System.String)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Execute"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.StaticMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.#ctor(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SourceGeneratedSymbol.GeneratedMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ToolGeneratedSymbol.GeneratedMember"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitPositionalPropertyRecord.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitPositionalPropertyRecord.Value"
+      },
+      "componentKind": "component.accessor.init",
+      "identity": "accessor/init",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitPositionalPropertyRecord.Value"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitPositionalPropertyRecord.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
+      },
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorClass.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorClass.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorStruct.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorStruct.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Item(System.Int32)"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Item(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Item(System.Int32)"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Required"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Required"
+      },
+      "componentKind": "component.accessor.init",
+      "identity": "accessor/init",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Required"
+      },
+      "componentKind": "component.backing-field",
+      "identity": "backing-field",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Required"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Item(System.Int32)"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Item(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Item(System.Int32)"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Value"
+      },
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get",
+      "origin": "origin.source",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.non-documentation-component"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Value"
+      },
+      "componentKind": "component.value",
+      "identity": "value",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Base"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Derived"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.DiamondImplementation"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitCopyRecord"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitPositionalPropertyRecord"
+      },
+      "componentKind": "component.synthesized.record-copy-constructor",
+      "identity": "synthesized/record-copy-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitShape"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IOperatorContract`1"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MemberShapes"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/0",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MemberShapes"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/1",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MetadataInterfaceImplementation"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedComponentHost"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MultiInterfaceImplementation"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability.ProtectedInternalNested"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability.ProtectedNested"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.PrimaryConstructorStruct"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.parameter",
+      "identity": "parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.return",
+      "identity": "return",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-begin-invoke",
+      "identity": "synthesized/delegate-begin-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-end-invoke",
+      "identity": "synthesized/delegate-end-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "componentKind": "component.synthesized.delegate-invoke",
+      "identity": "synthesized/delegate-invoke",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
+      },
+      "componentKind": "component.synthesized.record-copy-constructor",
+      "identity": "synthesized/record-copy-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
+      },
+      "componentKind": "component.synthesized.record-positional-property",
+      "identity": "synthesized/record-positional-property/0",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecordStruct"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecordStruct"
+      },
+      "componentKind": "component.synthesized.record-positional-property",
+      "identity": "synthesized/record-positional-property/0",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRefStruct`1"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRefStruct`1"
+      },
+      "componentKind": "component.type-parameter",
+      "identity": "type-parameter/0",
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleStruct"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleStruct"
+      },
+      "componentKind": "component.unknown",
+      "identity": "unknown/0",
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.component-kind"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SealedBase"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ShapeBase"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ShapeDerived"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SourceGeneratedSymbol"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.StaticConstructorShape"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "ComponentClassification",
+      "parentSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
+      },
+      "componentKind": "component.synthesized.implicit-constructor",
+      "identity": "synthesized/implicit-constructor",
+      "origin": "origin.compiler-synthesized",
+      "supportStatus": "support.not-applicable",
+      "skipReason": "skip.not-applicable.synthesized-non-target"
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.explicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ExplicitShape.TaxonomyFixtures#IShapeContract#Changed"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.explicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.TaxonomyFixtures#IContract#Execute"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.explicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitShape.TaxonomyFixtures#IShapeContract#Item(System.Int32)"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.explicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitShape.TaxonomyFixtures#IShapeContract#Value"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeDerived.Changed"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.DiamondImplementation.Execute"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MetadataInterfaceImplementation.Dispose"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:System.IDisposable.Dispose"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IAlphaContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IBetaContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.StaticMember"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.implicit-interface-implementation",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Value"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedProtectedContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IProtectedContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedShapeContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedShapeContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedShapeContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDiamondContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ILeftContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.inherited-interface-member",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IRightContract"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.overrides",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeDerived.Changed"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeBase.Changed"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.overrides",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.Derived.ProtectedMember"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.overrides",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Item(System.Int32)"
+      }
+    },
+    {
+      "recordType": "RelationObservation",
+      "relationKind": "relation.overrides",
+      "sourceSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Value"
+      },
+      "targetSymbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Value"
+      }
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.IShapeContract.Changed"
+      },
+      "primaryKind": "symbol.member.event",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.MemberShapes.Changed"
+      },
+      "primaryKind": "symbol.member.event",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeBase.Changed"
+      },
+      "primaryKind": "symbol.member.event",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "E:TaxonomyFixtures.ShapeDerived.Changed"
+      },
+      "primaryKind": "symbol.member.event",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "F:TaxonomyFixtures.MemberShapes.Constant"
+      },
+      "primaryKind": "symbol.member.field",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "F:TaxonomyFixtures.MemberShapes.Field"
+      },
+      "primaryKind": "symbol.member.field",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "F:TaxonomyFixtures.SampleEnum.One"
+      },
+      "primaryKind": "symbol.member.enum-member",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "F:TaxonomyFixtures.SampleRecord.RequiredField"
+      },
+      "primaryKind": "symbol.member.field",
+      "traits": [
+        "trait.required"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "F:TaxonomyFixtures.SampleRefStruct`1.Value"
+      },
+      "primaryKind": "symbol.member.field",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.DiamondImplementation.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ExplicitCopyRecord.#ctor(TaxonomyFixtures.ExplicitCopyRecord)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ExplicitPositionalPropertyRecord.#ctor(System.Int32)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IAlphaContract.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IBetaContract.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IContract.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IDefaultContract.DefaultMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IDefaultContract.StaticVirtualMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.static",
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Addition(`0,`0)"
+      },
+      "primaryKind": "symbol.member.operator",
+      "traits": [
+        "trait.abstract",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IOperatorContract`1.op_Implicit(`0)~System.Int32"
+      },
+      "primaryKind": "symbol.member.conversion",
+      "traits": [
+        "trait.abstract",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IProtectedContract.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.IStaticContract.StaticMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.abstract",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.#ctor"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.AsyncMethod"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.async"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.Finalize"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.IteratorMethod"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.iterator"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.Raise"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Addition(TaxonomyFixtures.MemberShapes,TaxonomyFixtures.MemberShapes)"
+      },
+      "primaryKind": "symbol.member.operator",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MemberShapes.op_Implicit(TaxonomyFixtures.MemberShapes)~System.Int32"
+      },
+      "primaryKind": "symbol.member.conversion",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MetadataInterfaceImplementation.Dispose"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.SourceMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MixedTarget`1.ToolMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.MultiInterfaceImplementation.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.NestedReachability.ProtectedInternalNested.ReachableMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.NestedReachability.ProtectedNested.ReachableMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.PrimaryConstructorClass.#ctor(System.Int32)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.PrimaryConstructorStruct.#ctor(System.Int32)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleExtensions.Extend``1(``0)"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.extension",
+        "trait.generic",
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.#ctor(System.String)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Execute"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.StaticMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecordStruct.#ctor(System.Int32)"
+      },
+      "primaryKind": "symbol.member.constructor",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SourceGeneratedSymbol.GeneratedMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.ToolGeneratedSymbol.GeneratedMember"
+      },
+      "primaryKind": "symbol.member.method",
+      "traits": [],
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ExplicitPositionalPropertyRecord.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [
+        "trait.init-only"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Item(System.Int32)"
+      },
+      "primaryKind": "symbol.member.indexer",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.IShapeContract.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MemberShapes.Property"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorClass.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.PrimaryConstructorStruct.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Item(System.Int32)"
+      },
+      "primaryKind": "symbol.member.indexer",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.Required"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [
+        "trait.init-only",
+        "trait.required"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Item(System.Int32)"
+      },
+      "primaryKind": "symbol.member.indexer",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeBase.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [
+        "trait.virtual"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
+      },
+      "primaryKind": "symbol.member.indexer",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Value"
+      },
+      "primaryKind": "symbol.member.property",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Base"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.Derived"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.DiamondImplementation"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitCopyRecord"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.record-class"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitPositionalPropertyRecord"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.record-class"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ExplicitShape"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IAlphaContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IBetaContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDefaultContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedProtectedContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDerivedShapeContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IDiamondContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ILeftContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IOperatorContract`1"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract",
+        "trait.generic"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IProtectedContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IRightContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IShapeContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.IStaticContract"
+      },
+      "primaryKind": "symbol.type.interface",
+      "traits": [
+        "trait.abstract"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MemberShapes"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MetadataInterfaceImplementation"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedComponentHost"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MixedTarget`1"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.generic",
+        "trait.partial"
+      ],
+      "origin": "origin.mixed",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.mixed-origin"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.MultiInterfaceImplementation"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability.ProtectedInternalNested"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.NestedReachability.ProtectedNested"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.PartialAmbiguity"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.ambiguous",
+      "skipReason": "skip.ambiguous.partial-declaration"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.PrimaryConstructorClass"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.PrimaryConstructorStruct"
+      },
+      "primaryKind": "symbol.type.struct",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleDelegate"
+      },
+      "primaryKind": "symbol.type.delegate",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleEnum"
+      },
+      "primaryKind": "symbol.type.enum",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleExtensions"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.static"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecord"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.partial",
+        "trait.record-class"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRecordStruct"
+      },
+      "primaryKind": "symbol.type.struct",
+      "traits": [
+        "trait.record-struct",
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleRefStruct`1"
+      },
+      "primaryKind": "symbol.type.struct",
+      "traits": [
+        "trait.generic",
+        "trait.ref-struct",
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SampleStruct"
+      },
+      "primaryKind": "symbol.type.struct",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SealedBase"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ShapeBase"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ShapeDerived"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [
+        "trait.sealed"
+      ],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.SourceGeneratedSymbol"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source-generator",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.StaticConstructorShape"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.ToolGeneratedSymbol"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.tool-generated",
+      "supportStatus": "support.supported"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.UnavailableGeneratedTarget"
+      },
+      "primaryKind": "symbol.type.class",
+      "traits": [],
+      "origin": "origin.unknown",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.generated-provenance"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.UnknownPartial"
+      },
+      "primaryKind": "symbol.unknown",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.symbol-kind"
+    },
+    {
+      "recordType": "TargetClassification",
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "T:TaxonomyFixtures.UnknownPrimary"
+      },
+      "primaryKind": "symbol.unknown",
+      "traits": [],
+      "origin": "origin.source",
+      "supportStatus": "support.unsupported",
+      "skipReason": "skip.unsupported.symbol-kind"
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.source",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.documentation-comment-id",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "recordType": "UnresolvedClassification",
+      "compilationContextRef": "synthetic.v1",
+      "origin": "origin.unknown",
+      "supportStatus": "support.unavailable-context",
+      "skipReason": "skip.unavailable.semantic-context",
+      "candidateLocator": {
+        "repository": {
+          "path": "./fixtures//unavailable.cs",
+          "span": {
+            "start": 1,
+            "end": 3
+          }
+        }
+      }
+    }
+  ],
+  "absenceVectors": [
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SealedBase.NotReachable"
+      },
+      "reason": "protected-member-in-sealed-container"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.TaxonomyFixtures#IContract#Execute"
+      },
+      "reason": "explicit-interface-relation-only"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecordStruct.Value"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "P:TaxonomyFixtures.SampleRecord.EqualityContract"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.PrintMembers(System.Text.StringBuilder)"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.Equals(TaxonomyFixtures.SampleRecord)"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.GetHashCode"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SampleRecord.<Clone>$"
+      },
+      "reason": "unregistered-record-synthesized-member"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.SealedBase.Finalize"
+      },
+      "reason": "non-reachable-constructor-or-destructor"
+    },
+    {
+      "symbolRef": {
+        "compilationContextRef": "synthetic.v1",
+        "documentationCommentId": "M:TaxonomyFixtures.StaticConstructorShape.#cctor"
+      },
+      "reason": "non-reachable-constructor-or-destructor"
+    }
+  ],
+  "unresolvedScenarios": [
+    {
+      "scenarioId": "synthetic-missing-documentation-id",
+      "documentationCommentIdAvailable": false,
+      "generatedProvenanceAvailable": true,
+      "semanticContextAvailable": true,
+      "observedOrigin": "origin.source",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "missing-doc-id"
+        }
+      }
+    },
+    {
+      "scenarioId": "repository-semantic-context",
+      "documentationCommentIdAvailable": true,
+      "generatedProvenanceAvailable": true,
+      "semanticContextAvailable": false,
+      "observedOrigin": "origin.source",
+      "candidateLocator": {
+        "repository": {
+          "path": "./fixtures//unavailable.cs",
+          "span": {
+            "start": 1,
+            "end": 3
+          }
+        }
+      }
+    }
+  ],
+  "unavailableTargetScenarios": [
+    {
+      "scenarioId": "generated-provenance",
+      "documentationCommentId": "T:TaxonomyFixtures.UnavailableGeneratedTarget",
+      "primaryKind": "symbol.type.class"
+    }
+  ],
+  "unknownComponentScenarios": [
+    {
+      "scenarioId": "unknown-member-repository",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.MemberShapes",
+      "candidateLocator": {
+        "repository": {
+          "path": "fixtures/unknown.cs",
+          "span": {
+            "start": 4,
+            "end": 6
+          }
+        }
+      }
+    },
+    {
+      "scenarioId": "unknown-member-synthetic",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.MemberShapes",
+      "candidateLocator": {
+        "synthetic": {
+          "fixtureId": "unknown-member-shape"
+        }
+      }
+    },
+    {
+      "scenarioId": "unknown-struct-generated",
+      "parentDocumentationCommentId": "T:TaxonomyFixtures.SampleStruct",
+      "candidateLocator": {
+        "generatedSource": {
+          "generatorId": "fixture.generator",
+          "hintNameId": "unknown-struct.g.cs"
+        }
+      }
+    }
+  ],
+  "sourceProvenance": {
+    "SampleSymbols.cs": "origin.source",
+    "SourceGeneratedSymbols.cs": "origin.source-generator",
+    "ToolGeneratedSymbols.cs": "origin.tool-generated",
+    "MixedTarget.Source.cs": "origin.source",
+    "MixedTarget.Tool.cs": "origin.tool-generated"
+  },
+  "contextCollisionVectors": [
+    {
+      "compilationContextRef": "synthetic.v2",
+      "documentationCommentId": "T:TaxonomyFixtures.IContract"
+    },
+    {
+      "compilationContextRef": "synthetic.v1",
+      "documentationCommentId": "T:TaxonomyFixtures.IContract"
+    }
+  ],
+  "targetScenarios": [
+    {
+      "scenarioId": "unknown-primary-kind",
+      "documentationCommentId": "T:TaxonomyFixtures.UnknownPrimary",
+      "kindAvailable": false,
+      "partialDeclaration": false
+    },
+    {
+      "scenarioId": "partial-declaration",
+      "documentationCommentId": "T:TaxonomyFixtures.PartialAmbiguity",
+      "kindAvailable": true,
+      "partialDeclaration": true,
+      "candidatePrimaryKind": "symbol.type.class"
+    },
+    {
+      "scenarioId": "unknown-kind-over-partial",
+      "documentationCommentId": "T:TaxonomyFixtures.UnknownPartial",
+      "kindAvailable": false,
+      "partialDeclaration": true
+    }
+  ],
+  "mixedComponentScenarios": [
+    {
+      "scenarioId": "mixed-property-value",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.value",
+      "identity": "value"
+    },
+    {
+      "scenarioId": "mixed-property-get",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.accessor.get",
+      "identity": "accessor/get"
+    },
+    {
+      "scenarioId": "mixed-property-set",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.accessor.set",
+      "identity": "accessor/set"
+    },
+    {
+      "scenarioId": "mixed-property-backing",
+      "parentDocumentationCommentId": "P:TaxonomyFixtures.MixedComponentHost.Value",
+      "componentKind": "component.backing-field",
+      "identity": "backing-field"
+    }
+  ]
+}

@@ -1,0 +1,1526 @@
+{
+  "registryVersion": 1,
+  "idPattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+  "sections": {
+    "primaryKinds": [
+      {
+        "definition": "Independent XML documentation target classified as symbol.type.class.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.type.class",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.type.struct.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.type.struct",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.type.interface.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.type.interface",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.type.enum.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.type.enum",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.type.delegate.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.type.delegate",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.constructor.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.constructor",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.method.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.method",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.operator.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.operator",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.conversion.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.conversion",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.property.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.property",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.indexer.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.indexer",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.field.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.field",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.enum-member.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.enum-member",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.member.event.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.member.event",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.ambiguous",
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Independent XML documentation target classified as symbol.unknown.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "symbol.unknown",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.unsupported"
+        ],
+        "requiredSkip": "skip.unsupported.symbol-kind"
+      }
+    ],
+    "componentKinds": [
+      {
+        "definition": "Subordinate XML documentation component classified as component.parameter.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.parameter",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.unavailable-context",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.indexer",
+          "symbol.type.delegate"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.type-parameter.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.type-parameter",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.unavailable-context",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.type.class",
+          "symbol.type.struct",
+          "symbol.type.interface",
+          "symbol.type.delegate",
+          "symbol.member.method"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.return.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.return",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.unavailable-context",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.type.delegate"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.value.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.value",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.supported",
+          "support.unavailable-context",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.property",
+          "symbol.member.indexer"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.accessor.get.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.accessor.get",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.property",
+          "symbol.member.indexer"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.accessor.set.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.accessor.set",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.property",
+          "symbol.member.indexer"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.accessor.init.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.accessor.init",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.property",
+          "symbol.member.indexer"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.accessor.add.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.accessor.add",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.event"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.accessor.remove.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.accessor.remove",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.event"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.backing-field.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.backing-field",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable",
+          "support.ambiguous"
+        ],
+        "parentKinds": [
+          "symbol.member.property",
+          "symbol.member.event"
+        ]
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.record-positional-property.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.record-positional-property",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.implicit-constructor.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.implicit-constructor",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.record-copy-constructor.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.record-copy-constructor",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.class",
+          "symbol.type.struct"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-invoke.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.delegate-invoke",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-begin-invoke.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.delegate-begin-invoke",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.synthesized.delegate-end-invoke.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.synthesized.delegate-end-invoke",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ],
+        "parentKinds": [
+          "symbol.type.delegate"
+        ],
+        "requiredOrigin": "origin.compiler-synthesized",
+        "requiredSkip": "skip.not-applicable.synthesized-non-target"
+      },
+      {
+        "definition": "Subordinate XML documentation component classified as component.unknown.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "component.unknown",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "allowedSupportStatuses": [
+          "support.unsupported"
+        ],
+        "parentKinds": [
+          "symbol.type.class",
+          "symbol.type.struct",
+          "symbol.type.interface",
+          "symbol.type.enum",
+          "symbol.type.delegate",
+          "symbol.member.constructor",
+          "symbol.member.method",
+          "symbol.member.operator",
+          "symbol.member.conversion",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.field",
+          "symbol.member.enum-member",
+          "symbol.member.event",
+          "symbol.unknown"
+        ],
+        "requiredSkip": "skip.unsupported.component-kind"
+      }
+    ],
+    "traits": [
+      {
+        "definition": "Independent classification trait trait.generic applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.generic",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.record-class applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.record-class",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.record-struct applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.record-struct",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.ref-struct applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.ref-struct",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.static applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.static",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.abstract applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.abstract",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.virtual applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.virtual",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.sealed applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.sealed",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.extension applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.extension",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.async applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.async",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.iterator applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.iterator",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.required applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.required",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.init-only applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.init-only",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      },
+      {
+        "definition": "Independent classification trait trait.partial applied to a target without changing its primary kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "trait.partial",
+        "recordTypes": [
+          "TargetClassification"
+        ]
+      }
+    ],
+    "relationKinds": [
+      {
+        "definition": "Directed semantic relation relation.overrides represented only by RelationObservation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "RelationObservation"
+        ],
+        "id": "relation.overrides",
+        "recordTypes": [
+          "RelationObservation"
+        ],
+        "sourceDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event"
+        ],
+        "targetDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event"
+        ]
+      },
+      {
+        "definition": "Directed semantic relation relation.implicit-interface-implementation represented only by RelationObservation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "RelationObservation"
+        ],
+        "id": "relation.implicit-interface-implementation",
+        "recordTypes": [
+          "RelationObservation"
+        ],
+        "sourceDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
+        ],
+        "targetDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
+        ]
+      },
+      {
+        "definition": "Directed semantic relation relation.explicit-interface-implementation represented only by RelationObservation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "RelationObservation"
+        ],
+        "id": "relation.explicit-interface-implementation",
+        "recordTypes": [
+          "RelationObservation"
+        ],
+        "sourceDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
+        ],
+        "targetDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
+        ]
+      },
+      {
+        "definition": "Directed semantic relation relation.inherited-interface-member represented only by RelationObservation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "RelationObservation"
+        ],
+        "id": "relation.inherited-interface-member",
+        "recordTypes": [
+          "RelationObservation"
+        ],
+        "sourceDomain": [
+          "symbol.type.interface"
+        ],
+        "targetDomain": [
+          "symbol.member.method",
+          "symbol.member.property",
+          "symbol.member.indexer",
+          "symbol.member.event",
+          "symbol.member.operator",
+          "symbol.member.conversion"
+        ]
+      }
+    ],
+    "origins": [
+      {
+        "definition": "Provenance aggregation value origin.source.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "origin.source",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      },
+      {
+        "definition": "Provenance aggregation value origin.source-generator.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "origin.source-generator",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      },
+      {
+        "definition": "Provenance aggregation value origin.tool-generated.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "origin.tool-generated",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      },
+      {
+        "definition": "Provenance aggregation value origin.compiler-synthesized.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "origin.compiler-synthesized",
+        "recordTypes": [
+          "ComponentClassification"
+        ]
+      },
+      {
+        "definition": "Provenance aggregation value origin.mixed.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "origin.mixed",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      },
+      {
+        "definition": "Provenance aggregation value origin.unknown.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "origin.unknown",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      }
+    ],
+    "supportStatuses": [
+      {
+        "definition": "Classification support outcome support.supported.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification"
+        ],
+        "id": "support.supported",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification"
+        ]
+      },
+      {
+        "definition": "Classification support outcome support.unsupported.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification"
+        ],
+        "id": "support.unsupported",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification"
+        ]
+      },
+      {
+        "definition": "Classification support outcome support.ambiguous.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification"
+        ],
+        "id": "support.ambiguous",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification"
+        ]
+      },
+      {
+        "definition": "Classification support outcome support.not-applicable.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "support.not-applicable",
+        "recordTypes": [
+          "ComponentClassification"
+        ]
+      },
+      {
+        "definition": "Classification support outcome support.unavailable-context.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "support.unavailable-context",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ]
+      }
+    ],
+    "skipReasons": [
+      {
+        "definition": "Canonical primary skip reason skip.unsupported.symbol-kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "skip.unsupported.symbol-kind",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "precedence": 4,
+        "allowedSupportStatuses": [
+          "support.unsupported"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.unsupported.component-kind.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "skip.unsupported.component-kind",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "precedence": 4,
+        "allowedSupportStatuses": [
+          "support.unsupported"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.ambiguous.partial-declaration.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification"
+        ],
+        "id": "skip.ambiguous.partial-declaration",
+        "recordTypes": [
+          "TargetClassification"
+        ],
+        "precedence": 5,
+        "allowedSupportStatuses": [
+          "support.ambiguous"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.ambiguous.mixed-origin.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification"
+        ],
+        "id": "skip.ambiguous.mixed-origin",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification"
+        ],
+        "precedence": 6,
+        "allowedSupportStatuses": [
+          "support.ambiguous"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.not-applicable.synthesized-non-target.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "skip.not-applicable.synthesized-non-target",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "precedence": 7,
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.not-applicable.non-documentation-component.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "ComponentClassification"
+        ],
+        "id": "skip.not-applicable.non-documentation-component",
+        "recordTypes": [
+          "ComponentClassification"
+        ],
+        "precedence": 8,
+        "allowedSupportStatuses": [
+          "support.not-applicable"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.unavailable.documentation-comment-id.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "UnresolvedClassification"
+        ],
+        "id": "skip.unavailable.documentation-comment-id",
+        "recordTypes": [
+          "UnresolvedClassification"
+        ],
+        "precedence": 1,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.unavailable.generated-provenance.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "skip.unavailable.generated-provenance",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "precedence": 2,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
+        ]
+      },
+      {
+        "definition": "Canonical primary skip reason skip.unavailable.semantic-context.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "id": "skip.unavailable.semantic-context",
+        "recordTypes": [
+          "TargetClassification",
+          "ComponentClassification",
+          "UnresolvedClassification"
+        ],
+        "precedence": 3,
+        "allowedSupportStatuses": [
+          "support.unavailable-context"
+        ]
+      }
+    ],
+    "evidenceKinds": [
+      {
+        "definition": "Bounded evidence item category evidence.source.declaration.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.source.declaration",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.source.implementation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.source.implementation",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.source.xml-documentation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.source.xml-documentation",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.source.attribute.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.source.attribute",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.test.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.test",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.repository-documentation.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.repository-documentation",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Bounded evidence item category evidence.public-contract.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.public-contract",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      }
+    ],
+    "evidenceRelations": [
+      {
+        "definition": "Evidence-to-subject relation evidence.declares.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.declares",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Evidence-to-subject relation evidence.documents.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.documents",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Evidence-to-subject relation evidence.tests.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.tests",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Evidence-to-subject relation evidence.references.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.references",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Evidence-to-subject relation evidence.constrains.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.constrains",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      }
+    ],
+    "locatorKinds": [
+      {
+        "definition": "Evidence locator discriminator evidence.locator.repository.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ],
+        "id": "evidence.locator.repository",
+        "recordTypes": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ]
+      },
+      {
+        "definition": "Evidence locator discriminator evidence.locator.metadata.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem"
+        ],
+        "id": "evidence.locator.metadata",
+        "recordTypes": [
+          "EvidenceItem"
+        ]
+      },
+      {
+        "definition": "Evidence locator discriminator evidence.locator.synthetic.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ],
+        "id": "evidence.locator.synthetic",
+        "recordTypes": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ]
+      }
+    ],
+    "bundleAvailabilityStatuses": [
+      {
+        "definition": "Evidence bundle availability state evidence.bundle.complete.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.bundle.complete",
+        "recordTypes": [
+          "EvidenceBundle"
+        ]
+      },
+      {
+        "definition": "Evidence bundle availability state evidence.bundle.partial.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.bundle.partial",
+        "recordTypes": [
+          "EvidenceBundle"
+        ]
+      },
+      {
+        "definition": "Evidence bundle availability state evidence.bundle.unavailable.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.bundle.unavailable",
+        "recordTypes": [
+          "EvidenceBundle"
+        ]
+      }
+    ],
+    "bundleOmissionReasons": [
+      {
+        "definition": "Canonical evidence omission reason evidence.omission.access-not-permitted.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.omission.access-not-permitted",
+        "recordTypes": [
+          "EvidenceBundle"
+        ],
+        "precedence": 1
+      },
+      {
+        "definition": "Canonical evidence omission reason evidence.omission.source-unavailable.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.omission.source-unavailable",
+        "recordTypes": [
+          "EvidenceBundle"
+        ],
+        "precedence": 2
+      },
+      {
+        "definition": "Canonical evidence omission reason evidence.omission.binary-content.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.omission.binary-content",
+        "recordTypes": [
+          "EvidenceBundle"
+        ],
+        "precedence": 3
+      },
+      {
+        "definition": "Canonical evidence omission reason evidence.omission.budget-exhausted.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.omission.budget-exhausted",
+        "recordTypes": [
+          "EvidenceBundle"
+        ],
+        "precedence": 4,
+        "allowedBundleStatuses": [
+          "evidence.bundle.partial"
+        ]
+      },
+      {
+        "definition": "Canonical evidence omission reason evidence.omission.not-provided.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceBundle"
+        ],
+        "id": "evidence.omission.not-provided",
+        "recordTypes": [
+          "EvidenceBundle"
+        ],
+        "precedence": 5
+      }
+    ]
+  }
+}

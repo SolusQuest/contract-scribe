@@ -1,0 +1,607 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/symbol-evidence-taxonomy/v1.schema.json",
+  "title": "ContractScribe Symbol Evidence Bundle V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidenceBundleVersion",
+    "availabilityStatus",
+    "items"
+  ],
+  "properties": {
+    "evidenceBundleVersion": {
+      "const": 1
+    },
+    "availabilityStatus": {
+      "enum": [
+        "evidence.bundle.complete",
+        "evidence.bundle.partial",
+        "evidence.bundle.unavailable"
+      ]
+    },
+    "omissionReason": {
+      "enum": [
+        "evidence.omission.access-not-permitted",
+        "evidence.omission.source-unavailable",
+        "evidence.omission.binary-content",
+        "evidence.omission.budget-exhausted",
+        "evidence.omission.not-provided"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "subject",
+        "kind",
+        "relation",
+        "excerpt",
+        "sha256",
+        "originalUtf8ByteCount",
+        "includedUtf8ByteCount",
+        "omittedUtf8ByteCount",
+        "isTruncated",
+        "locator"
+      ],
+      "properties": {
+        "evidenceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+          "maxLength": 128
+        },
+        "subject": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "kind": {
+          "enum": [
+            "evidence.source.declaration",
+            "evidence.source.implementation",
+            "evidence.source.xml-documentation",
+            "evidence.source.attribute",
+            "evidence.test",
+            "evidence.repository-documentation",
+            "evidence.public-contract"
+          ]
+        },
+        "relation": {
+          "enum": [
+            "evidence.declares",
+            "evidence.documents",
+            "evidence.tests",
+            "evidence.references",
+            "evidence.constrains"
+          ]
+        },
+        "excerpt": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalUtf8ByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "includedUtf8ByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "omittedUtf8ByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "isTruncated": {
+          "type": "boolean"
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        }
+      }
+    },
+    "symbolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilationContextRef",
+        "documentationCommentId"
+      ],
+      "properties": {
+        "compilationContextRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "documentationCommentId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ],
+          "properties": {
+            "repository": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "span": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metadata"
+          ],
+          "properties": {
+            "metadata": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assemblyIdentity",
+                "documentationCommentId"
+              ],
+              "properties": {
+                "assemblyIdentity": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                },
+                "documentationCommentId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "synthetic"
+          ],
+          "properties": {
+            "synthetic": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fixtureId"
+              ],
+              "properties": {
+                "fixtureId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "candidateLocator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ],
+          "properties": {
+            "repository": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generatedSource"
+          ],
+          "properties": {
+            "generatedSource": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "generatorId",
+                "hintNameId"
+              ],
+              "properties": {
+                "generatorId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                },
+                "hintNameId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "synthetic"
+          ],
+          "properties": {
+            "synthetic": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fixtureId"
+              ],
+              "properties": {
+                "fixtureId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "targetClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "symbolRef",
+        "primaryKind",
+        "traits",
+        "origin",
+        "supportStatus"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TargetClassification"
+        },
+        "symbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "primaryKind": {
+          "type": "string",
+          "pattern": "^(symbol\\.(type|member)\\.|symbol\\.unknown$)",
+          "enum": [
+            "symbol.type.class",
+            "symbol.type.struct",
+            "symbol.type.interface",
+            "symbol.type.enum",
+            "symbol.type.delegate",
+            "symbol.member.constructor",
+            "symbol.member.method",
+            "symbol.member.operator",
+            "symbol.member.conversion",
+            "symbol.member.property",
+            "symbol.member.indexer",
+            "symbol.member.field",
+            "symbol.member.enum-member",
+            "symbol.member.event",
+            "symbol.unknown"
+          ]
+        },
+        "traits": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^trait\\.",
+            "enum": [
+              "trait.generic",
+              "trait.record-class",
+              "trait.record-struct",
+              "trait.ref-struct",
+              "trait.static",
+              "trait.abstract",
+              "trait.virtual",
+              "trait.sealed",
+              "trait.extension",
+              "trait.async",
+              "trait.iterator",
+              "trait.required",
+              "trait.init-only",
+              "trait.partial"
+            ]
+          }
+        },
+        "origin": {
+          "type": "string",
+          "pattern": "^origin\\.",
+          "enum": [
+            "origin.source",
+            "origin.source-generator",
+            "origin.tool-generated",
+            "origin.compiler-synthesized",
+            "origin.mixed",
+            "origin.unknown"
+          ]
+        },
+        "supportStatus": {
+          "type": "string",
+          "pattern": "^support\\.",
+          "enum": [
+            "support.supported",
+            "support.unsupported",
+            "support.ambiguous",
+            "support.not-applicable",
+            "support.unavailable-context"
+          ]
+        },
+        "skipReason": {
+          "type": "string",
+          "pattern": "^skip\\.",
+          "enum": [
+            "skip.unsupported.symbol-kind",
+            "skip.unsupported.component-kind",
+            "skip.ambiguous.partial-declaration",
+            "skip.ambiguous.mixed-origin",
+            "skip.not-applicable.synthesized-non-target",
+            "skip.not-applicable.non-documentation-component",
+            "skip.unavailable.documentation-comment-id",
+            "skip.unavailable.generated-provenance",
+            "skip.unavailable.semantic-context"
+          ]
+        }
+      }
+    },
+    "componentClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "parentSymbolRef",
+        "componentKind",
+        "identity",
+        "origin",
+        "supportStatus"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "ComponentClassification"
+        },
+        "parentSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "componentKind": {
+          "type": "string",
+          "pattern": "^component\\.",
+          "enum": [
+            "component.parameter",
+            "component.type-parameter",
+            "component.return",
+            "component.value",
+            "component.accessor.get",
+            "component.accessor.set",
+            "component.accessor.init",
+            "component.accessor.add",
+            "component.accessor.remove",
+            "component.backing-field",
+            "component.synthesized.record-positional-property",
+            "component.synthesized.implicit-constructor",
+            "component.synthesized.record-copy-constructor",
+            "component.synthesized.delegate-invoke",
+            "component.synthesized.delegate-begin-invoke",
+            "component.synthesized.delegate-end-invoke",
+            "component.unknown"
+          ]
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "type": "string",
+          "pattern": "^origin\\.",
+          "enum": [
+            "origin.source",
+            "origin.source-generator",
+            "origin.tool-generated",
+            "origin.compiler-synthesized",
+            "origin.mixed",
+            "origin.unknown"
+          ]
+        },
+        "supportStatus": {
+          "type": "string",
+          "pattern": "^support\\.",
+          "enum": [
+            "support.supported",
+            "support.unsupported",
+            "support.ambiguous",
+            "support.not-applicable",
+            "support.unavailable-context"
+          ]
+        },
+        "skipReason": {
+          "type": "string",
+          "pattern": "^skip\\.",
+          "enum": [
+            "skip.unsupported.symbol-kind",
+            "skip.unsupported.component-kind",
+            "skip.ambiguous.partial-declaration",
+            "skip.ambiguous.mixed-origin",
+            "skip.not-applicable.synthesized-non-target",
+            "skip.not-applicable.non-documentation-component",
+            "skip.unavailable.documentation-comment-id",
+            "skip.unavailable.generated-provenance",
+            "skip.unavailable.semantic-context"
+          ]
+        }
+      }
+    },
+    "relationObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "relationKind",
+        "sourceSymbolRef",
+        "targetSymbolRef"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "RelationObservation"
+        },
+        "relationKind": {
+          "type": "string",
+          "pattern": "^relation\\.",
+          "enum": [
+            "relation.overrides",
+            "relation.implicit-interface-implementation",
+            "relation.explicit-interface-implementation",
+            "relation.inherited-interface-member"
+          ]
+        },
+        "sourceSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "targetSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        }
+      }
+    },
+    "unresolvedClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "compilationContextRef",
+        "origin",
+        "supportStatus",
+        "skipReason",
+        "candidateLocator"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "UnresolvedClassification"
+        },
+        "compilationContextRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "origin": {
+          "type": "string",
+          "pattern": "^origin\\.",
+          "enum": [
+            "origin.source",
+            "origin.source-generator",
+            "origin.tool-generated",
+            "origin.compiler-synthesized",
+            "origin.mixed",
+            "origin.unknown"
+          ]
+        },
+        "supportStatus": {
+          "const": "support.unavailable-context"
+        },
+        "skipReason": {
+          "type": "string",
+          "pattern": "^skip\\.unavailable\\.",
+          "enum": [
+            "skip.unavailable.documentation-comment-id",
+            "skip.unavailable.generated-provenance",
+            "skip.unavailable.semantic-context"
+          ]
+        },
+        "candidateLocator": {
+          "$ref": "#/$defs/candidateLocator"
+        }
+      }
+    },
+    "classificationRecord": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/targetClassification"
+        },
+        {
+          "$ref": "#/$defs/componentClassification"
+        },
+        {
+          "$ref": "#/$defs/relationObservation"
+        },
+        {
+          "$ref": "#/$defs/unresolvedClassification"
+        }
+      ]
+    }
+  }
+}
