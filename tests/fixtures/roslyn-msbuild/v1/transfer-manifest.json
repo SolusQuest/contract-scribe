@@ -1,0 +1,49 @@
+{
+  "formatVersion": "m0.4-transfer-manifest-v1",
+  "fixtureId": "roslyn-msbuild-v1",
+  "solution": "Sample.sln",
+  "projectGraph": {
+    "projects": ["SampleApp", "SampleLibrary"],
+    "references": [{ "from": "SampleApp", "to": "SampleLibrary" }]
+  },
+  "fixtureContentSha256": {
+    "Sample.sln": "7696ccf677a950e07feec355b28b17a004756b75a619f1095ab9161818af2d23",
+    "SampleLibrary/SampleLibrary.csproj": "fc05e8b0a79435fca5d5a73d3cb43646fe1c2747e580ef1142f22a76d74076aa",
+    "SampleLibrary/Api.cs": "55d9745cb8e753d7f3ec01485b275c5304ec24c9aaf916d022f516b6aee8f140",
+    "SampleApp/SampleApp.csproj": "48e8240f5da66f070d8fc1b11d57343be72de9577f49068b980d8b0324f187d8",
+    "SampleApp/App.cs": "09c3d534c4dc42ee1c70d2db607cbda1a491af2743e0c53a91948e8b00f29155",
+    "expected-symbols.json": "ea3a57997bf5dc9f891c169bbb1e63e9866749805a5c4fe09ad3d629eba99ca2"
+  },
+  "sdk": {
+    "globalJsonVersion": "10.0.102",
+    "rollForward": "latestFeature"
+  },
+  "packages": {
+    "Microsoft.Build.Locator": "1.9.1",
+    "Microsoft.CodeAnalysis.CSharp.Workspaces": "4.14.0",
+    "Microsoft.CodeAnalysis.Workspaces.MSBuild": "4.14.0"
+  },
+  "requiredMatrix": ["ubuntu-latest", "windows-latest"],
+  "commands": [
+    "dotnet restore ContractScribe.slnx",
+    "dotnet run --project src/ContractScribe.Roslyn.Experiment/ContractScribe.Roslyn.Experiment.csproj -- tests/fixtures/roslyn-msbuild/v1/Sample.sln tests/fixtures/roslyn-msbuild/v1/output",
+    "dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore"
+  ],
+  "comparison": {
+    "artifact": "semantic-payload.json",
+    "encoding": "utf-8-no-bom",
+    "whitespace": "none",
+    "trailingNewline": false,
+    "equality": "byte-equality",
+    "environmentFieldsIncluded": false
+  },
+  "knownWarnings": [],
+  "unresolvedConstraints": [
+    "This baseline does not establish Native AOT feasibility or general project compatibility."
+  ],
+  "m05Handoff": {
+    "frozen": ["fixture", "expected-symbols", "semantic-runner", "symbol-identity", "semantic-payload", "ordering"],
+    "hostChangesAllowed": ["deployment-invocation", "publish-settings"],
+    "aotAdaptation": "A required frozen-artifact change is a negative M0.5 result and requires a new M0.4 baseline."
+  }
+}
