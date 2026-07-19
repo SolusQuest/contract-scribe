@@ -235,7 +235,7 @@ public sealed class FrameworkDependentExperiment
             MSBuildLocator.RegisterInstance(selected);
             registeredToolchain = new ToolchainIdentity(
                 GetSdkVersion(selected) ?? resolvedSdkVersion,
-                FileVersionInfo.GetVersionInfo(Path.Combine(selected.MSBuildPath, "Microsoft.Build.dll")).FileVersion
+                FileVersionInfo.GetVersionInfo(Path.Join(selected.MSBuildPath, "Microsoft.Build.dll")).FileVersion
                     ?? "unknown",
                 selected.DiscoveryType.ToString(),
                 Environment.Version.ToString(),
@@ -259,7 +259,7 @@ public sealed class FrameworkDependentExperiment
         var directory = new DirectoryInfo(Path.GetDirectoryName(solutionPath)!);
         while (directory is not null)
         {
-            var globalJson = Path.Combine(directory.FullName, "global.json");
+            var globalJson = Path.Join(directory.FullName, "global.json");
             if (File.Exists(globalJson))
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(globalJson));

@@ -38,8 +38,8 @@ public sealed class RoslynExperimentTests
 
         Assert.Equal(0, first.ExitCode);
         Assert.Equal(0, second.ExitCode);
-        var firstPayload = File.ReadAllBytes(Path.Combine(first.OutputDirectory, "semantic-payload.json"));
-        var secondPayload = File.ReadAllBytes(Path.Combine(second.OutputDirectory, "semantic-payload.json"));
+        var firstPayload = File.ReadAllBytes(Path.Join(first.OutputDirectory, "semantic-payload.json"));
+        var secondPayload = File.ReadAllBytes(Path.Join(second.OutputDirectory, "semantic-payload.json"));
         Assert.Equal(firstPayload, secondPayload);
         Assert.DoesNotContain('\n', SemanticPayloadSerializer.DecodeUtf8(firstPayload));
         Assert.DoesNotContain('\r', SemanticPayloadSerializer.DecodeUtf8(firstPayload));
@@ -55,11 +55,11 @@ public sealed class RoslynExperimentTests
         Assert.Equal(0, run.ExitCode);
         Assert.Empty(run.Stderr);
         Assert.NotEmpty(run.Stdout);
-        Assert.True(File.Exists(Path.Combine(outputDirectory, "result.json")));
-        Assert.True(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+        Assert.True(File.Exists(Path.Join(outputDirectory, "result.json")));
+        Assert.True(File.Exists(Path.Join(outputDirectory, "semantic-payload.json")));
 
-        using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "result.json")));
-        using var payload = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "semantic-payload.json")));
+        using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Join(outputDirectory, "result.json")));
+        using var payload = JsonDocument.Parse(File.ReadAllBytes(Path.Join(outputDirectory, "semantic-payload.json")));
         Assert.Equal("succeeded", result.RootElement.GetProperty("status").GetString());
         Assert.False(result.RootElement.TryGetProperty("failurePhase", out _));
         Assert.False(result.RootElement.TryGetProperty("failureCode", out _));
@@ -74,12 +74,12 @@ public sealed class RoslynExperimentTests
         var outputDirectory = CreateTestOutputDirectory();
         var success = await RunHostAsync(outputDirectory);
         Assert.Equal(0, success.ExitCode);
-        Assert.True(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+        Assert.True(File.Exists(Path.Join(outputDirectory, "semantic-payload.json")));
 
-        var failure = await RunHostAsync(outputDirectory, Path.Combine(outputDirectory, "missing.sln"));
+        var failure = await RunHostAsync(outputDirectory, Path.Join(outputDirectory, "missing.sln"));
         Assert.Equal(2, failure.ExitCode);
-        Assert.False(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
-        using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "result.json")));
+        Assert.False(File.Exists(Path.Join(outputDirectory, "semantic-payload.json")));
+        using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Join(outputDirectory, "result.json")));
         Assert.Equal("invalid-input", result.RootElement.GetProperty("status").GetString());
         Assert.DoesNotContain("\\", failure.Stdout + failure.Stderr);
     }
@@ -319,9 +319,8 @@ public sealed class RoslynExperimentTests
         var files = Directory.GetFiles(Path.Combine(root, "docs", "20_architecture", "experiments"), "*", SearchOption.AllDirectories)
             .Concat(Directory.GetFiles(FixtureRoot, "*.json", SearchOption.AllDirectories))
             .Distinct(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in files)
+        foreach (var content in files.Select(File.ReadAllText))
         {
-            var content = File.ReadAllText(file);
             Assert.DoesNotMatch(@"(?i)([A-Z]:\\|\\\\|/home/|TO_BE_FILLED|<private>)", content);
         }
     }
