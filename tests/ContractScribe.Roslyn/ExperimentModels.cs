@@ -20,6 +20,13 @@ public enum FailurePhase
 
 public sealed record DiagnosticRecord(string Code, string Severity);
 
+public sealed record ToolchainIdentity(
+    string SdkVersion,
+    string MsbuildVersion,
+    string DiscoveryType,
+    string RuntimeVersion,
+    string ProcessArchitecture);
+
 public sealed record SymbolRecord(string DocumentationCommentId, string Kind, string Name);
 
 public sealed record ProjectPayload(string ProjectId, IReadOnlyList<SymbolRecord> Symbols);
@@ -32,7 +39,8 @@ public sealed record ExperimentResult(
     FailurePhase? FailurePhase,
     string? FailureCode,
     SemanticPayload? SemanticPayload,
-    IReadOnlyList<DiagnosticRecord> Diagnostics)
+    IReadOnlyList<DiagnosticRecord> Diagnostics,
+    ToolchainIdentity? Toolchain = null)
 {
     public int ExitCode => Status switch
     {
@@ -51,7 +59,8 @@ public sealed record ExperimentResult(
             null,
             null,
             payload,
-            Array.Empty<DiagnosticRecord>());
+            Array.Empty<DiagnosticRecord>(),
+            null);
     }
 
     public static ExperimentResult Failure(
@@ -66,7 +75,22 @@ public sealed record ExperimentResult(
             phase,
             code,
             null,
-            diagnostics ?? Array.Empty<DiagnosticRecord>());
+            diagnostics ?? Array.Empty<DiagnosticRecord>(),
+            null);
+    }
+
+    public void Validate()
+    {
+        switch (Status)
+        {
+            case ExperimentStatus.Succeeded when FailurePhase is null && FailureCode is null && SemanticPayload is not null:
+            case ExperimentStatus.ClassifiedFailure when FailurePhase is not null && FailureCode is not null && SemanticPayload is null && FailureRegistry.IsKnown(FailurePhase.Value, FailureCode):
+            case ExperimentStatus.InvalidInput when FailurePhase == ContractScribe.Roslyn.FailurePhase.Input && FailureCode is not null && SemanticPayload is null && FailureRegistry.IsKnown(ContractScribe.Roslyn.FailurePhase.Input, FailureCode):
+            case ExperimentStatus.InternalError when FailurePhase is null && FailureCode is null && SemanticPayload is null:
+                return;
+            default:
+                throw new InvalidOperationException("The experiment result violates the closed status and failure contract.");
+        }
     }
 }
 

@@ -20,50 +20,10 @@ public sealed class RoslynExperimentTests
         Assert.Equal(0, execution.Result.ExitCode);
         Assert.NotNull(execution.SemanticPayloadBytes);
 
-        var expected = new SemanticPayload(
-            new[]
-            {
-                new ProjectPayload(
-                    "SampleApp",
-                    new[]
-                    {
-                        new SymbolRecord("M:SampleApp.AppType.Run", "Method", "Run"),
-                        new SymbolRecord("T:SampleApp.AppType", "NamedType", "AppType"),
-                    }),
-                new ProjectPayload(
-                    "SampleLibrary",
-                    new[]
-                    {
-                        new SymbolRecord(
-                            "M:SampleLibrary.Api.RootType.Process(System.Int32)",
-                            "Method",
-                            "Process"),
-                        new SymbolRecord(
-                            "M:SampleLibrary.Api.RootType.Process(System.String)",
-                            "Method",
-                            "Process"),
-                        new SymbolRecord(
-                            "M:SampleLibrary.Api.RootType.get_Value",
-                            "Method",
-                            "get_Value"),
-                        new SymbolRecord(
-                            "M:SampleLibrary.Api.RootType.set_Value(System.Int32)",
-                            "Method",
-                            "set_Value"),
-                        new SymbolRecord(
-                            "P:SampleLibrary.Api.RootType.Value",
-                            "Property",
-                            "Value"),
-                        new SymbolRecord(
-                            "T:SampleLibrary.Api.RootType",
-                            "NamedType",
-                            "RootType"),
-                        new SymbolRecord(
-                            "T:SampleLibrary.Api.RootType.NestedType",
-                            "NamedType",
-                            "NestedType"),
-                    }),
-            });
+        var expected = JsonSerializer.Deserialize<SemanticPayload>(
+            File.ReadAllText(Path.Combine(FixtureRoot, "expected-symbols.json")),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidOperationException("The committed expected-symbols oracle could not be read.");
 
         Assert.Equal(
             SemanticPayloadSerializer.Serialize(expected),
@@ -73,53 +33,28 @@ public sealed class RoslynExperimentTests
     [Fact]
     public async Task IndependentProcessesProduceTheSameCanonicalPayload()
     {
-        var first = await RunExperimentAsync();
-        var second = await RunExperimentAsync();
+        var first = await RunHostAsync(CreateTestOutputDirectory());
+        var second = await RunHostAsync(CreateTestOutputDirectory());
 
-        Assert.Equal(first.SemanticPayloadBytes, second.SemanticPayloadBytes);
-        Assert.DoesNotContain('\n', SemanticPayloadSerializer.DecodeUtf8(first.SemanticPayloadBytes!));
-        Assert.DoesNotContain('\r', SemanticPayloadSerializer.DecodeUtf8(first.SemanticPayloadBytes!));
-        Assert.False(first.SemanticPayloadBytes![0] == 0xEF);
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal(0, second.ExitCode);
+        var firstPayload = File.ReadAllBytes(Path.Combine(first.OutputDirectory, "semantic-payload.json"));
+        var secondPayload = File.ReadAllBytes(Path.Combine(second.OutputDirectory, "semantic-payload.json"));
+        Assert.Equal(firstPayload, secondPayload);
+        Assert.DoesNotContain('\n', SemanticPayloadSerializer.DecodeUtf8(firstPayload));
+        Assert.DoesNotContain('\r', SemanticPayloadSerializer.DecodeUtf8(firstPayload));
+        Assert.False(firstPayload[0] == 0xEF);
     }
 
     [Fact]
     public async Task HostWritesEnvelopeAndStandalonePayloadWithMatchingSemantics()
     {
-        var outputDirectory = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-host-output");
-        Directory.CreateDirectory(outputDirectory);
-        foreach (var file in new[] { "result.json", "semantic-payload.json" })
-        {
-            File.Delete(Path.Combine(outputDirectory, file));
-        }
+        var outputDirectory = CreateTestOutputDirectory();
+        var run = await RunHostAsync(outputDirectory);
 
-        var host = Path.Combine(
-            FindRepositoryRoot(),
-            "tests",
-            "ContractScribe.Roslyn.Experiment",
-            "bin",
-            "Release",
-            "net10.0",
-            "ContractScribe.Roslyn.Experiment.dll");
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        startInfo.ArgumentList.Add(host);
-        startInfo.ArgumentList.Add(Path.Combine(FixtureRoot, "Sample.sln"));
-        startInfo.ArgumentList.Add(outputDirectory);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("The experiment host did not start.");
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        Assert.Equal(0, process.ExitCode);
-        Assert.Empty(stderr);
-        Assert.NotEmpty(stdout);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Empty(run.Stderr);
+        Assert.NotEmpty(run.Stdout);
         Assert.True(File.Exists(Path.Combine(outputDirectory, "result.json")));
         Assert.True(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
 
@@ -131,6 +66,65 @@ public sealed class RoslynExperimentTests
         Assert.Equal(
             payload.RootElement.GetRawText(),
             result.RootElement.GetProperty("semanticPayload").GetRawText());
+    }
+
+    [Fact]
+    public async Task HostRemovesStalePayloadAfterClassifiedInputFailure()
+    {
+        var outputDirectory = CreateTestOutputDirectory();
+        var success = await RunHostAsync(outputDirectory);
+        Assert.Equal(0, success.ExitCode);
+        Assert.True(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+
+        var failure = await RunHostAsync(outputDirectory, Path.Combine(outputDirectory, "missing.sln"));
+        Assert.Equal(2, failure.ExitCode);
+        Assert.False(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+        using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "result.json")));
+        Assert.Equal("invalid-input", result.RootElement.GetProperty("status").GetString());
+        Assert.DoesNotContain("\\", failure.Stdout + failure.Stderr);
+    }
+
+    [Fact]
+    public async Task RunnerClassifiesWorkspaceGraphMismatchFromRealSolution()
+    {
+        var fixture = CopyFixtureToTestDirectory();
+        var solution = Path.Combine(fixture, "Sample.sln");
+        var appProject = Path.Combine(fixture, "SampleApp", "SampleApp.csproj");
+        File.WriteAllText(appProject, File.ReadAllText(appProject).Replace(
+            "    <ProjectReference Include=\"..\\SampleLibrary\\SampleLibrary.csproj\" />",
+            string.Empty,
+            StringComparison.Ordinal));
+
+        var execution = await new FrameworkDependentExperiment().RunAsync(solution);
+
+        Assert.Equal(ExperimentStatus.ClassifiedFailure, execution.Result.Status);
+        Assert.Equal(FailurePhase.WorkspaceLoad, execution.Result.FailurePhase);
+        Assert.Equal("workspace.project-graph-mismatch", execution.Result.FailureCode);
+    }
+
+    [Fact]
+    public async Task RunnerClassifiesCompilationErrorsFromRealSolution()
+    {
+        var fixture = CopyFixtureToTestDirectory();
+        File.AppendAllText(Path.Combine(fixture, "SampleApp", "App.cs"), "\npublic syntax error\n");
+
+        var execution = await new FrameworkDependentExperiment().RunAsync(Path.Combine(fixture, "Sample.sln"));
+
+        Assert.Equal(ExperimentStatus.ClassifiedFailure, execution.Result.Status);
+        Assert.Equal(FailurePhase.Compilation, execution.Result.FailurePhase);
+        Assert.Equal("compilation.errors", execution.Result.FailureCode);
+    }
+
+    [Fact]
+    public async Task RunnerClassifiesSerializationFailureOnRealRunPath()
+    {
+        var execution = await new FrameworkDependentExperiment(_ => throw new InvalidOperationException())
+            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+
+        Assert.Equal(ExperimentStatus.ClassifiedFailure, execution.Result.Status);
+        Assert.Equal(FailurePhase.Serialization, execution.Result.FailurePhase);
+        Assert.Equal("serialization.semantic-payload-failed", execution.Result.FailureCode);
+        Assert.Null(execution.SemanticPayloadBytes);
     }
 
     [Fact]
@@ -239,6 +233,25 @@ public sealed class RoslynExperimentTests
     }
 
     [Fact]
+    public void ResultSerializerFailsClosedForUnknownStatusAndCodeCombinations()
+    {
+        var unknownCode = ExperimentResult.Failure(
+            ExperimentStatus.ClassifiedFailure,
+            FailurePhase.Compilation,
+            "workspace.solution-load-failed");
+        Assert.Throws<InvalidOperationException>(() => ExperimentResultSerializer.Serialize(unknownCode));
+
+        var invalidSuccess = new ExperimentResult(
+            ExperimentFormat.Version,
+            ExperimentStatus.Succeeded,
+            FailurePhase.Input,
+            "input.solution-not-found",
+            null,
+            Array.Empty<DiagnosticRecord>());
+        Assert.Throws<InvalidOperationException>(() => ExperimentResultSerializer.Serialize(invalidSuccess));
+    }
+
+    [Fact]
     public void ExperimentArtifactsContainNoMachinePathPlaceholders()
     {
         var root = FindRepositoryRoot();
@@ -286,6 +299,65 @@ public sealed class RoslynExperimentTests
         return await new FrameworkDependentExperiment().RunAsync(
             Path.Combine(FixtureRoot, "Sample.sln"));
     }
+
+    private static async Task<HostRun> RunHostAsync(string outputDirectory, string? solutionPath = null)
+    {
+        var host = Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "ContractScribe.Roslyn.Experiment",
+            "bin",
+            "Release",
+            "net10.0",
+            "ContractScribe.Roslyn.Experiment.dll");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(host);
+        startInfo.ArgumentList.Add(solutionPath ?? Path.Combine(FixtureRoot, "Sample.sln"));
+        startInfo.ArgumentList.Add(outputDirectory);
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The experiment host did not start.");
+
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return new HostRun(process.ExitCode, stdout, stderr, outputDirectory);
+    }
+
+    private static string CreateTestOutputDirectory()
+    {
+        var directory = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-host-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static string CopyFixtureToTestDirectory()
+    {
+        var target = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-fixture-tests", Guid.NewGuid().ToString("N"));
+        CopyDirectory(FixtureRoot, target);
+        return target;
+    }
+
+    private static void CopyDirectory(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (var file in Directory.GetFiles(source))
+        {
+            File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+        }
+
+        foreach (var directory in Directory.GetDirectories(source))
+        {
+            CopyDirectory(directory, Path.Combine(target, Path.GetFileName(directory)));
+        }
+    }
+
+    private sealed record HostRun(int ExitCode, string Stdout, string Stderr, string OutputDirectory);
 
     private static string FixtureRoot
     {

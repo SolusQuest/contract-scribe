@@ -8,6 +8,7 @@ public static class ExperimentResultSerializer
     public static byte[] Serialize(ExperimentResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
+        result.Validate();
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(
@@ -49,6 +50,19 @@ public static class ExperimentResultSerializer
             }
 
             writer.WriteEndArray();
+
+            if (result.Toolchain is not null)
+            {
+                writer.WritePropertyName("toolchain");
+                writer.WriteStartObject();
+                writer.WriteString("sdkVersion", result.Toolchain.SdkVersion);
+                writer.WriteString("msbuildVersion", result.Toolchain.MsbuildVersion);
+                writer.WriteString("discoveryType", result.Toolchain.DiscoveryType);
+                writer.WriteString("runtimeVersion", result.Toolchain.RuntimeVersion);
+                writer.WriteString("processArchitecture", result.Toolchain.ProcessArchitecture);
+                writer.WriteEndObject();
+            }
+
             writer.WriteEndObject();
             writer.Flush();
         }
@@ -59,7 +73,6 @@ public static class ExperimentResultSerializer
     private static void WritePayload(Utf8JsonWriter writer, SemanticPayload payload)
     {
         writer.WriteStartObject();
-        writer.WriteString("formatVersion", ExperimentFormat.SemanticPayloadVersion);
         writer.WritePropertyName("projects");
         writer.WriteStartArray();
 

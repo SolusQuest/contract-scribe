@@ -20,7 +20,6 @@ public static class SemanticPayloadSerializer
                    }))
         {
             writer.WriteStartObject();
-            writer.WriteString("formatVersion", ExperimentFormat.SemanticPayloadVersion);
             writer.WritePropertyName("projects");
             writer.WriteStartArray();
 

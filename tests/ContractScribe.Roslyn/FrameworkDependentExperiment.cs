@@ -1,12 +1,23 @@
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ContractScribe.Roslyn;
 
 public sealed class FrameworkDependentExperiment
 {
     private static readonly StringComparer Ordinal = StringComparer.Ordinal;
+    private static ToolchainIdentity? registeredToolchain;
+    private readonly Func<SemanticPayload, byte[]> serializePayload;
+
+    public FrameworkDependentExperiment(Func<SemanticPayload, byte[]>? payloadSerializer = null)
+    {
+        serializePayload = payloadSerializer ?? SemanticPayloadSerializer.Serialize;
+    }
 
     public async Task<ExperimentExecution> RunAsync(string solutionPath, CancellationToken cancellationToken = default)
     {
@@ -26,9 +37,10 @@ public sealed class FrameworkDependentExperiment
         }
 
         var workspaceDiagnostics = new List<DiagnosticRecord>();
+        ToolchainIdentity? toolchain = null;
         try
         {
-            RegisterMsbuild();
+            toolchain = RegisterMsbuild(solutionPath);
 
             using var workspace = MSBuildWorkspace.Create();
             workspace.WorkspaceFailed += (_, eventArgs) =>
@@ -56,28 +68,42 @@ public sealed class FrameworkDependentExperiment
             }
 
             var projects = solution.Projects
-                .Where(project => string.Equals(project.Language, LanguageNames.CSharp, StringComparison.Ordinal))
                 .OrderBy(project => project.Name, Ordinal)
                 .ToArray();
 
-            if (!projects.Select(project => project.Name).SequenceEqual(
+            if (workspaceDiagnostics.Any(diagnostic => diagnostic.Severity == "failure"))
+            {
+                var firstFailure = SelectWorkspaceFailure(workspaceDiagnostics);
+                return Failure(
+                    ExperimentStatus.ClassifiedFailure,
+                    firstFailure.Phase,
+                    firstFailure.Code,
+                    workspaceDiagnostics,
+                    toolchain);
+            }
+
+            if (projects.Length != 2
+                || !projects.Select(project => project.Name).SequenceEqual(
                     new[] { "SampleApp", "SampleLibrary" },
-                    Ordinal))
+                    Ordinal)
+                || projects.Any(project => !string.Equals(project.Language, LanguageNames.CSharp, StringComparison.Ordinal)))
             {
                 throw new ExperimentFailureException(
                     FailurePhase.WorkspaceLoad,
                     "workspace.project-graph-mismatch");
             }
 
-            var sampleApp = projects.Single(project => project.Name == "SampleApp");
-            var projectReferenceNames = sampleApp.ProjectReferences
-                .Select(reference => solution.GetProject(reference.ProjectId)?.Name)
-                .Where(name => name is not null)
-                .Cast<string>()
-                .OrderBy(name => name, Ordinal)
+            var edges = projects
+                .SelectMany(project => project.ProjectReferences.Select(reference =>
+                    (From: project.Name, To: solution.GetProject(reference.ProjectId)?.Name)))
+                .OrderBy(edge => edge.From, Ordinal)
+                .ThenBy(edge => edge.To ?? string.Empty, Ordinal)
                 .ToArray();
 
-            if (!projectReferenceNames.SequenceEqual(new[] { "SampleLibrary" }, Ordinal))
+            if (edges.Length != 1
+                || edges[0].To is null
+                || !string.Equals(edges[0].From, "SampleApp", StringComparison.Ordinal)
+                || !string.Equals(edges[0].To, "SampleLibrary", StringComparison.Ordinal))
             {
                 throw new ExperimentFailureException(
                     FailurePhase.WorkspaceLoad,
@@ -129,7 +155,7 @@ public sealed class FrameworkDependentExperiment
             byte[] payloadBytes;
             try
             {
-                payloadBytes = SemanticPayloadSerializer.Serialize(payload);
+                payloadBytes = serializePayload(payload);
             }
             catch (Exception)
             {
@@ -137,53 +163,70 @@ public sealed class FrameworkDependentExperiment
                     ExperimentStatus.ClassifiedFailure,
                     FailurePhase.Serialization,
                     "serialization.semantic-payload-failed",
-                    workspaceDiagnostics);
-            }
-
-            if (workspaceDiagnostics.Any(diagnostic => diagnostic.Severity == "failure"))
-            {
-                var firstFailure = workspaceDiagnostics.First(diagnostic => diagnostic.Severity == "failure");
-                var phase = firstFailure.Code == "msbuild.sdk-unavailable"
-                    ? FailurePhase.MsbuildEnvironment
-                    : FailurePhase.WorkspaceLoad;
-                return Failure(
-                    ExperimentStatus.ClassifiedFailure,
-                    phase,
-                    firstFailure.Code,
-                    workspaceDiagnostics);
+                    workspaceDiagnostics,
+                    toolchain);
             }
 
             return new ExperimentExecution(
-                ExperimentResult.Success(payload) with { Diagnostics = workspaceDiagnostics },
+                ExperimentResult.Success(payload) with { Diagnostics = workspaceDiagnostics, Toolchain = toolchain },
                 payloadBytes);
         }
         catch (OperationCanceledException)
         {
-            return Failure(ExperimentStatus.InternalError, null, null, workspaceDiagnostics);
+            return Failure(ExperimentStatus.InternalError, null, null, workspaceDiagnostics, toolchain);
         }
         catch (ExperimentFailureException exception)
         {
             var status = exception.Phase == FailurePhase.Input
                 ? ExperimentStatus.InvalidInput
                 : ExperimentStatus.ClassifiedFailure;
-            return Failure(status, exception.Phase, exception.Code, workspaceDiagnostics);
+            return Failure(status, exception.Phase, exception.Code, workspaceDiagnostics, toolchain);
         }
         catch (Exception)
         {
-            return Failure(ExperimentStatus.InternalError, null, null, workspaceDiagnostics);
+            return Failure(ExperimentStatus.InternalError, null, null, workspaceDiagnostics, toolchain);
         }
     }
 
-    private static void RegisterMsbuild()
+    private static ToolchainIdentity RegisterMsbuild(string solutionPath)
     {
         if (MSBuildLocator.IsRegistered)
         {
-            return;
+            return registeredToolchain
+                ?? throw new ExperimentFailureException(
+                    FailurePhase.MsbuildEnvironment,
+                    "msbuild.registration-failed");
         }
 
         try
         {
-            MSBuildLocator.RegisterDefaults();
+            var expectedSdkVersion = ReadExpectedSdkVersion(solutionPath);
+            MSBuildLocator.AllowQueryAllDotnetLocations = true;
+            var selected = MSBuildLocator.QueryVisualStudioInstances()
+                .Where(instance => instance.DiscoveryType == DiscoveryType.DotNetSdk)
+                .Where(instance => string.Equals(GetSdkVersion(instance), expectedSdkVersion, StringComparison.Ordinal))
+                .OrderByDescending(instance => instance.Version)
+                .FirstOrDefault();
+            if (selected is null)
+            {
+                throw new ExperimentFailureException(
+                    FailurePhase.MsbuildEnvironment,
+                    "msbuild.sdk-unavailable");
+            }
+
+            MSBuildLocator.RegisterInstance(selected);
+            registeredToolchain = new ToolchainIdentity(
+                expectedSdkVersion,
+                FileVersionInfo.GetVersionInfo(Path.Combine(selected.MSBuildPath, "Microsoft.Build.dll")).FileVersion
+                    ?? "unknown",
+                selected.DiscoveryType.ToString(),
+                Environment.Version.ToString(),
+                RuntimeInformation.ProcessArchitecture.ToString());
+            return registeredToolchain;
+        }
+        catch (ExperimentFailureException)
+        {
+            throw;
         }
         catch (Exception)
         {
@@ -191,6 +234,47 @@ public sealed class FrameworkDependentExperiment
                 FailurePhase.MsbuildEnvironment,
                 "msbuild.registration-failed");
         }
+    }
+
+    private static string ReadExpectedSdkVersion(string solutionPath)
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(solutionPath)!);
+        while (directory is not null)
+        {
+            var globalJson = Path.Combine(directory.FullName, "global.json");
+            if (File.Exists(globalJson))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(globalJson));
+                return document.RootElement.GetProperty("sdk").GetProperty("version").GetString()
+                    ?? throw new ExperimentFailureException(
+                        FailurePhase.MsbuildEnvironment,
+                        "msbuild.sdk-unavailable");
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new ExperimentFailureException(
+            FailurePhase.MsbuildEnvironment,
+            "msbuild.sdk-unavailable");
+    }
+
+    private static string? GetSdkVersion(VisualStudioInstance instance)
+    {
+        var path = instance.VisualStudioRootPath ?? instance.MSBuildPath;
+        var match = Regex.Match(path, @"(?:^|[\\/])(?<version>\d+\.\d+\.\d+)(?:[\\/]|$)");
+        return match.Success ? match.Groups["version"].Value : null;
+    }
+
+    private static (FailurePhase Phase, string Code) SelectWorkspaceFailure(
+        IReadOnlyList<DiagnosticRecord> diagnostics)
+    {
+        if (diagnostics.Any(diagnostic => diagnostic.Code == "msbuild.sdk-unavailable"))
+        {
+            return (FailurePhase.MsbuildEnvironment, "msbuild.sdk-unavailable");
+        }
+
+        return (FailurePhase.WorkspaceLoad, "workspace.solution-load-failed");
     }
 
     private static IEnumerable<SymbolRecord> EnumeratePublicSourceSymbols(INamespaceSymbol root)
@@ -296,10 +380,11 @@ public sealed class FrameworkDependentExperiment
         ExperimentStatus status,
         FailurePhase? phase,
         string? code,
-        IReadOnlyList<DiagnosticRecord>? diagnostics = null)
+        IReadOnlyList<DiagnosticRecord>? diagnostics = null,
+        ToolchainIdentity? toolchain = null)
     {
         return new ExperimentExecution(
-            ExperimentResult.Failure(status, phase, code, diagnostics),
+            ExperimentResult.Failure(status, phase, code, diagnostics) with { Toolchain = toolchain },
             null);
     }
 }
