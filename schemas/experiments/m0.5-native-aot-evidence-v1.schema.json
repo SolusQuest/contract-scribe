@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
+  "title": "ContractScribe M0.5 Native AOT Evidence V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidenceVersion", "recordType", "cell", "profile", "commands", "warnings", "toolchain", "dependencies"],
+  "properties": {
+    "evidenceVersion": { "const": "m0.5-native-aot-evidence-v1" },
+    "recordType": { "enum": ["cell", "protocol-failure"] },
+    "cell": { "$ref": "#/$defs/cell" },
+    "profile": { "$ref": "#/$defs/profile" },
+    "commands": { "type": "array", "items": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[^\\r\\n]+$" } } },
+    "warnings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/observation" } },
+    "toolchain": { "$ref": "#/$defs/toolchain" },
+    "dependencies": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" } },
+    "outcome": { "enum": ["feasible-clean", "feasible-with-warnings", "not-feasible", "inconclusive"] },
+    "phase": { "enum": ["preflight", "restore", "publish", "native-link", "launch", "semantic-path", "comparison"] },
+    "cause": { "enum": ["native-toolchain", "rid-assets", "sdk-resolution", "aot-analysis", "trimming-reflection", "dynamic-assembly-loading", "msbuild-host", "roslyn", "semantic-contract", "unknown"] },
+    "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]+)+$" },
+    "protocolFailure": { "$ref": "#/$defs/protocolFailure" },
+    "comparison": { "$ref": "#/$defs/comparison" },
+    "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } }
+  },
+  "allOf": [
+    { "if": { "properties": { "recordType": { "const": "cell" } } }, "then": { "required": ["outcome", "phase", "cause", "comparison"] } },
+    { "if": { "properties": { "recordType": { "const": "protocol-failure" } } }, "then": { "required": ["protocolFailure"] } }
+  ],
+  "$defs": {
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runnerOs", "rid", "processArchitecture"],
+      "properties": {
+        "runnerOs": { "enum": ["Ubuntu", "Windows"] },
+        "rid": { "enum": ["linux-x64", "win-x64"] },
+        "processArchitecture": { "const": "X64" }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetFramework", "configuration", "publishAot", "selfContained", "publishTrimmed", "runtimeIdentifier"],
+      "properties": {
+        "targetFramework": { "const": "net10.0" },
+        "configuration": { "const": "Release" },
+        "publishAot": { "const": true },
+        "selfContained": { "const": true },
+        "publishTrimmed": { "const": true },
+        "runtimeIdentifier": { "enum": ["linux-x64", "win-x64"] }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdkVersion", "runtimeVersion", "msbuildVersion", "nativeCompilerId", "nativeCompilerVersion", "linkerId", "linkerVersion", "runnerOs", "rid", "processArchitecture"],
+      "properties": {
+        "sdkVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "runtimeVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "msbuildVersion": { "type": "string", "pattern": "^(unknown|[0-9]+\\.[0-9]+\\.[0-9]+)" },
+        "nativeCompilerId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "nativeCompilerVersion": { "type": "string", "pattern": "^(unknown|[a-zA-Z0-9._-]+)$" },
+        "linkerId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "linkerVersion": { "type": "string", "pattern": "^(unknown|[a-zA-Z0-9._-]+)$" },
+        "runnerOs": { "enum": ["Ubuntu", "Windows"] },
+        "rid": { "enum": ["linux-x64", "win-x64"] },
+        "processArchitecture": { "const": "X64" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "cause", "code"],
+      "properties": {
+        "phase": { "enum": ["preflight", "restore", "publish", "native-link", "launch", "semantic-path", "comparison", "evidence"] },
+        "cause": { "enum": ["native-toolchain", "rid-assets", "sdk-resolution", "aot-analysis", "trimming-reflection", "dynamic-assembly-loading", "msbuild-host", "roslyn", "semantic-contract", "unknown"] },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]+)+$" }
+      }
+    },
+    "protocolFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "code"],
+      "properties": {
+        "phase": { "const": "evidence" },
+        "code": { "enum": ["evidence.artifact-missing", "evidence.artifact-stale", "evidence.artifact-malformed", "evidence.artifact-status-contradiction", "evidence.inner-contract-invalid", "evidence.contract-invalid", "evidence.public-safety-failed", "evidence.provenance-invalid"] }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["not-run", "compared"] },
+        "frameworkPayloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "aotPayloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "repeatedAotPayloadByteEqual": { "type": "boolean" },
+        "frameworkByteEqual": { "type": "boolean" }
+      }
+    }
+  }
+}

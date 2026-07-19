@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -32,3 +33,61 @@ jobs:
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
+
+  m05-native-aot-closure:
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Run M0.5 closure cell
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1 -RuntimeIdentifier ${{ matrix.rid }} -Configuration Release
+      - name: Upload sanitized cell evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m05-${{ matrix.rid }}
+          path: tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-${{ matrix.rid }}-evidence-v1.json
+          if-no-files-found: error
+
+  m05-native-aot-aggregate:
+    if: always() && github.event_name == 'workflow_dispatch'
+    needs: m05-native-aot-closure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: m05-*
+          path: TestResults/m05-evidence
+          merge-multiple: true
+      - name: Aggregate M0.5 evidence
+        shell: pwsh
+        run: >-
+          pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1
+          -LinuxEvidencePath TestResults/m05-evidence/m0.5-linux-x64-evidence-v1.json
+          -WindowsEvidencePath TestResults/m05-evidence/m0.5-win-x64-evidence-v1.json
+      - name: Upload aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m05-summary
+          path: tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json
+          if-no-files-found: error

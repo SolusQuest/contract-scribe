@@ -1,0 +1,38 @@
+{
+  "formatVersion": "m0.5-native-aot-registry-v1",
+  "phases": ["preflight", "restore", "publish", "native-link", "launch", "semantic-path", "comparison", "evidence"],
+  "causes": ["native-toolchain", "rid-assets", "sdk-resolution", "aot-analysis", "trimming-reflection", "dynamic-assembly-loading", "msbuild-host", "roslyn", "semantic-contract", "unknown"],
+  "cellCodes": {
+    "preflight.native-toolchain-unavailable": { "phase": "preflight", "allowedCauses": ["native-toolchain"], "allowedOutcomes": ["inconclusive"] },
+    "restore.rid-assets-unavailable": { "phase": "restore", "allowedCauses": ["rid-assets", "unknown"], "allowedOutcomes": ["inconclusive"] },
+    "restore.sdk-resolution-failed": { "phase": "restore", "allowedCauses": ["sdk-resolution", "unknown"], "allowedOutcomes": ["inconclusive"] },
+    "publish.aot-analysis-failed": { "phase": "publish", "allowedCauses": ["aot-analysis", "trimming-reflection", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "publish.trimming-analysis-failed": { "phase": "publish", "allowedCauses": ["trimming-reflection", "dynamic-assembly-loading", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "native-link.linker-failed": { "phase": "native-link", "allowedCauses": ["native-toolchain", "aot-analysis", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "launch.native-process-failed": { "phase": "launch", "allowedCauses": ["native-toolchain", "dynamic-assembly-loading", "msbuild-host", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "semantic-path.sdk-resolution-failed": { "phase": "semantic-path", "allowedCauses": ["sdk-resolution", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "semantic-path.msbuild-host-incompatible": { "phase": "semantic-path", "allowedCauses": ["msbuild-host", "unknown"], "allowedOutcomes": ["not-feasible", "inconclusive"] },
+    "semantic-path.roslyn-incompatible": { "phase": "semantic-path", "allowedCauses": ["roslyn"], "allowedOutcomes": ["not-feasible"] },
+    "semantic-path.inner-classified-failure": { "phase": "semantic-path", "allowedCauses": ["semantic-contract", "unknown"], "allowedOutcomes": ["inconclusive", "not-feasible"] },
+    "semantic-path.inner-internal-error": { "phase": "semantic-path", "allowedCauses": ["unknown"], "allowedOutcomes": ["inconclusive"] },
+    "comparison.payload-mismatch": { "phase": "comparison", "allowedCauses": ["semantic-contract"], "allowedOutcomes": ["not-feasible"] },
+    "comparison.payload-nondeterministic": { "phase": "comparison", "allowedCauses": ["semantic-contract", "unknown"], "allowedOutcomes": ["inconclusive"] }
+  },
+  "protocolFailureCodes": [
+    "evidence.artifact-missing",
+    "evidence.artifact-stale",
+    "evidence.artifact-malformed",
+    "evidence.artifact-status-contradiction",
+    "evidence.inner-contract-invalid",
+    "evidence.contract-invalid",
+    "evidence.public-safety-failed",
+    "evidence.provenance-invalid"
+  ],
+  "aggregateOutcomes": ["feasible-clean", "feasible-with-warnings", "mixed", "not-feasible", "inconclusive"],
+  "rules": {
+    "unknownCause": "always-inconclusive",
+    "protocolFailure": "overrides-provisional-cell-and-exits-nonzero",
+    "conclusiveAggregateExitCode": 0,
+    "inconclusiveOrProtocolFailureExitCode": 1
+  }
+}

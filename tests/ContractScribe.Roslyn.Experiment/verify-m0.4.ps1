@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Configuration = "Release",
-    [switch]$EvidenceReproduction
+    [switch]$EvidenceReproduction,
+    [string]$M05ManifestPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +20,35 @@ function Assert-Condition([bool]$condition, [string]$message) {
 
 Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host was not found."
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$baseAllowedPostSourceFiles = @(
+    ".github/workflows/ci.yml",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
+    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+)
+$expectedM05PostSourceFiles = @(
+    "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
+    "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json",
+    "docs/20_architecture/experiments/m0.5-native-aot-feasibility.md",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1",
+    "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs"
+)
+$allowedPostSourceFiles = $baseAllowedPostSourceFiles
+$allowedPostImplementationFiles = @()
+if (-not [string]::IsNullOrWhiteSpace($M05ManifestPath)) {
+    $resolvedM05ManifestPath = (Resolve-Path -LiteralPath $M05ManifestPath).Path
+    $m05Manifest = Get-Content -LiteralPath $resolvedM05ManifestPath -Raw | ConvertFrom-Json
+    $declaredM05PostSourceFiles = @($m05Manifest.allowedPostSourceFiles | ForEach-Object { $_.ToString() })
+    Assert-Condition ((($declaredM05PostSourceFiles | Sort-Object) -join "`n") -ceq (($expectedM05PostSourceFiles | Sort-Object) -join "`n")) "The M0.5 manifest does not declare the closed post-source file set."
+    $m04ManifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Condition ($m05Manifest.m04ManifestSha256 -eq $m04ManifestHash) "The M0.5 manifest does not bind the M0.4 transfer manifest."
+    Assert-Condition ($m05Manifest.m04FrozenSourceRevision -eq $manifest.sourceRevision) "The M0.5 manifest does not bind the frozen M0.4 source revision."
+    $allowedPostSourceFiles += $declaredM05PostSourceFiles
+    $allowedPostImplementationFiles = @($m05Manifest.allowedPostImplementationFiles | ForEach-Object { $_.ToString() })
+}
 $resolvedSdkVersion = (& dotnet --version).Trim()
 Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."
 $isRecordedWindowsEvidence = $EvidenceReproduction -and (
@@ -32,12 +62,7 @@ $sourceRange = "$($manifest.sourceRevision)..$currentRevision"
 $sourceFiles = @(git diff --name-only $sourceRange)
 $sourceDiffExitCode = $LASTEXITCODE
 Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
-$allowedPostSourceFiles = @(
-    ".github/workflows/ci.yml",
-    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
-    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
-)
-Assert-Condition (($sourceFiles | Where-Object { $_ -notin $allowedPostSourceFiles }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
+Assert-Condition (($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles) }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name
