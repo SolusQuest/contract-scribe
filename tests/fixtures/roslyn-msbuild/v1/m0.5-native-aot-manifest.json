@@ -86,7 +86,7 @@
     "tests/ContractScribe.Roslyn/ExperimentResultSerializer.cs": "b52c67b5377639ed48c8dde2d1af463ec8870af5c2ed605012180a93af898da8",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj": "820f16d093875a7ecd74a0fdab54e37ea784a2422c0fac0274d46267b8a58170",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs": "3ce25ee736cad42129f28bec473101be24dddd6e1c4fc24a1cc7e4779d469ab5",
-    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "bdc831a467bf6cacecc9b6f784534c767203f54fdd27a61878e723eeadeba634",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "525430dcab84aeecd5bbd3e063d773e0c9b0fff22e596be0546a4229c7b27903",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "1bef3b13746fe97842b2736a16eb58a8359dcb61aad60d07b8edcdd68b854b95",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "8c1cb905fd1d2db79aece7f787c016a2e08859e0dfaebd0bade2bceb8cf69e75",
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs": "af0cebff811cd542cea9f25e45aa70719c7ddbadf3880b6d1908b5530024ec00",

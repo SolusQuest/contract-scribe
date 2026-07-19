@@ -128,18 +128,20 @@ function Get-Toolchain([string]$runnerOs, [string]$rid, [string]$m04ResultPath) 
         $linker = Get-Command link.exe -ErrorAction SilentlyContinue
         if ($null -ne $compiler) {
             $nativeCompilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler.Source).FileVersion
+            if ([string]::IsNullOrWhiteSpace($nativeCompilerVersion)) { $nativeCompilerVersion = "unknown" }
             $nativeCompilerAvailable = $true
         }
         if ($null -ne $linker) {
             $linkerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($linker.Source).FileVersion
+            if ([string]::IsNullOrWhiteSpace($linkerVersion)) { $linkerVersion = "unknown" }
             $linkerAvailable = $true
         }
     }
     else {
         $compilerProbe = Invoke-CapturedProcess "clang" @("--version") $repositoryRoot
         $linkerProbe = Invoke-CapturedProcess "ld.lld" @("--version") $repositoryRoot
-        $compilerMatch = [Regex]::Match($compilerProbe.Stdout, "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
-        $linkerMatch = [Regex]::Match($linkerProbe.Stdout, "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
+        $compilerMatch = [Regex]::Match(($compilerProbe.Stdout + $compilerProbe.Stderr), "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
+        $linkerMatch = [Regex]::Match(($linkerProbe.Stdout + $linkerProbe.Stderr), "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
         if ($compilerProbe.ExitCode -eq 0 -and $compilerMatch.Success) { $nativeCompilerVersion = $compilerMatch.Groups[1].Value; $nativeCompilerAvailable = $true }
         if ($linkerProbe.ExitCode -eq 0 -and $linkerMatch.Success) { $linkerVersion = $linkerMatch.Groups[1].Value; $linkerAvailable = $true }
     }
