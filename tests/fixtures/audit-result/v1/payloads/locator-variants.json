@@ -1,0 +1,27 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.metadata", "documentationCommentId": "T:AuditFixtures.MetadataWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/MetadataWidget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required", "policyResolution": "single", "documentationObservation": "documentation.present", "auditOutcome": "audit.outcome.compliant", "reasonCode": "audit.reason.required-present", "evidenceIds": [ "evidence.metadata" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.metadata", "subject": { "compilationContextRef": "synthetic.metadata", "documentationCommentId": "T:AuditFixtures.MetadataWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "metadata": { "assemblyIdentity": "synthetic.assembly", "documentationCommentId": "T:AuditFixtures.MetadataWidget" } } } ] }
+    },
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.synthetic", "documentationCommentId": "T:AuditFixtures.SyntheticWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source-generator", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/SyntheticWidget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required", "policyResolution": "single", "documentationObservation": "documentation.present", "auditOutcome": "audit.outcome.compliant", "reasonCode": "audit.reason.required-present", "evidenceIds": [ "evidence.synthetic" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.synthetic", "subject": { "compilationContextRef": "synthetic.synthetic", "documentationCommentId": "T:AuditFixtures.SyntheticWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "x", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "originalUtf8ByteCount": 1, "includedUtf8ByteCount": 1, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "synthetic": { "fixtureId": "synthetic-evidence" } } } ] }
+    },
+    {
+      "classification": { "recordType": "UnresolvedClassification", "compilationContextRef": "synthetic.generated", "origin": "origin.source-generator", "supportStatus": "support.unavailable-context", "skipReason": "skip.unavailable.generated-provenance", "candidateLocator": { "generatedSource": { "generatorId": "synthetic.generator", "hintNameId": "widget.g.cs", "span": { "start": 0, "end": 1 } } } },
+      "policyContributions": [], "policyExpectation": null, "policyResolution": "unavailable", "documentationObservation": null, "auditOutcome": "audit.outcome.skipped", "reasonCode": "audit.reason.classification-skipped", "evidenceIds": [], "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    },
+    {
+      "classification": { "recordType": "UnresolvedClassification", "compilationContextRef": "synthetic.repository", "origin": "origin.source", "supportStatus": "support.unavailable-context", "skipReason": "skip.unavailable.semantic-context", "candidateLocator": { "repository": { "path": "src/MissingWidget.cs", "span": { "start": 0, "end": 1 } } } },
+      "policyContributions": [], "policyExpectation": null, "policyResolution": "unavailable", "documentationObservation": null, "auditOutcome": "audit.outcome.skipped", "reasonCode": "audit.reason.classification-skipped", "evidenceIds": [], "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    }
+  ]
+}

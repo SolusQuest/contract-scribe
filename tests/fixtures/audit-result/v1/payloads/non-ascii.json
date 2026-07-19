@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.unicode", "documentationCommentId": "T:AuditFixtures.UnicodeWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/UnicodeWidget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.required-present",
+      "evidenceIds": [ "evidence.unicode" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.unicode", "subject": { "compilationContextRef": "synthetic.unicode", "documentationCommentId": "T:AuditFixtures.UnicodeWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "/// <summary>文档 🧪。</summary>", "sha256": "c4fc1fbd32473aa29f623ec51e8b40e94a7ef31b8bc160ac05ba8456b159744e", "originalUtf8ByteCount": 37, "includedUtf8ByteCount": 37, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "synthetic": { "fixtureId": "unicode-evidence" } } } ] }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "registryVersion": 1,
+  "sections": {
+    "outcomes": [
+      { "id": "audit.outcome.compliant", "definition": "The observed documentation satisfies the policy expectation." },
+      { "id": "audit.outcome.violation", "definition": "The observed documentation conflicts with the policy expectation." },
+      { "id": "audit.outcome.skipped", "definition": "The result cannot be safely evaluated under the bounded contract." }
+    ],
+    "observations": [
+      { "id": "documentation.present", "definition": "A bounded documentation payload exists." },
+      { "id": "documentation.absent", "definition": "A bounded declaration evidence set establishes that documentation is absent." },
+      { "id": "documentation.unavailable", "definition": "The documentation observation cannot be established from bounded evidence." }
+    ],
+    "policyResolutions": [
+      { "id": "single", "definition": "Exactly one policy evaluation contributed." },
+      { "id": "all-declarations-agree", "definition": "Multiple unique policy evaluations contributed the same expectation." },
+      { "id": "conflict", "definition": "Contributing policy evaluations produced different expectations." },
+      { "id": "unavailable", "definition": "No policy evaluation contributed or a higher-precedence skip hides it." }
+    ],
+    "reasons": [
+      { "id": "audit.reason.required-present", "outcome": "audit.outcome.compliant", "legal": { "policyExpectation": ["required"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.present"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.required-absent", "outcome": "audit.outcome.violation", "legal": { "policyExpectation": ["required"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.absent"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.optional-present", "outcome": "audit.outcome.compliant", "legal": { "policyExpectation": ["optional"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.present"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.optional-absent", "outcome": "audit.outcome.compliant", "legal": { "policyExpectation": ["optional"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.absent"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.forbidden-present", "outcome": "audit.outcome.violation", "legal": { "policyExpectation": ["forbidden"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.present"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.forbidden-absent", "outcome": "audit.outcome.compliant", "legal": { "policyExpectation": ["forbidden"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.absent"], "bundleStatus": ["evidence.bundle.complete"], "contributionCount": "at-least-1", "requiresEvidence": true } },
+      { "id": "audit.reason.classification-skipped", "outcome": "audit.outcome.skipped", "legal": { "policyExpectation": [null], "policyResolution": ["unavailable"], "documentationObservation": [null], "bundleStatus": ["evidence.bundle.unavailable"], "contributionCount": "any", "requiresEvidence": false } },
+      { "id": "audit.reason.policy-conflict", "outcome": "audit.outcome.skipped", "legal": { "policyExpectation": [null], "policyResolution": ["conflict"], "documentationObservation": [null], "bundleStatus": ["evidence.bundle.unavailable"], "contributionCount": "at-least-2", "requiresEvidence": false } },
+      { "id": "audit.reason.policy-unavailable", "outcome": "audit.outcome.skipped", "legal": { "policyExpectation": [null], "policyResolution": ["unavailable"], "documentationObservation": [null], "bundleStatus": ["evidence.bundle.unavailable"], "contributionCount": 0, "requiresEvidence": false } },
+      { "id": "audit.reason.documentation-unavailable", "outcome": "audit.outcome.skipped", "legal": { "policyExpectation": ["required", "optional", "forbidden"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.unavailable"], "bundleStatus": ["evidence.bundle.unavailable"], "contributionCount": "at-least-1", "requiresEvidence": false } },
+      { "id": "audit.reason.evidence-incomplete", "outcome": "audit.outcome.skipped", "legal": { "policyExpectation": ["required", "optional", "forbidden"], "policyResolution": ["single", "all-declarations-agree"], "documentationObservation": ["documentation.unavailable"], "bundleStatus": ["evidence.bundle.partial"], "contributionCount": "at-least-1", "requiresEvidence": false } }
+    ],
+    "primaryReasonPrecedence": [
+      "audit.reason.classification-skipped",
+      "audit.reason.policy-conflict",
+      "audit.reason.policy-unavailable",
+      "audit.reason.documentation-unavailable",
+      "audit.reason.evidence-incomplete"
+    ]
+  }
+}

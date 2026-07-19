@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "UnresolvedClassification", "compilationContextRef": "synthetic.v1", "origin": "origin.unknown", "supportStatus": "support.unavailable-context", "skipReason": "skip.unavailable.semantic-context", "candidateLocator": { "synthetic": { "fixtureId": "missing-doc-id" } } },
+      "policyContributions": [],
+      "policyExpectation": null,
+      "policyResolution": "unavailable",
+      "documentationObservation": null,
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.classification-skipped",
+      "evidenceIds": [],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.unavailable", "omissionReason": "evidence.omission.not-provided", "items": [] }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/Widget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.required-present",
+      "evidenceIds": [ "evidence.xml-doc" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.xml-doc", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "/// <summary>Widget docs.</summary>", "sha256": "7245070ca7cb1427ad4e7c502148e744d7f50f07ba86091b570795d5c1f7537f", "originalUtf8ByteCount": 35, "includedUtf8ByteCount": 35, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/Widget.cs" } } } ] }
+    }
+  ]
+}
