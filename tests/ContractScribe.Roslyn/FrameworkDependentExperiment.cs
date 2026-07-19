@@ -263,13 +263,34 @@ public sealed class FrameworkDependentExperiment
         {
             throw;
         }
-        catch (Exception exception)
+        catch (InvalidOperationException exception)
         {
-            throw new ExperimentFailureException(
-                FailurePhase.MsbuildEnvironment,
-                "msbuild.registration-failed",
-                exception);
+            throw CreateMsbuildRegistrationFailure(exception);
         }
+        catch (IOException exception)
+        {
+            throw CreateMsbuildRegistrationFailure(exception);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw CreateMsbuildRegistrationFailure(exception);
+        }
+        catch (JsonException exception)
+        {
+            throw CreateMsbuildRegistrationFailure(exception);
+        }
+        catch (NotSupportedException exception)
+        {
+            throw CreateMsbuildRegistrationFailure(exception);
+        }
+    }
+
+    private static ExperimentFailureException CreateMsbuildRegistrationFailure(Exception exception)
+    {
+        return new ExperimentFailureException(
+            FailurePhase.MsbuildEnvironment,
+            "msbuild.registration-failed",
+            exception);
     }
 
     private static ExperimentExecution HandleWorkspaceLoadException(
