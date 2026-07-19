@@ -4,7 +4,7 @@
   "m04ManifestPath": "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json",
   "m04ManifestSha256": "c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3",
   "m04FrozenSourceRevision": "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c",
-  "implementationRevision": "b5fbd70f7fa29000414874886c97ef1c15daec57",
+  "implementationRevision": "b0f0bfb4a3fa222f0ac0f743c634d97fc5a79e2c",
   "allowedPostSourceFiles": [
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
     "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json",
