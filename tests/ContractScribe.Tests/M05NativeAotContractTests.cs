@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -21,6 +23,20 @@ public sealed class M05NativeAotContractTests
 
         Assert.True(EvidenceSchema.Value.Evaluate(cell.RootElement).IsValid);
         Assert.True(EvidenceSchema.Value.Evaluate(protocol.RootElement).IsValid);
+    }
+
+    [Fact]
+    public void EvidenceSchemaRejectsMixedRecordShapesAndContradictoryComparison()
+    {
+        var mixedNode = JsonNode.Parse(CreateCell("Windows", "win-x64", "feasible-clean"))!.AsObject();
+        mixedNode["protocolFailure"] = new JsonObject { ["phase"] = "evidence", ["code"] = "evidence.contract-invalid" };
+        using var mixed = JsonDocument.Parse(mixedNode.ToJsonString());
+        Assert.False(EvidenceSchema.Value.Evaluate(mixed.RootElement).IsValid);
+
+        var notRunNode = JsonNode.Parse(CreateCell("Windows", "win-x64", "inconclusive"))!.AsObject();
+        notRunNode["comparison"]!["aotPayloadSha256"] = new string('a', 64);
+        using var contradictoryComparison = JsonDocument.Parse(notRunNode.ToJsonString());
+        Assert.False(EvidenceSchema.Value.Evaluate(contradictoryComparison.RootElement).IsValid);
     }
 
     [Fact]
@@ -71,6 +87,101 @@ public sealed class M05NativeAotContractTests
         Assert.Equal("semantic-contract", mismatch.GetProperty("allowedCauses")[0].GetString());
         Assert.True(registry.RootElement.GetProperty("protocolFailureCodes").GetArrayLength() >= 8);
         Assert.Equal("always-inconclusive", registry.RootElement.GetProperty("rules").GetProperty("unknownCause").GetString());
+    }
+
+    [Fact]
+    public void ManifestUsesTheExactClosedPostImplementationSet()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "m0.5-native-aot-manifest.json")));
+        var actual = manifest.RootElement.GetProperty("allowedPostImplementationFiles")
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        var expected = new[]
+        {
+            "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
+            "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json",
+            "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json"
+        };
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("feasible-clean", "feasible-clean", "feasible-clean", 0)]
+    [InlineData("feasible-clean", "feasible-with-warnings", "feasible-with-warnings", 0)]
+    [InlineData("feasible-with-warnings", "feasible-with-warnings", "feasible-with-warnings", 0)]
+    [InlineData("feasible-clean", "not-feasible", "mixed", 0)]
+    [InlineData("not-feasible", "not-feasible", "not-feasible", 0)]
+    [InlineData("inconclusive", "feasible-clean", "inconclusive", 1)]
+    public void AggregateScriptImplementsTheClosedTruthTable(string firstOutcome, string secondOutcome, string expectedOutcome, int expectedExitCode)
+    {
+        var root = FindRepositoryRoot();
+        var directory = Path.Join(root, "TestResults", "m05-aggregate-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var summaryPath = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "evidence", "m0.5-summary-v1.json");
+        try
+        {
+            var linuxPath = Path.Join(directory, "linux.json");
+            var windowsPath = Path.Join(directory, "windows.json");
+            File.WriteAllText(linuxPath, CreateCell("Ubuntu", "linux-x64", firstOutcome));
+            File.WriteAllText(windowsPath, CreateCell("Windows", "win-x64", secondOutcome));
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
+            startInfo.ArgumentList.Add("-LinuxEvidencePath");
+            startInfo.ArgumentList.Add(linuxPath);
+            startInfo.ArgumentList.Add("-WindowsEvidencePath");
+            startInfo.ArgumentList.Add(windowsPath);
+            using var process = Process.Start(startInfo)!;
+            var stdout = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.Equal(expectedExitCode, process.ExitCode);
+            Assert.Contains($"M0.5 aggregate outcome: {expectedOutcome}", stdout, StringComparison.Ordinal);
+            using var summary = JsonDocument.Parse(File.ReadAllText(summaryPath));
+            Assert.Equal(expectedOutcome, summary.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal(expectedExitCode, summary.RootElement.GetProperty("exitCode").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(summaryPath)) File.Delete(summaryPath);
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static string CreateCell(string runnerOs, string rid, string outcome)
+    {
+        var comparison = outcome == "inconclusive"
+            ? new JsonObject { ["status"] = "not-run" }
+            : new JsonObject { ["status"] = "compared", ["frameworkPayloadSha256"] = new string('a', 64), ["aotPayloadSha256"] = new string(outcome == "not-feasible" ? 'b' : 'a', 64), ["repeatedAotPayloadByteEqual"] = true, ["frameworkByteEqual"] = outcome != "not-feasible" };
+        var cell = new JsonObject
+        {
+            ["evidenceVersion"] = "m0.5-native-aot-evidence-v1",
+            ["recordType"] = "cell",
+            ["cell"] = new JsonObject { ["runnerOs"] = runnerOs, ["rid"] = rid, ["processArchitecture"] = "X64" },
+            ["profile"] = new JsonObject { ["targetFramework"] = "net10.0", ["configuration"] = "Release", ["publishAot"] = true, ["selfContained"] = true, ["publishTrimmed"] = true, ["runtimeIdentifier"] = rid },
+            ["commands"] = new JsonArray { new JsonArray("dotnet", "publish") },
+            ["warnings"] = new JsonArray(),
+            ["toolchain"] = new JsonObject { ["sdkVersion"] = "10.0.102", ["runtimeVersion"] = "10.0.9", ["msbuildVersion"] = "unknown", ["nativeCompilerId"] = runnerOs == "Windows" ? "msvc" : "clang", ["nativeCompilerVersion"] = "unknown", ["linkerId"] = runnerOs == "Windows" ? "link" : "lld", ["linkerVersion"] = "unknown", ["runnerOs"] = runnerOs, ["rid"] = rid, ["processArchitecture"] = "X64" },
+            ["dependencies"] = new JsonArray("global-json"),
+            ["outcome"] = outcome,
+            ["phase"] = outcome == "inconclusive" ? "preflight" : "comparison",
+            ["cause"] = outcome == "inconclusive" ? "native-toolchain" : "semantic-contract",
+            ["comparison"] = comparison
+        };
+        if (outcome == "inconclusive") cell["code"] = "preflight.native-toolchain-unavailable";
+        if (outcome == "not-feasible") cell["code"] = "comparison.payload-mismatch";
+        if (outcome == "feasible-with-warnings") cell["warnings"] = new JsonArray { new JsonObject { ["phase"] = "publish", ["cause"] = "aot-analysis", ["code"] = "warning.reviewed" } };
+        return cell.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 
     private static string FindRepositoryRoot()

@@ -23,8 +23,10 @@
     "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } }
   },
   "allOf": [
-    { "if": { "properties": { "recordType": { "const": "cell" } } }, "then": { "required": ["outcome", "phase", "cause", "comparison"] } },
-    { "if": { "properties": { "recordType": { "const": "protocol-failure" } } }, "then": { "required": ["protocolFailure"] } }
+    { "if": { "properties": { "recordType": { "const": "cell" } } }, "then": { "required": ["outcome", "phase", "cause", "comparison"], "not": { "required": ["protocolFailure"] } } },
+    { "if": { "properties": { "recordType": { "const": "protocol-failure" } } }, "then": { "required": ["protocolFailure"], "not": { "anyOf": [{ "required": ["outcome"] }, { "required": ["phase"] }, { "required": ["cause"] }, { "required": ["code"] }, { "required": ["comparison"] }] } } },
+    { "if": { "properties": { "comparison": { "properties": { "status": { "const": "compared" } } } } }, "then": { "properties": { "comparison": { "required": ["frameworkPayloadSha256", "aotPayloadSha256", "repeatedAotPayloadByteEqual", "frameworkByteEqual"] } } } },
+    { "if": { "properties": { "comparison": { "properties": { "status": { "const": "not-run" } } } } }, "then": { "properties": { "comparison": { "not": { "anyOf": [{ "required": ["aotPayloadSha256"] }, { "required": ["repeatedAotPayloadByteEqual"] }, { "required": ["frameworkByteEqual"] }] } } } } }
   ],
   "$defs": {
     "cell": {

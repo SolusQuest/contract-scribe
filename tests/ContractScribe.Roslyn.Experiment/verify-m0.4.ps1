@@ -36,18 +36,28 @@ $expectedM05PostSourceFiles = @(
     "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs"
 )
+$expectedM05PostImplementationFiles = @(
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json"
+)
 $allowedPostSourceFiles = $baseAllowedPostSourceFiles
 $allowedPostImplementationFiles = @()
 if (-not [string]::IsNullOrWhiteSpace($M05ManifestPath)) {
     $resolvedM05ManifestPath = (Resolve-Path -LiteralPath $M05ManifestPath).Path
+    $repositoryRootPrefix = [IO.Path]::GetFullPath($repositoryRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    Assert-Condition ($resolvedM05ManifestPath.StartsWith($repositoryRootPrefix, [StringComparison]::OrdinalIgnoreCase)) "The M0.5 manifest must be inside the repository."
+    Assert-Condition ([IO.Path]::GetFileName($resolvedM05ManifestPath) -eq "m0.5-native-aot-manifest.json") "The M0.5 manifest path is not the closed manifest."
     $m05Manifest = Get-Content -LiteralPath $resolvedM05ManifestPath -Raw | ConvertFrom-Json
     $declaredM05PostSourceFiles = @($m05Manifest.allowedPostSourceFiles | ForEach-Object { $_.ToString() })
     Assert-Condition ((($declaredM05PostSourceFiles | Sort-Object) -join "`n") -ceq (($expectedM05PostSourceFiles | Sort-Object) -join "`n")) "The M0.5 manifest does not declare the closed post-source file set."
+    $declaredM05PostImplementationFiles = @($m05Manifest.allowedPostImplementationFiles | ForEach-Object { $_.ToString() })
+    Assert-Condition ((($declaredM05PostImplementationFiles | Sort-Object) -join "`n") -ceq (($expectedM05PostImplementationFiles | Sort-Object) -join "`n")) "The M0.5 manifest does not declare the closed post-implementation file set."
     $m04ManifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
     Assert-Condition ($m05Manifest.m04ManifestSha256 -eq $m04ManifestHash) "The M0.5 manifest does not bind the M0.4 transfer manifest."
     Assert-Condition ($m05Manifest.m04FrozenSourceRevision -eq $manifest.sourceRevision) "The M0.5 manifest does not bind the frozen M0.4 source revision."
     $allowedPostSourceFiles += $declaredM05PostSourceFiles
-    $allowedPostImplementationFiles = @($m05Manifest.allowedPostImplementationFiles | ForEach-Object { $_.ToString() })
+    $allowedPostImplementationFiles = $declaredM05PostImplementationFiles
 }
 $resolvedSdkVersion = (& dotnet --version).Trim()
 Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."

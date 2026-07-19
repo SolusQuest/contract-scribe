@@ -31,6 +31,10 @@ function Assert-Condition([bool]$condition, [string]$message) {
     }
 }
 
+$evidenceRoot = [IO.Path]::GetFullPath((Join-Path $fixtureRoot "evidence")).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+Assert-Condition ($EvidencePath.StartsWith($evidenceRoot, [StringComparison]::OrdinalIgnoreCase)) "The evidence path is outside the controlled evidence directory."
+Assert-Condition ([IO.Path]::GetFileName($EvidencePath) -eq ("m0.5-" + $RuntimeIdentifier + "-evidence-v1.json")) "The evidence path is not the closed cell evidence path."
+
 function Get-Sha256([string]$path) {
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -323,19 +327,23 @@ if ($nativeRestoreFirst.ExitCode -ne 0) {
 }
 
 $publishDirectories = @()
-$publishResult = $null
+$publishResults = @()
 for ($attempt = 1; $attempt -le 2; $attempt++) {
     $publishDirectory = Join-Path $protocolRoot ("publish-" + $attempt)
     $publishDirectories += $publishDirectory
     if (Test-Path -LiteralPath $publishDirectory) { Remove-Item -LiteralPath $publishDirectory -Recurse -Force }
     New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
     $publishArgs = @("publish", $nativeProjectPath, "--configuration", "Release", "--runtime", $RuntimeIdentifier, "--no-restore", "--output", $publishDirectory)
-    $publishResult = Invoke-CapturedProcess "dotnet" $publishArgs $repositoryRoot
-    if ($publishResult.ExitCode -eq 0) { break }
+    $publishResults += Invoke-CapturedProcess "dotnet" $publishArgs $repositoryRoot
+    if ($publishResults[-1].ExitCode -eq 0) { break }
 }
 
-if ($null -eq $publishResult -or $publishResult.ExitCode -ne 0) {
-    $classification = Get-ErrorClassification (($publishResult.Stdout + $publishResult.Stderr))
+if ($publishResults.Count -eq 0 -or $publishResults[-1].ExitCode -ne 0) {
+    $classifications = @($publishResults | ForEach-Object { Get-ErrorClassification ($_.Stdout + $_.Stderr) })
+    $classification = $classifications[0]
+    if ($classifications.Count -ne 2 -or $classifications[0].Code -ne $classifications[1].Code -or $classifications[0].Cause -ne $classifications[1].Cause) {
+        $classification = [pscustomobject]@{ Phase = "native-link"; Cause = "unknown"; Code = "native-link.linker-failed"; Outcome = "inconclusive" }
+    }
     $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands
     Save-Record $record
     if ($classification.Outcome -eq "not-feasible") { Write-Output "M0.5 cell conclusive negative: $($classification.Code)."; exit 0 }
@@ -345,14 +353,18 @@ if ($null -eq $publishResult -or $publishResult.ExitCode -ne 0) {
 
 $nativeBinaryName = "ContractScribe.Roslyn.NativeAot.Experiment" + $(if ($RuntimeIdentifier -eq "win-x64") { ".exe" } else { "" })
 $nativeBinaryPath = Join-Path $publishDirectories[-1] $nativeBinaryName
-Assert-Condition (Test-Path -LiteralPath $nativeBinaryPath) "The native executable is missing after a successful publish."
+if (-not (Test-Path -LiteralPath $nativeBinaryPath)) {
+    $record = New-ProtocolRecord "evidence.artifact-missing" $toolchain $commands
+    Save-Record $record
+    Write-Output "M0.5 protocol failure: native executable artifact is missing."
+    exit 1
+}
 $aotPayloadPaths = @()
-$aotRuns = @()
+$aotResults = @()
 for ($run = 1; $run -le 2; $run++) {
     $runDirectory = Join-Path $protocolRoot ("native-run-" + $run)
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
     $nativeRun = Invoke-CapturedProcess $nativeBinaryPath @($solutionPath, $runDirectory) $repositoryRoot
-    $aotRuns += $nativeRun
     $inner = Get-InnerClassification (Join-Path $runDirectory "result.json")
     if ($inner.Protocol) {
         $record = New-ProtocolRecord $inner.ProtocolCode $toolchain $commands
@@ -360,21 +372,35 @@ for ($run = 1; $run -le 2; $run++) {
         Write-Output "M0.5 protocol failure: $($inner.ProtocolCode)."
         exit 1
     }
-    if ($nativeRun.ExitCode -ne 0 -or -not $inner.Succeeded) {
-        $record = New-CellRecord $inner.Outcome $inner.Phase $inner.Cause $inner.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $inner.Phase; cause = $inner.Cause; code = $inner.Code }) $toolchain $commands
-        Save-Record $record
-        if ($inner.Outcome -eq "not-feasible") { Write-Output "M0.5 cell conclusive negative: $($inner.Code)."; exit 0 }
-        Write-Output "M0.5 cell inconclusive: native semantic path did not succeed."
-        exit 1
+    $aotResults += [pscustomobject]@{ Process = $nativeRun; Inner = $inner; RunDirectory = $runDirectory }
+    if ($nativeRun.ExitCode -eq 0 -and $inner.Succeeded) {
+        $payloadPath = Join-Path $runDirectory "semantic-payload.json"
+        if (-not (Test-Path -LiteralPath $payloadPath)) {
+            $record = New-ProtocolRecord "evidence.artifact-status-contradiction" $toolchain $commands
+            Save-Record $record
+            Write-Output "M0.5 protocol failure: successful native result is missing its semantic payload."
+            exit 1
+        }
+        $aotPayloadPaths += $payloadPath
     }
-    $payloadPath = Join-Path $runDirectory "semantic-payload.json"
-    Assert-Condition (Test-Path -LiteralPath $payloadPath) "A successful native result is missing its semantic payload."
-    $aotPayloadPaths += $payloadPath
+}
+
+$failedRuns = @($aotResults | Where-Object { $_.Process.ExitCode -ne 0 -or -not $_.Inner.Succeeded })
+if ($failedRuns.Count -gt 0) {
+    $classification = $failedRuns[0].Inner
+    if ($failedRuns.Count -ne 2 -or $classification.Code -ne $failedRuns[1].Inner.Code -or $classification.Cause -ne $failedRuns[1].Inner.Cause) {
+        $classification = [pscustomobject]@{ Phase = "launch"; Cause = "unknown"; Code = "launch.native-process-failed"; Outcome = "inconclusive" }
+    }
+    $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands
+    Save-Record $record
+    if ($classification.Outcome -eq "not-feasible") { Write-Output "M0.5 cell conclusive negative: $($classification.Code)."; exit 0 }
+    Write-Output "M0.5 cell inconclusive: native semantic path did not reproduce."
+    exit 1
 }
 
 $firstAotBytes = [IO.File]::ReadAllBytes($aotPayloadPaths[0])
 $secondAotBytes = [IO.File]::ReadAllBytes($aotPayloadPaths[1])
-$repeatedEqual = [Linq.Enumerable]::SequenceEqual($firstAotBytes, $secondAotBytes)
+$repeatedEqual = [System.Linq.Enumerable]::SequenceEqual($firstAotBytes, $secondAotBytes)
 if (-not $repeatedEqual) {
     $record = New-CellRecord "inconclusive" "comparison" "semantic-contract" "comparison.payload-nondeterministic" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $false $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-nondeterministic" }) $toolchain $commands
     Save-Record $record
@@ -383,7 +409,7 @@ if (-not $repeatedEqual) {
 }
 
 $frameworkBytes = [IO.File]::ReadAllBytes($frameworkPayloadPath)
-$frameworkEqual = [Linq.Enumerable]::SequenceEqual($frameworkBytes, $firstAotBytes)
+$frameworkEqual = [System.Linq.Enumerable]::SequenceEqual($frameworkBytes, $firstAotBytes)
 if (-not $frameworkEqual) {
     $record = New-CellRecord "not-feasible" "comparison" "semantic-contract" "comparison.payload-mismatch" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-mismatch" }) $toolchain $commands
     Save-Record $record
