@@ -32,6 +32,8 @@ $expectedM05PostSourceFiles = @(
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5-provenance.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/test-m0.5-provenance.ps1",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1",
     "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs"

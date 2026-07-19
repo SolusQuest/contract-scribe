@@ -18,6 +18,7 @@ $registryPath = Join-Path $repositoryRoot "docs\20_architecture\experiments\m0.5
 $solutionPath = Join-Path $fixtureRoot "Sample.sln"
 $nativeProjectPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.NativeAot.Experiment\ContractScribe.Roslyn.NativeAot.Experiment.csproj"
 $m04VerifierPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\verify-m0.4.ps1"
+$provenanceVerifierPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.NativeAot.Experiment\verify-m0.5-provenance.ps1"
 $protocolRoot = Join-Path $repositoryRoot ("TestResults\m0.5-protocol\" + $RuntimeIdentifier)
 $defaultEvidencePath = Join-Path $fixtureRoot ("evidence\m0.5-" + $RuntimeIdentifier + "-evidence-v1.json")
 if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
@@ -421,11 +422,26 @@ if ($EvidenceReproduction) {
         Assert-Condition (@($changedFiles | Where-Object { $allowedFiles -notcontains $_ }).Count -eq 0) "The reproduction head contains changes outside the post-implementation evidence allowlist."
     }
     else {
-        & git -C $repositoryRoot merge-base --is-ancestor $manifest.m04FrozenSourceRevision $currentRevision
-        Assert-Condition ($LASTEXITCODE -eq 0) "Neither the implementation revision nor the frozen M0.4 source revision is in the reproduction history."
-        $historyFiles = @(& git -C $repositoryRoot diff --name-only "$($manifest.m04FrozenSourceRevision)..$currentRevision")
-        $allowedHistoryFiles = @($manifest.allowedPostSourceFiles) + @($manifest.allowedPostImplementationFiles)
-        Assert-Condition (@($historyFiles | Where-Object { $allowedHistoryFiles -notcontains $_ }).Count -eq 0) "The squashed reproduction history contains files outside the closed M0.5 provenance allowlist."
+        Assert-Condition (Test-Path -LiteralPath $provenanceVerifierPath) "The M0.5 provenance verifier is missing."
+        $allowedHistoryFiles = @(
+            ".github/workflows/ci.yml",
+            "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
+            "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+        ) + @($manifest.allowedPostSourceFiles) + @($manifest.allowedPostImplementationFiles)
+        $provenanceArguments = @(
+            "-NoProfile",
+            "-File",
+            $provenanceVerifierPath,
+            "-RepositoryRoot",
+            $repositoryRoot,
+            "-FrozenSourceRevision",
+            [string]$manifest.m04FrozenSourceRevision,
+            "-CurrentRevision",
+            $currentRevision,
+            "-AllowedFiles"
+        ) + ($allowedHistoryFiles -join "|")
+        $provenance = Invoke-CapturedProcess "pwsh" $provenanceArguments $repositoryRoot
+        Assert-Condition ($provenance.ExitCode -eq 0) "The squashed reproduction tree failed the closed provenance check: $($provenance.Stdout) $($provenance.Stderr)"
     }
     $recordOutputPath = Join-Path $protocolRoot "reproduction-evidence.json"
 }

@@ -85,7 +85,35 @@ public sealed class M05NativeAotContractTests
         var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
         Assert.Contains("cat-file", verifier, StringComparison.Ordinal);
         Assert.Contains("m04FrozenSourceRevision", verifier, StringComparison.Ordinal);
+        Assert.Contains("verify-m0.5-provenance.ps1", verifier, StringComparison.Ordinal);
         Assert.Contains("$aggregateOutcome -eq \"feasible-clean\"", aggregate, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProvenanceFallbackAcceptsANonAncestorSquashedTreeAndRejectsUnexpectedFiles()
+    {
+        var root = FindRepositoryRoot();
+        var testScript = Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "test-m0.5-provenance.ps1");
+        var verifierScript = Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "verify-m0.5-provenance.ps1");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "pwsh",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(testScript);
+        startInfo.ArgumentList.Add("-VerifierPath");
+        startInfo.ArgumentList.Add(verifierScript);
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.True(process.ExitCode == 0, $"Provenance regression failed. stdout: {stdout}; stderr: {stderr}");
+        Assert.Contains("non-ancestral squash accepted", stdout, StringComparison.Ordinal);
     }
 
     [Fact]
