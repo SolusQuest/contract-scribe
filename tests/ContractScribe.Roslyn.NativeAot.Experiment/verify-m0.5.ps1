@@ -126,6 +126,26 @@ function Get-Toolchain([string]$runnerOs, [string]$rid, [string]$m04ResultPath) 
     if ($runnerOs -eq "Windows") {
         $compiler = Get-Command cl.exe -ErrorAction SilentlyContinue
         $linker = Get-Command link.exe -ErrorAction SilentlyContinue
+        $vswhere = Get-Command vswhere.exe -ErrorAction SilentlyContinue
+        if ($null -eq $vswhere) {
+            $vswherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path -LiteralPath $vswherePath) { $vswhere = [pscustomobject]@{ Source = $vswherePath } }
+        }
+        if (($null -eq $compiler -or $null -eq $linker) -and $null -ne $vswhere) {
+            $installationPath = (& $vswhere.Source -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($installationPath)) {
+                $msvcRoot = Join-Path $installationPath "VC\Tools\MSVC"
+                $toolDirectory = Get-ChildItem -LiteralPath $msvcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+                if ($null -ne $toolDirectory) {
+                    $nativeBinDirectory = Join-Path $toolDirectory.FullName "bin\Hostx64\x64"
+                    $compilerPath = Join-Path $nativeBinDirectory "cl.exe"
+                    $linkerPath = Join-Path $nativeBinDirectory "link.exe"
+                    if (Test-Path -LiteralPath $compilerPath) { $compiler = [pscustomobject]@{ Source = $compilerPath } }
+                    if (Test-Path -LiteralPath $linkerPath) { $linker = [pscustomobject]@{ Source = $linkerPath } }
+                    if ($null -ne $compiler -and $null -ne $linker) { $env:PATH = $nativeBinDirectory + ";" + $env:PATH }
+                }
+            }
+        }
         if ($null -ne $compiler) {
             $nativeCompilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler.Source).FileVersion
             if ([string]::IsNullOrWhiteSpace($nativeCompilerVersion)) { $nativeCompilerVersion = "unknown" }
@@ -138,8 +158,13 @@ function Get-Toolchain([string]$runnerOs, [string]$rid, [string]$m04ResultPath) 
         }
     }
     else {
-        $compilerProbe = Invoke-CapturedProcess "clang" @("--version") $repositoryRoot
-        $linkerProbe = Invoke-CapturedProcess "ld.lld" @("--version") $repositoryRoot
+        $compiler = Get-Command clang -ErrorAction SilentlyContinue
+        $linker = Get-Command ld.lld -ErrorAction SilentlyContinue
+        if ($null -eq $linker) { $linker = Get-Command "ld.lld-*" -ErrorAction SilentlyContinue | Sort-Object Source -Descending | Select-Object -First 1 }
+        $compilerCommand = if ($null -ne $compiler) { $compiler.Source } else { "clang" }
+        $linkerCommand = if ($null -ne $linker) { $linker.Source } else { "ld.lld" }
+        $compilerProbe = Invoke-CapturedProcess $compilerCommand @("--version") $repositoryRoot
+        $linkerProbe = Invoke-CapturedProcess $linkerCommand @("--version") $repositoryRoot
         $compilerMatch = [Regex]::Match(($compilerProbe.Stdout + $compilerProbe.Stderr), "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
         $linkerMatch = [Regex]::Match(($linkerProbe.Stdout + $linkerProbe.Stderr), "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
         if ($compilerProbe.ExitCode -eq 0 -and $compilerMatch.Success) { $nativeCompilerVersion = $compilerMatch.Groups[1].Value; $nativeCompilerAvailable = $true }
