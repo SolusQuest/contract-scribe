@@ -1,11 +1,12 @@
 {
   "fixtureVersion": 1,
   "cases": [
-    { "caseId": "unknown-field", "payloadFile": "invalid/unknown-field.json", "canonical": false },
+    { "caseId": "unknown-field", "payloadFile": "invalid/unknown-field.json", "canonical": true },
     { "caseId": "duplicate-property", "payloadFile": "invalid/duplicate-property.json", "canonical": false },
     { "caseId": "relation-classification", "payloadFile": "invalid/relation-classification.json", "canonical": false },
     { "caseId": "illegal-policy-row", "payloadFile": "invalid/illegal-policy-row.json", "canonical": false },
     { "caseId": "invalid-evidence-hash", "payloadFile": "invalid/invalid-evidence-hash.json", "canonical": false },
+    { "caseId": "absent-documentation-contradiction", "payloadFile": "invalid/absent-documentation-contradiction.json", "canonical": false },
     { "caseId": "documentation-evidence-collision", "payloadFile": "invalid/documentation-evidence-collision.json", "canonical": false },
     { "caseId": "policy-unavailable-row", "payloadFile": "invalid/policy-unavailable-row.json", "canonical": false },
     { "caseId": "noncanonical-whitespace", "payloadFile": "invalid/noncanonical-whitespace.json", "canonical": true }
