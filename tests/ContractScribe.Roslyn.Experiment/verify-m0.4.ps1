@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+    [switch]$EvidenceReproduction
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,7 +21,10 @@ Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host w
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $resolvedSdkVersion = (& dotnet --version).Trim()
 Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."
-$isLocalEvidence = [string]::IsNullOrWhiteSpace($env:RUNNER_OS)
+$isRecordedWindowsEvidence = $EvidenceReproduction -and (
+    $env:RUNNER_OS -eq "Windows" -or
+    ([string]::IsNullOrWhiteSpace($env:RUNNER_OS) -and $IsWindows)
+)
 $currentRevision = (& git rev-parse HEAD).Trim()
 Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
 Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
@@ -63,7 +67,7 @@ for ($run = 1; $run -le 2; $run++) {
     Assert-Condition ($result.status -eq "succeeded") "The result envelope did not report success."
     Assert-Condition ($result.toolchain.sdkVersion -eq $resolvedSdkVersion) "The selected SDK does not match the SDK resolved for global.json: $($result.toolchain.sdkVersion) vs $resolvedSdkVersion."
     Assert-Condition ($result.toolchain.discoveryType -eq "DotNetSdk") "The selected toolchain was not discovered as a dotnet SDK: $($result.toolchain.discoveryType)."
-    if ($isLocalEvidence) {
+    if ($isRecordedWindowsEvidence) {
         Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.observedEvidence.toolchain.sdkVersion) "Observed SDK evidence does not match the run: $($result.toolchain.sdkVersion)."
         Assert-Condition ($result.toolchain.msbuildVersion -eq $manifest.observedEvidence.toolchain.msbuildVersion) "Observed MSBuild evidence does not match the run: $($result.toolchain.msbuildVersion)."
     }
@@ -74,7 +78,7 @@ for ($run = 1; $run -le 2; $run++) {
     Assert-Condition (-not ($payloadBytes[0] -eq 0xEF -and $payloadBytes[1] -eq 0xBB -and $payloadBytes[2] -eq 0xBF)) "The semantic payload has a BOM."
     Assert-Condition ($payloadBytes[$payloadBytes.Length - 1] -ne 0x0A -and $payloadBytes[$payloadBytes.Length - 1] -ne 0x0D) "The semantic payload has a trailing newline."
     $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($isLocalEvidence) {
+    if ($isRecordedWindowsEvidence) {
         Assert-Condition ($payloadHash -eq $manifest.observedEvidence.payloadSha256) "Observed payload evidence does not match the run: $payloadHash."
     }
 

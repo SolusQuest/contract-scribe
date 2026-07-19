@@ -26,7 +26,7 @@ jobs:
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
       - shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release -EvidenceReproduction
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
