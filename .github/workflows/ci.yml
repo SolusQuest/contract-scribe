@@ -5,6 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: M0.5 Native AOT operation
+        required: true
+        default: closure
+        type: choice
+        options:
+          - closure
+          - reproduction
 
 permissions:
   contents: read
@@ -27,7 +36,7 @@ jobs:
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
       - shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release -M05ManifestPath tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
@@ -35,7 +44,7 @@ jobs:
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
 
   m05-native-aot-closure:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'closure'
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +74,7 @@ jobs:
           if-no-files-found: error
 
   m05-native-aot-aggregate:
-    if: always() && github.event_name == 'workflow_dispatch'
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'closure'
     needs: m05-native-aot-closure
     runs-on: ubuntu-latest
     steps:
@@ -91,3 +100,43 @@ jobs:
           name: m05-summary
           path: tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json
           if-no-files-found: error
+
+  m05-native-aot-reproduction:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'reproduction'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Reproduce committed M0.5 cell evidence
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1 -RuntimeIdentifier ${{ matrix.rid }} -Configuration Release -EvidenceReproduction
+
+  m05-native-aot-reproduction-aggregate:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'reproduction'
+    needs: m05-native-aot-reproduction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Reproduce committed M0.5 aggregate evidence
+        shell: pwsh
+        run: >-
+          pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1
+          -LinuxEvidencePath tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json
+          -WindowsEvidencePath tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json
+          -EvidenceReproduction

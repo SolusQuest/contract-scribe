@@ -14,6 +14,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "m0.5-native-aot-manifest.json"
 $m04ManifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
+$registryPath = Join-Path $repositoryRoot "docs\20_architecture\experiments\m0.5-native-aot-registry-v1.json"
 $solutionPath = Join-Path $fixtureRoot "Sample.sln"
 $nativeProjectPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.NativeAot.Experiment\ContractScribe.Roslyn.NativeAot.Experiment.csproj"
 $m04VerifierPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\verify-m0.4.ps1"
@@ -23,6 +24,8 @@ if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
     $EvidencePath = $defaultEvidencePath
 }
 $EvidencePath = [IO.Path]::GetFullPath($EvidencePath)
+$committedEvidencePath = $EvidencePath
+$recordOutputPath = $EvidencePath
 
 function Assert-Condition([bool]$condition, [string]$message) {
     if (-not $condition) {
@@ -104,22 +107,56 @@ function Get-ProcessArchitecture {
     return "Unknown"
 }
 
-function Get-Toolchain([string]$runnerOs, [string]$rid) {
+function Get-Toolchain([string]$runnerOs, [string]$rid, [string]$m04ResultPath) {
     $sdk = (& dotnet --version).Trim()
     if ($sdk -notmatch "^\d+\.\d+\.\d+$") { $sdk = "0.0.0" }
-    $runtime = [Environment]::Version.ToString()
+    $m04Toolchain = $null
+    if (Test-Path -LiteralPath $m04ResultPath) {
+        try { $m04Toolchain = (Get-Content -LiteralPath $m04ResultPath -Raw | ConvertFrom-Json).toolchain } catch { $m04Toolchain = $null }
+    }
+    $runtime = if ($null -ne $m04Toolchain -and $m04Toolchain.runtimeVersion) { [string]$m04Toolchain.runtimeVersion } else { [Environment]::Version.ToString() }
     if ($runtime -notmatch "^\d+\.\d+\.\d+$") { $runtime = "0.0.0" }
-    return [ordered]@{
+    $msbuild = if ($null -ne $m04Toolchain -and $m04Toolchain.msbuildVersion) { [string]$m04Toolchain.msbuildVersion } else { "unknown" }
+    $nativeCompilerId = if ($runnerOs -eq "Windows") { "msvc" } else { "clang" }
+    $linkerId = if ($runnerOs -eq "Windows") { "link" } else { "lld" }
+    $nativeCompilerVersion = "unknown"
+    $linkerVersion = "unknown"
+    $nativeCompilerAvailable = $false
+    $linkerAvailable = $false
+    if ($runnerOs -eq "Windows") {
+        $compiler = Get-Command cl.exe -ErrorAction SilentlyContinue
+        $linker = Get-Command link.exe -ErrorAction SilentlyContinue
+        if ($null -ne $compiler) {
+            $nativeCompilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler.Source).FileVersion
+            $nativeCompilerAvailable = $true
+        }
+        if ($null -ne $linker) {
+            $linkerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($linker.Source).FileVersion
+            $linkerAvailable = $true
+        }
+    }
+    else {
+        $compilerProbe = Invoke-CapturedProcess "clang" @("--version") $repositoryRoot
+        $linkerProbe = Invoke-CapturedProcess "ld.lld" @("--version") $repositoryRoot
+        $compilerMatch = [Regex]::Match($compilerProbe.Stdout, "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
+        $linkerMatch = [Regex]::Match($linkerProbe.Stdout, "(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
+        if ($compilerProbe.ExitCode -eq 0 -and $compilerMatch.Success) { $nativeCompilerVersion = $compilerMatch.Groups[1].Value; $nativeCompilerAvailable = $true }
+        if ($linkerProbe.ExitCode -eq 0 -and $linkerMatch.Success) { $linkerVersion = $linkerMatch.Groups[1].Value; $linkerAvailable = $true }
+    }
+    return [pscustomobject]@{
+        Identity = [ordered]@{
         sdkVersion = $sdk
         runtimeVersion = $runtime
-        msbuildVersion = "unknown"
-        nativeCompilerId = if ($runnerOs -eq "Windows") { "msvc" } else { "clang" }
-        nativeCompilerVersion = "unknown"
-        linkerId = if ($runnerOs -eq "Windows") { "link" } else { "lld" }
-        linkerVersion = "unknown"
+        msbuildVersion = $msbuild
+        nativeCompilerId = $nativeCompilerId
+        nativeCompilerVersion = $nativeCompilerVersion
+        linkerId = $linkerId
+        linkerVersion = $linkerVersion
         runnerOs = $runnerOs
         rid = $rid
         processArchitecture = Get-ProcessArchitecture
+        }
+        Available = ($nativeCompilerAvailable -and $linkerAvailable)
     }
 }
 
@@ -164,7 +201,7 @@ function Get-ErrorClassification([string]$text) {
 
 function Get-InnerClassification([string]$resultPath) {
     if (-not (Test-Path -LiteralPath $resultPath)) {
-        return [pscustomobject]@{ Protocol = $false; Phase = "launch"; Cause = "unknown"; Code = "launch.native-process-failed"; Outcome = "inconclusive" }
+        return [pscustomobject]@{ Protocol = $true; ProtocolCode = "evidence.artifact-missing" }
     }
     try {
         $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
@@ -193,14 +230,14 @@ function Get-InnerClassification([string]$resultPath) {
     }
 }
 
-function New-CellRecord([string]$outcome, [string]$phase, [string]$cause, [string]$code, [object]$comparison, [object[]]$observations, [object]$toolchain, [object[]]$commands) {
+function New-CellRecord([string]$outcome, [string]$phase, [string]$cause, [string]$code, [object]$comparison, [object[]]$observations, [object]$toolchain, [object[]]$commands, [object[]]$warnings = @()) {
     $record = [ordered]@{
         evidenceVersion = "m0.5-native-aot-evidence-v1"
         recordType = "cell"
         cell = [ordered]@{ runnerOs = $runnerOs; rid = $RuntimeIdentifier; processArchitecture = $processArchitecture }
         profile = Get-Profile $RuntimeIdentifier
         commands = $commands
-        warnings = @()
+        warnings = @($warnings | Sort-Object phase, cause, code -Unique)
         toolchain = $toolchain
         dependencies = @("m04-fixture", "m04-manifest", "global-json", "native-toolchain")
         outcome = $outcome
@@ -229,13 +266,61 @@ function New-ProtocolRecord([string]$code, [object]$toolchain, [object[]]$comman
     }
 }
 
+function Assert-RecordContract([object]$record) {
+    $common = @("evidenceVersion", "recordType", "cell", "profile", "commands", "warnings", "toolchain", "dependencies")
+    foreach ($name in $common) { Assert-Condition ($null -ne $record.$name) "The evidence record is missing '$name'." }
+    Assert-Condition ($record.evidenceVersion -eq "m0.5-native-aot-evidence-v1") "The evidence version is invalid."
+    Assert-Condition ($record.recordType -in @("cell", "protocol-failure")) "The evidence record type is invalid."
+    Assert-Condition ($record.cell.runnerOs -in @("Ubuntu", "Windows") -and $record.cell.rid -in @("linux-x64", "win-x64") -and $record.cell.processArchitecture -eq "X64") "The evidence cell identity is invalid."
+    Assert-Condition ($record.profile.targetFramework -eq "net10.0" -and $record.profile.configuration -eq "Release" -and $record.profile.publishAot -eq $true -and $record.profile.selfContained -eq $true -and $record.profile.publishTrimmed -eq $true -and $record.profile.runtimeIdentifier -eq $record.cell.rid) "The evidence publish profile is invalid."
+    Assert-Condition ($record.toolchain.runnerOs -eq $record.cell.runnerOs -and $record.toolchain.rid -eq $record.cell.rid -and $record.toolchain.processArchitecture -eq "X64") "The evidence toolchain identity is inconsistent."
+    Assert-Condition (@($record.warnings).Count -eq @($record.warnings | ForEach-Object { "$($_.phase)|$($_.cause)|$($_.code)" } | Sort-Object -Unique).Count) "The evidence contains duplicate warnings."
+    if ($record.recordType -eq "protocol-failure") {
+        Assert-Condition ($null -ne $record.protocolFailure -and $record.protocolFailure.phase -eq "evidence" -and @($registry.protocolFailureCodes) -contains [string]$record.protocolFailure.code) "The protocol-failure record is invalid."
+        foreach ($name in @("outcome", "phase", "cause", "code", "comparison", "observations")) { Assert-Condition ($null -eq $record.$name) "A protocol-failure record contains cell field '$name'." }
+        return
+    }
+    Assert-Condition ($null -eq $record.protocolFailure) "A cell record contains a protocol-failure field."
+    Assert-Condition ($record.outcome -in @("feasible-clean", "feasible-with-warnings", "not-feasible", "inconclusive")) "The cell outcome is invalid."
+    Assert-Condition ($record.phase -in @("preflight", "restore", "publish", "native-link", "launch", "semantic-path", "comparison")) "The cell phase is invalid."
+    Assert-Condition ($record.cause -in @("native-toolchain", "rid-assets", "sdk-resolution", "aot-analysis", "trimming-reflection", "dynamic-assembly-loading", "msbuild-host", "roslyn", "semantic-contract", "unknown")) "The cell cause is invalid."
+    if ([string]::IsNullOrWhiteSpace([string]$record.code)) {
+        Assert-Condition ($record.outcome -in @("feasible-clean", "feasible-with-warnings")) "A negative or inconclusive cell is missing its stable code."
+    }
+    else {
+        Assert-Condition ($registry.cellCodes.PSObject.Properties.Name -contains [string]$record.code) "The cell code is not in the closed registry."
+        $definition = $registry.cellCodes.($record.code)
+        Assert-Condition ($definition.phase -eq $record.phase -and @($definition.allowedCauses) -contains $record.cause -and @($definition.allowedOutcomes) -contains $record.outcome) "The cell classification is not allowed by the registry."
+    }
+    Assert-Condition (-not ($record.cause -eq "unknown" -and $record.outcome -ne "inconclusive")) "Unknown cause cannot be conclusive."
+    if ($record.outcome -eq "feasible-clean") { Assert-Condition (@($record.warnings).Count -eq 0) "Feasible-clean evidence cannot contain warnings." }
+    if ($record.outcome -eq "feasible-with-warnings") { Assert-Condition (@($record.warnings).Count -gt 0 -and (@($record.warnings | ForEach-Object { $registry.warningCodes -contains [string]$_.code }) -notcontains $false)) "Feasible-with-warnings requires only reviewed warning codes." }
+    Assert-Condition ($null -ne $record.comparison -and $record.comparison.status -in @("not-run", "compared")) "The comparison status is invalid."
+    if ($record.comparison.status -eq "compared") {
+        Assert-Condition ($record.comparison.frameworkPayloadSha256 -match "^[0-9a-f]{64}$" -and $record.comparison.aotPayloadSha256 -match "^[0-9a-f]{64}$" -and $null -ne $record.comparison.repeatedAotPayloadByteEqual -and $null -ne $record.comparison.frameworkByteEqual) "Compared evidence is missing payload facts."
+    }
+    else {
+        Assert-Condition ($null -eq $record.comparison.aotPayloadSha256 -and $null -eq $record.comparison.repeatedAotPayloadByteEqual -and $null -eq $record.comparison.frameworkByteEqual) "Not-run evidence contains comparison facts."
+    }
+    if ($record.code -eq "comparison.payload-nondeterministic") { Assert-Condition ($record.outcome -eq "inconclusive" -and $record.comparison.status -eq "compared" -and $record.comparison.repeatedAotPayloadByteEqual -eq $false) "Nondeterministic evidence is contradictory." }
+    if ($record.code -eq "comparison.payload-mismatch") { Assert-Condition ($record.outcome -eq "not-feasible" -and $record.comparison.status -eq "compared" -and $record.comparison.repeatedAotPayloadByteEqual -eq $true -and $record.comparison.frameworkByteEqual -eq $false -and $record.cause -eq "semantic-contract") "Payload-mismatch evidence is contradictory." }
+    if ($record.outcome -eq "feasible-clean") { Assert-Condition ($record.comparison.status -eq "compared" -and $record.comparison.repeatedAotPayloadByteEqual -eq $true -and $record.comparison.frameworkByteEqual -eq $true) "Feasible-clean evidence is missing successful comparison facts." }
+    if ($record.outcome -eq "feasible-with-warnings") { Assert-Condition ($record.comparison.status -eq "compared" -and $record.comparison.repeatedAotPayloadByteEqual -eq $true -and $record.comparison.frameworkByteEqual -eq $true) "Feasible-with-warnings evidence is missing successful comparison facts." }
+    if ($record.comparison.status -eq "not-run") { Assert-Condition ($record.outcome -eq "inconclusive" -or $record.phase -ne "comparison") "A conclusive comparison outcome cannot be not-run." }
+}
+
 function Save-Record([object]$record) {
-    Write-CanonicalJson $EvidencePath $record
-    $content = [IO.File]::ReadAllText($EvidencePath)
+    Assert-RecordContract $record
+    Write-CanonicalJson $recordOutputPath $record
+    $content = [IO.File]::ReadAllText($recordOutputPath)
     Assert-Condition ($content -notmatch "(?i)([A-Z]:\\|/home/|/Users/|authorization|bearer\s|access[_-]?token|api[_-]?key|username|hostname|environment)") "The evidence contains a private path, credential-like value, or environment dump."
-    $bytes = [IO.File]::ReadAllBytes($EvidencePath)
+    $bytes = [IO.File]::ReadAllBytes($recordOutputPath)
     Assert-Condition ($bytes.Length -gt 0 -and $bytes[0] -ne 0xEF) "The evidence is empty or has a UTF-8 BOM."
     Assert-Condition ($bytes[$bytes.Length - 1] -ne 0x0A -and $bytes[$bytes.Length - 1] -ne 0x0D) "The evidence has a trailing newline."
+    if ($EvidenceReproduction) {
+        Assert-Condition ([System.Linq.Enumerable]::SequenceEqual($bytes, [IO.File]::ReadAllBytes($committedEvidencePath))) "The regenerated evidence differs from the committed evidence."
+        Remove-Item -LiteralPath $recordOutputPath -Force
+    }
 }
 
 function Get-Comparison([string]$frameworkPayloadPath, [string]$aotPayloadPath, [bool]$repeatedEqual, [bool]$frameworkEqual) {
@@ -246,12 +331,29 @@ function Get-Comparison([string]$frameworkPayloadPath, [string]$aotPayloadPath, 
     if (Test-Path -LiteralPath $aotPayloadPath) {
         $comparison.aotPayloadSha256 = Get-Sha256 $aotPayloadPath
     }
-    if ($repeatedEqual -or $frameworkEqual) {
+    if ((Test-Path -LiteralPath $frameworkPayloadPath) -and (Test-Path -LiteralPath $aotPayloadPath)) {
         $comparison.status = "compared"
         $comparison.repeatedAotPayloadByteEqual = $repeatedEqual
         $comparison.frameworkByteEqual = $frameworkEqual
     }
     return $comparison
+}
+
+function Get-WarningObservations([string]$text, [string]$phase) {
+    $observations = @()
+    foreach ($line in ($text -split "`r?`n")) {
+        $match = [Regex]::Match($line, "(?i)\bwarning\s+([A-Z][A-Z0-9_-]*\d+[A-Z0-9_-]*)\b")
+        if ($match.Success) {
+            $warningCode = "warning." + $match.Groups[1].Value.ToLowerInvariant()
+            $cause = if ($line -match "(?i)trim|il20") { "trimming-reflection" } else { "aot-analysis" }
+            $observations += [ordered]@{ phase = $phase; cause = $cause; code = $warningCode }
+        }
+    }
+    return @($observations | Sort-Object phase, cause, code -Unique)
+}
+
+function Test-SameClassification([object]$first, [object]$second) {
+    return ($first.Phase -eq $second.Phase -and $first.Cause -eq $second.Cause -and $first.Code -eq $second.Code -and $first.Outcome -eq $second.Outcome)
 }
 
 $runnerOs = Get-RunnerOs
@@ -265,6 +367,7 @@ Assert-Condition (Test-Path -LiteralPath $nativeProjectPath) "The Native AOT hos
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $m04Manifest = Get-Content -LiteralPath $m04ManifestPath -Raw | ConvertFrom-Json
+$registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
 Assert-Condition ($manifest.m04ManifestSha256 -eq (Get-Sha256 $m04ManifestPath)) "The M0.5 manifest does not match the M0.4 transfer manifest."
 Assert-Condition ($manifest.m04FrozenSourceRevision -eq $m04Manifest.sourceRevision) "The M0.5 manifest does not match the frozen M0.4 source revision."
 Assert-Condition ($manifest.publishProfile.targetFramework -eq "net10.0" -and $manifest.publishProfile.configuration -eq "Release" -and $manifest.publishProfile.publishAot -eq $true -and $manifest.publishProfile.selfContained -eq $true -and $manifest.publishProfile.publishTrimmed -eq $true) "The publish profile is not the closed M0.5 profile."
@@ -277,18 +380,34 @@ foreach ($entry in $manifest.implementationInputHashes.PSObject.Properties) {
     Assert-Condition ($entry.Value -eq (Get-Sha256 $inputPath)) "An M0.5 implementation input hash is stale."
 }
 
+if ($EvidenceReproduction) {
+    Assert-Condition (Test-Path -LiteralPath $committedEvidencePath) "The committed cell evidence is missing for reproduction."
+    $currentRevision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+    Assert-Condition ($manifest.implementationRevision -match "^[0-9a-f]{40}$") "The implementation revision is not a full commit hash."
+    & git -C $repositoryRoot merge-base --is-ancestor $manifest.implementationRevision $currentRevision
+    Assert-Condition ($LASTEXITCODE -eq 0) "The implementation revision is not an ancestor of the reproduction head."
+    $changedFiles = @(& git -C $repositoryRoot diff --name-only "$($manifest.implementationRevision)..$currentRevision")
+    $allowedFiles = @($manifest.allowedPostImplementationFiles)
+    Assert-Condition (@($changedFiles | Where-Object { $allowedFiles -notcontains $_ }).Count -eq 0) "The reproduction head contains changes outside the post-implementation evidence allowlist."
+    $recordOutputPath = Join-Path $protocolRoot "reproduction-evidence.json"
+}
+
 Remove-CellOutputs
-$toolchain = Get-Toolchain $runnerOs $RuntimeIdentifier
+$toolchainProbe = Get-Toolchain $runnerOs $RuntimeIdentifier ""
+$toolchain = $toolchainProbe.Identity
 $commands = Get-CommandList
 $frameworkPayloadPath = Join-Path $repositoryRoot "TestResults\m0.4-protocol\run-1\semantic-payload.json"
+$capturedWarnings = @()
 
 $restoreArgs = @("restore", "ContractScribe.slnx")
 $restoreFirst = Invoke-CapturedProcess "dotnet" $restoreArgs $repositoryRoot
 if ($restoreFirst.ExitCode -ne 0) {
+    $firstRestoreClassification = Get-ErrorClassification ($restoreFirst.Stdout + $restoreFirst.Stderr)
     Remove-CellOutputs
     $restoreSecond = Invoke-CapturedProcess "dotnet" $restoreArgs $repositoryRoot
     if ($restoreSecond.ExitCode -ne 0) {
-        $classification = Get-ErrorClassification ($restoreFirst.Stdout + $restoreFirst.Stderr + $restoreSecond.Stdout + $restoreSecond.Stderr)
+        $secondRestoreClassification = Get-ErrorClassification ($restoreSecond.Stdout + $restoreSecond.Stderr)
+        $classification = if (Test-SameClassification $firstRestoreClassification $secondRestoreClassification) { $firstRestoreClassification } else { [pscustomobject]@{ Phase = "restore"; Cause = "unknown"; Code = "restore.sdk-resolution-failed"; Outcome = "inconclusive" } }
         $record = New-CellRecord "inconclusive" "restore" $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @() $toolchain $commands
         Save-Record $record
         Write-Output "M0.5 cell inconclusive: restore did not reproduce."
@@ -312,13 +431,25 @@ if ($m04.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $frameworkPayloadPath))
     exit 1
 }
 
+$m04ResultPath = Join-Path $repositoryRoot "TestResults\m0.4-protocol\run-1\result.json"
+$toolchainProbe = Get-Toolchain $runnerOs $RuntimeIdentifier $m04ResultPath
+$toolchain = $toolchainProbe.Identity
+if (-not $toolchainProbe.Available) {
+    $record = New-CellRecord "inconclusive" "preflight" "native-toolchain" "preflight.native-toolchain-unavailable" (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = "preflight"; cause = "native-toolchain"; code = "preflight.native-toolchain-unavailable" }) $toolchain $commands
+    Save-Record $record
+    Write-Output "M0.5 cell inconclusive: required native compiler/linker identity is unavailable."
+    exit 1
+}
+
 $nativeRestoreArgs = @("restore", $nativeProjectPath, "--runtime", $RuntimeIdentifier)
 $nativeRestoreFirst = Invoke-CapturedProcess "dotnet" $nativeRestoreArgs $repositoryRoot
 if ($nativeRestoreFirst.ExitCode -ne 0) {
+    $firstNativeRestoreClassification = Get-ErrorClassification ($nativeRestoreFirst.Stdout + $nativeRestoreFirst.Stderr)
     Remove-Item -LiteralPath (Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.NativeAot.Experiment\obj") -Recurse -Force -ErrorAction SilentlyContinue
     $nativeRestoreSecond = Invoke-CapturedProcess "dotnet" $nativeRestoreArgs $repositoryRoot
     if ($nativeRestoreSecond.ExitCode -ne 0) {
-        $classification = Get-ErrorClassification ($nativeRestoreFirst.Stdout + $nativeRestoreFirst.Stderr + $nativeRestoreSecond.Stdout + $nativeRestoreSecond.Stderr)
+        $secondNativeRestoreClassification = Get-ErrorClassification ($nativeRestoreSecond.Stdout + $nativeRestoreSecond.Stderr)
+        $classification = if (Test-SameClassification $firstNativeRestoreClassification $secondNativeRestoreClassification) { $firstNativeRestoreClassification } else { [pscustomobject]@{ Phase = "restore"; Cause = "unknown"; Code = "restore.rid-assets-unavailable"; Outcome = "inconclusive" } }
         $record = New-CellRecord "inconclusive" $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @() $toolchain $commands
         Save-Record $record
         Write-Output "M0.5 cell inconclusive: RID-specific restore did not reproduce."
@@ -335,16 +466,27 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
     $publishArgs = @("publish", $nativeProjectPath, "--configuration", "Release", "--runtime", $RuntimeIdentifier, "--no-restore", "--output", $publishDirectory)
     $publishResults += Invoke-CapturedProcess "dotnet" $publishArgs $repositoryRoot
+    $capturedWarnings += @(Get-WarningObservations ($publishResults[-1].Stdout + $publishResults[-1].Stderr) "publish")
     if ($publishResults[-1].ExitCode -eq 0) { break }
+    if ($attempt -eq 1) {
+        $nativeRidIntermediate = Join-Path $repositoryRoot ("tests\ContractScribe.Roslyn.NativeAot.Experiment\obj\Release\net10.0\" + $RuntimeIdentifier)
+        $nativeRidBin = Join-Path $repositoryRoot ("tests\ContractScribe.Roslyn.NativeAot.Experiment\bin\Release\net10.0\" + $RuntimeIdentifier)
+        foreach ($intermediatePath in @($nativeRidIntermediate, $nativeRidBin)) {
+            if (Test-Path -LiteralPath $intermediatePath) { Remove-Item -LiteralPath $intermediatePath -Recurse -Force }
+        }
+    }
 }
 
 if ($publishResults.Count -eq 0 -or $publishResults[-1].ExitCode -ne 0) {
     $classifications = @($publishResults | ForEach-Object { Get-ErrorClassification ($_.Stdout + $_.Stderr) })
     $classification = $classifications[0]
-    if ($classifications.Count -ne 2 -or $classifications[0].Code -ne $classifications[1].Code -or $classifications[0].Cause -ne $classifications[1].Cause) {
+    if ($classifications.Count -ne 2 -or -not (Test-SameClassification $classifications[0] $classifications[1])) {
         $classification = [pscustomobject]@{ Phase = "native-link"; Cause = "unknown"; Code = "native-link.linker-failed"; Outcome = "inconclusive" }
     }
-    $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands
+    if (@($capturedWarnings | Where-Object { $registry.warningCodes -notcontains [string]$_.code }).Count -gt 0) {
+        $classification = [pscustomobject]@{ Phase = "publish"; Cause = "unknown"; Code = "publish.unreviewed-warning"; Outcome = "inconclusive" }
+    }
+    $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands $capturedWarnings
     Save-Record $record
     if ($classification.Outcome -eq "not-feasible") { Write-Output "M0.5 cell conclusive negative: $($classification.Code)."; exit 0 }
     Write-Output "M0.5 cell inconclusive: publish did not produce a reproducible native artifact."
@@ -365,6 +507,7 @@ for ($run = 1; $run -le 2; $run++) {
     $runDirectory = Join-Path $protocolRoot ("native-run-" + $run)
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
     $nativeRun = Invoke-CapturedProcess $nativeBinaryPath @($solutionPath, $runDirectory) $repositoryRoot
+    $capturedWarnings += @(Get-WarningObservations ($nativeRun.Stdout + $nativeRun.Stderr) "launch")
     $inner = Get-InnerClassification (Join-Path $runDirectory "result.json")
     if ($inner.Protocol) {
         $record = New-ProtocolRecord $inner.ProtocolCode $toolchain $commands
@@ -388,10 +531,13 @@ for ($run = 1; $run -le 2; $run++) {
 $failedRuns = @($aotResults | Where-Object { $_.Process.ExitCode -ne 0 -or -not $_.Inner.Succeeded })
 if ($failedRuns.Count -gt 0) {
     $classification = $failedRuns[0].Inner
-    if ($failedRuns.Count -ne 2 -or $classification.Code -ne $failedRuns[1].Inner.Code -or $classification.Cause -ne $failedRuns[1].Inner.Cause) {
+    if ($failedRuns.Count -ne 2 -or -not (Test-SameClassification $classification $failedRuns[1].Inner)) {
         $classification = [pscustomobject]@{ Phase = "launch"; Cause = "unknown"; Code = "launch.native-process-failed"; Outcome = "inconclusive" }
     }
-    $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands
+    if (@($capturedWarnings | Where-Object { $registry.warningCodes -notcontains [string]$_.code }).Count -gt 0) {
+        $classification = [pscustomobject]@{ Phase = "launch"; Cause = "unknown"; Code = "launch.native-process-failed"; Outcome = "inconclusive" }
+    }
+    $record = New-CellRecord $classification.Outcome $classification.Phase $classification.Cause $classification.Code (Get-Comparison $frameworkPayloadPath "" $false $false) @([ordered]@{ phase = $classification.Phase; cause = $classification.Cause; code = $classification.Code }) $toolchain $commands $capturedWarnings
     Save-Record $record
     if ($classification.Outcome -eq "not-feasible") { Write-Output "M0.5 cell conclusive negative: $($classification.Code)."; exit 0 }
     Write-Output "M0.5 cell inconclusive: native semantic path did not reproduce."
@@ -402,7 +548,7 @@ $firstAotBytes = [IO.File]::ReadAllBytes($aotPayloadPaths[0])
 $secondAotBytes = [IO.File]::ReadAllBytes($aotPayloadPaths[1])
 $repeatedEqual = [System.Linq.Enumerable]::SequenceEqual($firstAotBytes, $secondAotBytes)
 if (-not $repeatedEqual) {
-    $record = New-CellRecord "inconclusive" "comparison" "semantic-contract" "comparison.payload-nondeterministic" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $false $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-nondeterministic" }) $toolchain $commands
+    $record = New-CellRecord "inconclusive" "comparison" "semantic-contract" "comparison.payload-nondeterministic" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $false $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-nondeterministic" }) $toolchain $commands $capturedWarnings
     Save-Record $record
     Write-Output "M0.5 cell inconclusive: native payloads were not byte-identical."
     exit 1
@@ -411,13 +557,21 @@ if (-not $repeatedEqual) {
 $frameworkBytes = [IO.File]::ReadAllBytes($frameworkPayloadPath)
 $frameworkEqual = [System.Linq.Enumerable]::SequenceEqual($frameworkBytes, $firstAotBytes)
 if (-not $frameworkEqual) {
-    $record = New-CellRecord "not-feasible" "comparison" "semantic-contract" "comparison.payload-mismatch" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-mismatch" }) $toolchain $commands
+    $record = New-CellRecord "not-feasible" "comparison" "semantic-contract" "comparison.payload-mismatch" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $false) @([ordered]@{ phase = "comparison"; cause = "semantic-contract"; code = "comparison.payload-mismatch" }) $toolchain $commands $capturedWarnings
     Save-Record $record
     Write-Output "M0.5 cell conclusive negative: Native AOT payload differs from the frozen framework baseline."
     exit 0
 }
 
-$record = New-CellRecord "feasible-clean" "comparison" "semantic-contract" "" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $true) @() $toolchain $commands
+$unreviewedWarnings = @($capturedWarnings | Where-Object { $registry.warningCodes -notcontains [string]$_.code })
+if ($unreviewedWarnings.Count -gt 0) {
+    $record = New-CellRecord "inconclusive" "publish" "unknown" "publish.unreviewed-warning" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $true) @([ordered]@{ phase = "publish"; cause = "unknown"; code = "publish.unreviewed-warning" }) $toolchain $commands $capturedWarnings
+    Save-Record $record
+    Write-Output "M0.5 cell inconclusive: unreviewed Native AOT warnings were observed."
+    exit 1
+}
+$outcome = if (@($capturedWarnings).Count -gt 0) { "feasible-with-warnings" } else { "feasible-clean" }
+$record = New-CellRecord $outcome "comparison" "semantic-contract" "" (Get-Comparison $frameworkPayloadPath $aotPayloadPaths[0] $true $true) @() $toolchain $commands $capturedWarnings
 Save-Record $record
 Write-Output "M0.5 cell conclusive positive: Native AOT payload matched the frozen framework baseline."
 exit 0

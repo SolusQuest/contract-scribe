@@ -103,15 +103,14 @@ public sealed class M05NativeAotContractTests
         {
             "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
             "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json",
-            "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json"
+            "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json",
+            "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json"
         };
         Assert.Equal(expected, actual);
     }
 
     [Theory]
     [InlineData("feasible-clean", "feasible-clean", "feasible-clean", 0)]
-    [InlineData("feasible-clean", "feasible-with-warnings", "feasible-with-warnings", 0)]
-    [InlineData("feasible-with-warnings", "feasible-with-warnings", "feasible-with-warnings", 0)]
     [InlineData("feasible-clean", "not-feasible", "mixed", 0)]
     [InlineData("not-feasible", "not-feasible", "not-feasible", 0)]
     [InlineData("inconclusive", "feasible-clean", "inconclusive", 1)]

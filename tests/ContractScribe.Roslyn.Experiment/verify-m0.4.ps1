@@ -37,6 +37,7 @@ $expectedM05PostSourceFiles = @(
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs"
 )
 $expectedM05PostImplementationFiles = @(
+    "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
     "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
     "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json",
     "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json"

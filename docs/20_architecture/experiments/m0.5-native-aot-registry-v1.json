@@ -16,8 +16,10 @@
     "semantic-path.inner-classified-failure": { "phase": "semantic-path", "allowedCauses": ["semantic-contract", "unknown"], "allowedOutcomes": ["inconclusive", "not-feasible"] },
     "semantic-path.inner-internal-error": { "phase": "semantic-path", "allowedCauses": ["unknown"], "allowedOutcomes": ["inconclusive"] },
     "comparison.payload-mismatch": { "phase": "comparison", "allowedCauses": ["semantic-contract"], "allowedOutcomes": ["not-feasible"] },
-    "comparison.payload-nondeterministic": { "phase": "comparison", "allowedCauses": ["semantic-contract", "unknown"], "allowedOutcomes": ["inconclusive"] }
+    "comparison.payload-nondeterministic": { "phase": "comparison", "allowedCauses": ["semantic-contract", "unknown"], "allowedOutcomes": ["inconclusive"] },
+    "publish.unreviewed-warning": { "phase": "publish", "allowedCauses": ["unknown"], "allowedOutcomes": ["inconclusive"] }
   },
+  "warningCodes": [],
   "protocolFailureCodes": [
     "evidence.artifact-missing",
     "evidence.artifact-stale",
