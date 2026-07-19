@@ -129,14 +129,17 @@ public sealed class AuditResultContractTests
                 continue;
             }
 
+            var rejected = false;
             try
             {
                 using var document = ParseStrict(payload);
-                Assert.False(AuditSchema.Value.Evaluate(document.RootElement).IsValid && IsSemanticallyValid(document.RootElement), relative);
+                rejected = !AuditSchema.Value.Evaluate(document.RootElement).IsValid || !IsSemanticallyValid(document.RootElement);
             }
             catch (FormatException)
             {
+                rejected = true;
             }
+            Assert.True(rejected, relative);
         }
 
         Assert.Equal(listed.Order(StringComparer.OrdinalIgnoreCase), Directory.EnumerateFiles(Path.Join(root, "invalid"), "*.json", SearchOption.TopDirectoryOnly).Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')).Order(StringComparer.OrdinalIgnoreCase));
@@ -242,6 +245,13 @@ public sealed class AuditResultContractTests
         using var nonCanonicalPolicyDocument = JsonDocument.Parse(nonCanonicalPolicy);
         Assert.False(IsSemanticallyValid(nonCanonicalPolicyDocument.RootElement));
 
+        var supportedUnknown = File.ReadAllText(FixturePath("payloads", "required-present.json")).Replace("\"origin\": \"origin.source\"", "\"origin\": \"origin.unknown\"", StringComparison.Ordinal);
+        using var supportedUnknownDocument = JsonDocument.Parse(supportedUnknown);
+        Assert.False(IsSemanticallyValid(supportedUnknownDocument.RootElement));
+        var supportedMixed = supportedUnknown.Replace("origin.unknown", "origin.mixed", StringComparison.Ordinal);
+        using var supportedMixedDocument = JsonDocument.Parse(supportedMixed);
+        Assert.False(IsSemanticallyValid(supportedMixedDocument.RootElement));
+
         var absent = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-absent.json")))!.AsObject();
         var xmlEvidence = (JsonObject)absent["results"]![0]!["evidenceBundle"]!["items"]![0]!.DeepClone();
         xmlEvidence["evidenceId"] = "evidence.xml-doc";
@@ -285,11 +295,15 @@ public sealed class AuditResultContractTests
         item["isTruncated"] = true;
         using var truncated = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
         Assert.False(IsSemanticallyValid(truncated.RootElement));
-        Assert.True(IsSemanticallyValid(truncated.RootElement, new Dictionary<(int ResultIndex, string EvidenceId), string> { [(0, "evidence.partial")] = "xy" }));
+        var originals = new Dictionary<(int ResultIndex, string EvidenceId), string> { [(0, "evidence.partial")] = "xy" };
+        Assert.True(IsSemanticallyValid(truncated.RootElement, originals));
+        var canonical = Canonicalize(truncated.RootElement);
+        Assert.False(IsCanonicalBytes(canonical));
+        Assert.True(IsCanonicalBytes(canonical, originals));
 
         item["locator"]!["repository"]!["span"] = new JsonObject { ["start"] = 0, ["end"] = 3 };
         using var outOfRangeTruncatedSpan = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
-        Assert.False(IsSemanticallyValid(outOfRangeTruncatedSpan.RootElement, new Dictionary<(int ResultIndex, string EvidenceId), string> { [(0, "evidence.partial")] = "xy" }));
+        Assert.False(IsSemanticallyValid(outOfRangeTruncatedSpan.RootElement, originals));
     }
 
     [Fact]
@@ -401,7 +415,19 @@ public sealed class AuditResultContractTests
             ValidateDocument(document, originalEvidenceTexts);
             return true;
         }
-        catch (Exception)
+        catch (Xunit.Sdk.XunitException)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (KeyNotFoundException)
         {
             return false;
         }
@@ -439,6 +465,8 @@ public sealed class AuditResultContractTests
             ValidateCandidateLocator(candidateLocator);
         }
 
+        var origin = classification.GetProperty("origin").GetString();
+        var skipReasonValue = classification.TryGetProperty("skipReason", out var skipValue) ? skipValue.GetString() : null;
         if (supportStatus == "support.supported") Assert.False(classification.TryGetProperty("skipReason", out _));
         else
         {
@@ -452,8 +480,8 @@ public sealed class AuditResultContractTests
                 _ => "skip.invalid."
             }, skipReason.GetString());
             ValidateTaxonomyEntry("skipReasons", skipReason.GetString(), recordType, supportStatus);
-            ValidateOriginSpecificCombination(recordType, supportStatus, classification.GetProperty("origin").GetString(), skipReason.GetString());
         }
+        ValidateOriginSpecificCombination(recordType, supportStatus, origin, skipReasonValue);
     }
 
     private static void ValidateOriginSpecificCombination(string? recordType, string? supportStatus, string? origin, string? skipReason)
@@ -962,16 +990,32 @@ public sealed class AuditResultContractTests
         return builder.Append('"').ToString();
     }
 
-    private static bool IsCanonicalBytes(byte[] payload)
+    private static bool IsCanonicalBytes(byte[] payload, IReadOnlyDictionary<(int ResultIndex, string EvidenceId), string>? originalEvidenceTexts = null)
     {
         try
         {
             using var document = ParseStrict(payload);
             if (!AuditSchema.Value.Evaluate(document.RootElement).IsValid) return false;
-            ValidateDocument(document.RootElement);
+            ValidateDocument(document.RootElement, originalEvidenceTexts);
             return payload.SequenceEqual(Canonicalize(document.RootElement));
         }
-        catch (Exception)
+        catch (Xunit.Sdk.XunitException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (KeyNotFoundException)
         {
             return false;
         }
