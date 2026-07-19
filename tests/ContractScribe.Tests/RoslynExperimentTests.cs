@@ -155,6 +155,34 @@ public sealed class RoslynExperimentTests
     }
 
     [Fact]
+    public async Task HostClassifiesUnavailableMsbuildEnvironmentWithoutPayloadOrPathLeak()
+    {
+        var fixture = CopyFixtureOutsideRepository();
+        var outputDirectory = CreateTestOutputDirectory();
+        try
+        {
+            var run = await RunHostAsync(outputDirectory, Path.Combine(fixture, "Sample.sln"));
+
+            Assert.Equal(1, run.ExitCode);
+            Assert.Empty(run.Stderr);
+            Assert.DoesNotContain("\\", run.Stdout + run.Stderr);
+            Assert.DoesNotContain("/home/", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("token", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(Path.Combine(outputDirectory, "semantic-payload.json")));
+
+            using var result = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(outputDirectory, "result.json")));
+            Assert.Equal("classified-failure", result.RootElement.GetProperty("status").GetString());
+            Assert.Equal("msbuild-environment", result.RootElement.GetProperty("failurePhase").GetString());
+            Assert.Equal("msbuild.sdk-unavailable", result.RootElement.GetProperty("failureCode").GetString());
+            Assert.False(result.RootElement.TryGetProperty("semanticPayload", out _));
+        }
+        finally
+        {
+            Directory.Delete(fixture, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MissingSolutionIsAnInvalidInputFailure()
     {
         var execution = await new FrameworkDependentExperiment().RunAsync(
@@ -372,6 +400,13 @@ public sealed class RoslynExperimentTests
     private static string CopyFixtureToTestDirectory()
     {
         var target = Path.Combine(FindRepositoryRoot(), "TestResults", "m0.4-fixture-tests", Guid.NewGuid().ToString("N"));
+        CopyDirectory(FixtureRoot, target);
+        return target;
+    }
+
+    private static string CopyFixtureOutsideRepository()
+    {
+        var target = Path.Combine(Path.GetTempPath(), "contract-scribe-m0.4", Guid.NewGuid().ToString("N"));
         CopyDirectory(FixtureRoot, target);
         return target;
     }
