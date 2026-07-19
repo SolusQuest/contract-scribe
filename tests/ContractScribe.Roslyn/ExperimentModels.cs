@@ -151,7 +151,8 @@ public static class FailureRegistry
 
 internal sealed class ExperimentFailureException : Exception
 {
-    public ExperimentFailureException(FailurePhase phase, string code)
+    public ExperimentFailureException(FailurePhase phase, string code, Exception? innerException = null)
+        : base(code, innerException)
     {
         Phase = phase;
         Code = code;

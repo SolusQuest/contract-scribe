@@ -64,22 +64,21 @@ public sealed class FrameworkDependentExperiment
             {
                 throw;
             }
-            catch (Exception)
+            catch (InvalidOperationException exception)
             {
-                if (workspaceDiagnostics.Any(diagnostic => diagnostic.Severity == "failure"))
-                {
-                    var firstFailure = SelectWorkspaceFailure(workspaceDiagnostics);
-                    return Failure(
-                        ExperimentStatus.ClassifiedFailure,
-                        firstFailure.Phase,
-                        firstFailure.Code,
-                        workspaceDiagnostics,
-                        toolchain);
-                }
-
-                throw new ExperimentFailureException(
-                    FailurePhase.WorkspaceLoad,
-                    "workspace.solution-load-failed");
+                return HandleWorkspaceLoadException(exception, workspaceDiagnostics, toolchain);
+            }
+            catch (IOException exception)
+            {
+                return HandleWorkspaceLoadException(exception, workspaceDiagnostics, toolchain);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                return HandleWorkspaceLoadException(exception, workspaceDiagnostics, toolchain);
+            }
+            catch (NotSupportedException exception)
+            {
+                return HandleWorkspaceLoadException(exception, workspaceDiagnostics, toolchain);
             }
 
             var projects = solution.Projects
@@ -173,7 +172,25 @@ public sealed class FrameworkDependentExperiment
             {
                 payloadBytes = serializePayload(payload);
             }
-            catch (Exception)
+            catch (JsonException)
+            {
+                return Failure(
+                    ExperimentStatus.ClassifiedFailure,
+                    FailurePhase.Serialization,
+                    "serialization.semantic-payload-failed",
+                    workspaceDiagnostics,
+                    toolchain);
+            }
+            catch (NotSupportedException)
+            {
+                return Failure(
+                    ExperimentStatus.ClassifiedFailure,
+                    FailurePhase.Serialization,
+                    "serialization.semantic-payload-failed",
+                    workspaceDiagnostics,
+                    toolchain);
+            }
+            catch (InvalidOperationException)
             {
                 return Failure(
                     ExperimentStatus.ClassifiedFailure,
@@ -246,12 +263,35 @@ public sealed class FrameworkDependentExperiment
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             throw new ExperimentFailureException(
                 FailurePhase.MsbuildEnvironment,
-                "msbuild.registration-failed");
+                "msbuild.registration-failed",
+                exception);
         }
+    }
+
+    private static ExperimentExecution HandleWorkspaceLoadException(
+        Exception exception,
+        IReadOnlyList<DiagnosticRecord> workspaceDiagnostics,
+        ToolchainIdentity? toolchain)
+    {
+        if (workspaceDiagnostics.Any(diagnostic => diagnostic.Severity == "failure"))
+        {
+            var firstFailure = SelectWorkspaceFailure(workspaceDiagnostics);
+            return Failure(
+                ExperimentStatus.ClassifiedFailure,
+                firstFailure.Phase,
+                firstFailure.Code,
+                workspaceDiagnostics,
+                toolchain);
+        }
+
+        throw new ExperimentFailureException(
+            FailurePhase.WorkspaceLoad,
+            "workspace.solution-load-failed",
+            exception);
     }
 
     private static string ReadExpectedSdkVersion(string solutionPath)
