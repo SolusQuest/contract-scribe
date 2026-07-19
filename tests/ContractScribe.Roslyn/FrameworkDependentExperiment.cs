@@ -13,10 +13,14 @@ public sealed class FrameworkDependentExperiment
     private static readonly StringComparer Ordinal = StringComparer.Ordinal;
     private static ToolchainIdentity? registeredToolchain;
     private readonly Func<SemanticPayload, byte[]> serializePayload;
+    private readonly Func<INamespaceSymbol, IEnumerable<SymbolRecord>> enumerateSymbols;
 
-    public FrameworkDependentExperiment(Func<SemanticPayload, byte[]>? payloadSerializer = null)
+    public FrameworkDependentExperiment(
+        Func<SemanticPayload, byte[]>? payloadSerializer = null,
+        Func<INamespaceSymbol, IEnumerable<SymbolRecord>>? symbolEnumerator = null)
     {
         serializePayload = payloadSerializer ?? SemanticPayloadSerializer.Serialize;
+        enumerateSymbols = symbolEnumerator ?? EnumeratePublicSourceSymbols;
     }
 
     public async Task<ExperimentExecution> RunAsync(string solutionPath, CancellationToken cancellationToken = default)
@@ -62,6 +66,17 @@ public sealed class FrameworkDependentExperiment
             }
             catch (Exception)
             {
+                if (workspaceDiagnostics.Any(diagnostic => diagnostic.Severity == "failure"))
+                {
+                    var firstFailure = SelectWorkspaceFailure(workspaceDiagnostics);
+                    return Failure(
+                        ExperimentStatus.ClassifiedFailure,
+                        firstFailure.Phase,
+                        firstFailure.Code,
+                        workspaceDiagnostics,
+                        toolchain);
+                }
+
                 throw new ExperimentFailureException(
                     FailurePhase.WorkspaceLoad,
                     "workspace.solution-load-failed");
@@ -143,7 +158,8 @@ public sealed class FrameworkDependentExperiment
                     }
                 }
 
-                var sourceSymbols = EnumeratePublicSourceSymbols(compilation.Assembly.GlobalNamespace);
+                var sourceSymbols = enumerateSymbols(compilation.Assembly.GlobalNamespace).ToArray();
+                ValidateSymbolRecords(sourceSymbols);
                 payloads.Add(new ProjectPayload(
                     project.Name,
                     sourceSymbols
@@ -341,6 +357,23 @@ public sealed class FrameworkDependentExperiment
             }
 
             yield return new SymbolRecord(documentationCommentId, symbol.Kind.ToString(), symbol.Name);
+        }
+    }
+
+    private static void ValidateSymbolRecords(IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (symbols.Any(symbol => string.IsNullOrWhiteSpace(symbol.DocumentationCommentId)))
+        {
+            throw new ExperimentFailureException(
+                FailurePhase.SymbolIdentity,
+                "symbol.missing-documentation-id");
+        }
+
+        if (symbols.GroupBy(symbol => symbol.DocumentationCommentId, Ordinal).Any(group => group.Count() > 1))
+        {
+            throw new ExperimentFailureException(
+                FailurePhase.SymbolIdentity,
+                "symbol.duplicate-identity");
         }
     }
 

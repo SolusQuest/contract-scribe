@@ -84,7 +84,7 @@ public sealed record ExperimentResult(
         switch (Status)
         {
             case ExperimentStatus.Succeeded when FailurePhase is null && FailureCode is null && SemanticPayload is not null:
-            case ExperimentStatus.ClassifiedFailure when FailurePhase is not null && FailureCode is not null && SemanticPayload is null && FailureRegistry.IsKnown(FailurePhase.Value, FailureCode):
+            case ExperimentStatus.ClassifiedFailure when FailurePhase is not null && FailurePhase != ContractScribe.Roslyn.FailurePhase.Input && FailureCode is not null && SemanticPayload is null && FailureRegistry.IsKnown(FailurePhase.Value, FailureCode):
             case ExperimentStatus.InvalidInput when FailurePhase == ContractScribe.Roslyn.FailurePhase.Input && FailureCode is not null && SemanticPayload is null && FailureRegistry.IsKnown(ContractScribe.Roslyn.FailurePhase.Input, FailureCode):
             case ExperimentStatus.InternalError when FailurePhase is null && FailureCode is null && SemanticPayload is null:
                 return;

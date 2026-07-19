@@ -128,6 +128,33 @@ public sealed class RoslynExperimentTests
     }
 
     [Fact]
+    public async Task RunnerClassifiesSymbolIdentityFailuresOnRealProjectionPath()
+    {
+        static IEnumerable<SymbolRecord> MissingDocumentationId(Microsoft.CodeAnalysis.INamespaceSymbol _)
+        {
+            yield return new SymbolRecord(string.Empty, "NamedType", "MissingId");
+        }
+
+        static IEnumerable<SymbolRecord> DuplicateIdentity(Microsoft.CodeAnalysis.INamespaceSymbol _)
+        {
+            yield return new SymbolRecord("T:Duplicate", "NamedType", "First");
+            yield return new SymbolRecord("T:Duplicate", "NamedType", "Second");
+        }
+
+        var missing = await new FrameworkDependentExperiment(symbolEnumerator: MissingDocumentationId)
+            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+        var duplicate = await new FrameworkDependentExperiment(symbolEnumerator: DuplicateIdentity)
+            .RunAsync(Path.Combine(FixtureRoot, "Sample.sln"));
+
+        Assert.Equal((FailurePhase.SymbolIdentity, "symbol.missing-documentation-id"),
+            (missing.Result.FailurePhase, missing.Result.FailureCode));
+        Assert.Equal((FailurePhase.SymbolIdentity, "symbol.duplicate-identity"),
+            (duplicate.Result.FailurePhase, duplicate.Result.FailureCode));
+        Assert.Equal(1, missing.Result.ExitCode);
+        Assert.Equal(1, duplicate.Result.ExitCode);
+    }
+
+    [Fact]
     public async Task MissingSolutionIsAnInvalidInputFailure()
     {
         var execution = await new FrameworkDependentExperiment().RunAsync(
@@ -249,6 +276,12 @@ public sealed class RoslynExperimentTests
             null,
             Array.Empty<DiagnosticRecord>());
         Assert.Throws<InvalidOperationException>(() => ExperimentResultSerializer.Serialize(invalidSuccess));
+
+        var invalidClassifiedInput = ExperimentResult.Failure(
+            ExperimentStatus.ClassifiedFailure,
+            FailurePhase.Input,
+            "input.solution-not-found");
+        Assert.Throws<InvalidOperationException>(() => ExperimentResultSerializer.Serialize(invalidClassifiedInput));
     }
 
     [Fact]
