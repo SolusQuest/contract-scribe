@@ -247,6 +247,18 @@ public sealed class AuditResultContractTests
         Assert.Equal(CandidateLocatorKey(first.RootElement), CandidateLocatorKey(second.RootElement));
     }
 
+    [Fact]
+    public void UnresolvedCanonicalOrder_UsesLocatorRankAndNumericSpanOffsets()
+    {
+        using var repository2 = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":2,\"end\":3}}}}");
+        using var repository10 = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":10,\"end\":11}}}}");
+        using var generated = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"generatedSource\":{\"generatorId\":\"synthetic.generator\",\"hintNameId\":\"widget.g.cs\"}}}");
+        using var synthetic = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"synthetic-fixture\"}}}");
+        Assert.True(GetResultSortKey(repository2.RootElement).CompareTo(GetResultSortKey(repository10.RootElement)) < 0);
+        Assert.True(GetResultSortKey(repository10.RootElement).CompareTo(GetResultSortKey(generated.RootElement)) < 0);
+        Assert.True(GetResultSortKey(generated.RootElement).CompareTo(GetResultSortKey(synthetic.RootElement)) < 0);
+    }
+
     private static JsonDocument ParseStrict(byte[] payload)
     {
         if (payload.Length >= 3 && payload[0] == 0xEF && payload[1] == 0xBB && payload[2] == 0xBF) throw new FormatException("A UTF-8 BOM is not canonical.");
@@ -726,7 +738,7 @@ public sealed class AuditResultContractTests
         var items = value.EnumerateArray().ToArray();
         return propertyName switch
         {
-            "results" => items.OrderBy(item => ClassificationOrder(item.GetProperty("classification"))).ThenBy(item => GetSubjectKey(item.GetProperty("classification")), StringComparer.Ordinal),
+            "results" => items.OrderBy(item => GetResultSortKey(item.GetProperty("classification"))),
             "policyContributions" => items.OrderBy(item => item.GetProperty("projectPath").GetString(), StringComparer.Ordinal).ThenBy(item => item.GetProperty("sourcePath").GetString(), StringComparer.Ordinal),
             "evidenceIds" => items.OrderBy(item => item.GetString(), StringComparer.Ordinal),
             "items" => items.OrderBy(item => item.GetProperty("evidenceId").GetString(), StringComparer.Ordinal),
@@ -744,6 +756,54 @@ public sealed class AuditResultContractTests
             "UnresolvedClassification" => 2,
             _ => throw new InvalidOperationException("Unknown classification order.")
         };
+    }
+
+    private static ResultSortKey GetResultSortKey(JsonElement classification)
+    {
+        return classification.GetProperty("recordType").GetString() switch
+        {
+            "TargetClassification" => new ResultSortKey(0, classification.GetProperty("symbolRef").GetProperty("compilationContextRef").GetString()!, 0, classification.GetProperty("symbolRef").GetProperty("documentationCommentId").GetString()!, string.Empty, false, 0, 0),
+            "ComponentClassification" => new ResultSortKey(1, classification.GetProperty("parentSymbolRef").GetProperty("compilationContextRef").GetString()!, 0, classification.GetProperty("parentSymbolRef").GetProperty("documentationCommentId").GetString()!, classification.GetProperty("componentKind").GetString()!, false, 0, 0, classification.GetProperty("identity").GetString()!),
+            "UnresolvedClassification" => GetUnresolvedSortKey(classification),
+            _ => throw new InvalidOperationException("Unknown result type.")
+        };
+    }
+
+    private static ResultSortKey GetUnresolvedSortKey(JsonElement classification)
+    {
+        var locator = classification.GetProperty("candidateLocator");
+        if (locator.TryGetProperty("repository", out var repository)) return CreateUnresolvedKey(classification, 0, repository.GetProperty("path").GetString()!, string.Empty, repository);
+        if (locator.TryGetProperty("generatedSource", out var generated)) return CreateUnresolvedKey(classification, 1, generated.GetProperty("generatorId").GetString()!, generated.GetProperty("hintNameId").GetString()!, generated);
+        return new ResultSortKey(2, classification.GetProperty("compilationContextRef").GetString()!, 2, locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!, string.Empty, false, 0, 0);
+    }
+
+    private static ResultSortKey CreateUnresolvedKey(JsonElement classification, int rank, string field1, string field2, JsonElement locator)
+    {
+        var hasSpan = locator.TryGetProperty("span", out var span);
+        return new ResultSortKey(2, classification.GetProperty("compilationContextRef").GetString()!, rank, field1, field2, hasSpan, hasSpan ? span.GetProperty("start").GetInt32() : 0, hasSpan ? span.GetProperty("end").GetInt32() : 0);
+    }
+
+    private readonly record struct ResultSortKey(int TypeRank, string Primary, int VariantRank, string Field1, string Field2, bool HasSpan, int Start, int End, string Field3 = "") : IComparable<ResultSortKey>
+    {
+        public int CompareTo(ResultSortKey other)
+        {
+            var result = TypeRank.CompareTo(other.TypeRank);
+            if (result != 0) return result;
+            result = string.CompareOrdinal(Primary, other.Primary);
+            if (result != 0) return result;
+            result = VariantRank.CompareTo(other.VariantRank);
+            if (result != 0) return result;
+            result = string.CompareOrdinal(Field1, other.Field1);
+            if (result != 0) return result;
+            result = string.CompareOrdinal(Field2, other.Field2);
+            if (result != 0) return result;
+            result = string.CompareOrdinal(Field3, other.Field3);
+            if (result != 0) return result;
+            result = HasSpan.CompareTo(other.HasSpan);
+            if (result != 0) return result;
+            result = Start.CompareTo(other.Start);
+            return result != 0 ? result : End.CompareTo(other.End);
+        }
     }
 
     private static void RejectUnpairedSurrogates(string value)
