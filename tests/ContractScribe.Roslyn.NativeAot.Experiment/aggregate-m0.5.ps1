@@ -81,7 +81,7 @@ function Validate-Cell([object]$cell) {
     if ($cell.outcome -eq "feasible-with-warnings" -and ($cell.comparison.status -ne "compared" -or $cell.comparison.repeatedAotPayloadByteEqual -ne $true -or $cell.comparison.frameworkByteEqual -ne $true)) { Fail-Aggregate "feasible-with-warnings is not backed by two successful byte comparisons." }
     if ($cell.outcome -eq "not-feasible" -and $cell.code -eq "comparison.payload-mismatch" -and ($cell.comparison.status -ne "compared" -or $cell.comparison.repeatedAotPayloadByteEqual -ne $true -or $cell.comparison.frameworkByteEqual -ne $false -or $cell.cause -ne "semantic-contract")) { Fail-Aggregate "payload-mismatch is not backed by a stable semantic comparison." }
     if ($cell.code -eq "comparison.payload-nondeterministic" -and ($cell.outcome -ne "inconclusive" -or $cell.comparison.status -ne "compared" -or $cell.comparison.repeatedAotPayloadByteEqual -ne $false)) { Fail-Aggregate "nondeterministic comparison facts are contradictory." }
-    if ($cell.comparison.status -eq "not-run" -and ($cell.outcome -ne "inconclusive" -or $cell.phase -eq "comparison")) { Fail-Aggregate "not-run comparison is only valid for pre-comparison inconclusive evidence." }
+    if ($cell.comparison.status -eq "not-run" -and ($cell.outcome -in @("feasible-clean", "feasible-with-warnings") -or $cell.phase -eq "comparison")) { Fail-Aggregate "not-run comparison is not valid for a feasible or comparison-stage outcome." }
 }
 
 $linux = Read-Evidence $LinuxEvidencePath

@@ -87,7 +87,7 @@
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj": "820f16d093875a7ecd74a0fdab54e37ea784a2422c0fac0274d46267b8a58170",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs": "3ce25ee736cad42129f28bec473101be24dddd6e1c4fc24a1cc7e4779d469ab5",
     "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "e2ec6194a566558ff291d88424091da52ecb28634a500e0a8ec83317d5e9c9d9",
-    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "1bef3b13746fe97842b2736a16eb58a8359dcb61aad60d07b8edcdd68b854b95",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "a66a36568867c2c8c4d25969d67cdea6d3a22c753d7160bf6bd8807139bb8f10",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "8c1cb905fd1d2db79aece7f787c016a2e08859e0dfaebd0bade2bceb8cf69e75",
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs": "af0cebff811cd542cea9f25e45aa70719c7ddbadf3880b6d1908b5530024ec00",
     ".github/workflows/ci.yml": "9afecbd51f8f7c859b8191c5a44ecb7fecc6d5fb2656a5b024a05f0edd5d01c7",
