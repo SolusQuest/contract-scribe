@@ -36,12 +36,28 @@ The candidate list contains different architectural layers. This ADR treats them
 - Execution baseline: the runtime/deployment model that executes the semantic path.
 - Loader: the responsibility for resolving the SDK/MSBuild environment and opening a solution.
 - Semantic runner: the frozen M0.4 test-only implementation that loads the solution and produces the canonical comparison artifact.
+- Semantic core: the semantic analysis and canonicalization responsibility inside the runner. M0.6 does not define or select a separately deployable semantic-core component.
+- Host: the process or test host that owns runner startup, SDK/MSBuild discovery, input selection, and result propagation. The M0.4 host is test-only.
+- CLI: a user-facing command-line product surface. M0.6 does not create or select one.
 - Process topology: whether loading and semantic execution share a process or cross a child-process boundary. M0.6 records the observed M0.4 test-host topology but does not select a production topology.
+- Child process: a separately spawned process boundary used for loading or semantic execution. It is a topology option, not a distribution channel or an evidenced M0 baseline.
+- Distribution baseline: the validated runtime and packaging assumptions that a future consumer-facing channel would carry. M0.6 records no distribution baseline.
 - Distribution channel: how a future consumer obtains and updates a product. M0.6 does not select one.
 - Framework-dependent: this M0 baseline requires the compatible repository SDK/runtime and MSBuild environment used by the M0.4 path; it is not a self-contained or Native AOT publication claim.
 - Native AOT: the M0.5 tested publication profile and its bounded result, not an umbrella claim about future remediated designs.
 
 The selected candidate name is `framework-dependent semantic execution baseline`. It describes the directly evidenced layer and must not be read as a verified claim about future production `ContractScribe.Cli` behavior.
+
+The disposition vocabulary is closed for this ADR:
+
+- Selected: the one provisional candidate chosen for the next validation gate from direct positive evidence.
+- Rejected: evidence rules out the candidate for the stated profile or the candidate violates a decision boundary.
+- Deferred: the candidate remains plausible but is intentionally left for a later issue or gate.
+- Not evidenced: the committed experiments do not exercise the candidate sufficiently to make it eligible.
+- Not feasible under the tested profile: the exact tested profile reaches a reproducible negative; this does not generalize beyond that profile.
+- Outside current scope: the question is intentionally not decided by M0.6 and must not be inferred from this ADR.
+
+Every candidate is compared using the same criteria: evidence strength, semantic-path fidelity, deterministic canonical output, SDK/MSBuild compatibility, offline and no-secret behavior, prerequisites, supported matrix, operational complexity, failure diagnosability, process-boundary cost, distribution mechanics, and M1 implementation implications. These criteria guide the decision without turning untested convenience or packaging preferences into evidence.
 
 ## Evidence classification
 
@@ -67,7 +83,7 @@ Toolchain, package, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-
 
 ### Framework-dependent semantic execution baseline — selected provisionally
 
-This is the only directly exercised candidate. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
+This is the only eligible candidate with positive framework-dependent execution evidence. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
 
 The initial runtime prerequisite is the repository's `global.json` policy: base SDK `10.0.102` with `latestFeature` roll-forward, plus the exact M0.4 package baseline. Each run records the actually selected SDK/runtime/MSBuild identity under that policy. M0.7 must inherit the policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
 
@@ -97,13 +113,14 @@ The experimental `semantic-payload.json` remains only the M0.4/M0.5 canonical co
 
 ## M0.7 validation handoff
 
-M0.7 must validate the selected execution baseline without adapting it. The subject under test is the frozen M0.4 framework-dependent semantic runner, `(logicalProjectId, documentationCommentId)` identity, ordering, serializer, canonical comparison contract, and pinned source revision/hashes. The independent validation repository supplies newly authored project source and a precommitted expected-output oracle; those inputs must not be copied from or generated using the M0.4 fixture or runner output.
+M0.7 must validate the selected execution baseline without adapting it. The subject under test is the frozen M0.4 framework-dependent semantic runner, `(logicalProjectId, documentationCommentId)` identity, ordering, serializer, canonical comparison contract, and pinned source revision/hashes. The independent validation repository supplies newly authored project source and a precommitted expected-output oracle; those inputs must not be copied from or generated using the M0.4 fixture or runner output. Independence applies to the source contents and oracle, not to the frozen runner's structural preconditions: the validation fixture must still contain exactly two SDK-style C# projects named `SampleApp` and `SampleLibrary`, with exactly one `SampleApp` → `SampleLibrary` project reference. A different project count, project name, language, or reference graph is a fixture/protocol error and is classified separately from selected-baseline support failure; M0.7 must not generalize or modify the runner to accept it.
 
 The closed derivation is:
 
 - Run required `ubuntu-latest` and `windows-latest` cells with `X64` process architecture.
 - Use the repository `global.json` policy of base SDK `10.0.102` with `latestFeature` roll-forward and the exact M0.4 package baseline from the transfer manifest; record the actually selected SDK/runtime/MSBuild identity for each cell.
 - Invoke the frozen framework-dependent runner shape with the independent solution and expected-output manifest. Do not add a new runtime mode or modify the frozen runner to make the independent smoke pass.
+- Preserve the runner's frozen fixture-shape preconditions: exactly two SDK-style C# projects named `SampleApp` and `SampleLibrary`, and exactly one `SampleApp` → `SampleLibrary` reference. The source and oracle remain newly authored even though this structural envelope is fixed.
 - Record observed runtime RIDs `linux-x64` and `win-x64`; they describe framework-dependent execution observations and are not Native AOT publish inputs.
 - Run fresh processes and compare canonical semantic artifact bytes, not environment, path, timestamp, duration, or process fields. The independently authored oracle is the comparison authority.
 
@@ -140,6 +157,16 @@ Costs and residual risks:
 
 Concrete future experiments, runtime prototypes, platform expansions, and publication decisions require separate issues. General residual risks may remain here without speculative placeholder issues.
 
+## Follow-up issues
+
+The following live issues make the deferred boundaries actionable without selecting them in M0.6:
+
+- [#10 — Validate the selected baseline on an independent synthetic repository](https://github.com/SolusQuest/contract-scribe/issues/10) owns the M0.7 validation gate and independent fixture/oracle.
+- [#17 — Define production process topology after M0.7](https://github.com/SolusQuest/contract-scribe/issues/17) owns the later in-process versus child-process or split-runtime decision.
+- [#18 — Define the first distribution and publication channel](https://github.com/SolusQuest/contract-scribe/issues/18) owns packaging, provenance, support, and compatibility decisions after execution validation and topology review.
+
+These issues are dependencies for later decisions, not additional selected baselines or implementation scope for this ADR.
+
 ## Public-safety and compatibility boundary
 
 This ADR and its evidence links contain only public repository artifacts and sanitized experiment records. They must not add private downstream identifiers, local paths, raw logs, credentials, environment dumps, prompts, or unbounded toolchain output.
@@ -148,7 +175,7 @@ Before a downstream-consumable release, package/tool/action publication, or exte
 
 ## References
 
-All references below are pinned to public commits on `main`:
+The repository artifacts below are pinned to public commits on `main`. Issue links are live tracking references and are intentionally not commit-pinned:
 
 - [Roadmap](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/roadmap.md)
 - [Initial issue plan](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/initial-issue-plan.md)
@@ -163,3 +190,5 @@ All references below are pinned to public commits on `main`:
 - [M0.5 aggregate evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json)
 - [Issue #9](https://github.com/SolusQuest/contract-scribe/issues/9)
 - [Issue #10](https://github.com/SolusQuest/contract-scribe/issues/10)
+- [Issue #17](https://github.com/SolusQuest/contract-scribe/issues/17)
+- [Issue #18](https://github.com/SolusQuest/contract-scribe/issues/18)
