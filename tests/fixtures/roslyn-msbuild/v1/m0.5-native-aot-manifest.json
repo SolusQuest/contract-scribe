@@ -1,0 +1,103 @@
+{
+  "formatVersion": "m0.5-native-aot-manifest-v1",
+  "fixtureId": "roslyn-msbuild-v1",
+  "m04ManifestPath": "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json",
+  "m04ManifestSha256": "c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3",
+  "m04FrozenSourceRevision": "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c",
+  "implementationRevision": "ed305a36f076d2d9aef981c44746d7a5a34d5bff",
+  "allowedPostSourceFiles": [
+    "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
+    "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json",
+    "docs/20_architecture/experiments/m0.5-native-aot-feasibility.md",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5-provenance.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/test-m0.5-provenance.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1",
+    "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs"
+  ],
+  "allowedPostImplementationFiles": [
+    "tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json"
+  ],
+  "inputPaths": [
+    "tests/fixtures/roslyn-msbuild/v1/Sample.sln",
+    "tests/fixtures/roslyn-msbuild/v1/SampleApp/SampleApp.csproj",
+    "tests/fixtures/roslyn-msbuild/v1/SampleApp/App.cs",
+    "tests/fixtures/roslyn-msbuild/v1/SampleLibrary/SampleLibrary.csproj",
+    "tests/fixtures/roslyn-msbuild/v1/SampleLibrary/Api.cs",
+    "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json",
+    "tests/ContractScribe.Roslyn/FrameworkDependentExperiment.cs",
+    "tests/ContractScribe.Roslyn/ExperimentModels.cs",
+    "tests/ContractScribe.Roslyn/SemanticPayloadSerializer.cs",
+    "tests/ContractScribe.Roslyn/ExperimentResultSerializer.cs",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5-provenance.ps1",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/test-m0.5-provenance.ps1",
+    "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs",
+    ".github/workflows/ci.yml",
+    "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json"
+  ],
+  "evidenceSchemaPath": "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
+  "registryPath": "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json",
+  "evidencePaths": [
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json",
+    "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json"
+  ],
+  "requiredMatrix": [
+    { "runnerOs": "Ubuntu", "rid": "linux-x64", "processArchitecture": "X64" },
+    { "runnerOs": "Windows", "rid": "win-x64", "processArchitecture": "X64" }
+  ],
+  "publishProfile": {
+    "targetFramework": "net10.0",
+    "configuration": "Release",
+    "publishAot": true,
+    "selfContained": true,
+    "publishTrimmed": true,
+    "runtimeIdentifierFromMatrix": true,
+    "otherProperties": "pinned-sdk-defaults"
+  },
+  "invalidations": [
+    "frozen-M0.4-input-change",
+    "evidence-schema-change",
+    "registry-change",
+    "publish-profile-change",
+    "warning-set-change",
+    "toolchain-or-runner-image-drift"
+  ],
+  "evidenceSchemaSha256": "6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4",
+  "registrySha256": "e0d96e9f73d0e0b13f15172ce455d90bcd80fcd149b7ae7d4f6827f655d4f4b7",
+  "implementationInputHashes": {
+    "tests/fixtures/roslyn-msbuild/v1/Sample.sln": "7696ccf677a950e07feec355b28b17a004756b75a619f1095ab9161818af2d23",
+    "tests/fixtures/roslyn-msbuild/v1/SampleApp/SampleApp.csproj": "48e8240f5da66f070d8fc1b11d57343be72de9577f49068b980d8b0324f187d8",
+    "tests/fixtures/roslyn-msbuild/v1/SampleApp/App.cs": "09c3d534c4dc42ee1c70d2db607cbda1a491af2743e0c53a91948e8b00f29155",
+    "tests/fixtures/roslyn-msbuild/v1/SampleLibrary/SampleLibrary.csproj": "fc05e8b0a79435fca5d5a73d3cb43646fe1c2747e580ef1142f22a76d74076aa",
+    "tests/fixtures/roslyn-msbuild/v1/SampleLibrary/Api.cs": "55d9745cb8e753d7f3ec01485b275c5304ec24c9aaf916d022f516b6aee8f140",
+    "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json": "ea3a57997bf5dc9f891c169bbb1e63e9866749805a5c4fe09ad3d629eba99ca2",
+    "tests/ContractScribe.Roslyn/FrameworkDependentExperiment.cs": "d28e7dec979a419cd8a086e2e5ff232bf9c56426b3d0573fc93ce305105153b7",
+    "tests/ContractScribe.Roslyn/ExperimentModels.cs": "5243a1cb0f41f6800bb4d1e8f3587805d19e452cc166595ede7978145c7ad4ca",
+    "tests/ContractScribe.Roslyn/SemanticPayloadSerializer.cs": "928d84df47d51ce4dc20abf72cc59618594d236fd498c9f0a07ac2121886c4c5",
+    "tests/ContractScribe.Roslyn/ExperimentResultSerializer.cs": "b52c67b5377639ed48c8dde2d1af463ec8870af5c2ed605012180a93af898da8",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/ContractScribe.Roslyn.NativeAot.Experiment.csproj": "820f16d093875a7ecd74a0fdab54e37ea784a2422c0fac0274d46267b8a58170",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/Program.cs": "3ce25ee736cad42129f28bec473101be24dddd6e1c4fc24a1cc7e4779d469ab5",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5.ps1": "44cd003b228ec429d1a207e5a87adeeaaf93eb75bf88fd080a0c4e2c87a8aae3",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/verify-m0.5-provenance.ps1": "7a63fbc96d9ffe5d32578d8f3f6f0f9fad8b1c4a2d602f1b81ffefbbc5d4355e",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/test-m0.5-provenance.ps1": "08b1adcbc161eb81a6285ba6e54b81d3f9507c5ba0e67198b29df6875aea315f",
+    "tests/ContractScribe.Roslyn.NativeAot.Experiment/aggregate-m0.5.ps1": "9d353e57cfe403522e2b75e4f95e789832d1e800e8817082a3f0ea10786c4f84",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "ec195607a7c3a4b3611d99ab3239aa43d528ab47145774b12439656438fc18c0",
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs": "41be10d3639d08865553a94aa5a594a497dca50ec51ebfa34d711aca3dc19ddd",
+    ".github/workflows/ci.yml": "a482779711b27458b326fcc91130d06f31b53b6fe4e88686258aeb092c76989b",
+    "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json": "6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4",
+    "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json": "e0d96e9f73d0e0b13f15172ce455d90bcd80fcd149b7ae7d4f6827f655d4f4b7"
+  }
+}
