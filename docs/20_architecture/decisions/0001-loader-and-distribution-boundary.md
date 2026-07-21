@@ -69,7 +69,7 @@ Toolchain, package, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-
 
 This is the only directly exercised candidate. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
 
-The initial runtime prerequisite is the repository's `global.json` SDK `10.0.102` with `latestFeature` roll-forward and the exact M0.4 package baseline. M0.7 must inherit that policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
+The initial runtime prerequisite is the repository's `global.json` policy: base SDK `10.0.102` with `latestFeature` roll-forward, plus the exact M0.4 package baseline. Each run records the actually selected SDK/runtime/MSBuild identity under that policy. M0.7 must inherit the policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
 
 ### Native AOT CLI using the exact M0.5 profile — rejected for this profile
 
@@ -102,7 +102,7 @@ M0.7 must validate the selected execution baseline without adapting it. The subj
 The closed derivation is:
 
 - Run required `ubuntu-latest` and `windows-latest` cells with `X64` process architecture.
-- Use the repository `global.json` SDK `10.0.102` with `latestFeature` roll-forward and the exact M0.4 package baseline from the transfer manifest.
+- Use the repository `global.json` policy of base SDK `10.0.102` with `latestFeature` roll-forward and the exact M0.4 package baseline from the transfer manifest; record the actually selected SDK/runtime/MSBuild identity for each cell.
 - Invoke the frozen framework-dependent runner shape with the independent solution and expected-output manifest. Do not add a new runtime mode or modify the frozen runner to make the independent smoke pass.
 - Record observed runtime RIDs `linux-x64` and `win-x64`; they describe framework-dependent execution observations and are not Native AOT publish inputs.
 - Run fresh processes and compare canonical semantic artifact bytes, not environment, path, timestamp, duration, or process fields. The independently authored oracle is the comparison authority.
