@@ -76,6 +76,19 @@ foreach ($vector in $postRunVectors) {
     }
 }
 
+$freshNondeterminismRoot = Join-Path $root "fresh-run-nondeterminism"
+Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-1") $true 2 $true "payload-one"
+Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-2") $true 2 $true "payload-one"
+$freshRunTwoPath = Join-Path $freshNondeterminismRoot "cell-1\run-2\semantic-payload.json"
+[IO.File]::WriteAllText($freshRunTwoPath, "payload-two", [Text.UTF8Encoding]::new($false))
+$freshCellDocumentPath = Join-Path $freshNondeterminismRoot "cell-1\m0.7-evidence.json"
+$freshCellDocument = Get-Content -LiteralPath $freshCellDocumentPath -Raw | ConvertFrom-Json
+$freshCellDocument.runs[1].payloadSha256 = (Get-FileHash -LiteralPath $freshRunTwoPath -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText($freshCellDocumentPath, ($freshCellDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+$freshNondeterminismOutput = Join-Path $freshNondeterminismRoot "aggregate.json"
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $freshNondeterminismRoot -OutputPath $freshNondeterminismOutput 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $freshNondeterminismOutput | ConvertFrom-Json).aggregateOutcome -ne "baseline-failure") { throw "Fresh-process nondeterminism was not classified as baseline-failure." }
+
 $crossCellRoot = Join-Path $root "cross-cell-byte-mismatch"
 Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-1") $true 2 $true "payload-one"
 Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-2") $true 2 $true "payload-two"

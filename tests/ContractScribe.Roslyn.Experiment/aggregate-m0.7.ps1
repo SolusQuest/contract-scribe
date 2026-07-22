@@ -30,6 +30,10 @@ trap {
         $outcome = "protocol-failure"
         $reasonCode = "aggregate-evidence-invalid"
     }
+    elseif ($_.Exception.Message -match "Fresh runs in a required cell are not byte-identical") {
+        $outcome = "baseline-failure"
+        $reasonCode = "fresh-process-nondeterminism"
+    }
     elseif ($_.Exception.Message -match "two successful|required cell|incomplete") {
         $outcome = "inconclusive"
         $reasonCode = "required-cell-evidence-incomplete"
