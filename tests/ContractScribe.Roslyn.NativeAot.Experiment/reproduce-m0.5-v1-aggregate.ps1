@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet("Release")]
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+    [string]$CellProofRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,8 +26,11 @@ $overlayPaths = @(
 $worktreePath = Join-Path ([IO.Path]::GetTempPath()) ("contract-scribe-m05-v1-aggregate-" + [Guid]::NewGuid().ToString("N"))
 $proofPath = Join-Path $repositoryRoot "TestResults\m05-v1-reproduction-aggregate-proof.json"
 $initialStatus = @()
+$initialFullStatus = @()
+$initialWorktrees = @()
 $failure = $false
 $cleanupFailure = $false
+$proof = $null
 
 function Assert-Condition([bool]$condition, [string]$message = "closed-check-failed") {
     if (-not $condition) { throw $message }
@@ -78,6 +82,16 @@ function Get-GitStatusPaths([string]$path) {
     } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
+function Get-GitWorktreeList {
+    return @(Invoke-Git @("worktree", "list", "--porcelain"))
+}
+
+function Remove-Proof {
+    if (Test-Path -LiteralPath $proofPath) {
+        Remove-Item -LiteralPath $proofPath -Force
+    }
+}
+
 function Invoke-Captured([string]$fileName, [string[]]$arguments, [string]$workingDirectory) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $fileName
@@ -99,9 +113,30 @@ function Write-CanonicalJson([string]$path, [object]$value) {
     [IO.File]::WriteAllText($path, ($value | ConvertTo-Json -Depth 10 -Compress), [Text.UTF8Encoding]::new($false))
 }
 
+function Assert-CellProofs([string]$root, [string]$orchestrationRevision) {
+    Assert-Condition (-not [string]::IsNullOrWhiteSpace($root)) "cell-proof-root-missing"
+    Assert-Condition (Test-Path -LiteralPath $root -PathType Container) "cell-proof-root-missing"
+    $expected = @("linux-x64", "win-x64")
+    $files = @(Get-ChildItem -LiteralPath $root -File -Filter "*.json" | Select-Object -ExpandProperty Name | Sort-Object)
+    Assert-Condition (($files -join "`n") -ceq ((@("m05-v1-reproduction-proof-linux-x64.json", "m05-v1-reproduction-proof-win-x64.json") | Sort-Object) -join "`n")) "cell-proof-set-mismatch"
+    foreach ($rid in $expected) {
+        $path = Join-Path $root ("m05-v1-reproduction-proof-" + $rid + ".json")
+        try { $cellProof = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { throw "cell-proof-malformed" }
+        Assert-Condition ($cellProof.version -eq "m0.5-v1-reproduction-proof-v1") "cell-proof-version-mismatch"
+        Assert-Condition ($cellProof.rid -eq $rid) "cell-proof-rid-mismatch"
+        Assert-Condition ($cellProof.anchorRevision -eq $anchorRevision) "cell-proof-anchor-mismatch"
+        Assert-Condition ($cellProof.implementationRevision -eq $implementationRevision) "cell-proof-implementation-mismatch"
+        Assert-Condition ($cellProof.orchestrationRevision -eq $orchestrationRevision) "cell-proof-orchestration-mismatch"
+        Assert-Condition ($cellProof.byteEqual -eq $true) "cell-proof-byte-mismatch"
+    }
+}
+
 try {
+    Remove-Proof
     # The aggregate proof is transitive: anchor blobs equal historical blobs, and historical reproduction equals those blobs.
     $initialStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all") $repositoryRoot)
+    $initialFullStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all", "--ignored") $repositoryRoot)
+    $initialWorktrees = @(Get-GitWorktreeList)
     Assert-Condition ($initialStatus.Count -eq 0) "current-tree-dirty"
     Invoke-Git @("cat-file", "-e", ($anchorRevision + "^{commit}")) | Out-Null
     try { Invoke-Git @("cat-file", "-e", ($implementationRevision + "^{commit}")) | Out-Null }
@@ -109,6 +144,10 @@ try {
         Invoke-Git @("fetch", "--no-tags", "origin", $implementationRevision) | Out-Null
         Invoke-Git @("cat-file", "-e", ($implementationRevision + "^{commit}")) | Out-Null
     }
+
+    $orchestrationRevision = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { (Invoke-Git @("rev-parse", "HEAD")).Trim() }
+    Assert-Condition ($orchestrationRevision -match "^[0-9a-f]{40}$") "orchestration-revision-invalid"
+    if (-not [string]::IsNullOrWhiteSpace($CellProofRoot)) { Assert-CellProofs $CellProofRoot $orchestrationRevision }
 
     foreach ($relativePath in @($linuxEvidenceRelativePath, $windowsEvidenceRelativePath, $summaryRelativePath)) {
         Assert-BytesEqual (Get-GitBytes $anchorRevision $relativePath) (Get-FileBytes (Join-Path $repositoryRoot $relativePath))
@@ -131,6 +170,7 @@ try {
     Assert-Condition (@($dirtyPaths | Where-Object { $changedOverlayPaths -notcontains $_ }).Count -eq 0) "overlay-outside-closed-set"
     Assert-Condition (@($dirtyPaths | Where-Object { $changedOverlayPaths -contains $_ }).Count -eq $changedOverlayPaths.Count) "overlay-dirty-set-mismatch"
 
+    if ($env:CONTRACTSCRIBE_M05_TEST_FAIL_HISTORICAL -eq "1") { throw "injected-historical-failure" }
     $historicalScript = Join-Path $worktreePath "tests\ContractScribe.Roslyn.NativeAot.Experiment\aggregate-m0.5.ps1"
     $run = Invoke-Captured "pwsh" @("-NoProfile", "-File", $historicalScript, "-LinuxEvidencePath", $linuxEvidenceRelativePath, "-WindowsEvidencePath", $windowsEvidenceRelativePath, "-EvidenceReproduction") $worktreePath
     Assert-Condition ($run.ExitCode -eq 0) "historical-aggregate-failed"
@@ -138,11 +178,9 @@ try {
         version = "m0.5-v1-reproduction-aggregate-proof-v1"
         anchorRevision = $anchorRevision
         implementationRevision = $implementationRevision
-        orchestrationRevision = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { (Invoke-Git @("rev-parse", "HEAD")).Trim() }
+        orchestrationRevision = $orchestrationRevision
         byteEqual = $true
     }
-    Write-CanonicalJson $proofPath $proof
-    Write-Output "M0.5 V1 aggregate reproduction proof passed."
 }
 catch {
     $failure = $true
@@ -154,10 +192,26 @@ finally {
     }
     try { Invoke-Git @("worktree", "prune") | Out-Null } catch { $cleanupFailure = $true }
     try {
-        $finalStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all") $repositoryRoot)
-        if ($finalStatus.Count -ne $initialStatus.Count) { $cleanupFailure = $true }
+        if (Test-Path -LiteralPath $worktreePath) { $cleanupFailure = $true }
+        $finalWorktrees = @(Get-GitWorktreeList)
+        if ((($finalWorktrees -join "`n") -cne ($initialWorktrees -join "`n"))) { $cleanupFailure = $true }
+        $finalStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all", "--ignored") $repositoryRoot)
+        if ((($finalStatus -join "`n") -cne ($initialFullStatus -join "`n"))) { $cleanupFailure = $true }
+        if (Test-Path -LiteralPath $proofPath) { $cleanupFailure = $true }
     }
     catch { $cleanupFailure = $true }
 }
-if ($failure -or $cleanupFailure) { exit 1 }
-exit 0
+if ($failure -or $cleanupFailure) {
+    try { Remove-Proof } catch { }
+    exit 1
+}
+try {
+    Write-CanonicalJson $proofPath $proof
+    Write-Output "M0.5 V1 aggregate reproduction proof passed."
+    exit 0
+}
+catch {
+    try { Remove-Proof } catch { }
+    Write-Output "M0.5 V1 aggregate reproduction failed closed."
+    exit 1
+}

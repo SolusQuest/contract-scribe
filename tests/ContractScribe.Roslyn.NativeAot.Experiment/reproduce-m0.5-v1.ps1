@@ -40,8 +40,11 @@ $inventoryPaths = @(
 $worktreePath = Join-Path ([IO.Path]::GetTempPath()) ("contract-scribe-m05-v1-" + [Guid]::NewGuid().ToString("N"))
 $proofPath = Join-Path $repositoryRoot ("TestResults\m05-v1-reproduction-proof-" + $RuntimeIdentifier + ".json")
 $initialStatus = @()
+$initialFullStatus = @()
+$initialWorktrees = @()
 $failure = $false
 $cleanupFailure = $false
+$proof = $null
 
 function Assert-Condition([bool]$condition, [string]$message = "closed-check-failed") {
     if (-not $condition) { throw $message }
@@ -93,6 +96,16 @@ function Get-GitStatusPaths([string]$path) {
     } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
+function Get-GitWorktreeList {
+    return @(Invoke-Git @("worktree", "list", "--porcelain"))
+}
+
+function Remove-Proof {
+    if (Test-Path -LiteralPath $proofPath) {
+        Remove-Item -LiteralPath $proofPath -Force
+    }
+}
+
 function Invoke-Captured([string]$fileName, [string[]]$arguments, [string]$workingDirectory) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $fileName
@@ -116,7 +129,10 @@ function Write-CanonicalJson([string]$path, [object]$value) {
 }
 
 try {
+    Remove-Proof
     $initialStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all") $repositoryRoot)
+    $initialFullStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all", "--ignored") $repositoryRoot)
+    $initialWorktrees = @(Get-GitWorktreeList)
     Assert-Condition ($initialStatus.Count -eq 0) "current-tree-dirty"
     Invoke-Git @("cat-file", "-e", ($anchorRevision + "^{commit}")) | Out-Null
     try { Invoke-Git @("cat-file", "-e", ($implementationRevision + "^{commit}")) | Out-Null }
@@ -155,6 +171,7 @@ try {
     Assert-Condition (@($dirtyPaths | Where-Object { $changedOverlayPaths -notcontains $_ }).Count -eq 0) "overlay-outside-closed-set"
     Assert-Condition (@($dirtyPaths | Where-Object { $changedOverlayPaths -contains $_ }).Count -eq $changedOverlayPaths.Count) "overlay-dirty-set-mismatch"
 
+    if ($env:CONTRACTSCRIBE_M05_TEST_FAIL_HISTORICAL -eq "1") { throw "injected-historical-failure" }
     $historicalScript = Join-Path $worktreePath "tests\ContractScribe.Roslyn.NativeAot.Experiment\verify-m0.5.ps1"
     $run = Invoke-Captured "pwsh" @("-NoProfile", "-File", $historicalScript, "-RuntimeIdentifier", $RuntimeIdentifier, "-Configuration", $Configuration, "-EvidenceReproduction") $worktreePath
     Assert-Condition ($run.ExitCode -eq 0) "historical-verifier-failed"
@@ -166,8 +183,6 @@ try {
         orchestrationRevision = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { (Invoke-Git @("rev-parse", "HEAD")).Trim() }
         byteEqual = $true
     }
-    Write-CanonicalJson $proofPath $proof
-    Write-Output "M0.5 V1 reproduction proof passed for $RuntimeIdentifier."
 }
 catch {
     $failure = $true
@@ -182,10 +197,26 @@ finally {
     }
     try { Invoke-Git @("worktree", "prune") | Out-Null } catch { $cleanupFailure = $true }
     try {
-        $finalStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all") $repositoryRoot)
-        if ($finalStatus.Count -ne $initialStatus.Count) { $cleanupFailure = $true }
+        if (Test-Path -LiteralPath $worktreePath) { $cleanupFailure = $true }
+        $finalWorktrees = @(Get-GitWorktreeList)
+        if ((($finalWorktrees -join "`n") -cne ($initialWorktrees -join "`n"))) { $cleanupFailure = $true }
+        $finalStatus = @(Invoke-Git @("status", "--porcelain", "--untracked-files=all", "--ignored") $repositoryRoot)
+        if ((($finalStatus -join "`n") -cne ($initialFullStatus -join "`n"))) { $cleanupFailure = $true }
+        if (Test-Path -LiteralPath $proofPath) { $cleanupFailure = $true }
     }
     catch { $cleanupFailure = $true }
 }
-if ($failure -or $cleanupFailure) { exit 1 }
-exit 0
+if ($failure -or $cleanupFailure) {
+    try { Remove-Proof } catch { }
+    exit 1
+}
+try {
+    Write-CanonicalJson $proofPath $proof
+    Write-Output "M0.5 V1 reproduction proof passed for $RuntimeIdentifier."
+    exit 0
+}
+catch {
+    try { Remove-Proof } catch { }
+    Write-Output "M0.5 V1 reproduction failed closed."
+    exit 1
+}

@@ -1,8 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$LinuxEvidencePath,
-    [Parameter(Mandatory = $true)]
     [string]$WindowsEvidencePath,
     [string]$OutputPath = "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json",
     [switch]$EvidenceReproduction

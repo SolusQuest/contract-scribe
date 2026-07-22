@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Output "M0.4 V1 current-tree entrypoint is disabled during security migration. Use the versioned M0.4 V2 verifier after the migration closure."
+Write-Output "M0.4 V1 current-tree entrypoint is disabled. Use reproduce-m0.5-v1.ps1 only from the main-only historical reproduction workflow; the M0.4 V2 verifier is a Stage 2 deliverable."
 exit 1
 <#
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path

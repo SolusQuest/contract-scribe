@@ -17,6 +17,16 @@ permissions:
   contents: read
 
 jobs:
+  m05-v1-dispatch-guard:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the exact main ref and reproduction mode
+        shell: bash
+        run: |
+          test "${{ inputs.mode }}" = "m05-v1-reproduction"
+          test "${{ github.ref }}" = "refs/heads/main"
+
   validate:
     strategy:
       fail-fast: false
@@ -43,6 +53,7 @@ jobs:
 
   m05-native-aot-reproduction:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'm05-v1-reproduction' && github.ref == 'refs/heads/main'
+    needs: m05-v1-dispatch-guard
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +75,6 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/reproduce-m0.5-v1.ps1 -RuntimeIdentifier ${{ matrix.rid }} -Configuration Release
       - name: Upload sanitized reproduction proof
-        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: m05-v1-proof-${{ matrix.rid }}-ed305a36f076d2d9aef981c44746d7a5a34d5bff
@@ -72,7 +82,7 @@ jobs:
           if-no-files-found: error
 
   m05-native-aot-reproduction-aggregate:
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'm05-v1-reproduction' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'm05-v1-reproduction' && github.ref == 'refs/heads/main' && needs.m05-native-aot-reproduction.result == 'success'
     needs: m05-native-aot-reproduction
     runs-on: ubuntu-latest
     steps:
@@ -80,11 +90,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Download successful cell proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: m05-v1-proof-*
+          path: TestResults/m05-v1-cell-proofs
+          merge-multiple: true
       - name: Reproduce committed M0.5 aggregate evidence
         shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/reproduce-m0.5-v1-aggregate.ps1 -Configuration Release
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.NativeAot.Experiment/reproduce-m0.5-v1-aggregate.ps1 -Configuration Release -CellProofRoot TestResults/m05-v1-cell-proofs
       - name: Upload sanitized aggregate reproduction proof
-        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: m05-v1-aggregate-proof-ed305a36f076d2d9aef981c44746d7a5a34d5bff

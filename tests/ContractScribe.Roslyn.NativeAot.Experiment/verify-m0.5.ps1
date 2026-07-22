@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [ValidateSet("linux-x64", "win-x64")]
-    [string]$RuntimeIdentifier,
+    [string]$RuntimeIdentifier = "linux-x64",
     [ValidateSet("Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath,
