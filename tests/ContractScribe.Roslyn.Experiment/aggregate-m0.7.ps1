@@ -10,7 +10,15 @@ $ErrorActionPreference = "Stop"
 trap {
     $outcome = "protocol-failure"
     $reasonCode = "aggregate-validation-failure"
-    if ($_.Exception.Message -match "two successful|required cell|incomplete") {
+    if ($_.Exception.Message -match "did not prove byte equality") {
+        $outcome = "baseline-failure"
+        $reasonCode = "cross-cell-byte-mismatch"
+    }
+    elseif ($_.Exception.Message -match "did not record exactly two fresh runs|payload artifact is missing|required cell payload artifact|recorded payload hash") {
+        $outcome = "protocol-failure"
+        $reasonCode = "aggregate-evidence-invalid"
+    }
+    elseif ($_.Exception.Message -match "two successful|required cell|incomplete") {
         $outcome = "inconclusive"
         $reasonCode = "required-cell-evidence-incomplete"
     }
