@@ -36,6 +36,18 @@ function Write-FailureEvidence([string]$message) {
         $outcome = "baseline-failure"
         $reasonCode = "conforming-baseline-failure"
     }
+    elseif ($message -match "protected fixture file hash") {
+        $reasonCode = "protected-fixture-hash-mismatch"
+    }
+    elseif ($message -match "fixture checkout|pinned independent commit") {
+        $reasonCode = "fixture-commit-mismatch"
+    }
+    elseif ($message -match "independent oracle hash|oracle hash") {
+        $reasonCode = "oracle-hash-mismatch"
+    }
+    elseif ($message -match "protected file inventory|unlisted public file") {
+        $reasonCode = "fixture-inventory-mismatch"
+    }
     elseif ($message -match "fixture|oracle|protected|public|BOM|trailing newline|inventory|manifest|hash") {
         $outcome = "protocol-failure"
         $reasonCode = "protocol-input-invalid"
