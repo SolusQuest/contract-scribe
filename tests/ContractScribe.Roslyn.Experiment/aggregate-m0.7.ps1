@@ -14,7 +14,11 @@ trap {
         $outcome = "inconclusive"
         $reasonCode = "required-cell-evidence-incomplete"
     }
-    elseif ($_.Exception.Message -match "payload|fresh|canonical|byte") {
+    elseif ($_.Exception.Message -match "recorded payload hash|payload artifact is missing|required cell payload artifact") {
+        $outcome = "protocol-failure"
+        $reasonCode = "aggregate-evidence-invalid"
+    }
+    elseif ($_.Exception.Message -match "fresh|canonical|cross-cell|byte") {
         $outcome = "baseline-failure"
         $reasonCode = "cross-cell-byte-mismatch"
     }
@@ -65,7 +69,7 @@ if ($failureFiles.Count -gt 0 -or $evidenceFiles.Count -ne 2) {
         retainedFailure = $true
     }
     [IO.File]::WriteAllText($OutputPath, ($failure | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-    throw "M0.7 aggregate evidence did not contain two successful required cells."
+    exit 1
 }
 
 $cells = @($evidenceFiles | ForEach-Object {

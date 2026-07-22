@@ -83,6 +83,8 @@ jobs:
           merge-multiple: false
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/aggregate-m0.7.ps1 -EvidenceRoot TestResults/m0.7-independent-validation -OutputPath TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-aggregate-outcomes.ps1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
