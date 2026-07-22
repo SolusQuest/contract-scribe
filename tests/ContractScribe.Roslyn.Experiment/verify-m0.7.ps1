@@ -107,6 +107,16 @@ foreach ($entry in $protectedFiles) {
     Assert-Condition (Test-Path -LiteralPath $path) "A protected fixture file is missing."
     Assert-Condition ((Get-FileSha256 $path) -eq $entry.Value) "A protected fixture file hash does not match."
 }
+$allowedFixtureFiles = @($protectedFiles.Name) + "fixture-manifest.json"
+$actualFixtureFiles = @(Get-ChildItem -LiteralPath $fixtureRoot -File -Recurse | Where-Object {
+    $_.FullName -notmatch "\\(?:\.git|bin|obj)(?:\\|$)"
+} | ForEach-Object {
+    $_.FullName.Substring($fixtureRoot.Length + 1).Replace("\", "/")
+})
+foreach ($path in $actualFixtureFiles) {
+    Assert-Condition ($allowedFixtureFiles -contains $path) "The independent fixture contains an unlisted public file."
+}
+Assert-Condition ((($actualFixtureFiles | Sort-Object) -join ",") -eq (($allowedFixtureFiles | Sort-Object) -join ",")) "The independent fixture protected file inventory is not closed."
 
 $solutionPath = Join-Path $fixtureRoot $fixtureManifest.solution
 $oraclePath = Join-Path $fixtureRoot $fixtureManifest.oracle.path
