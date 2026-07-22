@@ -16,8 +16,8 @@ $repositoryRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
 $transferManifestRelativePath = "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
-$frozenM04SourceRevision = "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c"
-$frozenTransferManifestSha256 = "c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3"
+$frozenM04SourceRevision = "090abc5c4d7cc028dd5222d899ab254761959570"
+$frozenTransferManifestSha256 = "8f4829cf5d3c67a6f0f6773624593bd0ec09d8ded77115e0c97258de21d8da0d"
 $hostPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\bin\$Configuration\net10.0\ContractScribe.Roslyn.Experiment.dll"
 $outputRoot = Join-Path $repositoryRoot "TestResults\m0.4-protocol"
 
