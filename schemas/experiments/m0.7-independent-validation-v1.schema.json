@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/SolusQuest/contract-scribe/blob/2453498f9fde4854b7442af6e1463e0739677fb5/schemas/experiments/m0.7-independent-validation-v1.schema.json",
+  "$id": "https://github.com/SolusQuest/contract-scribe/blob/489a25d70f8585e391af6a09054031e602e1643a/schemas/experiments/m0.7-independent-validation-v1.schema.json",
   "type": "object",
   "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "outcomeTaxonomy", "outcomeRules", "unresolvedRisks"],
   "properties": {

@@ -7,6 +7,35 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+trap {
+    $outcome = "protocol-failure"
+    $reasonCode = "aggregate-validation-failure"
+    if ($_.Exception.Message -match "two successful|required cell|incomplete") {
+        $outcome = "inconclusive"
+        $reasonCode = "required-cell-evidence-incomplete"
+    }
+    elseif ($_.Exception.Message -match "payload|fresh|canonical|byte") {
+        $outcome = "baseline-failure"
+        $reasonCode = "cross-cell-byte-mismatch"
+    }
+    elseif ($_.Exception.Message -match "baseline") {
+        $outcome = "baseline-invalidated"
+        $reasonCode = "aggregate-baseline-drift"
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
+    $failure = [ordered]@{
+        formatVersion = "contractscribe-m0.7-aggregate-evidence-v1"
+        aggregateOutcome = $outcome
+        reasonCode = $reasonCode
+        evidenceGeneratingCommit = $env:GITHUB_SHA
+        evidenceGeneratingRunUrl = if ($env:GITHUB_RUN_ID) { "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } else { $null }
+        retainedFailure = $true
+    }
+    [IO.File]::WriteAllText($OutputPath, ($failure | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    Write-Output "M0.7 aggregate evidence failed: $outcome ($reasonCode)."
+    exit 1
+}
+
 function Get-FileSha256([string]$path) {
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
 }

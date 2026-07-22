@@ -11,6 +11,28 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $PSScriptRoot "..\..\TestResults\m0.7-independent-validation"
+}
+function Write-EarlyFailureEvidence([string]$message) {
+    New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+    $failure = [ordered]@{
+        formatVersion = "contractscribe-m0.7-failure-evidence-v1"
+        aggregateOutcome = "protocol-failure"
+        reasonCode = "preflight-validation-failure"
+        selectedBaselineCommit = $BaselineCommit
+        fixtureCommit = $null
+        protocolCommit = $env:GITHUB_SHA
+        ci = [ordered]@{ runId = $env:GITHUB_RUN_ID; job = $env:GITHUB_JOB; sha = $env:GITHUB_SHA }
+        retainedFailure = $true
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputRoot "m0.7-failure-evidence.json"), ($failure | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    Write-Output "M0.7 validation failed: protocol-failure (preflight-validation-failure)."
+}
+trap {
+    Write-EarlyFailureEvidence $_.Exception.Message
+    exit 1
+}
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $baselineRoot = (Resolve-Path -LiteralPath $BaselineRepositoryPath).Path
 $fixtureRoot = (Resolve-Path -LiteralPath $FixtureRepositoryPath).Path
@@ -24,7 +46,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 function Write-FailureEvidence([string]$message) {
     $outcome = "protocol-failure"
     $reasonCode = "unexpected-verifier-error"
-    if ($message -match "baseline checkout|selected-baseline|semantic source|transfer manifest|SDK policy|roll-forward|package baseline|frozen host") {
+    if ($message -match "baseline checkout|selected-baseline commit|semantic source|transfer manifest|SDK policy|roll-forward|package baseline|frozen host") {
         $outcome = "baseline-invalidated"
         $reasonCode = "selected-baseline-drift"
     }
@@ -32,7 +54,7 @@ function Write-FailureEvidence([string]$message) {
         $outcome = "inconclusive"
         $reasonCode = "required-cell-inconclusive"
     }
-    elseif ($message -match "selected baseline did not complete|result envelope|semantic payload|fresh selected-baseline") {
+    elseif ($message -match "selected baseline did not complete|result envelope|semantic payload|fresh selected-baseline|output does not match the independent oracle") {
         $outcome = "baseline-failure"
         $reasonCode = "conforming-baseline-failure"
     }
@@ -59,7 +81,7 @@ function Write-FailureEvidence([string]$message) {
         reasonCode = $reasonCode
         selectedBaselineCommit = if ($null -ne $manifest) { $manifest.selectedBaseline.commit } else { $BaselineCommit }
         fixtureCommit = if ($null -ne $manifest) { $manifest.fixture.commit } else { $null }
-        protocolCommit = $null
+        protocolCommit = $env:GITHUB_SHA
         ci = [ordered]@{ runId = $env:GITHUB_RUN_ID; job = $env:GITHUB_JOB; sha = $env:GITHUB_SHA }
         retainedFailure = $true
     }
