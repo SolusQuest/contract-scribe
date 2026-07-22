@@ -9,10 +9,11 @@
   "fixture": {
     "repository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
     "trackingIssue": "https://github.com/Yuee98/contract-scribe-m07-fixture/issues/1",
-    "commit": "ae9972944f8f78a2ef2455380534120469324a4e",
+    "commit": "366011689de4668e8e2ebd8ec15e06d88a0c7e9e",
     "oraclePath": "expected-payload.json",
     "oracleSha256": "0441e29d34f602d1884d9ebf252838a7d16aad46646b6dce1f1acb55459a1118",
     "fileSha256": {
+      ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
       ".gitignore": "6c5082c7e6de3e350189c67a1aacf757485ecc26e0a3cf96683528565f3e5f12",
       "README.md": "2288ed24a3ff76621e16098431e34b33dec94757673fdd88e3c5a1377bde47a5",
       "Sample.sln": "9c251f53f108401e77bd94a95fb779320b176dda66afb556e9b5ccdeb05ead2d",
