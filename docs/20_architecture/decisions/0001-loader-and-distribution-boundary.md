@@ -79,19 +79,19 @@ The evidence inputs are:
 | Historical M0.5 Ubuntu and Windows cell evidence plus aggregate | Both historical required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution, or current-baseline evidence. |
 | Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
-The current M0.4 evidence instance consumed by this ADR is contained in implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. The eventual PR merge commit remains the retrieval point for the complete final repository state. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
+The current M0.4 evidence instance consumed by this ADR is introduced by this PR. During review, implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` identifies the evidence-generating commit within the PR branch; it is not presented as a stable `main` commit. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. After merge, the squash commit on `main` becomes the stable retrieval point for the complete final repository state. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
 
 The material experiment inputs are:
 
-| Path | Commit | Content identity |
+| Path | Review provenance | Content identity |
 | --- | --- | --- |
-| `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
-| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
-| `global.json` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
-| `Directory.Packages.props` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `a112573f56ccffb226144443424d4d80e6680d33799c16bd61da7470289bfd4c` |
-| `.github/workflows/ci.yml` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e` |
-| `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
-| `tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c` |
+| `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
+| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
+| `global.json` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
+| `Directory.Packages.props` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `a112573f56ccffb2261444434244d4d80e6680d33799c16bd61da7470289bfd4c` |
+| `.github/workflows/ci.yml` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e` |
+| `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
+| `tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c` |
 | `docs/20_architecture/experiments/m0.5-native-aot-feasibility.md` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `3654cac88753d8c463827d616cc7a842e835eeb72533375a8cd7d93a03c91376` |
 | `tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `ab527261098d11628a355d06bc0619d557613bc21d6919f920b8a2db4c42b6d0` |
 | `schemas/experiments/m0.5-native-aot-evidence-v1.schema.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4` |
@@ -202,13 +202,13 @@ Before a downstream-consumable release, package/tool/action publication, or exte
 
 ## References
 
-The repository artifacts below are pinned to public commits on `main`. Issue links are live tracking references and are intentionally not commit-pinned:
+The repository artifacts already merged to `main` below are pinned to public commits on `main`. The current M0.4 experiment record is introduced by this PR; its review-time provenance and content identity are recorded above, and its stable `main` commit will be the squash merge commit. Issue links are live tracking references and are intentionally not commit-pinned:
 
 - [Roadmap](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/roadmap.md)
 - [Initial issue plan](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/initial-issue-plan.md)
 - [Architecture](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/architecture.md)
 - [Distribution policy](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/distribution.md)
-- [Current M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/1d5fa571d4eafb44c2d4fffb1bbb81e330d45856/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
+- [Current M0.4 experiment record](../experiments/m0.4-framework-dependent-loading.md) (introduced by this PR; stable `main` commit after merge)
 - [Original M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
 - [Current M0.4 transfer manifest](../../tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
 - [M0.5 experiment record](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/docs/20_architecture/experiments/m0.5-native-aot-feasibility.md)
