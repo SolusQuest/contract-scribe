@@ -75,24 +75,7 @@ $sourceRange = "$($manifest.sourceRevision)..$currentRevision"
 $sourceFiles = @(git diff --name-only $sourceRange)
 $sourceDiffExitCode = $LASTEXITCODE
 Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
-$unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles) })
-$semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
-    $_ -in @(
-        "global.json",
-        "Directory.Build.props",
-        "Directory.Packages.props",
-        "ContractScribe.slnx"
-    ) -or
-    $_.StartsWith("tests/ContractScribe.Roslyn/", [StringComparison]::OrdinalIgnoreCase) -or
-    $_.StartsWith("tests/ContractScribe.Roslyn.Experiment/", [StringComparison]::OrdinalIgnoreCase) -or
-    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleApp/", [StringComparison]::OrdinalIgnoreCase) -or
-    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleLibrary/", [StringComparison]::OrdinalIgnoreCase) -or
-    $_ -in @(
-        "tests/fixtures/roslyn-msbuild/v1/Sample.sln",
-        "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json"
-    )
-})
-Assert-Condition ($semanticSourceFiles.Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path: $($semanticSourceFiles -join ', ')."
+Assert-Condition (($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles) }).Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path."
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name

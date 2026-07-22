@@ -77,7 +77,17 @@ The evidence inputs are:
 | M0.5 Ubuntu and Windows cell evidence plus aggregate | Both required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution. |
 | Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
-Toolchain, package, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-contract changes invalidate this evidence basis and require a new evidence version or explicit revalidation issue. Historical M0.4/M0.5 evidence remains immutable.
+The evidence instance consumed by this ADR is identified by the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit. The material experiment inputs are:
+
+| Path | Commit | Content identity |
+| --- | --- | --- |
+| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3` |
+| `tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `ab527261098d11628a355d06bc0619d557613bc21d6919f920b8a2db4c42b6d0` |
+| `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `a320872bc90f909959b0abbac7c8f30c800c2173641f1db959aef8fe43fb7932` |
+| `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `e5c3374d8d509cd4eea7b0ab5d6b6051b213df5dc7632b7bd1fa883a2f464b04` |
+| `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `e7c5877e26857f9ab6629076eb45b90a0d3cd6bd1b3c172a3c94c6405a1c733e` |
+
+The repository SDK policy is `global.json` SDK `10.0.102` with `latestFeature` roll-forward, and the package baseline is the one recorded by the M0.4 transfer manifest, including `System.Security.Cryptography.Xml` `9.0.15`. Before M0 closes, an M0.4/M0.5 experiment V1 may be superseded by a current commit and regenerated in place. A toolchain, package, runner-image, semantic-path, profile, or evidence-contract change must be described as a new current evidence instance and must be rerun or explicitly deferred; the old run remains retrievable only as pinned historical evidence and cannot silently support the changed baseline.
 
 ## Alternatives
 
