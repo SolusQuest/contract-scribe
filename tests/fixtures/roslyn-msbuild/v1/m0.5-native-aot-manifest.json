@@ -2,8 +2,8 @@
   "formatVersion": "m0.5-native-aot-manifest-v1",
   "fixtureId": "roslyn-msbuild-v1",
   "m04ManifestPath": "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json",
-  "m04ManifestSha256": "8f4829cf5d3c67a6f0f6773624593bd0ec09d8ded77115e0c97258de21d8da0d",
-  "m04FrozenSourceRevision": "090abc5c4d7cc028dd5222d899ab254761959570",
+  "m04ManifestSha256": "c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3",
+  "m04FrozenSourceRevision": "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c",
   "implementationRevision": "ed305a36f076d2d9aef981c44746d7a5a34d5bff",
   "allowedPostSourceFiles": [
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
