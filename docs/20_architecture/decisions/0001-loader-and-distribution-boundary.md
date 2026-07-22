@@ -79,14 +79,23 @@ The evidence inputs are:
 | Historical M0.5 Ubuntu and Windows cell evidence plus aggregate | Both historical required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution, or current-baseline evidence. |
 | Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
-The current M0.4 evidence instance consumed by this ADR uses the source revision recorded in the current transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and the current transfer-manifest SHA-256 below. The current V1 manifest content is part of this PR and will be retrievable from its merge commit; the content hash identifies it before that merge. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
+The current M0.4 evidence instance consumed by this ADR is contained in implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. The eventual PR merge commit remains the retrieval point for the complete final repository state. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
 
 The material experiment inputs are:
 
 | Path | Commit | Content identity |
 | --- | --- | --- |
-| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | Source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`; current V1 content is introduced by this PR | SHA-256 `b56f605f5fd2eb7fc031690d4ebf24a5b34476dcf87903dd680e8c536b0805f7` |
+| `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
+| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
+| `global.json` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
+| `Directory.Packages.props` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `a112573f56ccffb226144443424d4d80e6680d33799c16bd61da7470289bfd4c` |
+| `.github/workflows/ci.yml` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e` |
+| `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
+| `tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1` | `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` | SHA-256 `246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c` |
+| `docs/20_architecture/experiments/m0.5-native-aot-feasibility.md` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `3654cac88753d8c463827d616cc7a842e835eeb72533375a8cd7d93a03c91376` |
 | `tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `ab527261098d11628a355d06bc0619d557613bc21d6919f920b8a2db4c42b6d0` |
+| `schemas/experiments/m0.5-native-aot-evidence-v1.schema.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4` |
+| `docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `e0d96e9f73d0e0b13f15172ce455d90bcd80fcd149b7ae7d4f6827f655d4f4b7` |
 | `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `a320872bc90f909959b0abbac7c8f30c800c2173641f1db959aef8fe43fb7932` |
 | `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `e5c3374d8d509cd4eea7b0ab5d6b6051b213df5dc7632b7bd1fa883a2f464b04` |
 | `tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `e7c5877e26857f9ab6629076eb45b90a0d3cd6bd1b3c172a3c94c6405a1c733e` |
@@ -101,9 +110,13 @@ This is the only eligible candidate with positive framework-dependent execution 
 
 The initial runtime prerequisite is the repository's `global.json` policy: base SDK `10.0.102` with `latestFeature` roll-forward, plus the current M0.4 package baseline, including `System.Security.Cryptography.Xml` `9.0.18`. Each run records the actually selected SDK/runtime/MSBuild identity under that policy. M0.7 must inherit the policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
 
-### Native AOT CLI using the exact M0.5 profile — rejected for this profile
+### Historical Native AOT CLI under the exact M0.5 `9.0.15` evidence instance — not feasible for that historical profile
 
-M0.5 gives this candidate a conclusive negative within its closed matrix and publish profile: both Ubuntu/linux-x64 and Windows/win-x64 cells failed at publish-time trimming/reflection analysis. It is not selected as the M0 baseline. This disposition does not rule out a future, separately refined and evidenced AOT design.
+The historical M0.5 evidence instance gives this candidate a conclusive negative within its closed matrix and publish profile: both Ubuntu/linux-x64 and Windows/win-x64 cells failed at publish-time trimming/reflection analysis. This disposition applies only to that historical `9.0.15` instance and does not rule out a future, separately refined and evidenced AOT design.
+
+### Native AOT under the current `9.0.18` baseline — deferred and not evidenced
+
+This PR does not rerun or remediate Native AOT under the current package baseline. No current-baseline Native AOT conclusion is inferred from the historical M0.5 result.
 
 ### Framework-dependent loader plus AOT semantic core — deferred and not evidenced
 
@@ -119,7 +132,7 @@ This is a distribution-channel layer that may later wrap a selected execution ba
 
 ## Decision
 
-Select the `framework-dependent semantic execution baseline` provisionally for M0.7 validation. This selection is a decision inference from the directly exercised M0.4 path and the bounded M0.5 negative; it is not a production CLI or general compatibility claim.
+Select the `framework-dependent semantic execution baseline` provisionally for M0.7 validation. This selection is a decision inference from the directly exercised current M0.4 path; the historical M0.5 result is bounded context only and does not provide evidence against current `9.0.18` Native AOT. This is not a production CLI or general compatibility claim.
 
 M0.6 does not select a production process topology. The M0.4 in-process boundary is retained as a test-host observation only. M0.6 does not select a user-facing distribution channel; all channels, including .NET-tool-first, remain deferred and non-contractual.
 
@@ -160,7 +173,7 @@ Positive consequences:
 
 - M0.7 has a directly exercised subject under test and an independent fixture/oracle boundary.
 - M1 receives a concrete framework-dependent execution assumption without prematurely adding production runtime code or a package channel.
-- The Native AOT result is preserved as a useful bounded negative without overclaiming.
+- The historical Native AOT result is preserved as bounded context without overclaiming its applicability to the current package baseline.
 
 Costs and residual risks:
 
