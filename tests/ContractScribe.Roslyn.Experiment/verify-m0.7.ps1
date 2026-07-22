@@ -109,7 +109,7 @@ foreach ($entry in $protectedFiles) {
 }
 $allowedFixtureFiles = @($protectedFiles.Name) + "fixture-manifest.json"
 $actualFixtureFiles = @(Get-ChildItem -LiteralPath $fixtureRoot -File -Recurse | Where-Object {
-    $_.FullName -notmatch "\\(?:\.git|bin|obj)(?:\\|$)"
+    $_.FullName -notmatch "[/\\](?:\.git|bin|obj)(?:[/\\]|$)"
 } | ForEach-Object {
     $_.FullName.Substring($fixtureRoot.Length + 1).Replace("\", "/")
 })
