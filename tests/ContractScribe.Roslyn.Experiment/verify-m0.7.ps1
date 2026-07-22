@@ -161,11 +161,8 @@ foreach ($entry in $protectedFiles) {
     Assert-Condition ((Get-FileSha256 $path) -eq $entry.Value) "A protected fixture file hash does not match."
 }
 $allowedFixtureFiles = @($protectedFiles.Name) + "fixture-manifest.json"
-$actualFixtureFiles = @(Get-ChildItem -LiteralPath $fixtureRoot -File -Recurse | Where-Object {
-    $_.FullName -notmatch "[/\\](?:\.git|bin|obj)(?:[/\\]|$)"
-} | ForEach-Object {
-    $_.FullName.Substring($fixtureRoot.Length + 1).Replace("\", "/")
-})
+$actualFixtureFiles = @(& git -C $fixtureRoot ls-files | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+Assert-Condition ($LASTEXITCODE -eq 0) "The independent fixture tracked-file inventory could not be resolved."
 foreach ($path in $actualFixtureFiles) {
     Assert-Condition ($allowedFixtureFiles -contains $path) "The independent fixture contains an unlisted public file."
 }
