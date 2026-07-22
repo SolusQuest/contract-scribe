@@ -39,8 +39,6 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "The provenance regression repository clone failed."
     }
-    Invoke-Git @("config", "user.email", "test@example.invalid") | Out-Null
-    Invoke-Git @("config", "user.name", "ContractScribe provenance test") | Out-Null
     $baselineRevision = Invoke-Git @("rev-parse", "HEAD")
     Assert-Passed "baseline"
 
