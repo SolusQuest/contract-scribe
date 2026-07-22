@@ -180,7 +180,7 @@ Before a downstream-consumable release, package/tool/action publication, or exte
 
 ## References
 
-The repository artifacts below are pinned to public commits on `main`. Issue links are live tracking references and are intentionally not commit-pinned:
+The historical repository artifacts below are pinned to public commits on `main`. The current M0.4 security revalidation is linked to PR #16 pending merge; issue links are live tracking references and are intentionally not commit-pinned:
 
 - [Roadmap](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/roadmap.md)
 - [Initial issue plan](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/initial-issue-plan.md)
