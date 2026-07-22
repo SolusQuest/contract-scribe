@@ -12,9 +12,13 @@ ContractScribe's deterministic audit must remain separate from later proposal an
 
 M0.4 validated one bounded framework-dependent Roslyn/MSBuild semantic path on the public `roslyn-msbuild-v1` synthetic solution. The fixture contains `SampleApp` and `SampleLibrary`, with a handwritten expected-symbol oracle. The framework-dependent host discovers the SDK/MSBuild environment, loads the solution, projects a deterministic symbol set, and writes the standalone canonical `semantic-payload.json` comparison artifact. Two fresh local Windows runs produced identical payload bytes with SHA-256 `e5d3bc87a0448da6e953956aae897b33738a16efbedfeeefe1366fc5b8afbd29`.
 
+The current M0.4 security revalidation upgrades the central `System.Security.Cryptography.Xml` package baseline to `9.0.18` and records that baseline in the current transfer manifest. The M0.7 handoff uses this current 9.0.18 M0.4 baseline. Its provenance guard pins the current transfer-manifest content and a durable semantic-tree content hash, so the guard remains verifiable when the source commit is later merged by squash or rebase.
+
 M0.5 reused the frozen M0.4 runner, fixture, identity, ordering, and canonical payload comparison under `net10.0`, Release, `PublishAot=true`, `SelfContained=true`, `PublishTrimmed=true` on `linux-x64` and `win-x64`. Both closure cells reached a reproducible publish-time `publish.trimming-analysis-failed` result with cause `trimming-reflection`, producing the aggregate outcome `not-feasible`. Native execution and semantic payload comparison were not reached. This is evidence that the frozen path and exact tested Native AOT profile were not feasible on the required cells; it is not a claim that every Native AOT design or configuration is impossible.
 
-This ADR records the next bounded execution baseline from those facts. It does not promote the experimental host or payload into a production API, and it does not select a package or release channel.
+The committed M0.5 V1 manifest and evidence are historical artifacts for the old `9.0.15` M0.4 package baseline and remain immutable. They do not establish any Native AOT result for the current 9.0.18 baseline. Any M0.5 result for the current baseline requires a new M0.5 V2 manifest, evidence set, and independent revalidation.
+
+This ADR records the next bounded execution baseline from those facts. It does not promote the experimental host or payload into a production API, and it does not select a production package or release channel.
 
 ## Decision drivers
 
@@ -72,12 +76,12 @@ The evidence inputs are:
 
 | Input | What it establishes | What it does not establish |
 | --- | --- | --- |
-| M0.4 experiment record and transfer manifest | Framework-dependent loading and deterministic semantic output for the named synthetic fixture, SDK/package baseline, and required Ubuntu/Windows CI protocol. | Production loader behavior, arbitrary project compatibility, Native AOT feasibility, or a distribution channel. |
-| M0.5 experiment record and manifest | The frozen M0.4 path under the exact Native AOT profile, matrix, evidence schema, and closed failure registry. | General Native AOT impossibility, a remediated AOT design, or successful native execution. |
-| M0.5 Ubuntu and Windows cell evidence plus aggregate | Both required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution. |
+| Current M0.4 security revalidation and transfer manifest | Framework-dependent loading and deterministic semantic output for the named synthetic fixture, current `9.0.18` package baseline, and required Ubuntu/Windows CI protocol. | Production loader behavior, arbitrary project compatibility, Native AOT feasibility for 9.0.18, or a distribution channel. |
+| Historical M0.5 V1 manifest and experiment record | The frozen M0.4 path under the exact Native AOT profile, matrix, evidence schema, and closed failure registry as exercised against the old `9.0.15` package baseline. | Any Native AOT conclusion for the current 9.0.18 baseline, general Native AOT impossibility, a remediated AOT design, or successful native execution. |
+| Historical M0.5 V1 Ubuntu and Windows cell evidence plus aggregate | Both required cells have the same conclusive publish-time negative and the aggregate is `not-feasible` for the historical V1 baseline. | Semantic output comparison for Native AOT, because publish failed before execution, or evidence for the current 9.0.18 baseline. |
 | Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
-Toolchain, package, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-contract changes invalidate this evidence basis and require a new evidence version or explicit revalidation issue. Historical M0.4/M0.5 evidence remains immutable.
+Toolchain, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-contract changes invalidate the applicable evidence basis and require a new evidence version or explicit revalidation issue. The current M0.4 package security revalidation is recorded as a new current M0.4 baseline; it does not rewrite historical M0.5 V1 evidence. Historical M0.4/M0.5 evidence remains immutable.
 
 ## Alternatives
 
@@ -85,11 +89,11 @@ Toolchain, package, runner-image, M0.4 semantic-path, M0.5 profile, or evidence-
 
 This is the only eligible candidate with positive framework-dependent execution evidence. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
 
-The initial runtime prerequisite is the repository's `global.json` policy: base SDK `10.0.102` with `latestFeature` roll-forward, plus the exact M0.4 package baseline. Each run records the actually selected SDK/runtime/MSBuild identity under that policy. M0.7 must inherit the policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
+The initial runtime prerequisite is the repository's `global.json` policy: base SDK `10.0.102` with `latestFeature` roll-forward, plus the current M0.4 `9.0.18` package baseline. Each run records the actually selected SDK/runtime/MSBuild identity under that policy. M0.7 must inherit the policy and record the observed runtime RID for each framework-dependent cell (`linux-x64` and `win-x64`) without treating RID as a Native AOT publish input.
 
 ### Native AOT CLI using the exact M0.5 profile — rejected for this profile
 
-M0.5 gives this candidate a conclusive negative within its closed matrix and publish profile: both Ubuntu/linux-x64 and Windows/win-x64 cells failed at publish-time trimming/reflection analysis. It is not selected as the M0 baseline. This disposition does not rule out a future, separately refined and evidenced AOT design.
+Historical M0.5 V1 gives this candidate a conclusive negative within its closed matrix and publish profile: both Ubuntu/linux-x64 and Windows/win-x64 cells failed at publish-time trimming/reflection analysis against the old 9.0.15 baseline. It is not selected as the M0 baseline and says nothing about Native AOT on the current 9.0.18 baseline. This disposition does not rule out a future, separately refined and evidenced AOT design.
 
 ### Framework-dependent loader plus AOT semantic core — deferred and not evidenced
 
@@ -105,7 +109,7 @@ This is a distribution-channel layer that may later wrap a selected execution ba
 
 ## Decision
 
-Select the `framework-dependent semantic execution baseline` provisionally for M0.7 validation. This selection is a decision inference from the directly exercised M0.4 path and the bounded M0.5 negative; it is not a production CLI or general compatibility claim.
+Select the `framework-dependent semantic execution baseline` provisionally for M0.7 validation. This selection is a decision inference from the directly exercised current M0.4 9.0.18 path and the bounded historical M0.5 V1 negative; the historical negative is not evidence for Native AOT on 9.0.18. It is not a production CLI or general compatibility claim.
 
 M0.6 does not select a production process topology. The M0.4 in-process boundary is retained as a test-host observation only. M0.6 does not select a user-facing distribution channel; all channels, including .NET-tool-first, remain deferred and non-contractual.
 
@@ -118,7 +122,7 @@ M0.7 must validate the selected execution baseline without adapting it. The subj
 The closed derivation is:
 
 - Run required `ubuntu-latest` and `windows-latest` cells with `X64` process architecture.
-- Use the repository `global.json` policy of base SDK `10.0.102` with `latestFeature` roll-forward and the exact M0.4 package baseline from the transfer manifest; record the actually selected SDK/runtime/MSBuild identity for each cell.
+- Use the repository `global.json` policy of base SDK `10.0.102` with `latestFeature` roll-forward and the current M0.4 `9.0.18` package baseline from the current transfer manifest; record the actually selected SDK/runtime/MSBuild identity for each cell.
 - Invoke the frozen framework-dependent runner shape with the independent solution and expected-output manifest. Do not add a new runtime mode or modify the frozen runner to make the independent smoke pass.
 - Preserve the runner's frozen fixture-shape preconditions: exactly two SDK-style C# projects named `SampleApp` and `SampleLibrary`, and exactly one `SampleApp` → `SampleLibrary` reference. The source and oracle remain newly authored even though this structural envelope is fixed.
 - Record observed runtime RIDs `linux-x64` and `win-x64`; they describe framework-dependent execution observations and are not Native AOT publish inputs.
@@ -130,6 +134,7 @@ M0.7 outcomes have these meanings:
 - Complete semantic-path failure, nondeterminism, or mismatch with the independent oracle is a selected-baseline failure. It keeps M0 open and requires this ADR or the selected baseline to be revised or superseded before validation is repeated.
 - Fixture, provenance, public-safety, or contract errors are protocol failures, not baseline support evidence.
 - Any change to the selected baseline during validation invalidates the candidate and returns to M0.6.
+- Any Native AOT result for the current 9.0.18 baseline requires a new M0.5 V2 manifest and independently generated evidence; the historical M0.5 V1 result cannot be reused for that claim.
 - Success requires all required cells to complete the frozen runner path, agree with the independent oracle, and preserve the documented deterministic/offline/public-safety boundaries.
 
 After successful M0.7, a follow-up PR updates this ADR from `provisional candidate baseline pending M0.7` to `M0-validated baseline` and links the public evidence. A failed M0.7 leaves M0 open; #10 records the failure and links the revision/revalidation issue or PR that amends or supersedes this ADR. No failed or inconclusive result can be converted silently into M0 closure.
@@ -138,7 +143,7 @@ After successful M0.7, a follow-up PR updates this ADR from `provisional candida
 
 M1 may plan around the framework-dependent semantic execution boundary and the versioned M0.1-M0.3 contracts, but it must keep the M0.4/M0.5 hosts and `semantic-payload.json` test-only. M1 must define production audit inputs and outputs through the M0.1 policy/configuration and M0.2 audit-result contracts, not through the experimental payload. M1 may introduce a production loader only through its own implementation contract and validation; this ADR does not create that project, API, process protocol, or CLI behavior.
 
-The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/package policy, Ubuntu/Windows X64 matrix, and no-network semantic path. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, or installation channels requires separate evidence and explicit follow-up.
+The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/`9.0.18` package policy, Ubuntu/Windows X64 matrix, and no-network semantic path. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, Native AOT configurations, or installation channels requires separate evidence and explicit follow-up.
 
 ## Consequences and risks
 
@@ -146,12 +151,12 @@ Positive consequences:
 
 - M0.7 has a directly exercised subject under test and an independent fixture/oracle boundary.
 - M1 receives a concrete framework-dependent execution assumption without prematurely adding production runtime code or a package channel.
-- The Native AOT result is preserved as a useful bounded negative without overclaiming.
+- The historical Native AOT V1 result is preserved as a useful bounded negative without overclaiming against the current package baseline.
 
 Costs and residual risks:
 
 - The selected framework-dependent path may require a compatible SDK/MSBuild environment and may not generalize beyond the tested synthetic solution.
-- SDK, Roslyn, MSBuild, trimming, package, runner-image, or evidence-contract drift can invalidate the evidence basis.
+- SDK, Roslyn, MSBuild, trimming, current package, runner-image, or evidence-contract drift can invalidate the applicable evidence basis; historical M0.5 V1 remains tied to its old package baseline.
 - A future child-process or AOT split could improve deployment or isolation, but its protocol and runtime behavior are currently unknown.
 - Deferring the distribution channel leaves installation and upgrade UX undecided; that is intentional until the execution baseline is independently validated and release governance is ready.
 
@@ -182,7 +187,8 @@ The repository artifacts below are pinned to public commits on `main`. Issue lin
 - [Architecture](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/architecture.md)
 - [Distribution policy](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/distribution.md)
 - [M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
-- [M0.4 transfer manifest](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
+- [Current M0.4 security revalidation in PR #16](https://github.com/SolusQuest/contract-scribe/pull/16)
+- [Historical M0.4 transfer manifest used by M0.5 V1](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
 - [M0.5 experiment record](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/docs/20_architecture/experiments/m0.5-native-aot-feasibility.md)
 - [M0.5 manifest](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json)
 - [M0.5 Ubuntu evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json)

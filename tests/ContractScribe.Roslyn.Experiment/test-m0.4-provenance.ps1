@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $sourceRepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("contract-scribe-m04-provenance-" + [Guid]::NewGuid().ToString("N"))
+$squashedRoot = Join-Path ([IO.Path]::GetTempPath()) ("contract-scribe-m04-provenance-squashed-" + [Guid]::NewGuid().ToString("N"))
 
 function Invoke-Git([string[]]$arguments) {
     $output = @(& git -C $testRoot @arguments 2>&1)
@@ -15,20 +16,20 @@ function Invoke-Git([string[]]$arguments) {
     return ($output -join "`n").Trim()
 }
 
-function Invoke-Provenance {
-    $output = @(& pwsh -NoProfile -File $VerifierPath -RepositoryRoot $testRoot -ProvenanceOnly 2>&1)
+function Invoke-Provenance([string]$repositoryRoot = $testRoot) {
+    $output = @(& pwsh -NoProfile -File $VerifierPath -RepositoryRoot $repositoryRoot -ProvenanceOnly 2>&1)
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
 }
 
-function Assert-Passed([string]$caseName) {
-    $result = Invoke-Provenance
+function Assert-Passed([string]$caseName, [string]$repositoryRoot = $testRoot) {
+    $result = Invoke-Provenance $repositoryRoot
     if ($result.ExitCode -ne 0) {
         throw "$caseName should pass provenance validation: $($result.Output)"
     }
 }
 
-function Assert-Rejected([string]$caseName) {
-    $result = Invoke-Provenance
+function Assert-Rejected([string]$caseName, [string]$repositoryRoot = $testRoot) {
+    $result = Invoke-Provenance $repositoryRoot
     if ($result.ExitCode -eq 0) {
         throw "$caseName should be rejected by provenance validation."
     }
@@ -43,6 +44,21 @@ try {
     Invoke-Git @("config", "user.name", "ContractScribe provenance test") | Out-Null
     $baselineRevision = Invoke-Git @("rev-parse", "HEAD")
     Assert-Passed "baseline"
+
+    & git clone --depth 1 --no-local --no-hardlinks $sourceRepositoryRoot $squashedRoot 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "The shallow provenance regression repository clone failed."
+    }
+    Assert-Passed "squashed current baseline" $squashedRoot
+    & git -C $squashedRoot config user.email "test@example.invalid"
+    & git -C $squashedRoot config user.name "ContractScribe provenance test"
+    Set-Content -LiteralPath (Join-Path $squashedRoot "Directory.Packages.props") -Value "changed package" -NoNewline
+    & git -C $squashedRoot add Directory.Packages.props
+    & git -C $squashedRoot commit -m "change durable package baseline" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "The shallow provenance package-drift commit failed."
+    }
+    Assert-Rejected "squashed package drift" $squashedRoot
 
     Set-Content -LiteralPath (Join-Path $testRoot "docs/20_architecture/decisions/0001.md") -Value "ADR" -NoNewline
     Invoke-Git @("add", ".") | Out-Null
@@ -87,10 +103,13 @@ try {
     Invoke-Git @("commit", "-m", "rewrite provenance with runner drift") | Out-Null
     Assert-Rejected "runner drift with rewritten transfer manifest"
 
-    Write-Output "M0.4 provenance regression passed: documentation is accepted; runner, fixture, manifest, and ancestor build/package drift are rejected."
+    Write-Output "M0.4 provenance regression passed: current and squashed baselines are accepted; durable package, runner, fixture, manifest, and ancestor build/package drift are rejected."
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $squashedRoot) {
+        Remove-Item -LiteralPath $squashedRoot -Recurse -Force
     }
 }
