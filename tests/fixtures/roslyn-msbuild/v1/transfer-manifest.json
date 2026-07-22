@@ -18,8 +18,8 @@
   "protocolInputSha256": {
     ".github/workflows/ci.yml": "589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e",
     "Directory.Packages.props": "a112573f56ccffb226144443424d4d80e6680d33799c16bd61da7470289bfd4c",
-    "global.json": "da40e27cc07d42b5824f967eec21a10b776f6766759a04a3f0231080bb2f847f",
-    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "c9f5a0e6bf4fc31578c9634b80e60bc2391f7ecabe4ce04e6c74c7eb51567390",
+    "global.json": "99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5",
     "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1": "246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c",
     "docs/20_architecture/experiments/m0.4-framework-dependent-loading.md": "cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd"
   },

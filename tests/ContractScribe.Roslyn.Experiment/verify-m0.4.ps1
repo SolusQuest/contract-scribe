@@ -18,6 +18,12 @@ function Assert-Condition([bool]$condition, [string]$message) {
     }
 }
 
+function Get-CanonicalSha256([string]$path) {
+    $text = [IO.File]::ReadAllText($path)
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.UTF8Encoding]::new($false).GetBytes($normalized))).ToLowerInvariant()
+}
+
 Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host was not found."
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $baseAllowedPostSourceFiles = @(
@@ -73,7 +79,7 @@ foreach ($entry in $manifest.protocolInputSha256.PSObject.Properties) {
     $protocolPath = Join-Path $repositoryRoot $entry.Name
     Assert-Condition (Test-Path -LiteralPath $protocolPath) "A protocol input is missing: $($entry.Name)."
     Assert-Condition ($entry.Value -match "^[0-9a-f]{64}$") "A protocol input hash is not a lowercase SHA-256: $($entry.Name)."
-    $actualProtocolHash = (Get-FileHash -LiteralPath $protocolPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualProtocolHash = Get-CanonicalSha256 $protocolPath
     Assert-Condition ($actualProtocolHash -eq $entry.Value) "Protocol input hash does not match the transfer manifest: $($entry.Name)."
 }
 
