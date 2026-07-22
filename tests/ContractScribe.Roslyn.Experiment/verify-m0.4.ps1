@@ -15,6 +15,9 @@ $repositoryRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 }
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
+$transferManifestRelativePath = "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+$frozenM04SourceRevision = "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c"
+$frozenTransferManifestSha256 = "c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3"
 $hostPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\bin\$Configuration\net10.0\ContractScribe.Roslyn.Experiment.dll"
 $outputRoot = Join-Path $repositoryRoot "TestResults\m0.4-protocol"
 
@@ -31,8 +34,7 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $baseAllowedPostSourceFiles = @(
     ".github/workflows/ci.yml",
     "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1",
-    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
-    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1"
 )
 $expectedM05PostSourceFiles = @(
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
@@ -80,11 +82,15 @@ $isRecordedWindowsEvidence = $EvidenceReproduction -and (
 $currentRevision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
 Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
 Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
+Assert-Condition ($manifest.sourceRevision -eq $frozenM04SourceRevision) "The transfer manifest source revision does not match the frozen M0.4 source revision."
+$transferManifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Assert-Condition ($transferManifestSha256 -eq $frozenTransferManifestSha256) "The transfer manifest content does not match the frozen M0.4 provenance anchor."
 $sourceRange = "$($manifest.sourceRevision)..$currentRevision"
 $sourceFiles = @(git -C $repositoryRoot diff --name-only $sourceRange)
 $sourceDiffExitCode = $LASTEXITCODE
 Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
-$unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles) })
+$protectedBaselineFiles = @($transferManifestRelativePath)
+$unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles + $protectedBaselineFiles) })
 $semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
     $_ -in @(
         "global.json",
@@ -94,11 +100,20 @@ $semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
     $_.StartsWith("Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/ContractScribe.Roslyn/", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/ContractScribe.Roslyn.Experiment/", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleApp/", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleLibrary/", [StringComparison]::OrdinalIgnoreCase) -or
     $_ -in @(
         "tests/fixtures/roslyn-msbuild/v1/Sample.sln",
-        "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json"
+        "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json",
+        $transferManifestRelativePath
     )
 })
 Assert-Condition ($semanticSourceFiles.Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path: $($semanticSourceFiles -join ', ')."
