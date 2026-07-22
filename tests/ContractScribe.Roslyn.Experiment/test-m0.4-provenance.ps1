@@ -8,7 +8,7 @@ $sourceRepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("contract-scribe-m04-provenance-" + [Guid]::NewGuid().ToString("N"))
 
 function Invoke-Git([string[]]$arguments) {
-    $output = @(& git -C $testRoot @arguments 2>&1)
+    $output = & git -C $testRoot @arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "git $($arguments -join ' ') failed: $($output -join "`n")"
     }
@@ -16,7 +16,7 @@ function Invoke-Git([string[]]$arguments) {
 }
 
 function Invoke-Provenance {
-    $output = @(& pwsh -NoProfile -File $VerifierPath -RepositoryRoot $testRoot -ProvenanceOnly 2>&1)
+    $output = & pwsh -NoProfile -File $VerifierPath -RepositoryRoot $testRoot -ProvenanceOnly 2>&1
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
 }
 
