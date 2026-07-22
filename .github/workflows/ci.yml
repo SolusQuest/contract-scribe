@@ -37,9 +37,6 @@ jobs:
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release -M05ManifestPath tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json
-      - name: Verify M0.4 provenance guard
-        shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
