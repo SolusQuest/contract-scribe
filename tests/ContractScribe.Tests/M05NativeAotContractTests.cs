@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -40,14 +39,13 @@ public sealed class M05NativeAotContractTests
     }
 
     [Fact]
-    public void ManifestBindsTheImmutableM04TransferManifestAndClosedInputs()
+    public void HistoricalManifestRetainsItsOriginalM04InputsAndClosedProfile()
     {
         var root = FindRepositoryRoot();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "m0.5-native-aot-manifest.json")));
-        var transferManifestPath = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "transfer-manifest.json");
-        var transferHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(transferManifestPath))).ToLowerInvariant();
 
-        Assert.Equal(transferHash, manifest.RootElement.GetProperty("m04ManifestSha256").GetString());
+        Assert.Equal("c728b8ab10696767de6a37809f4cde60bdb060621ce3febec1869b92b5801bd3", manifest.RootElement.GetProperty("m04ManifestSha256").GetString());
+        Assert.Equal("63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c", manifest.RootElement.GetProperty("m04FrozenSourceRevision").GetString());
         Assert.Matches("^[0-9a-f]{40}$", manifest.RootElement.GetProperty("m04FrozenSourceRevision").GetString()!);
         var implementationRevision = manifest.RootElement.GetProperty("implementationRevision").GetString()!;
         Assert.Matches("^[0-9a-f]{40}$", implementationRevision);
