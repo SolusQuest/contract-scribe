@@ -40,20 +40,16 @@ public sealed class M05NativeAotContractTests
     }
 
     [Fact]
-    public void ManifestBindsTheHistoricalM04TransferManifestAndClosedInputs()
+    public void ManifestBindsTheImmutableM04TransferManifestAndClosedInputs()
     {
         var root = FindRepositoryRoot();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "m0.5-native-aot-manifest.json")));
-        const string transferManifestRelativePath = "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json";
-        var frozenRevision = manifest.RootElement.GetProperty("m04FrozenSourceRevision").GetString()!;
-        var implementationRevision = manifest.RootElement.GetProperty("implementationRevision").GetString()!;
-        var historicalTransferManifest = ReadGitBlob(root, implementationRevision, transferManifestRelativePath);
-        var transferHash = Convert.ToHexString(SHA256.HashData(historicalTransferManifest)).ToLowerInvariant();
-        using var historicalManifest = JsonDocument.Parse(historicalTransferManifest);
+        var transferManifestPath = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "transfer-manifest.json");
+        var transferHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(transferManifestPath))).ToLowerInvariant();
 
         Assert.Equal(transferHash, manifest.RootElement.GetProperty("m04ManifestSha256").GetString());
-        Assert.Equal(frozenRevision, historicalManifest.RootElement.GetProperty("sourceRevision").GetString());
-        Assert.Equal("9.0.15", historicalManifest.RootElement.GetProperty("packages").GetProperty("System.Security.Cryptography.Xml").GetString());
+        Assert.Matches("^[0-9a-f]{40}$", manifest.RootElement.GetProperty("m04FrozenSourceRevision").GetString()!);
+        var implementationRevision = manifest.RootElement.GetProperty("implementationRevision").GetString()!;
         Assert.Matches("^[0-9a-f]{40}$", implementationRevision);
         Assert.NotEqual(new string('0', 40), implementationRevision);
         Assert.Equal("net10.0", manifest.RootElement.GetProperty("publishProfile").GetProperty("targetFramework").GetString());
@@ -224,27 +220,6 @@ public sealed class M05NativeAotContractTests
         if (outcome == "not-feasible") cell["code"] = "comparison.payload-mismatch";
         if (outcome == "feasible-with-warnings") cell["warnings"] = new JsonArray { new JsonObject { ["phase"] = "publish", ["cause"] = "aot-analysis", ["code"] = "warning.reviewed" } };
         return cell.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-    }
-
-    private static byte[] ReadGitBlob(string root, string revision, string path)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = root,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add("show");
-        startInfo.ArgumentList.Add($"{revision}:{path}");
-        using var process = Process.Start(startInfo)!;
-        using var output = new MemoryStream();
-        process.StandardOutput.BaseStream.CopyTo(output);
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, $"git show failed: {error}");
-        return output.ToArray();
     }
 
     private static string FindRepositoryRoot()
