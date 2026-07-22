@@ -2,11 +2,17 @@
 param(
     [string]$Configuration = "Release",
     [switch]$EvidenceReproduction,
-    [string]$M05ManifestPath
+    [string]$M05ManifestPath,
+    [string]$RepositoryRoot,
+    [switch]$ProvenanceOnly
 )
 
 $ErrorActionPreference = "Stop"
-$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repositoryRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path
+} else {
+    (Resolve-Path -LiteralPath $RepositoryRoot).Path
+}
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
 $hostPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\bin\$Configuration\net10.0\ContractScribe.Roslyn.Experiment.dll"
@@ -18,10 +24,13 @@ function Assert-Condition([bool]$condition, [string]$message) {
     }
 }
 
-Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host was not found."
+if (-not $ProvenanceOnly) {
+    Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host was not found."
+}
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $baseAllowedPostSourceFiles = @(
     ".github/workflows/ci.yml",
+    "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
     "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
 )
@@ -68,21 +77,21 @@ $isRecordedWindowsEvidence = $EvidenceReproduction -and (
     $env:RUNNER_OS -eq "Windows" -or
     ([string]::IsNullOrWhiteSpace($env:RUNNER_OS) -and $IsWindows)
 )
-$currentRevision = (& git rev-parse HEAD).Trim()
+$currentRevision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
 Assert-Condition ($currentRevision -match "^[0-9a-f]{40}$") "The current source revision could not be resolved."
 Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfer manifest source revision is not exact."
 $sourceRange = "$($manifest.sourceRevision)..$currentRevision"
-$sourceFiles = @(git diff --name-only $sourceRange)
+$sourceFiles = @(git -C $repositoryRoot diff --name-only $sourceRange)
 $sourceDiffExitCode = $LASTEXITCODE
 Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
 $unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles) })
 $semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
     $_ -in @(
         "global.json",
-        "Directory.Build.props",
         "Directory.Packages.props",
         "ContractScribe.slnx"
     ) -or
+    $_.StartsWith("Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/ContractScribe.Roslyn/", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/ContractScribe.Roslyn.Experiment/", [StringComparison]::OrdinalIgnoreCase) -or
     $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleApp/", [StringComparison]::OrdinalIgnoreCase) -or
@@ -93,6 +102,11 @@ $semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
     )
 })
 Assert-Condition ($semanticSourceFiles.Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path: $($semanticSourceFiles -join ', ')."
+
+if ($ProvenanceOnly) {
+    Write-Output "M0.4 provenance scope verified."
+    return
+}
 
 foreach ($entry in $manifest.fixtureContentSha256.PSObject.Properties) {
     $path = Join-Path $fixtureRoot $entry.Name
