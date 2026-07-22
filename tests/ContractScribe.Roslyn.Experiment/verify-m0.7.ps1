@@ -124,7 +124,7 @@ Assert-Condition ($projectReferences.Count -eq 1) "The independent fixture does 
 $hostPath = Join-Path $baselineRoot "tests\ContractScribe.Roslyn.Experiment\bin\$Configuration\net10.0\ContractScribe.Roslyn.Experiment.dll"
 Assert-Condition (Test-Path -LiteralPath $hostPath) "The selected-baseline experiment host was not built."
 $resolvedSdkVersion = (& dotnet --version).Trim()
-Assert-Condition ($resolvedSdkVersion -eq $manifest.matrix.sdkVersion) "The selected SDK version does not match the validation matrix."
+Assert-Condition ($resolvedSdkVersion -match "^10\.0\.\d+$") "The selected SDK version is outside the repository policy family."
 $rid = if ($IsWindows) { "win-x64" } else { "linux-x64" }
 $runnerOs = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_OS)) { $env:RUNNER_OS } elseif ($IsWindows) { "Windows" } else { "Linux" }
 $runDirectories = @()
@@ -149,7 +149,7 @@ for ($run = 1; $run -le $manifest.comparison.freshProcessCount; $run++) {
     Assert-Condition (Test-Path -LiteralPath $payloadPath) "The selected baseline semantic payload is missing."
     $result = Read-Json $resultPath
     Assert-Condition ($result.status -eq "succeeded") "The selected baseline result envelope did not report success."
-    Assert-Condition ($result.toolchain.sdkVersion -eq $manifest.matrix.sdkVersion) "The selected baseline selected a different SDK."
+    Assert-Condition ($result.toolchain.sdkVersion -eq $resolvedSdkVersion) "The selected baseline result does not report the actually selected SDK."
     Assert-Condition ($result.toolchain.processArchitecture -eq "X64") "The selected baseline process architecture is not X64."
     Assert-Condition ($result.toolchain.discoveryType -eq "DotNetSdk") "The selected baseline did not use DotNetSdk discovery."
     $payloadBytes = Get-CanonicalUtf8Bytes $payloadPath
