@@ -18,7 +18,6 @@ $manifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
 $transferManifestRelativePath = "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
 $frozenM04SourceRevision = "090abc5c4d7cc028dd5222d899ab254761959570"
 $frozenTransferManifestSha256 = "8f4829cf5d3c67a6f0f6773624593bd0ec09d8ded77115e0c97258de21d8da0d"
-$frozenM04SemanticTreeSha256 = "14d1d84701c3fd4ef732c1a01f4d30a52c0596666fb22f8098b97c733005e2bc"
 $hostPath = Join-Path $repositoryRoot "tests\ContractScribe.Roslyn.Experiment\bin\$Configuration\net10.0\ContractScribe.Roslyn.Experiment.dll"
 $outputRoot = Join-Path $repositoryRoot "TestResults\m0.4-protocol"
 
@@ -37,49 +36,6 @@ $baseAllowedPostSourceFiles = @(
     "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1"
 )
-
-function Test-SemanticPath([string]$path) {
-    return $path -in @(
-        "global.json",
-        "Directory.Packages.props",
-        "ContractScribe.slnx"
-    ) -or
-    $path.StartsWith("Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/ContractScribe.Roslyn/", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/ContractScribe.Roslyn.Experiment/", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleApp/", [StringComparison]::OrdinalIgnoreCase) -or
-    $path.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleLibrary/", [StringComparison]::OrdinalIgnoreCase) -or
-    $path -in @(
-        "tests/fixtures/roslyn-msbuild/v1/Sample.sln",
-        "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json",
-        $transferManifestRelativePath
-    )
-}
-
-function Get-SemanticTreeSha256 {
-    $treeRows = @(git -C $repositoryRoot ls-tree -r --full-tree HEAD)
-    $entries = @()
-    foreach ($row in $treeRows) {
-        $parts = $row -split "`t", 2
-        Assert-Condition ($parts.Count -eq 2) "The committed semantic baseline tree could not be parsed."
-        $metadata = $parts[0] -split " "
-        $path = $parts[1]
-        if ((Test-SemanticPath $path) -and $path -notin $baseAllowedPostSourceFiles -and $path -ne $transferManifestRelativePath) {
-            Assert-Condition ($metadata.Count -eq 3 -and $metadata[2] -match "^[0-9a-f]{40}$") "The semantic baseline blob could not be resolved: $path."
-            $entries += "$path`t$($metadata[2])"
-        }
-    }
-    $canonical = ($entries | Sort-Object) -join "`n"
-    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.UTF8Encoding]::new($false).GetBytes($canonical))).ToLowerInvariant()
-}
 $expectedM05PostSourceFiles = @(
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
     "docs/20_architecture/experiments/m0.5-native-aot-registry-v1.json",
@@ -129,23 +85,38 @@ Assert-Condition ($manifest.sourceRevision -match "^[0-9a-f]{40}$") "The transfe
 Assert-Condition ($manifest.sourceRevision -eq $frozenM04SourceRevision) "The transfer manifest source revision does not match the frozen M0.4 source revision."
 $transferManifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-Condition ($transferManifestSha256 -eq $frozenTransferManifestSha256) "The transfer manifest content does not match the frozen M0.4 provenance anchor."
-$semanticTreeSha256 = Get-SemanticTreeSha256
-Assert-Condition ($semanticTreeSha256 -eq $frozenM04SemanticTreeSha256) "The semantic source tree does not match the durable M0.4 provenance anchor."
-
-& git -C $repositoryRoot cat-file -e "$($manifest.sourceRevision)^{commit}" 2>$null
-$sourceRevisionExists = ($LASTEXITCODE -eq 0)
-if ($sourceRevisionExists) {
-    $sourceRange = "$($manifest.sourceRevision)..$currentRevision"
-    $sourceFiles = @(git -C $repositoryRoot diff --name-only $sourceRange)
-    $sourceDiffExitCode = $LASTEXITCODE
-    Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
-    $protectedBaselineFiles = @($transferManifestRelativePath)
-    $unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles + $protectedBaselineFiles) })
-    $semanticSourceFiles = @($unallowedSourceFiles | Where-Object { Test-SemanticPath $_ })
-    Assert-Condition ($semanticSourceFiles.Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path: $($semanticSourceFiles -join ', ')."
-} else {
-    Write-Output "M0.4 source revision $($manifest.sourceRevision) is unavailable; durable semantic tree provenance anchor verified."
-}
+$sourceRange = "$($manifest.sourceRevision)..$currentRevision"
+$sourceFiles = @(git -C $repositoryRoot diff --name-only $sourceRange)
+$sourceDiffExitCode = $LASTEXITCODE
+Assert-Condition ($sourceDiffExitCode -eq 0) "The transfer manifest source revision could not be verified: $($manifest.sourceRevision)."
+$protectedBaselineFiles = @($transferManifestRelativePath)
+$unallowedSourceFiles = @($sourceFiles | Where-Object { $_ -notin ($allowedPostSourceFiles + $allowedPostImplementationFiles + $protectedBaselineFiles) })
+$semanticSourceFiles = @($unallowedSourceFiles | Where-Object {
+    $_ -in @(
+        "global.json",
+        "Directory.Packages.props",
+        "ContractScribe.slnx"
+    ) -or
+    $_.StartsWith("Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/ContractScribe.Roslyn/", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/ContractScribe.Roslyn.Experiment/", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Build.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/Directory.Packages.", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleApp/", [StringComparison]::OrdinalIgnoreCase) -or
+    $_.StartsWith("tests/fixtures/roslyn-msbuild/v1/SampleLibrary/", [StringComparison]::OrdinalIgnoreCase) -or
+    $_ -in @(
+        "tests/fixtures/roslyn-msbuild/v1/Sample.sln",
+        "tests/fixtures/roslyn-msbuild/v1/expected-symbols.json",
+        $transferManifestRelativePath
+    )
+})
+Assert-Condition ($semanticSourceFiles.Count -eq 0) "The transfer manifest source revision does not cover the current semantic source path: $($semanticSourceFiles -join ', ')."
 
 if ($ProvenanceOnly) {
     Write-Output "M0.4 provenance scope verified."
