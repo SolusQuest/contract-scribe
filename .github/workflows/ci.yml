@@ -54,13 +54,21 @@ jobs:
       - shell: pwsh
         run: Get-Content -LiteralPath TestResults/m0.7-independent-validation/m0.7-evidence.json -Raw
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
+        if: success()
         with:
           name: m0.7-evidence-${{ matrix.os }}
           path: TestResults/m0.7-independent-validation
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: m0.7-evidence-failure-${{ matrix.os }}
+          path: TestResults/m0.7-independent-validation/m0.7-failure-evidence.json
+          if-no-files-found: ignore
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-provenance.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-failure-safety.ps1 -BaselineRepositoryPath baseline -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help

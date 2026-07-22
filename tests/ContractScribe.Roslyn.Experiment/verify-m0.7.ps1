@@ -14,7 +14,14 @@ $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $PSScriptRoot "..\..\TestResults\m0.7-independent-validation"
 }
+function Remove-RawFailureArtifacts {
+    if (Test-Path -LiteralPath $OutputRoot) {
+        Get-ChildItem -LiteralPath $OutputRoot -Directory -Filter "run-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $OutputRoot "m0.7-evidence.json") -Force -ErrorAction SilentlyContinue
+    }
+}
 function Write-EarlyFailureEvidence([string]$message) {
+    Remove-RawFailureArtifacts
     New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
     $failure = [ordered]@{
         formatVersion = "contractscribe-m0.7-failure-evidence-v1"
@@ -44,6 +51,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 }
 
 function Write-FailureEvidence([string]$message) {
+    Remove-RawFailureArtifacts
     $outcome = "protocol-failure"
     $reasonCode = "unexpected-verifier-error"
     if ($message -match "baseline checkout|selected-baseline commit|semantic source|transfer manifest|SDK policy|roll-forward|package baseline|frozen host") {
