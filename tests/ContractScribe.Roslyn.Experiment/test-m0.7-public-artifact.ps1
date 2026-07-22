@@ -16,7 +16,13 @@ Set-Content -LiteralPath (Join-Path $sourceRoot "run-1\stdout.txt") -Value "Auth
 Set-Content -LiteralPath (Join-Path $sourceRoot "run-1\stderr.txt") -Value "synthetic stderr" -NoNewline
 Set-Content -LiteralPath (Join-Path $sourceRoot "run-1\result.json") -Value "{}" -NoNewline
 
-& pwsh -NoProfile -File (Join-Path $PSScriptRoot "prepare-m0.7-public-evidence.ps1") -SourceRoot $sourceRoot -PublicRoot $publicRoot
+Push-Location $repositoryRoot
+try {
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot "prepare-m0.7-public-evidence.ps1") -SourceRoot "TestResults\m0.7-public-artifact\source" -PublicRoot "TestResults\m0.7-public-artifact\public"
+}
+finally {
+    Pop-Location
+}
 $actual = @(Get-ChildItem -LiteralPath $publicRoot -File -Recurse | ForEach-Object { $_.FullName.Substring($publicRoot.Length + 1).Replace("\", "/") } | Sort-Object)
 $expected = @("m0.7-evidence.json", "run-1/semantic-payload.json", "run-2/semantic-payload.json") | Sort-Object
 if ((($actual -join ",") -ne ($expected -join ","))) { throw "Public artifact regression published an unexpected file set." }
