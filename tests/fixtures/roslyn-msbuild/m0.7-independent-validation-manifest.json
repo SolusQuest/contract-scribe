@@ -1,0 +1,65 @@
+{
+  "formatVersion": "contractscribe-m0.7-validation-v1",
+  "selectedBaseline": {
+    "commit": "645c0946b8b811d633b471b232b0654c10e6d7f6",
+    "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
+    "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
+    "frozenHost": "tests/ContractScribe.Roslyn.Experiment/bin/Release/net10.0/ContractScribe.Roslyn.Experiment.dll"
+  },
+  "fixture": {
+    "repository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
+    "trackingIssue": "https://github.com/Yuee98/contract-scribe-m07-fixture/issues/1",
+    "commit": "ae9972944f8f78a2ef2455380534120469324a4e",
+    "oraclePath": "expected-payload.json",
+    "oracleSha256": "0441e29d34f602d1884d9ebf252838a7d16aad46646b6dce1f1acb55459a1118",
+    "fileSha256": {
+      ".gitignore": "6c5082c7e6de3e350189c67a1aacf757485ecc26e0a3cf96683528565f3e5f12",
+      "README.md": "2288ed24a3ff76621e16098431e34b33dec94757673fdd88e3c5a1377bde47a5",
+      "Sample.sln": "9c251f53f108401e77bd94a95fb779320b176dda66afb556e9b5ccdeb05ead2d",
+      "SampleApp/EntryPoint.cs": "2414002227e0519bb51600de42c5b01778ba5a4eb8e7253d25197b20db28555a",
+      "SampleApp/SampleApp.csproj": "3c15d95c5233fe5ac459f1ab0251aad6df44da845ec5e818b8b7ed934b49d1c7",
+      "SampleLibrary/Catalog.cs": "35ca6c4b660d4efff488362d51757f73643e889e39299b6a9f7fd01ba86b9e4f",
+      "SampleLibrary/SampleLibrary.csproj": "584b6643de6d112d42fe26fe99254b35f4482325404f8e76a65fc0ea0eada3ad",
+      "expected-payload.json": "0441e29d34f602d1884d9ebf252838a7d16aad46646b6dce1f1acb55459a1118",
+      "fixture-manifest.json": "ead04df617dfe6f59b4130dfd8fdb6144831b4a058c2a12361cd7765c69234a0",
+      "global.json": "0b217c0d631cd67016fb292aecee77c824ae2614c33bbdcfd7450e40fbdb6b1c"
+    }
+  },
+  "matrix": {
+    "operatingSystems": ["ubuntu-latest", "windows-latest"],
+    "processArchitecture": "X64",
+    "sdkVersion": "10.0.102",
+    "rollForward": "latestFeature",
+    "securityXmlPackageVersion": "9.0.18",
+    "observedRids": ["linux-x64", "win-x64"]
+  },
+  "comparison": {
+    "artifact": "semantic-payload.json",
+    "encoding": "utf-8-no-bom",
+    "trailingNewline": false,
+    "equality": "byte-equality",
+    "freshProcessCount": 2,
+    "crossRunEquality": true,
+    "crossCellEquality": true
+  },
+  "commands": [
+    "dotnet restore ContractScribe.slnx",
+    "dotnet build ContractScribe.slnx --configuration Release --no-restore",
+    "dotnet restore baseline/ContractScribe.slnx",
+    "dotnet build baseline/ContractScribe.slnx --configuration Release --no-restore",
+    "dotnet restore fixture/Sample.sln",
+    "dotnet build fixture/Sample.sln --configuration Release --no-restore",
+    "pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release",
+    "pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release",
+    "pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.7.ps1 -Configuration Release"
+  ],
+  "outcomeTaxonomy": {
+    "values": ["succeeded", "inconclusive", "baseline-failure", "protocol-failure", "baseline-invalidated"],
+    "aggregatePrecedence": ["protocol-failure", "baseline-invalidated", "baseline-failure", "inconclusive", "succeeded"],
+    "nonSuccessRequiredCellReasons": ["cancelled", "timed-out", "incomplete", "post-run-invalidated"]
+  },
+  "unresolvedRisks": [
+    "The selected baseline remains limited to the documented two-project synthetic shape and Ubuntu/Windows X64 framework-dependent matrix.",
+    "Production process topology and distribution channel remain deferred to Issues #17 and #18."
+  ]
+}

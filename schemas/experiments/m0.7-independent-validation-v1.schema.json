@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yuee98/contract-scribe/blob/645c0946b8b811d633b471b232b0654c10e6d7f6/schemas/experiments/m0.7-independent-validation-v1.schema.json",
+  "type": "object",
+  "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "outcomeTaxonomy", "unresolvedRisks"],
+  "properties": {
+    "formatVersion": { "const": "contractscribe-m0.7-validation-v1" },
+    "selectedBaseline": {
+      "type": "object",
+      "required": ["commit", "semanticSourceRevision", "transferManifestSha256", "frozenHost"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "semanticSourceRevision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "transferManifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "frozenHost": { "type": "string", "pattern": "^tests/ContractScribe\\.Roslyn\\.Experiment/bin/Release/net10\\.0/.*\\.dll$" }
+      },
+      "additionalProperties": false
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["repository", "trackingIssue", "commit", "oraclePath", "oracleSha256", "fileSha256"],
+      "properties": {
+        "repository": { "type": "string", "format": "uri" },
+        "trackingIssue": { "type": "string", "format": "uri" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "oraclePath": { "const": "expected-payload.json" },
+        "oracleSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "fileSha256": { "type": "object", "minProperties": 10, "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+      },
+      "additionalProperties": false
+    },
+    "matrix": {
+      "type": "object",
+      "required": ["operatingSystems", "processArchitecture", "sdkVersion", "rollForward", "securityXmlPackageVersion", "observedRids"],
+      "properties": {
+        "operatingSystems": { "const": ["ubuntu-latest", "windows-latest"] },
+        "processArchitecture": { "const": "X64" },
+        "sdkVersion": { "const": "10.0.102" },
+        "rollForward": { "const": "latestFeature" },
+        "securityXmlPackageVersion": { "const": "9.0.18" },
+        "observedRids": { "const": ["linux-x64", "win-x64"] }
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "required": ["artifact", "encoding", "trailingNewline", "equality", "freshProcessCount", "crossRunEquality", "crossCellEquality"],
+      "properties": {
+        "artifact": { "const": "semantic-payload.json" },
+        "encoding": { "const": "utf-8-no-bom" },
+        "trailingNewline": { "const": false },
+        "equality": { "const": "byte-equality" },
+        "freshProcessCount": { "const": 2 },
+        "crossRunEquality": { "const": true },
+        "crossCellEquality": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "commands": { "type": "array", "minItems": 9, "items": { "type": "string", "minLength": 1 } },
+    "outcomeTaxonomy": {
+      "type": "object",
+      "required": ["values", "aggregatePrecedence", "nonSuccessRequiredCellReasons"],
+      "properties": {
+        "values": { "const": ["succeeded", "inconclusive", "baseline-failure", "protocol-failure", "baseline-invalidated"] },
+        "aggregatePrecedence": { "const": ["protocol-failure", "baseline-invalidated", "baseline-failure", "inconclusive", "succeeded"] },
+        "nonSuccessRequiredCellReasons": { "const": ["cancelled", "timed-out", "incomplete", "post-run-invalidated"] }
+      },
+      "additionalProperties": false
+    },
+    "unresolvedRisks": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+  },
+  "additionalProperties": false
+}

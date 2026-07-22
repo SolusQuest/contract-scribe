@@ -25,10 +25,32 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: SolusQuest/contract-scribe
+          ref: 645c0946b8b811d633b471b232b0654c10e6d7f6
+          path: baseline
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: Yuee98/contract-scribe-m07-fixture
+          ref: ae9972944f8f78a2ef2455380534120469324a4e
+          path: fixture
+          fetch-depth: 1
+          persist-credentials: false
+      - run: dotnet restore baseline/ContractScribe.slnx
+      - run: dotnet build baseline/ContractScribe.slnx --configuration Release --no-restore
+      - run: dotnet restore fixture/Sample.sln
+      - run: dotnet build fixture/Sample.sln --configuration Release --no-restore
       - shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
+        run: pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
       - shell: pwsh
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release
+        run: pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.7.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-provenance.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
