@@ -33,14 +33,14 @@ foreach ($vector in $vectors) {
     }
 }
 
-function Write-SyntheticCellEvidence([string]$cellRoot, [bool]$crossRunEquality, [int]$runCount, [bool]$writePayloads) {
+function Write-SyntheticCellEvidence([string]$cellRoot, [bool]$crossRunEquality, [int]$runCount, [bool]$writePayloads, [string]$payloadContent = "payload") {
     New-Item -ItemType Directory -Path $cellRoot -Force | Out-Null
     $runs = @()
     for ($run = 1; $run -le $runCount; $run++) {
         $payloadPath = Join-Path $cellRoot ("run-{0}\semantic-payload.json" -f $run)
         if ($writePayloads) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $payloadPath) -Force | Out-Null
-            [IO.File]::WriteAllText($payloadPath, "payload", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($payloadPath, $payloadContent, [Text.UTF8Encoding]::new($false))
         }
         $runs += [ordered]@{ run = $run; payloadSha256 = if ($writePayloads) { (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { "0000000000000000000000000000000000000000000000000000000000000000" }; sdkVersion = "10.0.302"; msbuildVersion = "18.6.11.33009"; runtimeVersion = "10.0.10"; processArchitecture = "X64" }
     }
@@ -74,6 +74,34 @@ foreach ($vector in $postRunVectors) {
     if ($aggregate.aggregateOutcome -ne $vector.expected -or -not $aggregate.retainedFailure) {
         throw "Aggregate post-run vector did not retain its expected outcome."
     }
+}
+
+$crossCellRoot = Join-Path $root "cross-cell-byte-mismatch"
+Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-1") $true 2 $true "payload-one"
+Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-2") $true 2 $true "payload-two"
+$crossCellTwoDocumentPath = Join-Path $crossCellRoot "cell-2\m0.7-evidence.json"
+$crossCellTwoDocument = Get-Content -LiteralPath $crossCellTwoDocumentPath -Raw | ConvertFrom-Json
+$crossCellTwoDocument.runnerOs = "Windows"
+$crossCellTwoDocument.rid = "win-x64"
+[IO.File]::WriteAllText($crossCellTwoDocumentPath, ($crossCellTwoDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+$crossCellOutput = Join-Path $crossCellRoot "aggregate.json"
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $crossCellRoot -OutputPath $crossCellOutput 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $crossCellOutput | ConvertFrom-Json).aggregateOutcome -ne "baseline-failure") { throw "Cross-cell byte mismatch was not classified as baseline-failure." }
+
+foreach ($provenanceField in @("selectedBaselineCommit", "protocolCommit", "fixtureCommit", "oracleSha256")) {
+    $provenanceRoot = Join-Path $root ("provenance-mismatch-{0}" -f $provenanceField)
+    Write-SyntheticCellEvidence (Join-Path $provenanceRoot "cell-1") $true 2 $true
+    Write-SyntheticCellEvidence (Join-Path $provenanceRoot "cell-2") $true 2 $true
+    $cellTwoDocumentPath = Join-Path $provenanceRoot "cell-2\m0.7-evidence.json"
+    $cellTwoDocument = Get-Content -LiteralPath $cellTwoDocumentPath -Raw | ConvertFrom-Json
+    $cellTwoDocument.runnerOs = "Windows"
+    $cellTwoDocument.rid = "win-x64"
+    $cellTwoDocument.$provenanceField = if ($provenanceField -eq "selectedBaselineCommit") { "1111111111111111111111111111111111111111" } elseif ($provenanceField -eq "protocolCommit") { "2222222222222222222222222222222222222222" } elseif ($provenanceField -eq "fixtureCommit") { "3333333333333333333333333333333333333333" } else { "4444444444444444444444444444444444444444444444444444444444444444" }
+    [IO.File]::WriteAllText($cellTwoDocumentPath, ($cellTwoDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $provenanceOutput = Join-Path $provenanceRoot "aggregate.json"
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $provenanceRoot -OutputPath $provenanceOutput 2>&1 | Out-Null
+    $expectedProvenanceOutcome = if ($provenanceField -eq "selectedBaselineCommit") { "baseline-invalidated" } else { "protocol-failure" }
+    if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $provenanceOutput | ConvertFrom-Json).aggregateOutcome -ne $expectedProvenanceOutcome) { throw "Aggregate provenance mismatch vector was misclassified." }
 }
 
 Remove-Item -LiteralPath $root -Recurse -Force

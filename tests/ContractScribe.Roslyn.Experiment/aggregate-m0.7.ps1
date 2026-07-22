@@ -10,7 +10,19 @@ $ErrorActionPreference = "Stop"
 trap {
     $outcome = "protocol-failure"
     $reasonCode = "aggregate-validation-failure"
-    if ($_.Exception.Message -match "did not prove byte equality") {
+    if ($_.Exception.Message -match "different canonical payload bytes") {
+        $outcome = "baseline-failure"
+        $reasonCode = "cross-cell-byte-mismatch"
+    }
+    elseif ($_.Exception.Message -match "different selected baselines") {
+        $outcome = "baseline-invalidated"
+        $reasonCode = "aggregate-baseline-drift"
+    }
+    elseif ($_.Exception.Message -match "different protocol commits|different fixtures|different oracles") {
+        $outcome = "protocol-failure"
+        $reasonCode = "aggregate-provenance-mismatch"
+    }
+    elseif ($_.Exception.Message -match "did not prove byte equality") {
         $outcome = "baseline-failure"
         $reasonCode = "cross-cell-byte-mismatch"
     }
