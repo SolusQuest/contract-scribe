@@ -74,10 +74,15 @@ Assert-Condition ($baselineTransferManifest.packages.'System.Security.Cryptograp
 $fixtureManifestPath = Join-Path $fixtureRoot "fixture-manifest.json"
 $fixtureManifest = Read-Json $fixtureManifestPath
 Assert-Condition ($fixtureManifest.formatVersion -eq "contractscribe-m0.7-fixture-v1") "The independent fixture manifest version is unsupported."
+Assert-Condition ($fixtureManifest.ownership.owner -eq "Yuee98") "The independent fixture owner is not the reviewed public owner."
+Assert-Condition ($fixtureManifest.ownership.publicRepository -eq $true) "The independent fixture is not declared public."
+Assert-Condition (-not [string]::IsNullOrWhiteSpace($fixtureManifest.ownership.availabilityExpectation)) "The independent fixture availability expectation is missing."
+Assert-Condition ($fixtureManifest.ownership.trackingIssue -eq "https://github.com/Yuee98/contract-scribe-m07-fixture/issues/1") "The independent fixture tracking issue is not pinned."
 Assert-Condition ($fixtureManifest.independence.sourceAuthoredFromScratch) "The independent fixture source provenance is not declared."
 Assert-Condition ($fixtureManifest.independence.oracleAuthoredBeforeSelectedBaselineExecution) "The independent oracle was not pinned before selected-baseline execution."
 Assert-Condition (-not $fixtureManifest.independence.oracleDerivedFromRunnerOutput) "The independent oracle is declared as runner-derived."
 Assert-Condition (-not $fixtureManifest.independence.m04SourceCopied -and -not $fixtureManifest.independence.m04OracleCopied) "The fixture declares copied M0.4 material."
+Assert-Condition ($fixtureManifest.preRunReview.independenceReviewed -and $fixtureManifest.preRunReview.publicSafetyReviewed -and $fixtureManifest.preRunReview.oracleReviewedBeforeSelectedBaselineExecution) "The fixture pre-run independence/public-safety review is incomplete."
 Assert-Condition ($fixtureManifest.compilation.targetFramework -eq "net10.0") "The fixture target framework is outside the M0.7 contract."
 Assert-Condition ($fixtureManifest.compilation.langVersion -eq "latest") "The fixture language version is outside the M0.7 contract."
 Assert-Condition ($fixtureManifest.compilation.nullable -eq "enable") "The fixture nullable policy is outside the M0.7 contract."
@@ -85,12 +90,22 @@ Assert-Condition ($fixtureManifest.compilation.implicitUsings -eq "disable") "Th
 Assert-Condition (@($fixtureManifest.compilation.packageReferences | Where-Object { $null -ne $_ }).Count -eq 0) "The fixture declares an external package reference."
 Assert-Condition ($fixtureManifest.oracle.path -eq "expected-payload.json") "The fixture oracle path is not the committed canonical payload."
 Assert-Condition ($fixtureManifest.oracle.sha256 -eq $manifest.fixture.oracleSha256) "The fixture manifest oracle hash does not match the ContractScribe manifest."
+Assert-Condition (-not [string]::IsNullOrWhiteSpace($fixtureManifest.oracle.correctionRule)) "The fixture oracle correction rule is missing."
 
 $fixtureFiles = @($manifest.fixture.fileSha256.PSObject.Properties)
 foreach ($entry in $fixtureFiles) {
     $path = Join-Path $fixtureRoot $entry.Name
     Assert-Condition (Test-Path -LiteralPath $path) "A pinned fixture file is missing."
     Assert-Condition ((Get-FileSha256 $path) -eq $entry.Value) "A pinned fixture file hash does not match."
+}
+
+$protectedFiles = @($fixtureManifest.protectedFiles.PSObject.Properties)
+Assert-Condition ($protectedFiles.Count -ge 10) "The independent fixture protected file inventory is incomplete."
+Assert-Condition ($null -ne ($protectedFiles | Where-Object { $_.Name -eq ".gitattributes" })) "The independent fixture protected file inventory does not include .gitattributes."
+foreach ($entry in $protectedFiles) {
+    $path = Join-Path $fixtureRoot $entry.Name
+    Assert-Condition (Test-Path -LiteralPath $path) "A protected fixture file is missing."
+    Assert-Condition ((Get-FileSha256 $path) -eq $entry.Value) "A protected fixture file hash does not match."
 }
 
 $solutionPath = Join-Path $fixtureRoot $fixtureManifest.solution

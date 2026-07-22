@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: Yuee98/contract-scribe-m07-fixture
-          ref: 366011689de4668e8e2ebd8ec15e06d88a0c7e9e
+          ref: fde210468c10e1f54fa371a863e1f07521d64b46
           path: fixture
           fetch-depth: 1
           persist-credentials: false

@@ -41,13 +41,17 @@ public sealed class M07IndependentValidationContractTests
         var matrix = document.RootElement.GetProperty("matrix");
         var comparison = document.RootElement.GetProperty("comparison");
         var outcomes = document.RootElement.GetProperty("outcomeTaxonomy");
+        var outcomeRules = document.RootElement.GetProperty("outcomeRules");
 
         Assert.Equal(new[] { "ubuntu-latest", "windows-latest" }, matrix.GetProperty("operatingSystems").EnumerateArray().Select(value => value.GetString()).ToArray());
         Assert.Equal("X64", matrix.GetProperty("processArchitecture").GetString());
         Assert.Equal(2, comparison.GetProperty("freshProcessCount").GetInt32());
         Assert.True(comparison.GetProperty("crossRunEquality").GetBoolean());
         Assert.True(comparison.GetProperty("crossCellEquality").GetBoolean());
-        Assert.Equal(new[] { "protocol-failure", "baseline-invalidated", "baseline-failure", "inconclusive", "succeeded" }, outcomes.GetProperty("aggregatePrecedence").EnumerateArray().Select(value => value.GetString()).ToArray());
+        Assert.Equal(new[] { "baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded" }, outcomes.GetProperty("aggregatePrecedence").EnumerateArray().Select(value => value.GetString()).ToArray());
+        Assert.Equal(new[] { "baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded" }, outcomeRules.GetProperty("aggregatePrecedence").EnumerateArray().Select(value => value.GetString()).ToArray());
+        Assert.Contains("M0.6", outcomeRules.GetProperty("baseline-invalidated").GetString(), StringComparison.Ordinal);
+        Assert.Contains("cancel", outcomeRules.GetProperty("inconclusive").GetString(), StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

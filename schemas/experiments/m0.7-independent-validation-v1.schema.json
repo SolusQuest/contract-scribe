@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Yuee98/contract-scribe/blob/645c0946b8b811d633b471b232b0654c10e6d7f6/schemas/experiments/m0.7-independent-validation-v1.schema.json",
   "type": "object",
-  "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "outcomeTaxonomy", "unresolvedRisks"],
+  "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "outcomeTaxonomy", "outcomeRules", "unresolvedRisks"],
   "properties": {
     "formatVersion": { "const": "contractscribe-m0.7-validation-v1" },
     "selectedBaseline": {
@@ -62,8 +62,21 @@
       "required": ["values", "aggregatePrecedence", "nonSuccessRequiredCellReasons"],
       "properties": {
         "values": { "const": ["succeeded", "inconclusive", "baseline-failure", "protocol-failure", "baseline-invalidated"] },
-        "aggregatePrecedence": { "const": ["protocol-failure", "baseline-invalidated", "baseline-failure", "inconclusive", "succeeded"] },
+        "aggregatePrecedence": { "const": ["baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded"] },
         "nonSuccessRequiredCellReasons": { "const": ["cancelled", "timed-out", "incomplete", "post-run-invalidated"] }
+      },
+      "additionalProperties": false
+    },
+    "outcomeRules": {
+      "type": "object",
+      "required": ["baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded", "aggregatePrecedence"],
+      "properties": {
+        "baseline-invalidated": { "type": "string", "minLength": 1 },
+        "protocol-failure": { "type": "string", "minLength": 1 },
+        "baseline-failure": { "type": "string", "minLength": 1 },
+        "inconclusive": { "type": "string", "minLength": 1 },
+        "succeeded": { "type": "string", "minLength": 1 },
+        "aggregatePrecedence": { "const": ["baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded"] }
       },
       "additionalProperties": false
     },
