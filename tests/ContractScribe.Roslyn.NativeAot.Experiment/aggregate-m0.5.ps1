@@ -9,6 +9,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Write-Output "M0.5 V1 current-tree aggregate entrypoint is disabled. Use reproduce-m0.5-v1-aggregate.ps1 from the main-only historical reproduction workflow."
+exit 1
+<#
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $committedOutputPath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot "tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json"))
@@ -143,3 +146,4 @@ if ($EvidenceReproduction) {
 
 Write-Output "M0.5 aggregate outcome: $aggregateOutcome"
 exit $summary.exitCode
+#>

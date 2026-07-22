@@ -10,6 +10,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Write-Output "M0.5 V1 current-tree entrypoint is disabled. Use reproduce-m0.5-v1.ps1 from the main-only historical reproduction workflow."
+exit 1
+<#
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "m0.5-native-aot-manifest.json"
@@ -629,3 +632,4 @@ $record = New-CellRecord $outcome "comparison" "semantic-contract" "" (Get-Compa
 Save-Record $record
 Write-Output "M0.5 cell conclusive positive: Native AOT payload matched the frozen framework baseline."
 exit 0
+#>

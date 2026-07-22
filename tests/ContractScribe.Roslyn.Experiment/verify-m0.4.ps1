@@ -1,4 +1,5 @@
 [CmdletBinding()]
+# Stage 1 migration tombstone: current-tree M0.4 V1 execution is disabled.
 param(
     [string]$Configuration = "Release",
     [switch]$EvidenceReproduction,
@@ -6,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Write-Output "M0.4 V1 current-tree entrypoint is disabled during security migration. Use the versioned M0.4 V2 verifier after the migration closure."
+exit 1
+<#
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $fixtureRoot = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\v1"
 $manifestPath = Join-Path $fixtureRoot "transfer-manifest.json"
@@ -134,3 +138,4 @@ $second = [System.IO.File]::ReadAllBytes($payloadPaths[1])
 Assert-Condition ([System.Linq.Enumerable]::SequenceEqual($first, $second)) "Fresh-process semantic payloads are not byte-identical."
 
 Write-Output "M0.4 protocol verified: fixture hashes, toolchain identity, two fresh-process runs, byte comparison, and public-safety scan passed."
+#>

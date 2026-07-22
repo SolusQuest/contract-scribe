@@ -71,22 +71,22 @@ public sealed class M05NativeAotContractTests
     {
         var root = FindRepositoryRoot();
         var verifier = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.Experiment", "verify-m0.4.ps1"));
-        Assert.Contains("M05ManifestPath", verifier, StringComparison.Ordinal);
-        Assert.Contains("expectedM05PostSourceFiles", verifier, StringComparison.Ordinal);
-        Assert.Contains("allowedPostImplementationFiles", verifier, StringComparison.Ordinal);
-        Assert.DoesNotContain("$_.Exception", verifier, StringComparison.Ordinal);
+        Assert.Contains("current-tree", verifier, StringComparison.Ordinal);
+        Assert.Contains("M0.4 V2", verifier, StringComparison.Ordinal);
+        Assert.Contains("exit 1", verifier, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ReproductionSupportsSquashedHistoryAndAggregatePreservesMixedWarnings()
     {
         var root = FindRepositoryRoot();
-        var verifier = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "verify-m0.5.ps1"));
-        var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
-        Assert.Contains("cat-file", verifier, StringComparison.Ordinal);
-        Assert.Contains("m04FrozenSourceRevision", verifier, StringComparison.Ordinal);
-        Assert.Contains("verify-m0.5-provenance.ps1", verifier, StringComparison.Ordinal);
-        Assert.Contains("$aggregateOutcome -eq \"feasible-clean\"", aggregate, StringComparison.Ordinal);
+        var verifier = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "reproduce-m0.5-v1.ps1"));
+        var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "reproduce-m0.5-v1-aggregate.ps1"));
+        Assert.Contains("63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e", verifier, StringComparison.Ordinal);
+        Assert.Contains("ed305a36f076d2d9aef981c44746d7a5a34d5bff", verifier, StringComparison.Ordinal);
+        Assert.Contains("worktree", verifier, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("transitive", aggregate, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e", aggregate, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -148,52 +148,14 @@ public sealed class M05NativeAotContractTests
         Assert.Equal(expected, actual);
     }
 
-    [Theory]
-    [InlineData("feasible-clean", "feasible-clean", "feasible-clean", 0)]
-    [InlineData("feasible-clean", "not-feasible", "mixed", 0)]
-    [InlineData("not-feasible", "not-feasible", "not-feasible", 0)]
-    [InlineData("inconclusive", "feasible-clean", "inconclusive", 1)]
-    public void AggregateScriptImplementsTheClosedTruthTable(string firstOutcome, string secondOutcome, string expectedOutcome, int expectedExitCode)
+    [Fact]
+    public void CurrentAggregateScriptIsAClosedLegacyTombstone()
     {
         var root = FindRepositoryRoot();
-        var directory = Path.Join(root, "TestResults", "m05-aggregate-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        var summaryPath = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "evidence", "m0.5-summary-v1.json");
-        try
-        {
-            var linuxPath = Path.Join(directory, "linux.json");
-            var windowsPath = Path.Join(directory, "windows.json");
-            File.WriteAllText(linuxPath, CreateCell("Ubuntu", "linux-x64", firstOutcome));
-            File.WriteAllText(windowsPath, CreateCell("Windows", "win-x64", secondOutcome));
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "pwsh",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-File");
-            startInfo.ArgumentList.Add(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
-            startInfo.ArgumentList.Add("-LinuxEvidencePath");
-            startInfo.ArgumentList.Add(linuxPath);
-            startInfo.ArgumentList.Add("-WindowsEvidencePath");
-            startInfo.ArgumentList.Add(windowsPath);
-            using var process = Process.Start(startInfo)!;
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
-
-            Assert.Equal(expectedExitCode, process.ExitCode);
-            Assert.Contains($"M0.5 aggregate outcome: {expectedOutcome}", stdout, StringComparison.Ordinal);
-            using var summary = JsonDocument.Parse(File.ReadAllText(summaryPath));
-            Assert.Equal(expectedOutcome, summary.RootElement.GetProperty("outcome").GetString());
-            Assert.Equal(expectedExitCode, summary.RootElement.GetProperty("exitCode").GetInt32());
-        }
-        finally
-        {
-            if (File.Exists(summaryPath)) File.Delete(summaryPath);
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
-        }
+        var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
+        Assert.Contains("current-tree", aggregate, StringComparison.Ordinal);
+        Assert.Contains("reproduce-m0.5-v1-aggregate.ps1", aggregate, StringComparison.Ordinal);
+        Assert.Contains("exit 1", aggregate, StringComparison.Ordinal);
     }
 
     private static string CreateCell(string runnerOs, string rid, string outcome)
