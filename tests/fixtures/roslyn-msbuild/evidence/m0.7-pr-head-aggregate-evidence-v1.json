@@ -1,0 +1,78 @@
+{
+  "formatVersion": "contractscribe-m0.7-aggregate-evidence-v1",
+  "validationStage": "pull-request-merge-ref",
+  "aggregateOutcome": "succeeded",
+  "selectedBaselineCommit": "645c0946b8b811d633b471b232b0654c10e6d7f6",
+  "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
+  "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
+  "protocolCommit": "4116569780ffa7ffd34a605401eab9a3c25decdb",
+  "fixtureRepository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
+  "fixtureCommit": "aee85e30a7634fdf6adce7ac8b1a185a68b9698a",
+  "oracleSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
+  "evidenceGenerating": {
+    "commit": "4116569780ffa7ffd34a605401eab9a3c25decdb",
+    "runId": "29962861143",
+    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/29962861143",
+    "jobs": {
+      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/29962861143/job/89067734219",
+      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/29962861143/job/89067734217",
+      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/29962861143/job/89068392437",
+      "analyze": "https://github.com/SolusQuest/contract-scribe/actions/runs/29962859308/job/89067731223"
+    }
+  },
+  "comparison": {
+    "artifact": "semantic-payload.json",
+    "encoding": "utf-8-no-bom",
+    "trailingNewline": false,
+    "equality": "byte-equality",
+    "freshProcessCountPerCell": 2,
+    "requiredCellCount": 2,
+    "crossRunEquality": true,
+    "crossCellEquality": true,
+    "payloadSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc"
+  },
+  "cells": [
+    {
+      "runnerOs": "Ubuntu",
+      "runnerImage": "ubuntu-latest",
+      "rid": "linux-x64",
+      "sdkVersion": "10.0.302",
+      "runtimeVersion": "10.0.10",
+      "msbuildVersion": "18.6.11.33009",
+      "processArchitecture": "X64",
+      "freshRunPayloadSha256": [
+        "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
+        "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc"
+      ],
+      "outcome": "succeeded"
+    },
+    {
+      "runnerOs": "Windows",
+      "runnerImage": "windows-latest",
+      "rid": "win-x64",
+      "sdkVersion": "10.0.302",
+      "runtimeVersion": "10.0.10",
+      "msbuildVersion": "18.6.11.33009",
+      "processArchitecture": "X64",
+      "freshRunPayloadSha256": [
+        "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
+        "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc"
+      ],
+      "outcome": "succeeded"
+    }
+  ],
+  "outcomeRules": {
+    "aggregatePrecedence": ["baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive", "succeeded"],
+    "adrPromotionEligible": false,
+    "postMergeValidationRequired": true
+  },
+  "unresolvedRisks": [
+    "This is PR-head evidence on the pull-request merge ref; a post-merge main validation must create the final evidence instance.",
+    "The selected baseline remains limited to the documented two-project synthetic shape and Ubuntu/Windows X64 framework-dependent matrix.",
+    "Production process topology and distribution channel remain deferred to Issues #17 and #18."
+  ],
+  "revalidationTriggers": [
+    "Any selected-baseline, semantic-source, runner, serializer, identity, fixture, oracle, protocol, toolchain, or matrix drift.",
+    "A different post-merge main result, which must be retained as a new evidence instance rather than replacing this record."
+  ]
+}
