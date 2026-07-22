@@ -21,6 +21,47 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repositoryRoot "TestResults\m0.7-independent-validation"
 }
 
+function Write-FailureEvidence([string]$message) {
+    $outcome = "protocol-failure"
+    $reasonCode = "unexpected-verifier-error"
+    if ($message -match "baseline checkout|selected-baseline|semantic source|transfer manifest|SDK policy|roll-forward|package baseline|frozen host") {
+        $outcome = "baseline-invalidated"
+        $reasonCode = "selected-baseline-drift"
+    }
+    elseif ($message -match "host was not built|SDK version|toolchain|infrastructure|inconclusive|cancelled|timeout|timed-out|incomplete") {
+        $outcome = "inconclusive"
+        $reasonCode = "required-cell-inconclusive"
+    }
+    elseif ($message -match "selected baseline did not complete|result envelope|semantic payload|fresh selected-baseline") {
+        $outcome = "baseline-failure"
+        $reasonCode = "conforming-baseline-failure"
+    }
+    elseif ($message -match "fixture|oracle|protected|public|BOM|trailing newline|inventory|manifest|hash") {
+        $outcome = "protocol-failure"
+        $reasonCode = "protocol-input-invalid"
+    }
+    New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+    $failure = [ordered]@{
+        formatVersion = "contractscribe-m0.7-failure-evidence-v1"
+        aggregateOutcome = $outcome
+        reasonCode = $reasonCode
+        selectedBaselineCommit = if ($null -ne $manifest) { $manifest.selectedBaseline.commit } else { $BaselineCommit }
+        fixtureCommit = if ($null -ne $manifest) { $manifest.fixture.commit } else { $null }
+        protocolCommit = $null
+        ci = [ordered]@{ runId = $env:GITHUB_RUN_ID; job = $env:GITHUB_JOB; sha = $env:GITHUB_SHA }
+        retainedFailure = $true
+    }
+    $failurePath = Join-Path $OutputRoot "m0.7-failure-evidence.json"
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText($failurePath, ($failure | ConvertTo-Json -Depth 10), $utf8NoBom)
+    Write-Output "M0.7 validation failed: $outcome ($reasonCode)."
+}
+
+trap {
+    Write-FailureEvidence $_.Exception.Message
+    exit 1
+}
+
 function Assert-Condition([bool]$condition, [string]$message) {
     if (-not $condition) {
         throw $message
@@ -127,12 +168,7 @@ Assert-Condition ((Get-FileSha256 $oraclePath) -eq $manifest.fixture.oracleSha25
 Assert-Condition ($oracleBytes.Length -gt 0) "The independent oracle is empty."
 Assert-Condition (-not ($oracleBytes[0] -eq 0xEF -and $oracleBytes[1] -eq 0xBB -and $oracleBytes[2] -eq 0xBF)) "The independent oracle has a BOM."
 $oracleCanonicalBytes = $oracleBytes
-if ($oracleCanonicalBytes[$oracleCanonicalBytes.Length - 1] -eq 0x0A) {
-    $oracleCanonicalBytes = $oracleCanonicalBytes[0..($oracleCanonicalBytes.Length - 2)]
-    if ($oracleCanonicalBytes.Length -gt 0 -and $oracleCanonicalBytes[$oracleCanonicalBytes.Length - 1] -eq 0x0D) {
-        $oracleCanonicalBytes = $oracleCanonicalBytes[0..($oracleCanonicalBytes.Length - 2)]
-    }
-}
+Assert-Condition ($oracleCanonicalBytes[$oracleCanonicalBytes.Length - 1] -ne 0x0A -and $oracleCanonicalBytes[$oracleCanonicalBytes.Length - 1] -ne 0x0D) "The independent oracle has a trailing newline."
 $oracle = Read-Json $oraclePath
 Assert-Condition (@($oracle.projects).Count -eq 2) "The independent oracle does not contain exactly two projects."
 Assert-Condition ((@($oracle.projects | ForEach-Object { $_.projectId }) -join ",") -eq "SampleApp,SampleLibrary") "The independent oracle project order is invalid."

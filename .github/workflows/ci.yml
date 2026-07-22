@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: Yuee98/contract-scribe-m07-fixture
-          ref: fde210468c10e1f54fa371a863e1f07521d64b46
+          ref: aee85e30a7634fdf6adce7ac8b1a185a68b9698a
           path: fixture
           fetch-depth: 1
           persist-credentials: false
@@ -53,6 +53,12 @@ jobs:
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.7.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - shell: pwsh
         run: Get-Content -LiteralPath TestResults/m0.7-independent-validation/m0.7-evidence.json -Raw
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: m0.7-evidence-${{ matrix.os }}
+          path: TestResults/m0.7-independent-validation
+          if-no-files-found: error
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-provenance.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore
@@ -60,3 +66,26 @@ jobs:
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
+
+  aggregate-m07:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: m0.7-evidence-*
+          path: TestResults/m0.7-independent-validation
+          merge-multiple: false
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/aggregate-m0.7.ps1 -EvidenceRoot TestResults/m0.7-independent-validation -OutputPath TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: m0.7-aggregate-evidence
+          path: TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json
+          if-no-files-found: error

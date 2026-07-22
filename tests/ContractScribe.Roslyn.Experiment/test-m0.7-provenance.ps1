@@ -29,7 +29,16 @@ $exitCode = $LASTEXITCODE
 if ($exitCode -eq 0) {
     throw "M0.7 provenance regression did not reject the tampered independent oracle."
 }
-if (($output | Out-String) -notmatch "oracle|fixture file hash") {
+if (($output | Out-String) -notmatch "oracle|fixture file hash|protocol-failure|protocol-input-invalid") {
     throw "M0.7 provenance regression failed for an unexpected reason."
 }
+$failureEvidencePath = Join-Path $repositoryRoot "TestResults\m0.7-independent-validation\m0.7-failure-evidence.json"
+if (-not (Test-Path -LiteralPath $failureEvidencePath)) {
+    throw "M0.7 provenance regression did not retain bounded failure evidence."
+}
+$failureEvidence = Get-Content -LiteralPath $failureEvidencePath -Raw | ConvertFrom-Json
+if ($failureEvidence.aggregateOutcome -ne "protocol-failure" -or -not $failureEvidence.retainedFailure) {
+    throw "M0.7 provenance regression retained an invalid failure outcome."
+}
+Remove-Item -LiteralPath $failureEvidencePath -Force
 Write-Output "M0.7 provenance regression passed: a tampered independent oracle was rejected."
