@@ -24,9 +24,12 @@ $baseAllowedPostSourceFiles = @(
     ".github/workflows/ci.yml",
     "Directory.Packages.props",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
+    "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1",
     "tests/ContractScribe.Tests/M05NativeAotContractTests.cs",
     "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json",
-    "docs/20_architecture/decisions/0001-loader-and-distribution-boundary.md"
+    "docs/20_architecture/decisions/0001-loader-and-distribution-boundary.md",
+    "docs/20_architecture/experiments/m0.4-framework-dependent-loading.md",
+    "global.json"
 )
 $expectedM05PostSourceFiles = @(
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
@@ -65,6 +68,25 @@ if (-not [string]::IsNullOrWhiteSpace($M05ManifestPath)) {
     $allowedPostSourceFiles += $declaredM05PostSourceFiles
     $allowedPostImplementationFiles = $declaredM05PostImplementationFiles
 }
+
+foreach ($entry in $manifest.protocolInputSha256.PSObject.Properties) {
+    $protocolPath = Join-Path $repositoryRoot $entry.Name
+    Assert-Condition (Test-Path -LiteralPath $protocolPath) "A protocol input is missing: $($entry.Name)."
+    Assert-Condition ($entry.Value -match "^[0-9a-f]{64}$") "A protocol input hash is not a lowercase SHA-256: $($entry.Name)."
+    $actualProtocolHash = (Get-FileHash -LiteralPath $protocolPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Condition ($actualProtocolHash -eq $entry.Value) "Protocol input hash does not match the transfer manifest: $($entry.Name)."
+}
+
+$packagesPath = Join-Path $repositoryRoot "Directory.Packages.props"
+$packagesXml = [xml](Get-Content -LiteralPath $packagesPath -Raw)
+$centralPackageNodes = @($packagesXml.Project.ItemGroup.PackageVersion)
+foreach ($entry in $manifest.packages.PSObject.Properties) {
+    $matchingNodes = @($centralPackageNodes | Where-Object { $_.Include -eq $entry.Name })
+    Assert-Condition ($matchingNodes.Count -eq 1) "The central package declaration is missing or duplicated: $($entry.Name)."
+    Assert-Condition ($matchingNodes[0].Version -eq $entry.Value) "The central package declaration does not match the transfer manifest: $($entry.Name)."
+}
+
+Assert-Condition ($manifest.observedEvidence.payloadSha256 -match "^[0-9a-f]{64}$") "The observed M0.4 payload hash is not a lowercase SHA-256."
 $resolvedSdkVersion = (& dotnet --version).Trim()
 Assert-Condition ($resolvedSdkVersion -match "^\d+\.\d+\.\d+$") "The dotnet SDK version could not be resolved."
 $isRecordedWindowsEvidence = $EvidenceReproduction -and (
@@ -124,9 +146,7 @@ for ($run = 1; $run -le 2; $run++) {
     Assert-Condition (-not ($payloadBytes[0] -eq 0xEF -and $payloadBytes[1] -eq 0xBB -and $payloadBytes[2] -eq 0xBF)) "The semantic payload has a BOM."
     Assert-Condition ($payloadBytes[$payloadBytes.Length - 1] -ne 0x0A -and $payloadBytes[$payloadBytes.Length - 1] -ne 0x0D) "The semantic payload has a trailing newline."
     $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($isRecordedWindowsEvidence) {
-        Assert-Condition ($payloadHash -eq $manifest.observedEvidence.payloadSha256) "Observed payload evidence does not match the run: $payloadHash."
-    }
+    Assert-Condition ($payloadHash -eq $manifest.observedEvidence.payloadSha256) "Observed payload evidence does not match the current manifest: $payloadHash."
 
     $publicOutput = (Get-Content -LiteralPath $stdoutPath -Raw) + (Get-Content -LiteralPath $stderrPath -Raw) + (Get-Content -LiteralPath $resultPath -Raw)
     Assert-Condition ($publicOutput -notmatch "(?i)([A-Z]:\\|/home/|/Users/|authorization|bearer\s|access[_-]?token|api[_-]?key)") "Public experiment output contains a machine path or credential-like value."

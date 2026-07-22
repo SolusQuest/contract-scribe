@@ -15,6 +15,14 @@
     "SampleApp/App.cs": "09c3d534c4dc42ee1c70d2db607cbda1a491af2743e0c53a91948e8b00f29155",
     "expected-symbols.json": "ea3a57997bf5dc9f891c169bbb1e63e9866749805a5c4fe09ad3d629eba99ca2"
   },
+  "protocolInputSha256": {
+    ".github/workflows/ci.yml": "589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e",
+    "Directory.Packages.props": "a112573f56ccffb226144443424d4d80e6680d33799c16bd61da7470289bfd4c",
+    "global.json": "da40e27cc07d42b5824f967eec21a10b776f6766759a04a3f0231080bb2f847f",
+    "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1": "c9f5a0e6bf4fc31578c9634b80e60bc2391f7ecabe4ce04e6c74c7eb51567390",
+    "tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1": "246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c",
+    "docs/20_architecture/experiments/m0.4-framework-dependent-loading.md": "cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd"
+  },
   "sdk": {
     "globalJsonVersion": "10.0.102",
     "rollForward": "latestFeature"
@@ -34,6 +42,7 @@
     "dotnet restore ContractScribe.slnx",
     "dotnet build ContractScribe.slnx --configuration Release --no-restore",
     "pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release",
+    "pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release",
     "dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore"
   ],
   "comparison": {
@@ -46,6 +55,7 @@
   },
   "observedEvidence": {
     "payloadSha256": "e5d3bc87a0448da6e953956aae897b33738a16efbedfeeefe1366fc5b8afbd29",
+    "packageBaseline": "System.Security.Cryptography.Xml=9.0.18",
     "toolchain": {
       "sdkVersion": "10.0.102",
       "msbuildVersion": "18.0.7.61305",
