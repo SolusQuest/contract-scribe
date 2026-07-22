@@ -6,6 +6,7 @@
   "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
   "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
   "protocolCommit": "e376abf73104156482dc1bdbb58951590ce04168",
+  "evidencePublicationCommit": "126465f79dc5c7a4e2dfcf7bb3e2631bfd847d0c",
   "fixtureRepository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
   "fixtureCommit": "aee85e30a7634fdf6adce7ac8b1a185a68b9698a",
   "oracleSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
