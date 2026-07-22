@@ -1,7 +1,7 @@
 {
   "formatVersion": "m0.4-transfer-manifest-v1",
   "fixtureId": "roslyn-msbuild-v1",
-  "sourceRevision": "63e7aa5c0cc16f10b1a5f732f69ca76379a0b34c",
+  "sourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
   "solution": "Sample.sln",
   "projectGraph": {
     "projects": ["SampleApp", "SampleLibrary"],
@@ -27,7 +27,7 @@
     "Microsoft.Build.Utilities.Core": "17.14.28",
     "Microsoft.CodeAnalysis.CSharp.Workspaces": "4.14.0",
     "Microsoft.CodeAnalysis.Workspaces.MSBuild": "4.14.0",
-    "System.Security.Cryptography.Xml": "9.0.15"
+    "System.Security.Cryptography.Xml": "9.0.18"
   },
   "requiredMatrix": ["ubuntu-latest", "windows-latest"],
   "commands": [

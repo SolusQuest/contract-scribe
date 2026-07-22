@@ -22,8 +22,11 @@ Assert-Condition (Test-Path -LiteralPath $hostPath) "The built experiment host w
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $baseAllowedPostSourceFiles = @(
     ".github/workflows/ci.yml",
+    "Directory.Packages.props",
     "tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1",
-    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json"
+    "tests/ContractScribe.Tests/M05NativeAotContractTests.cs",
+    "tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json",
+    "docs/20_architecture/decisions/0001-loader-and-distribution-boundary.md"
 )
 $expectedM05PostSourceFiles = @(
     "schemas/experiments/m0.5-native-aot-evidence-v1.schema.json",
