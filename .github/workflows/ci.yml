@@ -44,9 +44,11 @@ jobs:
       - run: dotnet restore fixture/Sample.sln
       - run: dotnet build fixture/Sample.sln --configuration Release --no-restore
       - shell: pwsh
-        run: pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
+        working-directory: baseline
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
       - shell: pwsh
-        run: pwsh -NoProfile -File baseline/tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release
+        working-directory: baseline
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.7.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - shell: pwsh
