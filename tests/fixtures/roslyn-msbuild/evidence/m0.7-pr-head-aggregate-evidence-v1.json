@@ -5,20 +5,20 @@
   "selectedBaselineCommit": "645c0946b8b811d633b471b232b0654c10e6d7f6",
   "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
   "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
-  "protocolCommit": "2b7701de200a0a8a1362561f1194b88f1bbb7f06",
+  "protocolCommit": "b4ad52968f993b2cf16e8825da300300d0a8dcca",
   "evidencePublicationCommit": "258f5376bfdf27941d33278d8a8867ee17a85b89",
   "fixtureRepository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
   "fixtureCommit": "aee85e30a7634fdf6adce7ac8b1a185a68b9698a",
   "oracleSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
   "evidenceGenerating": {
-    "commit": "2b7701de200a0a8a1362561f1194b88f1bbb7f06",
-    "runId": "29966779840",
-    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/29966779840",
+    "commit": "b4ad52968f993b2cf16e8825da300300d0a8dcca",
+    "runId": "29967056115",
+    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/29967056115",
     "jobs": {
-      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/29966779840/job/89079912515",
-      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/29966779840/job/89079912568",
-      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/29966779840/job/89080413683",
-      "analyze": "https://github.com/SolusQuest/contract-scribe/actions/runs/29966778149/job/89079909344"
+      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/29967056115/job/89080739974",
+      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/29967056115/job/89080740005",
+      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/29967056115/job/89081267420",
+      "analyze": "https://github.com/SolusQuest/contract-scribe/actions/runs/29967054365/job/89080737585"
     }
   },
   "comparison": {
