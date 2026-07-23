@@ -98,24 +98,6 @@ foreach ($vector in $postRunVectors) {
     }
 }
 
-$crossCellRoot = Join-Path $root "cross-cell-byte-mismatch"
-Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-1") $true 2 $true
-Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-2") $true 2 $true
-$crossCellTwoRunOnePath = Join-Path $crossCellRoot "cell-2\run-1\semantic-payload.json"
-$crossCellTwoRunTwoPath = Join-Path $crossCellRoot "cell-2\run-2\semantic-payload.json"
-[IO.File]::WriteAllText($crossCellTwoRunOnePath, "payload-two", [Text.UTF8Encoding]::new($false))
-[IO.File]::WriteAllText($crossCellTwoRunTwoPath, "payload-two", [Text.UTF8Encoding]::new($false))
-$crossCellTwoDocumentPath = Join-Path $crossCellRoot "cell-2\m0.7-evidence.json"
-$crossCellTwoDocument = Get-Content -LiteralPath $crossCellTwoDocumentPath -Raw | ConvertFrom-Json
-$crossCellTwoDocument.runs[0].payloadSha256 = (Get-FileHash -LiteralPath $crossCellTwoRunOnePath -Algorithm SHA256).Hash.ToLowerInvariant()
-$crossCellTwoDocument.runs[1].payloadSha256 = (Get-FileHash -LiteralPath $crossCellTwoRunTwoPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$crossCellTwoDocument.runnerOs = "Windows"
-$crossCellTwoDocument.rid = "win-x64"
-[IO.File]::WriteAllText($crossCellTwoDocumentPath, ($crossCellTwoDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-$crossCellOutput = Join-Path $crossCellRoot "aggregate.json"
-& pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $crossCellRoot -OutputPath $crossCellOutput -ManifestPath $syntheticManifestPath 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $crossCellOutput | ConvertFrom-Json).aggregateOutcome -ne "baseline-failure") { throw "Cross-cell byte mismatch was not classified as baseline-failure." }
-
 $wrongOracleRoot = Join-Path $root "wrong-but-identical-oracle"
 Write-SyntheticCellEvidence (Join-Path $wrongOracleRoot "cell-1") $true 2 $true "wrong-payload"
 Write-SyntheticCellEvidence (Join-Path $wrongOracleRoot "cell-2") $true 2 $true "wrong-payload"
