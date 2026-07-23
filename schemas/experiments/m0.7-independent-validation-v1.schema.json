@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/SolusQuest/contract-scribe/blob/489a25d70f8585e391af6a09054031e602e1643a/schemas/experiments/m0.7-independent-validation-v1.schema.json",
   "type": "object",
-  "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "outcomeTaxonomy", "outcomeRules", "unresolvedRisks"],
+  "required": ["formatVersion", "selectedBaseline", "fixture", "matrix", "comparison", "commands", "executionPolicy", "outcomeTaxonomy", "outcomeRules", "unresolvedRisks"],
   "properties": {
     "formatVersion": { "const": "contractscribe-m0.7-validation-v1" },
     "selectedBaseline": {
@@ -57,6 +57,16 @@
       "additionalProperties": false
     },
     "commands": { "type": "array", "minItems": 9, "items": { "type": "string", "minLength": 1 } },
+    "executionPolicy": {
+      "type": "object",
+      "required": ["networkDependencyDeclared", "networkIsolationEnforced", "offlineClaim"],
+      "properties": {
+        "networkDependencyDeclared": { "const": false },
+        "networkIsolationEnforced": { "const": false },
+        "offlineClaim": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "outcomeTaxonomy": {
       "type": "object",
       "required": ["values", "aggregatePrecedence", "nonSuccessRequiredCellReasons"],
