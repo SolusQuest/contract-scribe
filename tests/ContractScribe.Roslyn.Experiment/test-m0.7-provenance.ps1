@@ -19,12 +19,14 @@ New-Item -ItemType Directory -Path $target | Out-Null
 Copy-Item -Path (Join-Path (Resolve-Path $FixtureRepositoryPath).Path "*") -Destination $target -Recurse -Force
 $oracle = Join-Path $target "expected-payload.json"
 [IO.File]::AppendAllText($oracle, " ")
+$validationOutput = Join-Path $target "validation-output"
 
 $output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") `
     -Configuration $Configuration `
     -BaselineRepositoryPath $BaselineRepositoryPath `
     -FixtureRepositoryPath $target `
-    -BaselineCommit $BaselineCommit 2>&1
+    -BaselineCommit $BaselineCommit `
+    -OutputRoot $validationOutput 2>&1
 $exitCode = $LASTEXITCODE
 if ($exitCode -eq 0) {
     throw "M0.7 provenance regression did not reject the tampered independent oracle."
@@ -32,7 +34,7 @@ if ($exitCode -eq 0) {
 if (($output | Out-String) -notmatch "oracle|fixture file hash|protocol-failure|protocol-input-invalid") {
     throw "M0.7 provenance regression failed for an unexpected reason."
 }
-$failureEvidencePath = Join-Path $repositoryRoot "TestResults\m0.7-independent-validation\m0.7-failure-evidence.json"
+$failureEvidencePath = Join-Path $validationOutput "m0.7-failure-evidence.json"
 if (-not (Test-Path -LiteralPath $failureEvidencePath)) {
     throw "M0.7 provenance regression did not retain bounded failure evidence."
 }
@@ -41,4 +43,5 @@ if ($failureEvidence.aggregateOutcome -ne "protocol-failure" -or -not $failureEv
     throw "M0.7 provenance regression retained an invalid failure outcome."
 }
 Remove-Item -LiteralPath $failureEvidencePath -Force
+Remove-Item -LiteralPath $target -Recurse -Force
 Write-Output "M0.7 provenance regression passed: a tampered independent oracle was rejected."
