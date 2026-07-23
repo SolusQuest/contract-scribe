@@ -116,11 +116,14 @@ function Assert-ByteEqual([byte[]]$expected, [byte[]]$actual, [string]$message) 
     }
 }
 
+. (Join-Path $PSScriptRoot "m0.7-output-policy.ps1")
+
 Set-FailureContext "protocol-failure" "protocol-input-invalid"
 Assert-Condition ($manifest.formatVersion -eq "contractscribe-m0.7-validation-v1") "The M0.7 validation manifest version is unsupported."
 Set-FailureContext "baseline-invalidated" "selected-baseline-drift"
 Assert-Condition ($BaselineCommit -eq $manifest.selectedBaseline.commit) "The supplied selected-baseline commit does not match the M0.7 manifest."
 Assert-Condition ((Get-GitHead $baselineRoot) -eq $manifest.selectedBaseline.commit) "The baseline checkout is not the selected M0.6 commit."
+Set-FailureContext "protocol-failure" "fixture-checkout-drift"
 Assert-Condition ((Get-GitHead $fixtureRoot) -eq $manifest.fixture.commit) "The fixture checkout is not the pinned independent commit."
 
 $baselineTransferManifestPath = Join-Path $baselineRoot "tests\fixtures\roslyn-msbuild\v1\transfer-manifest.json"
@@ -268,7 +271,9 @@ for ($run = 1; $run -le $manifest.comparison.freshProcessCount; $run++) {
     Assert-Condition (-not ($payloadBytes[0] -eq 0xEF -and $payloadBytes[1] -eq 0xBB -and $payloadBytes[2] -eq 0xBF)) "The selected baseline semantic payload has a BOM."
     Assert-Condition ($payloadBytes[$payloadBytes.Length - 1] -ne 0x0A -and $payloadBytes[$payloadBytes.Length - 1] -ne 0x0D) "The selected baseline semantic payload has a trailing newline."
     $publicOutput = (Get-Content -LiteralPath $stdoutPath -Raw) + (Get-Content -LiteralPath $stderrPath -Raw) + (Get-Content -LiteralPath $resultPath -Raw)
-    Assert-Condition ($publicOutput -notmatch "(?i)([A-Z]:\\|/home/|/Users/|authorization|bearer\s|access[_-]?token|api[_-]?key|password\s*=)") "The selected baseline public output contains a path or credential-like value."
+    Set-FailureContext "protocol-failure" "public-output-safety"
+    Assert-Condition (Test-M07PublicOutputSafe $publicOutput) "The selected baseline public output contains a path or credential-like value."
+    Set-FailureContext "baseline-failure" "conforming-baseline-failure"
     $runDirectories += $runDirectory
     $runRecords += [pscustomobject]@{
         run = $run
