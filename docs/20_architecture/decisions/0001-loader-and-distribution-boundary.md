@@ -23,13 +23,13 @@ This ADR records the next bounded execution baseline from those facts. It does n
 The baseline must:
 
 - preserve the M0.4 semantic path, `(logicalProjectId, documentationCommentId)` identity, ordering, and deterministic comparison boundary;
-- keep the audit path offline and independent of provider/model secrets and GitHub write tokens;
+- declare no network-dependent operation and remain independent of provider/model secrets and GitHub write tokens; CI does not enforce egress isolation;
 - be directly exercised by the committed M0 evidence rather than inferred from an untested runtime split;
 - make SDK/MSBuild prerequisites, tested matrix, failure behavior, and evidence limits explicit;
 - keep public source safe and avoid machine-local paths, raw logs, environment dumps, credentials, and private downstream material;
 - provide a clear, bounded input to M0.7 and M1 without freezing an external compatibility or publication promise.
 
-Evidence validity, semantic-path fidelity, deterministic output, offline operation, and public safety are eligibility gates. Operational complexity, installation prerequisites, process isolation, and packaging convenience are trade-off criteria only after an option is eligible.
+Evidence validity, semantic-path fidelity, deterministic output, the declared no-network-dependency boundary, and public safety are eligibility gates. Operational complexity, installation prerequisites, process isolation, and packaging convenience are trade-off criteria only after an option is eligible.
 
 ## Decision dimensions and terminology
 
@@ -52,14 +52,14 @@ The selected candidate name is `framework-dependent semantic execution baseline`
 
 The disposition vocabulary is closed for this ADR:
 
-- Selected: the one provisional candidate chosen for the next validation gate from direct positive evidence.
+- Selected: the one candidate chosen for the stated profile from direct positive evidence; after a validation gate, the ADR records whether that selection is validated.
 - Rejected: evidence rules out the candidate for the stated profile or the candidate violates a decision boundary.
 - Deferred: the candidate remains plausible but is intentionally left for a later issue or gate.
 - Not evidenced: the committed experiments do not exercise the candidate sufficiently to make it eligible.
 - Not feasible under the tested profile: the exact tested profile reaches a reproducible negative; this does not generalize beyond that profile.
 - Outside current scope: the question is intentionally not decided by M0.6 and must not be inferred from this ADR.
 
-Every candidate is compared using the same criteria: evidence strength, semantic-path fidelity, deterministic canonical output, SDK/MSBuild compatibility, offline and no-secret behavior, prerequisites, supported matrix, operational complexity, failure diagnosability, process-boundary cost, distribution mechanics, and M1 implementation implications. These criteria guide the decision without turning untested convenience or packaging preferences into evidence.
+Every candidate is compared using the same criteria: evidence strength, semantic-path fidelity, deterministic canonical output, SDK/MSBuild compatibility, no declared network-dependent operation and no-secret behavior, prerequisites, supported matrix, operational complexity, failure diagnosability, process-boundary cost, distribution mechanics, and M1 implementation implications. These criteria guide the decision without turning untested convenience or packaging preferences into evidence.
 
 ## Evidence classification
 
@@ -67,7 +67,7 @@ The following classifications apply throughout this ADR:
 
 - Verified fact: directly demonstrated by a committed experiment record, manifest, evidence record, or repository rule.
 - Decision inference: a bounded choice derived from verified facts and explicitly labeled as inference.
-- Deferred risk: a material concern that does not invalidate this provisional selection but requires a later issue, experiment, or release gate.
+- Deferred risk: a material concern that does not invalidate this validated selection within its stated profile but requires a later issue, experiment, or release gate.
 - Unknown: not tested and not inferable from the committed evidence.
 
 The evidence inputs are:
@@ -78,7 +78,7 @@ The evidence inputs are:
 | Historical M0.5 experiment record and manifest | The historical frozen M0.4 path under the exact Native AOT profile, matrix, evidence schema, and closed failure registry. | A current `9.0.18` Native AOT claim, general Native AOT impossibility, a remediated AOT design, or successful native execution. |
 | Historical M0.5 Ubuntu and Windows cell evidence plus aggregate | Both historical required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution, or current-baseline evidence. |
 | M0.7 post-merge main validation run [`30004931948`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948) | The merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` completed the independent fixture/oracle validation with aggregate outcome `succeeded` on the required Ubuntu and Windows X64 cells. | Production loader behavior, arbitrary project compatibility, current-baseline Native AOT feasibility, or a distribution channel. |
-| Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
+| Architecture, distribution, and roadmap rules | Deterministic/no-declared-network-dependency/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
 The current M0.4 and M0.7 protocol inputs consumed by this ADR are stable on merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b`. The M0.7 PR-head evidence remains a historical pre-merge validation record; the post-merge main run linked above is the promotion evidence for this ADR. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
 
@@ -88,7 +88,7 @@ The material experiment inputs are:
 | --- | --- | --- |
 | `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
 | `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
-| `global.json` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `da40e27cc07d42b5824f967eec21a10b776f6766759a04a3f0231080bb2f847f` |
+| `global.json` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
 | `Directory.Packages.props` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `a112573f56ccffb2261444434244d4d80e6680d33799c16bd61da7470289bfd4c` |
 | `.github/workflows/ci.yml` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `4d7a22861d8950d9ffda725df19af1a1008a742e8df4ff776bb35194a858891f` |
 | `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
@@ -105,7 +105,7 @@ The repository SDK policy is `global.json` SDK `10.0.102` with `latestFeature` r
 
 ## Alternatives
 
-### Framework-dependent semantic execution baseline — selected provisionally
+### Framework-dependent semantic execution baseline — selected and validated within the tested matrix
 
 This is the only eligible candidate with positive framework-dependent execution evidence. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
 
@@ -158,15 +158,15 @@ M0.7 outcomes have these meanings:
 - Complete semantic-path failure, nondeterminism, or mismatch with the independent oracle is a selected-baseline failure. It keeps M0 open and requires this ADR or the selected baseline to be revised or superseded before validation is repeated.
 - Fixture, provenance, public-safety, or contract errors are protocol failures, not baseline support evidence.
 - Any change to the selected baseline during validation invalidates the candidate and returns to M0.6.
-- Success requires all required cells to complete the frozen runner path, agree with the independent oracle, and preserve the documented deterministic/offline/public-safety boundaries.
+- Success requires all required cells to complete the frozen runner path, agree with the independent oracle, and preserve the documented deterministic/no-declared-network-dependency/public-safety boundaries. The evidence does not claim sandboxed offline execution or enforced egress isolation.
 
-M0.7 succeeded on the PR-head validation and on the post-merge main validation. The post-merge main run [`30004931948`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948) validated merged commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` with successful Ubuntu [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583922), Windows [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583741), and aggregate [`aggregate-m07`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89199307975) jobs. The aggregate record reports `succeeded`, cross-cell byte equality, payload SHA-256 `df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc`, fixture commit `aee85e30a7634fdf6adce7ac8b1a185a68b9698a`, and the selected baseline commit `645c0946b8b811d633b471b232b0654c10e6d7f6`. The PR-head evidence remains historical and is not replaced by this post-merge result. A failed or inconclusive M0.7 would leave M0 open and require a revision/revalidation path; no negative result can be converted silently into M0 closure.
+M0.7 succeeded on the PR-head validation and on the post-merge main validation. The post-merge main run [`30004931948`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948) validated merged commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` with successful Ubuntu [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583922), Windows [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583741), and aggregate [`aggregate-m07`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89199307975) jobs. The aggregate record reports `succeeded`, cross-cell byte equality, payload SHA-256 `df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc`, fixture commit `aee85e30a7634fdf6adce7ac8b1a185a68b9698a`, and the selected baseline commit `645c0946b8b811d633b471b232b0654c10e6d7f6`. This demonstrates the declared no-network-dependent operation and no-private-credentials boundary; it does not prove that the host ran under egress isolation. The PR-head evidence remains historical and is not replaced by this post-merge result. The pre-merge freshness guard is retired from the normal CI path after this post-merge result; any future protocol, verifier, manifest, schema, aggregate, or workflow change requires a new evidence instance. A failed or inconclusive M0.7 would leave M0 open and require a revision/revalidation path; no negative result can be converted silently into M0 closure.
 
 ## M1 implications
 
 M1 may plan around the framework-dependent semantic execution boundary and the versioned M0.1-M0.3 contracts, but it must keep the M0.4/M0.5 hosts and `semantic-payload.json` test-only. M1 must define production audit inputs and outputs through the M0.1 policy/configuration and M0.2 audit-result contracts, not through the experimental payload. M1 may introduce a production loader only through its own implementation contract and validation; this ADR does not create that project, API, process protocol, or CLI behavior.
 
-The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/package policy, Ubuntu/Windows X64 matrix, and no-network semantic path. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, or installation channels requires separate evidence and explicit follow-up.
+The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/package policy, Ubuntu/Windows X64 matrix, and execution with no declared network-dependent operation; CI does not enforce egress isolation. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, or installation channels requires separate evidence and explicit follow-up.
 
 ## Consequences and risks
 
