@@ -58,6 +58,8 @@ jobs:
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-failure-safety.ps1 -BaselineRepositoryPath baseline -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
       - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-verifier-classification.ps1 -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture
+      - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-public-artifact.ps1
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-postrun-failure-safety.ps1

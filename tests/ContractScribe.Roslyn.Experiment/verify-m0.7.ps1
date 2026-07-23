@@ -20,36 +20,6 @@ function Remove-RawFailureArtifacts {
         Remove-Item -LiteralPath (Join-Path $OutputRoot "m0.7-evidence.json") -Force -ErrorAction SilentlyContinue
     }
 }
-function Write-EarlyFailureEvidence([string]$message) {
-    Remove-RawFailureArtifacts
-    New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
-    $failure = [ordered]@{
-        formatVersion = "contractscribe-m0.7-failure-evidence-v1"
-        aggregateOutcome = "protocol-failure"
-        reasonCode = "preflight-validation-failure"
-        selectedBaselineCommit = $BaselineCommit
-        fixtureCommit = $null
-        protocolCommit = $env:GITHUB_SHA
-        ci = [ordered]@{ runId = $env:GITHUB_RUN_ID; job = $env:GITHUB_JOB; sha = $env:GITHUB_SHA }
-        retainedFailure = $true
-    }
-    [IO.File]::WriteAllText((Join-Path $OutputRoot "m0.7-failure-evidence.json"), ($failure | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-    Write-Output "M0.7 validation failed: protocol-failure (preflight-validation-failure)."
-}
-trap {
-    Write-EarlyFailureEvidence $_.Exception.Message
-    exit 1
-}
-$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$baselineRoot = (Resolve-Path -LiteralPath $BaselineRepositoryPath).Path
-$fixtureRoot = (Resolve-Path -LiteralPath $FixtureRepositoryPath).Path
-$manifestPath = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\m0.7-independent-validation-manifest.json"
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-
-if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $repositoryRoot "TestResults\m0.7-independent-validation"
-}
-
 function Write-FailureEvidence([string]$message) {
     Remove-RawFailureArtifacts
     $outcome = "protocol-failure"
@@ -98,10 +68,18 @@ function Write-FailureEvidence([string]$message) {
     [IO.File]::WriteAllText($failurePath, ($failure | ConvertTo-Json -Depth 10), $utf8NoBom)
     Write-Output "M0.7 validation failed: $outcome ($reasonCode)."
 }
-
 trap {
     Write-FailureEvidence $_.Exception.Message
     exit 1
+}
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$baselineRoot = (Resolve-Path -LiteralPath $BaselineRepositoryPath).Path
+$fixtureRoot = (Resolve-Path -LiteralPath $FixtureRepositoryPath).Path
+$manifestPath = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\m0.7-independent-validation-manifest.json"
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $repositoryRoot "TestResults\m0.7-independent-validation"
 }
 
 function Assert-Condition([bool]$condition, [string]$message) {
