@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$EvidenceRoot,
-    [string]$OutputPath = "TestResults\m0.7-independent-validation\m0.7-aggregate-evidence.json"
+    [string]$OutputPath = "TestResults\m0.7-independent-validation\m0.7-aggregate-evidence.json",
+    [ValidateSet("success", "failure", "cancelled", "skipped")]
+    [string]$ValidateResult = "success"
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,7 +79,7 @@ $failureFiles = @(Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -File -Filte
 $outputDirectory = Split-Path -Parent $OutputPath
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 
-if ($failureFiles.Count -gt 0 -or $evidenceFiles.Count -ne 2) {
+if ($failureFiles.Count -gt 0 -or $ValidateResult -ne "success" -or $evidenceFiles.Count -ne 2) {
     $aggregateOutcome = "inconclusive"
     if ($failureFiles.Count -gt 0) {
         $failureOutcomes = @($failureFiles | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).aggregateOutcome })
@@ -88,8 +90,9 @@ if ($failureFiles.Count -gt 0 -or $evidenceFiles.Count -ne 2) {
     $failure = [ordered]@{
         formatVersion = "contractscribe-m0.7-aggregate-evidence-v1"
         aggregateOutcome = $aggregateOutcome
-        reasonCode = if ($failureFiles.Count -gt 0) { "required-cell-failure" } else { "required-cell-evidence-incomplete" }
+        reasonCode = if ($failureFiles.Count -gt 0) { "required-cell-failure" } elseif ($ValidateResult -ne "success") { "required-cell-validation-incomplete" } else { "required-cell-evidence-incomplete" }
         evidenceGeneratingCommit = $env:GITHUB_SHA
+        validateResult = $ValidateResult
         retainedFailure = $true
     }
     [IO.File]::WriteAllText($OutputPath, ($failure | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
@@ -140,6 +143,7 @@ $aggregate = [ordered]@{
     aggregateOutcome = "succeeded"
     evidenceGeneratingCommit = $env:GITHUB_SHA
     evidenceGeneratingRunUrl = if ($env:GITHUB_RUN_ID) { "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } else { $null }
+    validateResult = $ValidateResult
     selectedBaselineCommit = $cells[0].selectedBaselineCommit
     protocolCommit = $cells[0].protocolCommit
     fixtureCommit = $cells[0].fixtureCommit

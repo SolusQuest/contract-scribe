@@ -117,5 +117,16 @@ foreach ($provenanceField in @("selectedBaselineCommit", "protocolCommit", "fixt
     if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $provenanceOutput | ConvertFrom-Json).aggregateOutcome -ne $expectedProvenanceOutcome) { throw "Aggregate provenance mismatch vector was misclassified." }
 }
 
+foreach ($validateResult in @("failure", "cancelled")) {
+    $workflowResultRoot = Join-Path $root ("workflow-result-{0}" -f $validateResult)
+    Write-SyntheticCellEvidence (Join-Path $workflowResultRoot "cell-1") $true 2 $true
+    Write-SyntheticCellEvidence (Join-Path $workflowResultRoot "cell-2") $true 2 $true
+    $workflowResultOutput = Join-Path $workflowResultRoot "aggregate.json"
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $workflowResultRoot -OutputPath $workflowResultOutput -ValidateResult $validateResult 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { throw "Aggregate workflow-result vector unexpectedly succeeded for $validateResult." }
+    $workflowAggregate = Get-Content -Raw $workflowResultOutput | ConvertFrom-Json
+    if ($workflowAggregate.aggregateOutcome -eq "succeeded" -or $workflowAggregate.reasonCode -ne "required-cell-validation-incomplete") { throw "Aggregate workflow-result vector produced an invalid result for $validateResult." }
+}
+
 Remove-Item -LiteralPath $root -Recurse -Force
 Write-Output "M0.7 aggregate outcome vectors passed: baseline-invalidated, protocol-failure, baseline-failure, and inconclusive precedence are retained."
