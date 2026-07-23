@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_head_sha:
+        description: "PR head SHA represented by this validation run"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,12 +31,101 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: SolusQuest/contract-scribe
+          ref: 645c0946b8b811d633b471b232b0654c10e6d7f6
+          path: baseline
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: Yuee98/contract-scribe-m07-fixture
+          ref: aee85e30a7634fdf6adce7ac8b1a185a68b9698a
+          path: fixture
+          fetch-depth: 1
+          persist-credentials: false
+      - run: dotnet restore baseline/ContractScribe.slnx
+      - run: dotnet build baseline/ContractScribe.slnx --configuration Release --no-restore
+      - run: dotnet restore fixture/Sample.sln
+      - run: dotnet build fixture/Sample.sln --configuration Release --no-restore
       - shell: pwsh
+        working-directory: baseline
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1 -Configuration Release
       - shell: pwsh
+        working-directory: baseline
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1 -Configuration Release
+      - shell: pwsh
+        env:
+          M07_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.pr_head_sha || github.sha }}
+          M07_VALIDATION_MERGE_SHA: ${{ github.sha }}
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/verify-m0.7.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - shell: pwsh
+        run: Get-Content -LiteralPath TestResults/m0.7-independent-validation/m0.7-evidence.json -Raw
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-provenance.ps1 -Configuration Release -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-failure-safety.ps1 -BaselineRepositoryPath baseline -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-verifier-classification.ps1 -BaselineRepositoryPath baseline -FixtureRepositoryPath fixture
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-public-artifact.ps1
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-postrun-failure-safety.ps1
       - run: dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore
       - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
       - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
+      - shell: pwsh
+        if: success()
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/prepare-m0.7-public-evidence.ps1 -SourceRoot TestResults/m0.7-independent-validation -PublicRoot TestResults/m0.7-public-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: success()
+        with:
+          name: m0.7-evidence-${{ matrix.os }}
+          path: TestResults/m0.7-public-evidence
+          if-no-files-found: error
+      - shell: pwsh
+        if: failure()
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/write-m0.7-postrun-failure-evidence.ps1 -OutputRoot TestResults/m0.7-independent-validation -BaselineCommit 645c0946b8b811d633b471b232b0654c10e6d7f6
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: m0.7-evidence-failure-${{ matrix.os }}
+          path: TestResults/m0.7-independent-validation/m0.7-failure-evidence.json
+          if-no-files-found: ignore
+
+  aggregate-m07:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: m0.7-evidence-*
+          path: TestResults/m0.7-independent-validation
+          merge-multiple: false
+      - shell: pwsh
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.pr_head_sha || github.sha }}
+          VALIDATION_MERGE_SHA: ${{ github.sha }}
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/aggregate-m0.7.ps1 -EvidenceRoot TestResults/m0.7-independent-validation -OutputPath TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json -ValidateResult $env:VALIDATE_RESULT -ExpectedPrHeadCommit $env:PR_HEAD_SHA -ExpectedValidationMergeCommit $env:VALIDATION_MERGE_SHA -ExpectedRunId $env:GITHUB_RUN_ID
+      - shell: pwsh
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-aggregate-outcomes.ps1
+      - shell: pwsh
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+        env:
+          CURRENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.pr_head_sha || github.sha }}
+        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/guard-m0.7-evidence-freshness.ps1 -EvidencePath tests/fixtures/roslyn-msbuild/evidence/m0.7-pr-head-aggregate-evidence-v1.json -CurrentHeadCommit $env:CURRENT_PR_HEAD_SHA
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: m0.7-aggregate-evidence
+          path: TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json
+          if-no-files-found: error
