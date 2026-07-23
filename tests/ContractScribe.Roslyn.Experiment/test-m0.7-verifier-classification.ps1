@@ -31,6 +31,31 @@ if ($fixtureFailure.aggregateOutcome -ne "protocol-failure" -or $fixtureFailure.
 Remove-Item -LiteralPath $fixtureMismatchRoot -Recurse -Force
 Remove-Item -LiteralPath $fixtureMismatchOutput -Recurse -Force
 
+$baselineManifestDriftRoot = Join-Path $outputRoot "baseline-manifest-drift"
+New-Item -ItemType Directory -Path (Join-Path $baselineManifestDriftRoot "tests\fixtures\roslyn-msbuild\v1") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $BaselineRepositoryPath ".git") -Destination (Join-Path $baselineManifestDriftRoot ".git") -Recurse -Force
+$baselineTransferManifest = Join-Path $BaselineRepositoryPath "tests\fixtures\roslyn-msbuild\v1\transfer-manifest.json"
+$driftedTransferManifest = Join-Path $baselineManifestDriftRoot "tests\fixtures\roslyn-msbuild\v1\transfer-manifest.json"
+Copy-Item -LiteralPath $baselineTransferManifest -Destination $driftedTransferManifest -Force
+[IO.File]::WriteAllText($driftedTransferManifest, (Get-Content -LiteralPath $driftedTransferManifest -Raw) + "`n", [Text.UTF8Encoding]::new($false))
+$baselineManifestOutput = Join-Path $outputRoot "baseline-manifest-output"
+$baselineManifestParameters = @{
+    Configuration = "Release"
+    BaselineRepositoryPath = $baselineManifestDriftRoot
+    FixtureRepositoryPath = $FixtureRepositoryPath
+    BaselineCommit = "645c0946b8b811d633b471b232b0654c10e6d7f6"
+    OutputRoot = $baselineManifestOutput
+}
+$output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") @baselineManifestParameters 2>&1
+if ($LASTEXITCODE -eq 0) { throw "Baseline transfer-manifest classification regression unexpectedly succeeded." }
+$baselineManifestFailurePath = Join-Path $baselineManifestOutput "m0.7-failure-evidence.json"
+$baselineManifestFailure = Get-Content -LiteralPath $baselineManifestFailurePath -Raw | ConvertFrom-Json
+if ($baselineManifestFailure.aggregateOutcome -ne "baseline-invalidated" -or $baselineManifestFailure.reasonCode -ne "selected-baseline-transfer-manifest-drift") {
+    throw "Baseline transfer-manifest drift was not routed through the typed baseline-invalidated classifier."
+}
+Remove-Item -LiteralPath $baselineManifestDriftRoot -Recurse -Force
+Remove-Item -LiteralPath $baselineManifestOutput -Recurse -Force
+
 $verifyParameters = @{
     Configuration = "Release"
     BaselineRepositoryPath = $BaselineRepositoryPath

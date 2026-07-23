@@ -126,6 +126,7 @@ Assert-Condition ((Get-GitHead $baselineRoot) -eq $manifest.selectedBaseline.com
 Set-FailureContext "protocol-failure" "fixture-checkout-drift"
 Assert-Condition ((Get-GitHead $fixtureRoot) -eq $manifest.fixture.commit) "The fixture checkout is not the pinned independent commit."
 
+Set-FailureContext "baseline-invalidated" "selected-baseline-transfer-manifest-drift"
 $baselineTransferManifestPath = Join-Path $baselineRoot "tests\fixtures\roslyn-msbuild\v1\transfer-manifest.json"
 Assert-Condition ((Get-FileSha256 $baselineTransferManifestPath) -eq $manifest.selectedBaseline.transferManifestSha256) "The selected-baseline transfer manifest hash does not match."
 $baselineTransferManifest = Read-Json $baselineTransferManifestPath "baseline-invalidated" "selected-baseline-transfer-manifest-invalid"
