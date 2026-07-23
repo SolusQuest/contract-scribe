@@ -1,6 +1,6 @@
 # ADR 0002: Production process topology
 
-Status: Proposed
+Status: Accepted for M1; implementation and executable validation pending
 
 Date: 2026-07-23
 
