@@ -99,8 +99,8 @@ foreach ($vector in $postRunVectors) {
 }
 
 $freshNondeterminismRoot = Join-Path $root "fresh-run-nondeterminism"
-Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-1") $true 2 $true "payload-one"
-Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-2") $true 2 $true "payload-one"
+Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-1") $true 2 $true
+Write-SyntheticCellEvidence (Join-Path $freshNondeterminismRoot "cell-2") $true 2 $true
 $freshRunTwoPath = Join-Path $freshNondeterminismRoot "cell-1\run-2\semantic-payload.json"
 [IO.File]::WriteAllText($freshRunTwoPath, "payload-two", [Text.UTF8Encoding]::new($false))
 $freshCellDocumentPath = Join-Path $freshNondeterminismRoot "cell-1\m0.7-evidence.json"
@@ -112,10 +112,16 @@ $freshNondeterminismOutput = Join-Path $freshNondeterminismRoot "aggregate.json"
 if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $freshNondeterminismOutput | ConvertFrom-Json).aggregateOutcome -ne "baseline-failure") { throw "Fresh-process nondeterminism was not classified as baseline-failure." }
 
 $crossCellRoot = Join-Path $root "cross-cell-byte-mismatch"
-Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-1") $true 2 $true "payload-one"
-Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-2") $true 2 $true "payload-two"
+Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-1") $true 2 $true
+Write-SyntheticCellEvidence (Join-Path $crossCellRoot "cell-2") $true 2 $true
+$crossCellTwoRunOnePath = Join-Path $crossCellRoot "cell-2\run-1\semantic-payload.json"
+$crossCellTwoRunTwoPath = Join-Path $crossCellRoot "cell-2\run-2\semantic-payload.json"
+[IO.File]::WriteAllText($crossCellTwoRunOnePath, "payload-two", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($crossCellTwoRunTwoPath, "payload-two", [Text.UTF8Encoding]::new($false))
 $crossCellTwoDocumentPath = Join-Path $crossCellRoot "cell-2\m0.7-evidence.json"
 $crossCellTwoDocument = Get-Content -LiteralPath $crossCellTwoDocumentPath -Raw | ConvertFrom-Json
+$crossCellTwoDocument.runs[0].payloadSha256 = (Get-FileHash -LiteralPath $crossCellTwoRunOnePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$crossCellTwoDocument.runs[1].payloadSha256 = (Get-FileHash -LiteralPath $crossCellTwoRunTwoPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $crossCellTwoDocument.runnerOs = "Windows"
 $crossCellTwoDocument.rid = "win-x64"
 [IO.File]::WriteAllText($crossCellTwoDocumentPath, ($crossCellTwoDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
