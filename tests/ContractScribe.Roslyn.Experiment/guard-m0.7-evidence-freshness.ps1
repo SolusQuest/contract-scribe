@@ -21,9 +21,9 @@ if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit does not exist
 if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit predates the protocol PR head." }
 & git -C $repositoryRoot merge-base --is-ancestor $evidence.evidencePublicationCommit $CurrentHeadCommit
 if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit is not part of the current PR history." }
-$publicationFiles = @(& git -C $repositoryRoot diff-tree --no-commit-id --name-only -r $evidence.evidencePublicationCommit -- $normalizedEvidencePath | ForEach-Object { $_.Trim().Replace("\", "/") } | Where-Object { $_ })
-if ($publicationFiles -notcontains $normalizedEvidencePath) { throw "The evidence publication commit did not publish the committed evidence file." }
 if ($evidence.evidencePublicationCommit -ne $evidence.protocolPrHeadCommit) {
+    $publicationFiles = @(& git -C $repositoryRoot diff-tree --no-commit-id --name-only -r $evidence.evidencePublicationCommit -- $normalizedEvidencePath | ForEach-Object { $_.Trim().Replace("\", "/") } | Where-Object { $_ })
+    if ($publicationFiles -notcontains $normalizedEvidencePath) { throw "The evidence publication commit did not publish the committed evidence file." }
     $publicationEvidenceText = (& git -C $repositoryRoot show "$($evidence.evidencePublicationCommit):$normalizedEvidencePath" | Out-String)
     try {
         $publicationEvidence = $publicationEvidenceText | ConvertFrom-Json
