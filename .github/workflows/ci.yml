@@ -118,11 +118,6 @@ jobs:
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/aggregate-m0.7.ps1 -EvidenceRoot TestResults/m0.7-independent-validation -OutputPath TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json -ValidateResult $env:VALIDATE_RESULT -ExpectedPrHeadCommit $env:PR_HEAD_SHA -ExpectedValidationMergeCommit $env:VALIDATION_MERGE_SHA -ExpectedRunId $env:GITHUB_RUN_ID
       - shell: pwsh
         run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/test-m0.7-aggregate-outcomes.ps1
-      - shell: pwsh
-        if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
-        env:
-          CURRENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.pr_head_sha || github.sha }}
-        run: pwsh -NoProfile -File tests/ContractScribe.Roslyn.Experiment/guard-m0.7-evidence-freshness.ps1 -EvidencePath tests/fixtures/roslyn-msbuild/evidence/m0.7-pr-head-aggregate-evidence-v1.json -CurrentHeadCommit $env:CURRENT_PR_HEAD_SHA
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

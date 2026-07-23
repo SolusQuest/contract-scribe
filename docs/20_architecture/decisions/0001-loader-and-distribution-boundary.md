@@ -1,8 +1,8 @@
 # ADR 0001: Loader and distribution boundary
 
-Status: Provisional candidate baseline pending M0.7
+Status: M0-validated baseline
 
-Date: 2026-07-21
+Date: 2026-07-23
 
 Decision owner: Repository owner; this ADR becomes a repository decision through human-reviewed PR merge.
 
@@ -23,13 +23,13 @@ This ADR records the next bounded execution baseline from those facts. It does n
 The baseline must:
 
 - preserve the M0.4 semantic path, `(logicalProjectId, documentationCommentId)` identity, ordering, and deterministic comparison boundary;
-- keep the audit path offline and independent of provider/model secrets and GitHub write tokens;
+- declare no network-dependent operation and remain independent of provider/model secrets and GitHub write tokens; CI does not enforce egress isolation;
 - be directly exercised by the committed M0 evidence rather than inferred from an untested runtime split;
 - make SDK/MSBuild prerequisites, tested matrix, failure behavior, and evidence limits explicit;
 - keep public source safe and avoid machine-local paths, raw logs, environment dumps, credentials, and private downstream material;
 - provide a clear, bounded input to M0.7 and M1 without freezing an external compatibility or publication promise.
 
-Evidence validity, semantic-path fidelity, deterministic output, offline operation, and public safety are eligibility gates. Operational complexity, installation prerequisites, process isolation, and packaging convenience are trade-off criteria only after an option is eligible.
+Evidence validity, semantic-path fidelity, deterministic output, the declared no-network-dependency boundary, and public safety are eligibility gates. Operational complexity, installation prerequisites, process isolation, and packaging convenience are trade-off criteria only after an option is eligible.
 
 ## Decision dimensions and terminology
 
@@ -52,14 +52,14 @@ The selected candidate name is `framework-dependent semantic execution baseline`
 
 The disposition vocabulary is closed for this ADR:
 
-- Selected: the one provisional candidate chosen for the next validation gate from direct positive evidence.
+- Selected: the one candidate chosen for the stated profile from direct positive evidence; after a validation gate, the ADR records whether that selection is validated.
 - Rejected: evidence rules out the candidate for the stated profile or the candidate violates a decision boundary.
 - Deferred: the candidate remains plausible but is intentionally left for a later issue or gate.
 - Not evidenced: the committed experiments do not exercise the candidate sufficiently to make it eligible.
 - Not feasible under the tested profile: the exact tested profile reaches a reproducible negative; this does not generalize beyond that profile.
 - Outside current scope: the question is intentionally not decided by M0.6 and must not be inferred from this ADR.
 
-Every candidate is compared using the same criteria: evidence strength, semantic-path fidelity, deterministic canonical output, SDK/MSBuild compatibility, offline and no-secret behavior, prerequisites, supported matrix, operational complexity, failure diagnosability, process-boundary cost, distribution mechanics, and M1 implementation implications. These criteria guide the decision without turning untested convenience or packaging preferences into evidence.
+Every candidate is compared using the same criteria: evidence strength, semantic-path fidelity, deterministic canonical output, SDK/MSBuild compatibility, no declared network-dependent operation and no-secret behavior, prerequisites, supported matrix, operational complexity, failure diagnosability, process-boundary cost, distribution mechanics, and M1 implementation implications. These criteria guide the decision without turning untested convenience or packaging preferences into evidence.
 
 ## Evidence classification
 
@@ -67,7 +67,7 @@ The following classifications apply throughout this ADR:
 
 - Verified fact: directly demonstrated by a committed experiment record, manifest, evidence record, or repository rule.
 - Decision inference: a bounded choice derived from verified facts and explicitly labeled as inference.
-- Deferred risk: a material concern that does not invalidate this provisional selection but requires a later issue, experiment, or release gate.
+- Deferred risk: a material concern that does not invalidate this validated selection within its stated profile but requires a later issue, experiment, or release gate.
 - Unknown: not tested and not inferable from the committed evidence.
 
 The evidence inputs are:
@@ -77,21 +77,22 @@ The evidence inputs are:
 | Current M0.4 experiment record and transfer manifest | Framework-dependent loading and deterministic semantic output for the named synthetic fixture, current SDK/package baseline, and required Ubuntu/Windows CI protocol. | Production loader behavior, arbitrary project compatibility, Native AOT feasibility, or a distribution channel. |
 | Historical M0.5 experiment record and manifest | The historical frozen M0.4 path under the exact Native AOT profile, matrix, evidence schema, and closed failure registry. | A current `9.0.18` Native AOT claim, general Native AOT impossibility, a remediated AOT design, or successful native execution. |
 | Historical M0.5 Ubuntu and Windows cell evidence plus aggregate | Both historical required cells have the same conclusive publish-time negative and the aggregate is `not-feasible`. | Semantic output comparison for Native AOT, because publish failed before execution, or current-baseline evidence. |
-| Architecture, distribution, and roadmap rules | Deterministic/offline/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
+| M0.7 post-merge main validation run [`30004931948`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948) | The merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` completed the independent fixture/oracle validation with aggregate outcome `succeeded` on the required Ubuntu and Windows X64 cells. | Production loader behavior, arbitrary project compatibility, current-baseline Native AOT feasibility, or a distribution channel. |
+| Architecture, distribution, and roadmap rules | Deterministic/no-declared-network-dependency/security boundaries and the M0.6 → M0.7 lifecycle. | A production implementation or consumer-facing support promise. |
 
-The current M0.4 evidence instance consumed by this ADR is introduced by this PR. During review, implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` identifies the evidence-generating commit within the PR branch; it is not presented as a stable `main` commit. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. After merge, the squash commit on `main` becomes the stable retrieval point for the complete final repository state. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
+The current M0.4 and M0.7 protocol inputs consumed by this ADR are stable on merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b`. The M0.7 PR-head evidence remains a historical pre-merge validation record; the post-merge main run linked above is the promotion evidence for this ADR. Its semantic source revision is the one recorded in the transfer manifest, `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e`, and its current transfer-manifest SHA-256 is listed below. The historical M0.5 evidence instance remains pinned to the full `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` repository commit and the historical hashes below. The historical M0.5 instance binds the prior M0.4 manifest and the `9.0.15` package baseline; it cannot support a current `9.0.18` Native AOT claim without a new run.
 
 The material experiment inputs are:
 
 | Path | Review provenance | Content identity |
 | --- | --- | --- |
-| `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
-| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
-| `global.json` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
-| `Directory.Packages.props` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `a112573f56ccffb2261444434244d4d80e6680d33799c16bd61da7470289bfd4c` |
-| `.github/workflows/ci.yml` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `589a644b688ecf6b0297b5ceddb8eba23071591d9c23e48ff1559bbc51d3662e` |
-| `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
-| `tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1` | PR branch implementation commit `1d5fa571d4eafb44c2d4fffb1bbb81e330d45856` (not yet `main`-stable) | SHA-256 `246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c` |
+| `docs/20_architecture/experiments/m0.4-framework-dependent-loading.md` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `cddeb8e7030d6699d069f00a4b6b5f130c74eac5b5de57fe854abd0425f289bd` |
+| `tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b`; semantic source revision `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f` |
+| `global.json` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `99ba181da37e4a52e141a99260651ca43b1e3cfb3c1f02c8a145d70ed1aa8b29` |
+| `Directory.Packages.props` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `a112573f56ccffb2261444434244d4d80e6680d33799c16bd61da7470289bfd4c` |
+| `.github/workflows/ci.yml` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `4d7a22861d8950d9ffda725df19af1a1008a742e8df4ff776bb35194a858891f` |
+| `tests/ContractScribe.Roslyn.Experiment/verify-m0.4.ps1` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `36417b944aa9b666b68f9d55a60650d9cc5e9d6e57b8d3ead2e1f890fd73fff5` |
+| `tests/ContractScribe.Roslyn.Experiment/test-m0.4-provenance.ps1` | Merged `main` commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` | SHA-256 `246bf09d85f94b0adfa5b780b2a87a79276bf6a247b6d64d86b956f13d2d752c` |
 | `docs/20_architecture/experiments/m0.5-native-aot-feasibility.md` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `3654cac88753d8c463827d616cc7a842e835eeb72533375a8cd7d93a03c91376` |
 | `tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `ab527261098d11628a355d06bc0619d557613bc21d6919f920b8a2db4c42b6d0` |
 | `schemas/experiments/m0.5-native-aot-evidence-v1.schema.json` | `63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e` | SHA-256 `6b8f2f2dc393a224d40eab1d29f2b3bb90f58545dbea02c09d795f617bac40a4` |
@@ -104,7 +105,7 @@ The repository SDK policy is `global.json` SDK `10.0.102` with `latestFeature` r
 
 ## Alternatives
 
-### Framework-dependent semantic execution baseline — selected provisionally
+### Framework-dependent semantic execution baseline — selected and validated within the tested matrix
 
 This is the only eligible candidate with positive framework-dependent execution evidence. The M0.4 test-only host and semantic runner execute the Roslyn/MSBuild path in one process, using SDK/MSBuild discovery and the pinned package baseline. The observed process topology is recorded as a test-host fact; no production process topology is selected. The baseline is limited to the tested synthetic fixture and the documented Ubuntu/Windows, X64, SDK/package, and semantic comparison scope.
 
@@ -132,7 +133,7 @@ This is a distribution-channel layer that may later wrap a selected execution ba
 
 ## Decision
 
-Select the `framework-dependent semantic execution baseline` provisionally for M0.7 validation. This selection is a decision inference from the directly exercised current M0.4 path; the historical M0.5 result is bounded context only and does not provide evidence against current `9.0.18` Native AOT. This is not a production CLI or general compatibility claim.
+Select the `framework-dependent semantic execution baseline` as the M0-validated baseline within the tested M0.7 matrix. This selection is supported by the directly exercised current M0.4 path and the successful independent fixture/oracle validation on merged `main`; the historical M0.5 result is bounded context only and does not provide evidence against current `9.0.18` Native AOT. This is not a production CLI or general compatibility claim.
 
 M0.6 does not select a production process topology. The M0.4 in-process boundary is retained as a test-host observation only. M0.6 does not select a user-facing distribution channel; all channels, including .NET-tool-first, remain deferred and non-contractual.
 
@@ -157,15 +158,15 @@ M0.7 outcomes have these meanings:
 - Complete semantic-path failure, nondeterminism, or mismatch with the independent oracle is a selected-baseline failure. It keeps M0 open and requires this ADR or the selected baseline to be revised or superseded before validation is repeated.
 - Fixture, provenance, public-safety, or contract errors are protocol failures, not baseline support evidence.
 - Any change to the selected baseline during validation invalidates the candidate and returns to M0.6.
-- Success requires all required cells to complete the frozen runner path, agree with the independent oracle, and preserve the documented deterministic/offline/public-safety boundaries.
+- Success requires all required cells to complete the frozen runner path, agree with the independent oracle, and preserve the documented deterministic/no-declared-network-dependency/public-safety boundaries. The evidence does not claim sandboxed offline execution or enforced egress isolation.
 
-After successful M0.7, a follow-up PR updates this ADR from `provisional candidate baseline pending M0.7` to `M0-validated baseline` and links the public evidence. A failed M0.7 leaves M0 open; #10 records the failure and links the revision/revalidation issue or PR that amends or supersedes this ADR. No failed or inconclusive result can be converted silently into M0 closure.
+M0.7 succeeded on the PR-head validation and on the post-merge main validation. The post-merge main run [`30004931948`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948) validated merged commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` with successful Ubuntu [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583922), Windows [`validate`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89198583741), and aggregate [`aggregate-m07`](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948/job/89199307975) jobs. The aggregate record reports `succeeded`, cross-cell byte equality, payload SHA-256 `df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc`, fixture commit `aee85e30a7634fdf6adce7ac8b1a185a68b9698a`, and the selected baseline commit `645c0946b8b811d633b471b232b0654c10e6d7f6`. This demonstrates the declared no-network-dependent operation and no-private-credentials boundary; it does not prove that the host ran under egress isolation. The PR-head evidence remains historical and is not replaced by this post-merge result. The pre-merge freshness guard is retired from the normal CI path after this post-merge result; any future protocol, verifier, manifest, schema, aggregate, or workflow change requires a new evidence instance. A failed or inconclusive M0.7 would leave M0 open and require a revision/revalidation path; no negative result can be converted silently into M0 closure.
 
 ## M1 implications
 
 M1 may plan around the framework-dependent semantic execution boundary and the versioned M0.1-M0.3 contracts, but it must keep the M0.4/M0.5 hosts and `semantic-payload.json` test-only. M1 must define production audit inputs and outputs through the M0.1 policy/configuration and M0.2 audit-result contracts, not through the experimental payload. M1 may introduce a production loader only through its own implementation contract and validation; this ADR does not create that project, API, process protocol, or CLI behavior.
 
-The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/package policy, Ubuntu/Windows X64 matrix, and no-network semantic path. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, or installation channels requires separate evidence and explicit follow-up.
+The selected baseline remains limited to the tested synthetic project shape, SDK/MSBuild/package policy, Ubuntu/Windows X64 matrix, and execution with no declared network-dependent operation; CI does not enforce egress isolation. Support for other project types, frameworks, analyzers, generators, operating systems, architectures, RIDs, toolchains, or installation channels requires separate evidence and explicit follow-up.
 
 ## Consequences and risks
 
@@ -180,15 +181,15 @@ Costs and residual risks:
 - The selected framework-dependent path may require a compatible SDK/MSBuild environment and may not generalize beyond the tested synthetic solution.
 - SDK, Roslyn, MSBuild, trimming, package, runner-image, or evidence-contract drift can invalidate the evidence basis.
 - A future child-process or AOT split could improve deployment or isolation, but its protocol and runtime behavior are currently unknown.
-- Deferring the distribution channel leaves installation and upgrade UX undecided; that is intentional until the execution baseline is independently validated and release governance is ready.
+- Deferring the distribution channel leaves installation and upgrade UX undecided; that remains intentional until process topology and release governance are decided.
 
 Concrete future experiments, runtime prototypes, platform expansions, and publication decisions require separate issues. General residual risks may remain here without speculative placeholder issues.
 
 ## Follow-up issues
 
-The following live issues make the deferred boundaries actionable without selecting them in M0.6:
+The following issues make the remaining deferred boundaries actionable without expanding this validated baseline:
 
-- [#10 — Validate the selected baseline on an independent synthetic repository](https://github.com/SolusQuest/contract-scribe/issues/10) owns the M0.7 validation gate and independent fixture/oracle.
+- [#10 — Validate the selected baseline on an independent synthetic repository](https://github.com/SolusQuest/contract-scribe/issues/10) records the completed M0.7 validation gate and independent fixture/oracle.
 - [#17 — Define production process topology after M0.7](https://github.com/SolusQuest/contract-scribe/issues/17) owns the later in-process versus child-process or split-runtime decision.
 - [#18 — Define the first distribution and publication channel](https://github.com/SolusQuest/contract-scribe/issues/18) owns packaging, provenance, support, and compatibility decisions after execution validation and topology review.
 
@@ -202,13 +203,13 @@ Before a downstream-consumable release, package/tool/action publication, or exte
 
 ## References
 
-The repository artifacts already merged to `main` below are pinned to public commits on `main`. The current M0.4 experiment record is introduced by this PR; its review-time provenance and content identity are recorded above, and its stable `main` commit will be the squash merge commit. Issue links are live tracking references and are intentionally not commit-pinned:
+The repository artifacts already merged to `main` below are pinned to public commit `92dc5fbc9c432ff410e48eed1ea6e79226838d8b` where practical. The post-merge M0.7 evidence is linked to its immutable CI run above; Issue links are live tracking references and are intentionally not commit-pinned:
 
 - [Roadmap](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/roadmap.md)
 - [Initial issue plan](https://github.com/SolusQuest/contract-scribe/blob/60ddd6f481a9514f069af001388ddfdf9bc83502/docs/90_roadmap/initial-issue-plan.md)
 - [Architecture](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/architecture.md)
 - [Distribution policy](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/distribution.md)
-- [Current M0.4 experiment record](../experiments/m0.4-framework-dependent-loading.md) (introduced by this PR; stable `main` commit after merge)
+- [Current M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/92dc5fbc9c432ff410e48eed1ea6e79226838d8b/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
 - [Original M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
 - [Current M0.4 transfer manifest](../../tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
 - [M0.5 experiment record](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/docs/20_architecture/experiments/m0.5-native-aot-feasibility.md)
@@ -216,6 +217,8 @@ The repository artifacts already merged to `main` below are pinned to public com
 - [M0.5 Ubuntu evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json)
 - [M0.5 Windows evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-win-x64-evidence-v1.json)
 - [M0.5 aggregate evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-summary-v1.json)
+- [M0.7 PR-head aggregate evidence](https://github.com/SolusQuest/contract-scribe/blob/92dc5fbc9c432ff410e48eed1ea6e79226838d8b/tests/fixtures/roslyn-msbuild/evidence/m0.7-pr-head-aggregate-evidence-v1.json)
+- [M0.7 post-merge main aggregate evidence run](https://github.com/SolusQuest/contract-scribe/actions/runs/30004931948)
 - [Issue #9](https://github.com/SolusQuest/contract-scribe/issues/9)
 - [Issue #10](https://github.com/SolusQuest/contract-scribe/issues/10)
 - [Issue #17](https://github.com/SolusQuest/contract-scribe/issues/17)
