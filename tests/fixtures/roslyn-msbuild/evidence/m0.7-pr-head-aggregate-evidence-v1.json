@@ -2,24 +2,24 @@
   "formatVersion": "contractscribe-m0.7-aggregate-evidence-v1",
   "validationStage": "pull-request-protocol-head-validation",
   "aggregateOutcome": "succeeded",
-  "protocolPrHeadCommit": "2933973e1e55e86f9d038901565b80aafad1fedc",
-  "validationMergeCommit": "0c9bc7fa2490bf600ca6d91b13e7d892ceb0a0b5",
+  "protocolPrHeadCommit": "87392f55bebb4dd198f16cd042f0b468e84b8fa7",
+  "validationMergeCommit": "b705dae7af7ce7b0ff5474d31f7500ba520d514c",
   "selectedBaselineCommit": "645c0946b8b811d633b471b232b0654c10e6d7f6",
   "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
   "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
-  "protocolCommit": "2933973e1e55e86f9d038901565b80aafad1fedc",
-  "evidencePublicationCommit": "2933973e1e55e86f9d038901565b80aafad1fedc",
+  "protocolCommit": "87392f55bebb4dd198f16cd042f0b468e84b8fa7",
+  "evidencePublicationCommit": "87392f55bebb4dd198f16cd042f0b468e84b8fa7",
   "fixtureRepository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
   "fixtureCommit": "aee85e30a7634fdf6adce7ac8b1a185a68b9698a",
   "oracleSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
   "evidenceGenerating": {
-    "commit": "0c9bc7fa2490bf600ca6d91b13e7d892ceb0a0b5",
-    "runId": "30000356014",
-    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/30000356014",
+    "commit": "b705dae7af7ce7b0ff5474d31f7500ba520d514c",
+    "runId": "30001824737",
+    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/30001824737",
     "jobs": {
-      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/30000356014/job/89183832971",
-      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/30000356014/job/89183832972",
-      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/30000356014/job/89184481804",
+      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/30001824737/job/89188529710",
+      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/30001824737/job/89188529599",
+      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/30001824737/job/89189297661",
       "analyze": null
     }
   },
@@ -98,7 +98,7 @@
     "postMergeValidationRequired": true
   },
   "unresolvedRisks": [
-    "This is PR-head evidence from protocol head 2933973e1e55e86f9d038901565b80aafad1fedc; a post-merge main validation must create the final evidence instance.",
+    "This is PR-head evidence from protocol head 87392f55bebb4dd198f16cd042f0b468e84b8fa7 validated at merge ref b705dae7af7ce7b0ff5474d31f7500ba520d514c; a post-merge main validation must create the final evidence instance.",
     "The selected baseline remains limited to the documented two-project synthetic shape and Ubuntu/Windows X64 framework-dependent matrix.",
     "Production process topology and distribution channel remain deferred to Issues #17 and #18."
   ],
