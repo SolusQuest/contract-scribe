@@ -8,17 +8,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 $outputRootPath = [IO.Path]::GetFullPath($OutputRoot)
+$successEvidencePath = Join-Path $outputRootPath "m0.7-evidence.json"
+$failurePath = Join-Path $outputRootPath "m0.7-failure-evidence.json"
+$hadSuccessEvidence = Test-Path -LiteralPath $successEvidencePath
 if (Test-Path -LiteralPath $outputRootPath) {
     Get-ChildItem -LiteralPath $outputRootPath -Directory -Filter "run-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $outputRootPath "m0.7-evidence.json") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $successEvidencePath -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $outputRootPath -Force | Out-Null
-$failurePath = Join-Path $outputRootPath "m0.7-failure-evidence.json"
 if (-not (Test-Path -LiteralPath $failurePath)) {
+    $aggregateOutcome = if ($hadSuccessEvidence) { "protocol-failure" } else { "inconclusive" }
+    $reasonCode = if ($hadSuccessEvidence) { "post-run-validation-failure" } else { "pre-verifier-validation-failure" }
     $failure = [ordered]@{
         formatVersion = "contractscribe-m0.7-failure-evidence-v1"
-        aggregateOutcome = "protocol-failure"
-        reasonCode = "post-run-validation-failure"
+        aggregateOutcome = $aggregateOutcome
+        reasonCode = $reasonCode
         selectedBaselineCommit = $BaselineCommit
         fixtureCommit = $null
         protocolCommit = $env:GITHUB_SHA
