@@ -128,6 +128,8 @@ One process lifetime handles exactly one audit of one repository with one SDK se
 | No fallback between topologies; no mixed topology | decided | this section |
 | Concurrency only via separate OS processes; no shared mutable cross-process state | decided | this section |
 | Multi-repository batch mode in one process excluded | decided | reconsideration trigger in §12 |
+| Daemon/service models with a lifetime beyond the invoking host session | decided | outside the candidate set (terminology) |
+| C2/C3 concurrency limits (one active request per worker; multi-solution behavior) | deferred to [#27](https://github.com/SolusQuest/contract-scribe/issues/27) | eligibility experiment; candidate assumption: one active request per worker connection |
 
 ### 3. Trust model and isolation
 
@@ -168,7 +170,9 @@ Three outcome layers:
 
 - Audit outcome: `compliant`, `violation`, `skipped` (per the M0.2 audit-result contract). An audit violation is a successful execution carrying a violation audit outcome.
 - Execution outcome: invalid input, environment unavailable, load failure, audit error, cancelled, timeout.
-- Process outcome: the host process itself failed before committing a terminal outcome (crash, abort, external kill). An abruptly terminated in-process host cannot classify itself; observers classify the absence of a committed terminal outcome as process failure.
+- Process outcome: the host process itself failed before committing a terminal outcome (crash, abort, external kill). An abruptly terminated in-process host cannot classify itself; observers classify the absence of a committed terminal outcome as process failure. For C2/C3, worker-side process statuses (startup failure, crash, signal, protocol corruption) are mapped by the surviving host into execution outcomes under the abstract mapping below.
+
+Worker/process-status → host-outcome mapping (abstract; decided here and applicable to C2/C3 when eligible): worker startup failure maps to execution outcome `environment unavailable`; a worker crash or signal before a terminal response maps to `load failure` when it occurs during loading and to `audit error` otherwise; protocol corruption — a malformed, oversized, duplicate, or missing response, including a zero exit without a well-formed response — maps to `audit error`; a well-formed terminal response takes precedence over any conflicting worker exit code; cancellation propagates as the `cancelled` outcome; the host's own process outcome overrides every mapped outcome. Concrete class bindings belong to the #27 protocol.
 
 Abstract terminal outcome classes and precedence: exactly one terminal outcome per run, committed atomically (§9). Precedence is closed: (a) once a terminal outcome is atomically committed it stands — a later process crash cannot convert it, and process failure applies only when no terminal outcome was committed; (b) when no outcome is committed, an externally observed process outcome (crash, abort, external kill) is the outcome; (c) within execution outcomes, classification follows the earliest failing stage in the §1 order, and input classification precedes environment classification when both are detected at the same stage; (d) cancellation or timeout observed before the commit point yields the `cancelled` or timeout outcome and suppresses any later same-run result; (e) an audit outcome is produced only by a successful execution. The mapping from these classes to concrete CLI numeric exit codes is **deferred to #25**; multiple classes may share one numeric code where the CLI contract documents it, and the mapping requires no topology decision and must not change this one. The production implementation (#24) defines a closed failure-code registry with explicit versioning; experiment failure registries are not reused.
 
@@ -177,19 +181,22 @@ Abstract terminal outcome classes and precedence: exactly one terminal outcome p
 | Three outcome layers (audit / execution / process) | decided | this section |
 | Audit violation = successful execution carrying violation outcome | decided | this section |
 | Abstract terminal outcome classes and closed precedence (a)–(e) | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Worker/process-status → host-outcome mapping (abstract; startup failure, crash, signal, protocol corruption, response/exit-code conflict) | decided | this section; concrete bindings validated in [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
 | Unknown exceptions mapped to bounded internal errors without stack traces or machine paths | decided | this section |
 | Concrete CLI numeric exit codes | deferred to [#25](https://github.com/SolusQuest/contract-scribe/issues/25) | documented mapping; must not alter precedence |
 | Closed failure-code registry and versioning | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | implementation contract |
 
 ### 7. Cancellation and timeout
 
-Cancellation follows a single-terminal-outcome state machine with an atomic result-commit point: cancellation accepted before the commit point yields the `cancelled` outcome; once the terminal result is atomically committed, the committed outcome stands. Every run produces exactly one terminal outcome; stale or late completion attempts are rejected by the single-commit guard. Cancellation in-process is cooperative (`CancellationToken`); stages must observe cancellation at stage boundaries. Timeout classes: SDK discovery, load, and total audit, each mapping to the corresponding execution outcome; graceful shutdown is bounded by the same commit rule. Concrete timeout values are **deferred to #24**; they require runtime calibration and must not change this topology. Forced termination of a hung stage is external only (user or OS kill) — this is the documented R2 limitation and carries a decision reconsideration trigger. Retries are whole-process reruns; a rerun of the same request is idempotent with respect to outputs because results are committed atomically and stale artifacts are removed at run start (§9). Orphan workers, worker hangs, and response/exit-code conflicts are not applicable to C1.
+Cancellation follows a single-terminal-outcome state machine with an atomic result-commit point: cancellation accepted before the commit point yields the `cancelled` outcome; once the terminal result is atomically committed, the committed outcome stands. Every run produces exactly one terminal outcome; stale or late completion attempts are rejected by the single-commit guard. Cancellation in-process is cooperative (`CancellationToken`); stages must observe cancellation at stage boundaries. Timeout classes: startup (for C1 the host process start is observed by the caller or invoking environment; for C2/C3 the worker startup timeout applies), SDK discovery, load, total audit, and graceful shutdown — each mapping to the corresponding execution outcome, with graceful shutdown bounded by the same commit rule. Concrete timeout values are **deferred to #24**; they require runtime calibration and must not change this topology. Forced termination of a hung stage is external only (user or OS kill) — this is the documented R2 limitation and carries a decision reconsideration trigger. Retries are whole-process reruns; a rerun of the same request is idempotent with respect to outputs because results are committed atomically and stale artifacts are removed at run start (§9). Orphan workers, worker hangs, and response/exit-code conflicts are not applicable to C1.
 
 | Sub-decision | Status | Reference / required evidence |
 | --- | --- | --- |
 | Single-terminal-outcome state machine with atomic commit point; late completions rejected | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
 | Cooperative cancellation observed at stage boundaries | decided | this section |
-| Timeout classes (SDK discovery, load, total audit) and outcome mapping | decided | this section |
+| Timeout classes (startup, SDK discovery, load, total audit, graceful shutdown) and outcome mapping | decided | this section |
+| Startup timeout treatment (caller-observed for C1; worker startup timeout for C2/C3) | decided | this section; concrete values deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24); C2/C3 protocol in [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
+| Graceful-shutdown timeout bounded by the commit rule | decided | this section; concrete value deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) |
 | Concrete timeout values | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | runtime calibration |
 | Forced termination external-only (documented R2 limitation) | decided | reconsideration trigger in §12 |
 | Whole-process retry; idempotent reruns | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
@@ -219,8 +226,13 @@ The canonical audit result contains no process metadata (PID, timestamps, durati
 | No snapshot isolation; TOCTOU accepted for trusted input | decided | this section |
 | Atomic, kill-safe publication protocol: invalidate prior artifact at run start; same-volume staging in destination directory; rename; single-commit guard | decided | this section; kill-window and cross-volume/output-location vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
 | One-shot process-level MSBuildLocator per process | decided | this section |
+| In-process cache and workspace reuse within one audit only | decided | this section |
+| State isolation between repositories and SDK selections (fresh process per audit) | decided | this section |
+| Process-count limit: exactly one process per audit run | decided | this section |
 | OOM/stack-overflow/abort classified externally | decided | this section |
 | Concrete memory/runtime resource limits | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
+| Temporary-disk usage bound | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
+| Pipe backpressure | not applicable to C1 | open question for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
 | Working-directory independence | decided | this section |
 
 ### 10. SDK/MSBuild input scope
