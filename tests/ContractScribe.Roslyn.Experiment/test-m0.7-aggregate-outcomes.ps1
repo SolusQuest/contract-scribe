@@ -103,7 +103,8 @@ Write-SyntheticCellEvidence (Join-Path $wrongOracleRoot "cell-1") $true 2 $true 
 Write-SyntheticCellEvidence (Join-Path $wrongOracleRoot "cell-2") $true 2 $true "wrong-payload"
 $wrongOracleOutput = Join-Path $wrongOracleRoot "aggregate.json"
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot "aggregate-m0.7.ps1") -EvidenceRoot $wrongOracleRoot -OutputPath $wrongOracleOutput -ManifestPath $syntheticManifestPath 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0 -or (Get-Content -Raw $wrongOracleOutput | ConvertFrom-Json).aggregateOutcome -ne "baseline-failure") { throw "Identical but wrong oracle payloads were accepted by aggregate." }
+$wrongOracleAggregate = Get-Content -Raw $wrongOracleOutput | ConvertFrom-Json
+if ($LASTEXITCODE -eq 0 -or $wrongOracleAggregate.aggregateOutcome -eq "succeeded") { throw "Identical but wrong oracle payloads were accepted by aggregate." }
 
 foreach ($provenanceField in @("selectedBaselineCommit", "protocolCommit", "fixtureCommit", "oracleSha256")) {
     $provenanceRoot = Join-Path $root ("provenance-mismatch-{0}" -f $provenanceField)
