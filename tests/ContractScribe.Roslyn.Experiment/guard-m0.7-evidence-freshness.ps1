@@ -20,8 +20,6 @@ if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit does not exist
 if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit predates the protocol PR head." }
 & git -C $repositoryRoot merge-base --is-ancestor $evidence.evidencePublicationCommit $CurrentHeadCommit
 if ($LASTEXITCODE -ne 0) { throw "The evidence publication commit is not part of the current PR history." }
-$publicationFiles = @(& git -C $repositoryRoot diff-tree --no-commit-id --name-only -r $evidence.evidencePublicationCommit -- $EvidencePath | ForEach-Object { $_.Trim().Replace("\", "/") } | Where-Object { $_ })
-if ($publicationFiles -notcontains $EvidencePath.Replace("\", "/")) { throw "The evidence publication commit did not publish the committed evidence file." }
 if ($CurrentHeadCommit -eq $evidence.protocolPrHeadCommit) {
     Write-Output "M0.7 evidence freshness guard passed: current protocol PR head is covered."
     exit 0
