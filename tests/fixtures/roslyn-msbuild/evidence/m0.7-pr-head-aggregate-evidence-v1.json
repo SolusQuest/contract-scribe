@@ -5,22 +5,23 @@
   "selectedBaselineCommit": "645c0946b8b811d633b471b232b0654c10e6d7f6",
   "semanticSourceRevision": "63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e",
   "transferManifestSha256": "1ad92419cf77e82f660cd1226f2a10dbb0561b6271b0bfc482a8bb4799237c7f",
-  "protocolCommit": "3634c93c92232657b813306aaa94df040491876c",
+  "protocolCommit": "b94a776da0a44c8750cbcda62434ddeffcd543ed",
   "evidencePublicationCommit": "0a1c870328c982e4007861aa4195ffd2d6eed7aa",
   "fixtureRepository": "https://github.com/Yuee98/contract-scribe-m07-fixture",
   "fixtureCommit": "aee85e30a7634fdf6adce7ac8b1a185a68b9698a",
   "oracleSha256": "df8202a209fc0005fe897779fa97c9c44212140f633229414a9271f739338fdc",
   "evidenceGenerating": {
-    "commit": "3634c93c92232657b813306aaa94df040491876c",
-    "runId": "29970226178",
-    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/29970226178",
+    "commit": "b94a776da0a44c8750cbcda62434ddeffcd543ed",
+    "runId": "29971172107",
+    "runUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/29971172107",
     "jobs": {
-      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/29970226178/job/89090471696",
-      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/29970226178/job/89090471748",
-      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/29970226178/job/89090956607",
-      "analyze": "https://github.com/SolusQuest/contract-scribe/actions/runs/29970224506/job/89090468212"
+      "ubuntu": "https://github.com/SolusQuest/contract-scribe/actions/runs/29971172107/job/89093318557",
+      "windows": "https://github.com/SolusQuest/contract-scribe/actions/runs/29971172107/job/89093318538",
+      "aggregate": "https://github.com/SolusQuest/contract-scribe/actions/runs/29971172107/job/89093778897",
+      "analyze": "https://github.com/SolusQuest/contract-scribe/actions/runs/29971170055/job/89093314783"
     }
   },
+  "validateResult": "success",
   "comparison": {
     "artifact": "semantic-payload.json",
     "encoding": "utf-8-no-bom",
