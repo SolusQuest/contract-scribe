@@ -105,6 +105,7 @@ $freshRunTwoPath = Join-Path $freshNondeterminismRoot "cell-1\run-2\semantic-pay
 [IO.File]::WriteAllText($freshRunTwoPath, "payload-two", [Text.UTF8Encoding]::new($false))
 $freshCellDocumentPath = Join-Path $freshNondeterminismRoot "cell-1\m0.7-evidence.json"
 $freshCellDocument = Get-Content -LiteralPath $freshCellDocumentPath -Raw | ConvertFrom-Json
+$freshCellDocument.comparison.crossRunEquality = $false
 $freshCellDocument.runs[1].payloadSha256 = (Get-FileHash -LiteralPath $freshRunTwoPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText($freshCellDocumentPath, ($freshCellDocument | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 $freshNondeterminismOutput = Join-Path $freshNondeterminismRoot "aggregate.json"
