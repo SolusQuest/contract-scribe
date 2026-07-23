@@ -18,8 +18,7 @@ An issue ledger is not a core abstraction. If state becomes necessary, the proje
 
 ## Open decisions
 
-- Loader and semantic-analysis process boundary.
 - Feasible Native AOT distribution path.
 - Initial distribution form.
 
-These decisions require the M0 experiments and ADR described in the roadmap.
+The loader and semantic-analysis process boundary is decided by [ADR 0002](../20_architecture/decisions/0002-process-topology.md): the M1 deterministic audit uses an in-process production loader, with child-process topologies deferred pending their eligibility experiment. The remaining open decisions are owned by the follow-up issues referenced from ADR 0001 and ADR 0002.
