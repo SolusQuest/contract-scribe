@@ -106,29 +106,63 @@ C1 wins on evidence strength, semantic-path fidelity, determinism, operational c
 
 ## Contract of the selected topology
 
-Status legend: each **sub-decision row** below carries a status — **decided**, **not applicable**, or **deferred to** a linked follow-up issue. For the selected topology, every sub-decision that #17 owns and that determines topology eligibility or the process boundary is decided here; sub-decisions owned by other issues or requiring executable calibration are deferred with their required evidence stated, and they never change the selected topology. No unvalidated constant is invented to make a row look decided.
+Status legend: every **sub-decision row** in the tables below carries a status — **decided** in this ADR, **not applicable** to C1, or **deferred to** a linked follow-up issue with the required evidence or calibration stated. For the selected topology, every sub-decision that #17 owns and that determines topology eligibility or the process boundary is decided; sub-decisions owned by other issues or requiring executable calibration are deferred and never change the selected topology. No unvalidated constant is invented to make a row look decided.
 
-### 1. Responsibility and ownership matrix — decided
+### 1. Responsibility and ownership matrix
 
-One process (the audit host) owns every stage, in order: repository-root determination; solution/project path resolution; policy/configuration read and validation; SDK/global.json resolution; restore/build prerequisite checking; MSBuildLocator registration; MSBuildWorkspace/Compilation creation; M0.3 classification; XML-documentation detection; evidence excerpt and hashing; M0.1 policy evaluation; M0.2 audit-result aggregation and canonical serialization; final file writes; diagnostic filtering and public-safety enforcement; cancellation, timeout, and cleanup. There is no inter-process ownership. For deferred C2/C3 the side assignment is fixed by the candidate definitions (worker: SDK/MSBuild discovery, solution loading, compilation, M0.3 classification, XML-documentation observation, evidence excerpt/hash; parent: M0.1 policy evaluation, M0.2 audit-result aggregation/serialization, final writes, user-facing diagnostics); no stage may move across the fixed split point. Stage-level error mapping is defined by the production implementation contract (#24).
+One process (the audit host) owns every stage, in order: repository-root determination; solution/project path resolution; policy/configuration read and validation; SDK/global.json resolution; restore/build prerequisite checking; MSBuildLocator registration; MSBuildWorkspace/Compilation creation; M0.3 classification; XML-documentation detection; evidence excerpt and hashing; M0.1 policy evaluation; M0.2 audit-result aggregation and canonical serialization; final file writes; diagnostic filtering and public-safety enforcement; cancellation, timeout, and cleanup. There is no inter-process ownership. For deferred C2/C3 the side assignment is fixed by the candidate definitions (worker: SDK/MSBuild discovery, solution loading, compilation, M0.3 classification, XML-documentation observation, evidence excerpt/hash; parent: M0.1 policy evaluation, M0.2 audit-result aggregation/serialization, final writes, user-facing diagnostics); no stage may move across the fixed split point.
 
-### 2. Lifetime and concurrency — decided
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Single-process ownership of every stage | decided | this section |
+| Fixed C2/C3 split-point side assignment; no stage migration across the boundary | decided | this section |
+| Stage-level error mapping | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | production implementation contract |
+
+### 2. Lifetime and concurrency
 
 One process lifetime handles exactly one audit of one repository with one SDK selection. The process exits after the terminal outcome is committed. There is no worker, no fallback between topologies, and no mixed topology. Concurrent audits are separate OS processes; the host must not rely on shared mutable state across processes. A multi-repository batch mode within one process is outside the M1 shape; requiring it is a decision reconsideration trigger (§12).
 
-### 3. Trust model and isolation — decided
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| One process lifetime = one repository, one SDK selection, one audit; exit after terminal commit | decided | this section |
+| No fallback between topologies; no mixed topology | decided | this section |
+| Concurrency only via separate OS processes; no shared mutable cross-process state | decided | this section |
+| Multi-repository batch mode in one process excluded | decided | reconsideration trigger in §12 |
 
-Analyzed repositories are trusted input (R1). The host provides no sandbox and claims none. Environment inheritance is the OS default for a CLI process; the host must not read, persist, or emit credential-like environment values, and diagnostics remain bounded per §8. The audit never modifies source or project files itself; build outputs exist only because the caller prepared them, and any repository writes caused by MSBuild/design-time evaluation (for example `obj` artifacts) are bounded and verified by #24 and #26 rather than claimed absent here. Temporary files go to the system temporary directory with audit-unique names and deletion on exit. Paths are constrained lexically to the repository root; symlink, junction, or reparse-point escapes outside the root are rejected as invalid input. Worker executable location/integrity, shell-spawn rules, and process-tree termination are not applicable to C1.
+### 3. Trust model and isolation
 
-### 4. Transport and versioning — not applicable to C1
+Analyzed repositories are trusted input (R1). The host provides no sandbox and claims none. Environment handling follows three bounded guarantees: ContractScribe does not require or intentionally consume provider, model, or GitHub credentials; credential-like values must never be persisted or emitted through diagnostics, results, logs, or evidence; and repository-controlled MSBuild evaluation runs with the OS-inherited environment under the trusted-input assumption and is not sandboxed. MSBuild evaluation itself reads environment variables as project properties, so a stronger never-read guarantee would require an explicit scrubbed-environment design and is a decision reconsideration trigger (§12). The audit never modifies source or project files itself; build outputs exist only because the caller prepared them, and any repository writes caused by MSBuild/design-time evaluation (for example `obj` artifacts) are bounded and verified by #24 and #26 rather than claimed absent here. Non-publication temporary files go to the system temporary directory with audit-unique names and deletion on exit; result-publication staging follows §9 instead. Paths are constrained lexically to the repository root; symlink, junction, or reparse-point escapes outside the root are rejected as invalid input.
+
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Trusted-input assumption; no sandbox claim | decided | this section |
+| Environment boundary: no intentional credential consumption; credential-like values never persisted or emitted; inherited environment under trusted input | decided | this section; emission checks in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| No self-modification of source/project files; MSBuild/design-time writes bounded | decided | verification deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) and [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Non-publication temp files in system temp, audit-unique, deleted on exit | decided | this section |
+| Result-publication staging location and protocol | decided | §9 |
+| Lexical root constraint; symlink/junction/reparse-point escape rejection | decided | this section; tests in [#24](https://github.com/SolusQuest/contract-scribe/issues/24) and [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Worker executable location/integrity, shell-spawn rules, process-tree termination | not applicable to C1 | open questions for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
+
+### 4. Transport and versioning
 
 C1 has no IPC boundary. For deferred C2/C3 this dimension is an open question set for the eligibility experiment (#27), consistent with the fixed split point: transport; framing; encoding; a request contract limited to protocol version, request ID, repository root, solution path, and timeout/cancellation metadata (no policy reference — the parent owns policy evaluation); a response contract of execution status, the serialized semantic-facts payload (§5), bounded diagnostics, toolchain identity, and protocol identity (no audit-result bytes — the parent owns audit-result production); version negotiation; version-skew policy; unknown-field handling; size limits; stdout/stderr ownership; atomic result semantics. Addressing distinguishes private runtime addressing from public/output data: the request envelope may carry execution-necessary paths (a normalized absolute repository root plus a repository-relative or validated absolute solution path) provided the parent lexically validates them before sending, the solution path resolves under the repository root, symlink/junction/reparse-point and root-escape behavior is defined, and the worker never depends on its current working directory; these paths serve only the current local execution and are neither canonical contract data nor an external compatibility promise. Public/output data remains path-free: absolute machine paths are forbidden in the semantic-facts payload, response diagnostics, the audit result, user-facing stdout/stderr, logs, evidence, and public artifacts, and the worker must convert paths to repository-relative locators or stable bounded codes without echoing input absolute paths. Data forbidden from crossing the boundary in either direction: Roslyn object graphs, raw exceptions, environment dumps, and `semantic-payload.json`. No final values are fixed here.
 
-### 5. Serialized semantic-facts payload — not applicable to C1; open questions for the C2/C3 eligibility experiment
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Transport, framing, encoding, request/response contracts, version negotiation and skew, size limits, stdout/stderr ownership | not applicable to C1 | open questions for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
+| Addressing rule: private runtime addressing versus path-free public outputs | decided | this section; prototype validation in [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
+| Forbidden boundary data (Roslyn object graphs, raw exceptions, environment dumps, `semantic-payload.json`) | decided | this section |
+
+### 5. Serialized semantic-facts payload
 
 The payload the worker returns at the fixed split point is a distinct contract element, neither the experimental `semantic-payload.json` nor the M0.2 audit-result contract. The eligibility experiment (#27) must define: its semantic ownership (worker-produced, parent-consumed); schema and version; identity and ordering rules; size bounds; canonicalization; sufficiency for the parent's stages — because M0.3 classification, XML-documentation observation, and evidence excerpt/hash happen on the worker side, the payload must carry everything M0.1 policy evaluation and M0.2 audit-result production require; and breaking-change and compatibility rules. Elements only a prototype can determine (concrete schema, framing, bounds) remain open questions; C2/C3 may not be selected while they are open.
 
-### 6. Failure taxonomy and outcome semantics — classes and mapping decided; CLI numeric codes deferred
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Payload existence and boundary (distinct from `semantic-payload.json` and M0.2 audit result) | decided | this section |
+| Concrete schema, version, identity/ordering, bounds, canonicalization, sufficiency, breaking-change rules | deferred to [#27](https://github.com/SolusQuest/contract-scribe/issues/27) | eligibility experiment; blocks C2/C3 selection while open |
+
+### 6. Failure taxonomy and outcome semantics
 
 Three outcome layers:
 
@@ -138,35 +172,105 @@ Three outcome layers:
 
 Abstract terminal outcome classes and precedence: exactly one terminal outcome per run, committed atomically (§9). Precedence is closed: (a) once a terminal outcome is atomically committed it stands — a later process crash cannot convert it, and process failure applies only when no terminal outcome was committed; (b) when no outcome is committed, an externally observed process outcome (crash, abort, external kill) is the outcome; (c) within execution outcomes, classification follows the earliest failing stage in the §1 order, and input classification precedes environment classification when both are detected at the same stage; (d) cancellation or timeout observed before the commit point yields the `cancelled` or timeout outcome and suppresses any later same-run result; (e) an audit outcome is produced only by a successful execution. The mapping from these classes to concrete CLI numeric exit codes is **deferred to #25**; multiple classes may share one numeric code where the CLI contract documents it, and the mapping requires no topology decision and must not change this one. The production implementation (#24) defines a closed failure-code registry with explicit versioning; experiment failure registries are not reused.
 
-### 7. Cancellation and timeout — semantics decided; concrete timeout values deferred
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Three outcome layers (audit / execution / process) | decided | this section |
+| Audit violation = successful execution carrying violation outcome | decided | this section |
+| Abstract terminal outcome classes and closed precedence (a)–(e) | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Unknown exceptions mapped to bounded internal errors without stack traces or machine paths | decided | this section |
+| Concrete CLI numeric exit codes | deferred to [#25](https://github.com/SolusQuest/contract-scribe/issues/25) | documented mapping; must not alter precedence |
+| Closed failure-code registry and versioning | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | implementation contract |
 
-Cancellation follows a single-terminal-outcome state machine with an atomic result-commit point: cancellation accepted before the commit point yields the `cancelled` outcome; once the terminal result is atomically committed, the committed outcome stands. Every run produces exactly one terminal outcome; stale or late completion attempts are rejected by the single-commit guard. Cancellation in-process is cooperative (`CancellationToken`); stages must observe cancellation at stage boundaries. Timeout classes: SDK discovery, load, and total audit, each mapping to the corresponding execution outcome; graceful shutdown is bounded by the same commit rule. Concrete timeout values are **deferred to #24**; they require runtime calibration and must not change this topology. Forced termination of a hung stage is external only (user or OS kill) — this is the documented R2 limitation and carries a decision reconsideration trigger. Retries are whole-process reruns; a rerun of the same request is idempotent with respect to outputs because results are committed atomically and stale artifacts are removed (§9). Orphan workers, worker hangs, and response/exit-code conflicts are not applicable to C1.
+### 7. Cancellation and timeout
 
-### 8. Diagnostics and public safety — decided; numeric caps deferred
+Cancellation follows a single-terminal-outcome state machine with an atomic result-commit point: cancellation accepted before the commit point yields the `cancelled` outcome; once the terminal result is atomically committed, the committed outcome stands. Every run produces exactly one terminal outcome; stale or late completion attempts are rejected by the single-commit guard. Cancellation in-process is cooperative (`CancellationToken`); stages must observe cancellation at stage boundaries. Timeout classes: SDK discovery, load, and total audit, each mapping to the corresponding execution outcome; graceful shutdown is bounded by the same commit rule. Concrete timeout values are **deferred to #24**; they require runtime calibration and must not change this topology. Forced termination of a hung stage is external only (user or OS kill) — this is the documented R2 limitation and carries a decision reconsideration trigger. Retries are whole-process reruns; a rerun of the same request is idempotent with respect to outputs because results are committed atomically and stale artifacts are removed at run start (§9). Orphan workers, worker hangs, and response/exit-code conflicts are not applicable to C1.
+
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Single-terminal-outcome state machine with atomic commit point; late completions rejected | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Cooperative cancellation observed at stage boundaries | decided | this section |
+| Timeout classes (SDK discovery, load, total audit) and outcome mapping | decided | this section |
+| Concrete timeout values | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | runtime calibration |
+| Forced termination external-only (documented R2 limitation) | decided | reconsideration trigger in §12 |
+| Whole-process retry; idempotent reruns | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Worker orphan/hang/response-vs-exit-code conflicts | not applicable to C1 | open questions for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
+
+### 8. Diagnostics and public safety
 
 Diagnostics are allowlisted: stable codes, bounded messages, repository-relative paths (absolute machine paths forbidden), no source excerpts unless a future contract explicitly allowlists them, deterministic ordering and deduplication. Raw MSBuild/Roslyn diagnostics are classified, truncated, and sanitized before surfacing. Stack traces and machine-local detail are local-debug only and never enter public output; debug mode must not change the public output contract. Logs are not written to disk by default. Telemetry is a non-goal. Concrete maximum diagnostic counts and byte caps are **deferred to #24** as calibration values.
 
-### 9. Determinism and state management — decided
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Allowlisted fields; stable codes; repository-relative paths only | decided | this section |
+| Raw MSBuild/Roslyn diagnostic classification, truncation, sanitization | decided | this section |
+| Deterministic ordering and deduplication | decided | this section |
+| Stack traces debug-only; debug never changes the public contract | decided | this section |
+| No default disk logs; no telemetry | decided | this section |
+| Numeric count/byte caps | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
 
-The canonical audit result contains no process metadata (PID, timestamps, durations, temporary directories, machine identity); any execution envelope is separate and non-canonical. Culture, timezone, locale, and encoding must not affect output; ordering is ordinal and environment-independent, per the M0.2 contract. The host reads repository files as they are at load time, without snapshot isolation and without watching for changes; a repository modified during an audit may yield a result computed from a mixed state, and rerunning is the caller's decision (TOCTOU is accepted and documented for trusted input). Result commitment is atomic: write to a uniquely named temporary file, then rename. Any pre-existing target artifact is removed or quarantined before the run commits, so a failed, cancelled, or killed run never leaves an artifact that could be read as the current success; temporary files are cleaned up on failure and cancellation; only the atomically renamed file represents a successful run. MSBuildLocator registration is process-level and one-shot, consistent with the per-invocation process model. In-process caches are allowed within one audit only. OOM, stack overflow, and abort are process outcomes classified externally, since the terminated process cannot classify itself; concrete memory/runtime resource limits are **deferred to #24**. Working-directory independence: the host must not depend on the caller's current directory for correctness.
+### 9. Determinism and state management
 
-### 10. SDK/MSBuild input scope — boundaries decided; validation matrix deferred
+The canonical audit result contains no process metadata (PID, timestamps, durations, temporary directories, machine identity); any execution envelope is separate and non-canonical. Culture, timezone, locale, and encoding must not affect output; ordering is ordinal and environment-independent, per the M0.2 contract. The host reads repository files as they are at load time, without snapshot isolation and without watching for changes; a repository modified during an audit may yield a result computed from a mixed state, and rerunning is the caller's decision (TOCTOU is accepted and documented for trusted input). Result publication is atomic and kill-safe: any pre-existing target artifact is removed or quarantined at run start, before the first failure-prone stage, so a run killed at any point — including during SDK discovery or loading — never leaves an artifact readable as the current success; the staging file is created in the destination directory (the same filesystem as the target, because a cross-volume rename is not atomic), fully written, and then renamed onto the target path; staging files are cleaned up on failure and cancellation; only the atomically renamed file represents a successful run. MSBuildLocator registration is process-level and one-shot, consistent with the per-invocation process model. In-process caches are allowed within one audit only. OOM, stack overflow, and abort are process outcomes classified externally, since the terminated process cannot classify itself; concrete memory/runtime resource limits are **deferred to #24**. Working-directory independence: the host must not depend on the caller's current directory for correctness.
+
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| No process metadata in canonical result; separate non-canonical envelope | decided | this section |
+| Culture/timezone/locale/encoding independence; ordinal ordering | decided | this section; M0.2 contract |
+| No snapshot isolation; TOCTOU accepted for trusted input | decided | this section |
+| Atomic, kill-safe publication protocol: invalidate prior artifact at run start; same-volume staging in destination directory; rename; single-commit guard | decided | this section; kill-window and cross-volume/output-location vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| One-shot process-level MSBuildLocator per process | decided | this section |
+| OOM/stack-overflow/abort classified externally | decided | this section |
+| Concrete memory/runtime resource limits | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
+| Working-directory independence | decided | this section |
+
+### 10. SDK/MSBuild input scope
 
 The first version accepts an explicit path to a `.sln`, `.slnx`, or `.csproj`; directory auto-discovery is not performed. The CLI accepts absolute or repository-relative paths; diagnostics emit repository-relative paths only. Restore/build preparation is the caller's responsibility (fixed constraint); missing assets are input/environment errors. SDK selection follows `global.json` with `latestFeature` roll-forward; the actually selected SDK/MSBuild identity is recorded in the bounded execution envelope. Missing, invalid, or nested `global.json` follows .NET SDK resolution rules, with the selected identity recorded. The Ubuntu/Windows X64 matrix is the M0.7 evidence boundary, not a production support claim; the required implementation-validation matrix is **deferred to #26**, and no production support claim exists until it passes. Unsupported input classification: non-C# languages and solution filters (`.slnf`) are unsupported at M1 (outside the contract); analyzers, generators, and custom targets are trusted-but-unvalidated — #26 states whether they enter the initial validation matrix; multi-targeting is deferred until #24 defines its aggregation and identity behavior. M0 evidence covers only the tested synthetic shape.
 
-### 11. Migration and compatibility — decided
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Entry types: explicit `.sln`/`.slnx`/`.csproj` path; no auto-discovery | decided | this section |
+| Path forms (CLI input forms versus diagnostics output forms) | decided | this section |
+| Restore ownership (caller prepares; missing assets are input/environment errors) | decided | fixed constraint |
+| SDK selection policy (`global.json` + `latestFeature`) with recorded identity | decided | this section |
+| Missing/invalid/nested `global.json` behavior | decided | this section |
+| Evidence boundary (Ubuntu/Windows X64 is not a production support claim) | decided | this section |
+| Implementation-validation matrix | deferred to [#26](https://github.com/SolusQuest/contract-scribe/issues/26) | validation protocol |
+| Unsupported classification: non-C# and `.slnf` unsupported; analyzers/generators/custom targets trusted-but-unvalidated | decided | this section; matrix decision in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
+| Multi-targeting aggregation and identity semantics | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | implementation contract |
+
+### 11. Migration and compatibility
 
 C1 has no parent/worker versioning. The audit's external behavior binds to the M0.1–M0.3 contract versions only. No migration path exists from `semantic-payload.json` to any production contract. Internal process boundaries are not external compatibility commitments before the release and license gate, per ADR 0001. Version-skew, rollback, and stale-worker questions are deferred with C2/C3.
 
-### 12. Revalidation triggers — decided
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| C1 has no parent/worker versioning | decided | this section |
+| External behavior binds to M0.1–M0.3 contract versions | decided | this section |
+| No migration path from `semantic-payload.json` | decided | this section |
+| No external compatibility commitment before the release gate | decided | ADR 0001 |
+| C2/C3 version-skew, rollback, stale-worker handling | deferred to [#27](https://github.com/SolusQuest/contract-scribe/issues/27) | eligibility experiment |
+
+### 12. Revalidation triggers
 
 Evidence revalidation triggers (rerun validation; the topology decision stands): SDK, Roslyn, MSBuild, package, or runner-image drift; evidence-contract changes; validation-matrix changes; and M0.1–M0.3 contract changes that do not alter stage ownership or isolation requirements. An M0.1–M0.3 contract change that alters stage ownership or demands a new isolation boundary is a decision reconsideration trigger instead.
 
-Decision reconsideration triggers (reopen the topology choice): a new requirement to isolate untrusted MSBuild content; forced termination becoming a hard requirement; a multi-repository or multi-SDK single-host-lifetime requirement (changes R3/R4/R6); a fault-containment requirement change (R5); M1 implementation evidence that an in-process limitation assumed above does not hold; or C2/C3 becoming eligible through the prototype experiment (#27).
+Decision reconsideration triggers (reopen the topology choice): a new requirement to isolate untrusted MSBuild content; a scrubbed-environment requirement stronger than the §3 boundary; forced termination becoming a hard requirement; a multi-repository or multi-SDK single-host-lifetime requirement (changes R3/R4/R6); a fault-containment requirement change (R5); M1 implementation evidence that an in-process limitation assumed above does not hold; or C2/C3 becoming eligible through the prototype experiment (#27).
 
-### 13. Distribution constraints for #18 — decided (constraints only)
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Evidence revalidation trigger list | decided | this section |
+| Decision reconsideration trigger list | decided | this section |
+
+### 13. Distribution constraints for #18
 
 C1 imposes: a single runtime process with no separately deployed worker executable — hence no worker co-location, discovery, atomic-update, or version-handshake requirement — and a framework-dependent runtime. Artifact count, single-file publication, RID strategy, package layout, executable permissions beyond a normal CLI, and the channel itself remain owned by #18.
+
+| Sub-decision | Status | Reference / required evidence |
+| --- | --- | --- |
+| Single runtime process; no separately deployed worker executable | decided | this section |
+| Framework-dependent runtime | decided | ADR 0001 |
+| Artifact count, single-file publication, RID strategy, package layout, executable permissions, channel | deferred to [#18](https://github.com/SolusQuest/contract-scribe/issues/18) | distribution decision |
 
 ## Deferred candidates: assumptions and open questions
 
@@ -180,9 +284,9 @@ Costs and residual risks: C1 carries documented limitations on forced terminatio
 
 ## Follow-up issues
 
-- [#24 — Implement the in-process production audit host](https://github.com/SolusQuest/contract-scribe/issues/24) (M1): implements the selected in-process topology and the production contracts, and owns the deferred calibration values (concrete timeout values, diagnostic caps, resource limits) and the closed failure-code registry.
+- [#24 — Implement the in-process production audit host](https://github.com/SolusQuest/contract-scribe/issues/24) (M1): implements the selected in-process topology and the production contracts, and owns the deferred calibration values (concrete timeout values, diagnostic caps, resource limits), the closed failure-code registry, the atomic publication protocol (§9), and the environment boundary (§3).
 - [#25 — Define the M1 CLI surface](https://github.com/SolusQuest/contract-scribe/issues/25) (M1): owns concrete CLI numeric exit codes within the abstract outcome classes decided here.
-- [#26 — Validate the production in-process topology executably](https://github.com/SolusQuest/contract-scribe/issues/26) (M1): validates the implemented host on the required matrix, including determinism, cancellation, failure-taxonomy, and public-safety checks; defines the implementation-validation matrix.
+- [#26 — Validate the production in-process topology executably](https://github.com/SolusQuest/contract-scribe/issues/26) (M1): validates the implemented host on the required matrix, including determinism, cancellation, failure-taxonomy, public-safety, kill-window, and cross-volume publication checks; defines the implementation-validation matrix.
 - [#27 — Test-only child-process loader worker prototype experiment](https://github.com/SolusQuest/contract-scribe/issues/27) (kept live; scheduled after M1 or when a decision reconsideration trigger fires): establishes eligibility evidence for C2/C3, including the serialized semantic-facts payload contract.
 
 ## Public-safety and compatibility boundary
