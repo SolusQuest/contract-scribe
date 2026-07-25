@@ -170,7 +170,7 @@ Use issue #25 for the CLI contract. It defines:
 - retained `--help`, `--version`, and `doctor` behavior;
 - explicit absence of provider, GitHub, auto-discovery, and auto-restore options.
 
-Use issue #30 for the thin CLI implementation and integration tests only. Its exact-revision integration suite binds both the selected host revision and CLI revision, runs in the required Ubuntu and Windows X64 cells, and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code evidence. A change to any host-protected input invalidates the applicable host-validation execution evidence and requires that execution to rerun before M1 closure. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
+Use issue #30 for the thin CLI implementation and integration tests only. Its exact-revision integration suite binds both the selected host revision and CLI revision, runs in the required Ubuntu and Windows X64 cells, and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code evidence. A change to any host-protected input invalidates the applicable host-validation execution evidence, every #30 integration record bound to the prior host revision, and any downstream smoke bound to that host/CLI pair. The affected host execution, #30 integration matrix, and downstream smoke must rerun in dependency order against one exact revision set before M1 closure. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
 
 ### W5 — Executable validation
 
@@ -180,7 +180,7 @@ Create a direct sibling M1 issue to execute the frozen protocol and publish boun
 
 The refocused #26 is independently acceptable because it creates the reviewed oracle for later execution. The execution issue is independently acceptable because it binds results to that frozen protocol and exact implementation revision. Each owns one focused pull request and its required validators. Neither issue is a second-level child; both are direct children of the M1 parent.
 
-The #26 protocol and its execution establish the validated host baseline; they are not described as final CLI-composition evidence. Final M1 evidence combines that host baseline, #30's exact-revision cross-platform CLI integration record, and the independent smoke. Host-protected input drift reopens the affected protocol execution even when the CLI-only checks remain green.
+The #26 protocol and its execution establish the validated host baseline; they are not described as final CLI-composition evidence. Final M1 evidence combines that host baseline, #30's exact-revision cross-platform CLI integration record, and the independent smoke, all bound to one compatible exact revision set. Host-protected input drift reopens the affected protocol execution, invalidates the #30 integration record and downstream smoke that reference the prior host revision, and requires those applicable evidence stages to rerun even when unchanged CLI-only checks remain green.
 
 The protocol covers:
 
@@ -206,7 +206,7 @@ Ordinary CI does not prove enforced network isolation. Claims use the precise no
 
 Create one issue for a real-world public repository or private downstream read-only smoke.
 
-The smoke binds the exact validated host and CLI revision. A public target pins its commit. A private target publishes only a sanitized attestation containing:
+The smoke binds the exact validated host and CLI revision. A change to either revision invalidates the smoke and requires it to rerun after the applicable host and CLI integration evidence is current. A public target pins its commit. A private target publishes only a sanitized attestation containing:
 
 - contract and tool identities;
 - high-level project-shape classification;

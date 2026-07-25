@@ -207,7 +207,7 @@ system and safety protocol
 
 Message, tool, schema, document, and evidence-label ordering before the boundary is deterministic. Timestamps, run IDs, temporary paths, random identifiers, target symbols, cursors, remaining budgets, and prior target conversations are forbidden from that prefix.
 
-The runtime computes a local cacheable-prefix identity from the Scribe protocol, tool registry, repository context, scope context, and compatible provider/model configuration. Provider cache hits are observed but never trusted as the sole proof that two requests had the same prefix. A cache miss does not change correctness; it consumes uncached-input and cost budgets and remains visible in evaluation.
+The runtime computes a local cacheable-prefix identity from the Scribe protocol, tool registry, repository context, scope context, every other prefix-resident input including a style profile when present, and compatible provider/model configuration. The identity covers the exact normalized logical prefix rather than only a subset of its named inputs. Provider cache hits are observed but never trusted as the sole proof that two requests had the same prefix. A cache miss does not change correctness; it consumes uncached-input and cost budgets and remains visible in evaluation.
 
 The campaign runner groups compatible targets and schedules them close together to improve reuse. This grouping is deterministic request construction, not a parent-agent conversation fork. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 

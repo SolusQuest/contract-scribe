@@ -270,10 +270,11 @@ Scribe protocol hash
 + tool-registry hash
 + repository-context hash
 + scope-context hash
++ conditional prefix-resident input hashes, including style-profile hash when present
 + cacheable-prefix hash
 ```
 
-The exact hash composition is provisional until M3, but it must be computable locally without asking the provider whether two requests were equivalent.
+The exact hash composition is provisional until M3, but the cacheable-prefix identity must cover the exact normalized logical prefix, including every conditional prefix-resident input, and must be computable locally without asking the provider whether two requests were equivalent.
 
 Provider caching does not expand the model context window and does not justify sending unrelated project documents. The default pack stays bounded; additional documents remain available through read tools.
 

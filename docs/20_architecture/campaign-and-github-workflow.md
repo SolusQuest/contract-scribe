@@ -49,7 +49,11 @@ provider and model configuration
 + tool-registry identity
 + repository-context identity
 + scope-context identity
++ every other prefix-resident input identity, including style-profile identity when present
++ locally computed cacheable-prefix identity
 ```
+
+The context-group identity must cover every input that can change the reusable prefix and the resulting locally computed cacheable-prefix identity. Two targets cannot share a context group merely because their repository and scope contexts match when a prefix-resident style profile, request template, tool definition, or other prefix input differs.
 
 Context-group identity is a scheduling and economic boundary, not target-completion state. Target-specific evidence, attempts, and proposals do not belong to it.
 
