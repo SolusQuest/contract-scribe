@@ -36,7 +36,7 @@ ADR 0001 selects the framework-dependent semantic execution baseline. [ADR 0002]
 
 The planner converts a canonical audit result into a stable ordered work plan. It applies documentation-block, file, patch-size, provider-request, total/uncached-token, cost, attempt, and wall-clock budgets before work is published.
 
-Campaign state records snapshot identity, work-plan identity, batch progress, retry state, proposal-branch identity, and lineage across base commits. It is platform-neutral. A GitHub Issue is an adapter surface, not the state model.
+Campaign state records snapshot-scoped work-plan identity, batch progress, retry state, proposal-branch and pull-request-generation identity, and lineage across base commits. Cursors, checkpoints, and replay keys never cross snapshot identities. The model is platform-neutral. A GitHub Issue is an adapter surface, not the state model.
 
 ### Documentation Scribe
 
@@ -62,7 +62,7 @@ See [Documentation patch boundary](documentation-patch-boundary.md).
 
 The GitHub adapter reconciles campaign state with a GitHub Issue, branch, commit, and pull request. It is the only product component that may consume or use a GitHub write token to mutate GitHub.
 
-The initial workflow uses one bot-owned rolling draft pull request per campaign. Same-snapshot runs may append bounded batches to that draft while its base, ownership, and state remain safe. Merge, base drift, conflicts, human edits, closure without merge, or corrupted ledger state trigger explicit reconciliation rather than silent mutation.
+The initial workflow permits at most one active bot-owned proposal pull request per campaign at a time. The adapter creates it as draft; human promotion to ready-for-review keeps it active but makes it ineligible for further batch appends. Same-snapshot runs may append bounded batches only while that draft's base, ownership, and state remain safe. After a merged or otherwise terminal predecessor, remaining work on a new snapshot may create a new numbered draft generation. Merge, base drift, conflicts, human edits, closure without merge, or corrupted ledger state trigger explicit reconciliation rather than silent mutation.
 
 See [Campaign and GitHub workflow](campaign-and-github-workflow.md).
 
@@ -84,6 +84,8 @@ The wrapper is not a second product runtime. It is a thin, non-authoritative hos
 | Action wrapper | Payload acquisition only | Receives and forwards allowlisted credentials; no independent use | No direct product write | Action outputs and summary |
 
 The table describes ContractScribe-owned behavior. Repository-controlled MSBuild logic executes under the caller's trust model and is not sandboxed by the in-process M1 topology.
+
+The Documentation Scribe's lack of product mutation capabilities is enforced by more than project-reference direction: mutation-capable Core ports are internal and production-friend-visible only to Cli, `ContractScribe.Agent` is excluded from that allowlist, the CLI composition contract adapts infrastructure operations without injecting those capabilities into Agent, and architecture tests inspect both API surfaces and negative compilation fixtures. This is an in-process product-capability boundary, not an operating-system sandbox.
 
 ## Current implementation status
 

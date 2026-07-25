@@ -260,4 +260,6 @@ M3 validation includes:
 - total and uncached input, cache reuse, output, cost, latency, and tool-call observations;
 - sensitive-data and publication-boundary scans of requests, results, diagnostics, and evidence.
 
+The checked-in validation corpus may contain reviewed synthetic system and Scribe protocol templates, canonical ordered-message and tool-call vectors, adversarial prompt-injection strings, and minimized or synthetic provider-response shapes. Those artifacts are stable, commit-pinned test inputs, not captured live conversations. The corpus excludes private repository content, live-run prompts, complete tool transcripts, hidden reasoning, credentials, and raw provider responses. Live evaluation publishes only bounded provenance, field-shape observations, metrics, and sanitized outcomes needed to justify compatibility claims.
+
 The fake runtime proves orchestration mechanics. Real-provider evaluation determines which request, tool, response, normalization, and failure paths are evidenced; claims remain limited to that executed corpus. It also tests whether the product can produce useful documentation under the same bounded-output contract and whether its request layout has measurable economic behavior. Live provider credentials remain explicit opt-in and are not required by ordinary CI.

@@ -86,6 +86,8 @@ This project structure does not:
 - budget, context-grouping, retry, ordering, and state-transition rules;
 - ports such as audit, semantic evidence, proposal generation, patching, state storage, and publication interfaces.
 
+Core contract visibility is authority-sensitive. Pure DTOs, identities, state transitions, and the closed read-only Scribe-port surface may be public. Capability-bearing ports that authorize candidate source writes, state persistence, or platform publication are internal by default and production-friend-visible only to `ContractScribe.Cli`. Patching and GitHub expose their validated high-level operations from their own assemblies; Cli adapts those operations to the internal Core capabilities at the composition boundary. `ContractScribe.Agent` is never a friend assembly for those capabilities. Test-only friend access does not grant a production composition path and is checked separately. If this visibility model becomes unworkable, the authority boundary meets the split threshold for a separately reviewed capability-specific contract project; it must not be weakened by making mutation ports generally public.
+
 It may use the .NET base class libraries and narrowly justified contract libraries. It must not reference:
 
 - Roslyn or MSBuild;
@@ -153,7 +155,7 @@ It must not reference a model-provider or GitHub SDK. It accepts only validated 
 - deterministic fake runtime;
 - the initial real provider transport unless its dependency footprint justifies a separate adapter project.
 
-It depends on `ContractScribe.Core`. Semantic tool implementations are injected through Core-owned ports; the agent does not need a direct Roslyn dependency.
+It depends on `ContractScribe.Core`. Semantic tool implementations are injected through the closed public read-only Scribe-port surface; the agent does not need a direct Roslyn dependency.
 
 It must not reference:
 
@@ -163,7 +165,7 @@ It must not reference:
 - GitHub tokens or APIs;
 - shell or general-purpose edit runtimes.
 
-Keeping `Agent` independent of `Patching` and `GitHub` makes its lack of mutation authority a compile-time property rather than a prompt convention.
+Project-reference direction prevents `Agent` from depending on concrete mutation implementations. Core API visibility separately prevents it from declaring, accepting, returning, or resolving candidate-write, state-storage, or publication capabilities. The CLI composition root injects only the closed read-only Scribe tool registry and read ports. Together with negative compilation and public-API tests, this makes the absence of product mutation capabilities an executable compile/build-time property rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
 
 `ProjectContextBootstrapper` and `ProjectContextSession` are component responsibilities, not reasons to create another agent or production project. Core owns provider-neutral identities and rules, Roslyn owns repository-confined discovery and read implementations, Agent owns model-visible assembly and semantic traversal, and Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
@@ -173,7 +175,7 @@ Keeping `Agent` independent of `Patching` and `GitHub` makes its lack of mutatio
 
 - Issue checkpoint and append-only run-record reconciliation;
 - branch, commit, and pull-request ownership;
-- creation or continuation of one bot-owned rolling draft pull request per campaign;
+- creation or continuation of at most one active bot-owned proposal pull request per campaign, created as draft, with successive snapshot-bound draft generations only after terminal predecessors;
 - operation IDs and idempotent mutation;
 - base drift, conflict, human-change, corruption, closure, and replay handling;
 - GitHub permission, API failure, rate-limit, and response validation;
@@ -223,7 +225,7 @@ GitHub -X-> Agent
 Core -X-> any infrastructure project
 ```
 
-Architecture tests should enumerate project references and fail when a forbidden edge appears.
+Architecture tests enumerate project references and fail when a forbidden edge appears. They also inspect the Core and Agent public API surfaces, verify that mutation-capable Core ports are not publicly visible, verify that the production friend allowlist contains only Cli and never Agent, and compile a negative Agent fixture that attempts to reference or receive candidate-write, state-storage, and publication capabilities. That fixture must fail for accessibility or contract-surface reasons, not merely because a concrete implementation assembly is absent.
 
 ## Milestone evolution
 
@@ -337,6 +339,9 @@ The wrapper and payload have separate identities and provenance. Changing the wr
 The project graph is healthy when:
 
 - production reference edges match this document;
+- Core's public API exposes only the approved read-only Scribe capabilities, while candidate-write, state-storage, and publication ports remain inaccessible to Agent;
+- a negative Agent compilation fixture cannot reference, accept, return, or resolve those mutation-capable ports;
+- Agent constructors, properties, methods, and dependency-registration paths accept only the closed read-only Scribe tool registry and read ports;
 - deterministic tests can load `Core`, `Roslyn`, and `Patching` without provider or GitHub packages;
 - agent tests can run with fake semantic ports and no source-write implementation;
 - GitHub adapter tests can run with fake publication plans and no Roslyn or model runtime;

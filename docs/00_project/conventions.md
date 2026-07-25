@@ -1,7 +1,8 @@
 # Conventions
 
 - Use English for public repository documentation, issue titles, and code.
-- Keep repository surfaces free of private repository content, machine-local paths, prompts, raw provider responses, complete transcripts, raw logs, secrets, credentials, and private issue references.
+- Keep repository surfaces free of private repository content, machine-local paths, private or live-run prompts, raw provider responses, complete transcripts, raw logs, secrets, credentials, and private issue references.
+- Synthetic, reviewed, public-safe protocol templates, canonical request/tool-call vectors, adversarial prompt-injection fixtures, and minimized or synthetic response-normalization fixtures are permitted when a contract or executable validation corpus requires them. They must contain no private source, live-run conversation content, hidden reasoning, credentials, or machine-local data.
 - Use `main` as the default branch. After the one-time seed, all substantive changes use a branch and pull request.
 - Use conventional PR titles: `<type>(<scope>): <summary>`.
 - Keep published fixtures synthetic and free of secrets, private source, private identifiers, and machine-local paths.

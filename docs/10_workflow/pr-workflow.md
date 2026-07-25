@@ -4,7 +4,7 @@ Create substantive changes on a branch and open a draft pull request unless the 
 
 PR bodies must explain the change, link the tracking issue, record validation actually performed, and list remaining risks. A PR must not claim validation that did not run. The one-time repository bootstrap and an explicitly approved administrative change may state that no repository issue exists yet.
 
-Before merging, review sensitive-data and publication boundaries. No private downstream details, secrets, credentials, prompts, raw provider responses, complete transcripts, raw logs, machine-local paths, or unpinned private-only references may enter this repository.
+Before merging, review sensitive-data and publication boundaries. No private downstream details, secrets, credentials, private or live-run prompts, raw provider responses, complete transcripts, raw logs, machine-local paths, or unpinned private-only references may enter this repository. Reviewed synthetic protocol templates and executable request, tool-call, injection, and minimized normalization fixtures are allowed only under the public-safe fixture rules in [Conventions](../00_project/conventions.md).
 
 For a coordinated contract amendment, the PR body must list the lifecycle status, affected contract artifacts, behavioral compatibility impact, fixtures and conformance suites updated, dependent baselines invalidated or revalidated, and the exact reason an artifact-version increment is or is not required.
 

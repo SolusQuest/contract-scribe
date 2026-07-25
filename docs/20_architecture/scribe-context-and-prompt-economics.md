@@ -395,6 +395,8 @@ M3 must include deterministic tests for:
 - provider cache miss without correctness drift;
 - sensitive-data and publication-boundary scanning of context manifests, requests, diagnostics, and run summaries.
 
+Checked-in request and normalization fixtures are reviewed synthetic protocol artifacts. They may encode canonical messages, tool definitions and calls, terminal responses, adversarial injection text, and the minimal provider fields needed to replay normalization. They do not preserve private or live-run prompts, complete conversations or tool transcripts, hidden reasoning, credentials, raw provider responses, or machine-local data. Live observations are reduced to bounded provenance, field inventories, metrics, and sanitized expected outcomes before publication.
+
 Live synthetic evaluation uses DeepSeek as the primary provider and MiMo as the compatibility provider. It executes the frozen corpus and records observed request, tool, response, failure, cached and uncached usage when available, request count, accepted proposals, validation failures, latency, and cost. Compatibility statements are limited to the paths and observations evidenced by that run. Live credentials are opt-in and are never required by ordinary CI.
 
 ## Non-goals

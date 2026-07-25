@@ -2,7 +2,7 @@
 
 The deterministic audit baseline must not initiate network access or require a provider secret or GitHub write token. Proposal and publishing capabilities are optional, explicitly configured, and separated from deterministic audit execution.
 
-Public fixtures and CI must be synthetic and must not contain downstream-private source, prompts, transcripts, logs, credentials, or private paths. When a result cannot be supported by bounded evidence and a defined policy, the future system must produce a structured skip or fail closed rather than inventing a contract.
+Public fixtures and CI must be synthetic and must not contain downstream-private source, private or live-run prompts, complete transcripts, raw logs, credentials, or private paths. Reviewed public-safe protocol templates, canonical request/tool-call vectors, adversarial prompt-injection fixtures, and minimized or synthetic response-normalization fixtures are permitted when required for executable contract validation. When a result cannot be supported by bounded evidence and a defined policy, the future system must produce a structured skip or fail closed rather than inventing a contract.
 
 ## Repository trust model
 
@@ -27,9 +27,11 @@ The Documentation Scribe:
 - returns only a structured proposal or structured skip;
 - fails closed on invalid tool calls, exhausted budgets, unsupported output, or insufficient evidence.
 
-Provider requests must not contain credentials, machine-absolute paths, private issue text, raw build logs, or unrelated repository content. Public artifacts must not contain prompts, raw provider responses, hidden reasoning, or complete tool transcripts.
+Provider requests must not contain credentials, machine-absolute paths, private issue text, raw build logs, or unrelated repository content. Public artifacts must not contain private or live-run prompts, raw provider responses, hidden reasoning, or complete live tool transcripts. Project-owned, reviewed synthetic protocol templates and executable request/tool-call fixtures may be public when required by a contract. Provider normalization fixtures reproduce only the minimal public-safe fields needed for deterministic parsing and never preserve a raw live response.
 
 Repository and scope context snapshots use repository-relative paths, source/content hashes, explicit roles, and truncation records. Full context text and tool results are not stored in the GitHub Issue ledger. Shared prompt prefixes must not contain secrets, run-specific identifiers, temporary paths, or unrelated target evidence merely to improve provider cache reuse.
+
+The Scribe's product mutation boundary is enforced by the closed read-only tool registry, internal Core capabilities whose production friend allowlist contains only Cli, and CLI composition/API-surface tests that exclude `ContractScribe.Agent`. Project-reference direction alone is not treated as proof that Agent cannot receive a mutation capability. This in-process boundary does not claim protection against malicious code or replace external isolation for repositories of reduced trust.
 
 Independent Scribe runs may share immutable context inputs and local read-only indexes. They do not share mutable provider conversations or hidden reasoning. A provider cache hit or provider session identifier never grants authority and is never used as proof of repository identity or safe resume.
 
@@ -43,7 +45,7 @@ A model-generated proposal is never treated as a source patch or as evidence tha
 
 Only the GitHub adapter may consume or use a GitHub write token to mutate GitHub. Permissions are least privilege and scoped to the requested operation. A selected Action host may receive and forward an explicitly allowlisted token to the CLI, so it is inside the credential-handling boundary, but it cannot interpret, persist, log, or independently use that token. The audit, planner, model runtime, and patch validator do not receive the token.
 
-Campaign and ledger records contain identifiers, hashes, statuses, counts, budgets, validation summaries, and GitHub URLs only. They exclude source excerpts, prompts, raw provider responses, secrets, and complete diffs.
+Campaign and ledger records contain identifiers, hashes, statuses, counts, budgets, validation summaries, and GitHub URLs only. They exclude source excerpts, private or complete prompt content, raw provider responses, secrets, and complete diffs.
 
 All mutations are idempotent and reconciled before replay. Base drift, branch ownership mismatch, unexpected human changes, malformed state, and conflicting active pull requests fail closed.
 

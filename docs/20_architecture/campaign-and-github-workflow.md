@@ -27,7 +27,8 @@ repository identity
 A work plan identifies the ordered documentation work derived from a snapshot:
 
 ```text
-audit-result digest
+snapshot identity
++ audit-result digest
 + target-selection policy
 + proposal contract
 + style profile
@@ -35,6 +36,8 @@ audit-result digest
 + project-context selection policy
 + stable ordering rules
 ```
+
+The work-plan identity is an execution identity, not merely a content digest. An implementation may compute a separate reusable content digest for diagnostics or caching, but cursors, checkpoints, target completion, replay, and idempotent operations bind the snapshot-scoped work-plan identity.
 
 ### Context-group identity
 
@@ -60,6 +63,8 @@ work-plan identity
 + budget configuration
 + batch sequence
 ```
+
+Batch identity inherits snapshot identity through work-plan identity. Every persisted cursor, checkpoint, attempt record, operation ID, and replay key also carries or is derived from the snapshot and work-plan identities; publication operations additionally bind the pull-request generation. A missing or mismatched identity fails closed.
 
 ### Campaign identity
 
@@ -113,9 +118,11 @@ Representative states include:
 
 The final contract defines legal transitions, terminal states, retry ownership, and precedence.
 
+Campaign state records the current snapshot and work-plan identities, cursor and batch progress, the active pull-request identity when one exists, the pull-request generation, the snapshot bound to that generation, and the merged or closed predecessor. A transition may create a new pull-request generation only when any predecessor is terminal and reconciliation proves that no active campaign pull request exists.
+
 ## Same-snapshot continuation
 
-The initial GitHub workflow uses one bot-owned rolling draft pull request per campaign.
+The initial GitHub workflow permits at most one active bot-owned proposal pull request per campaign at a time. The adapter creates each generation as draft; an open pull request remains active after a human marks it ready for review and until it is merged or closed. A campaign may create successive pull-request generations as snapshots advance; each generation is bound to one snapshot identity and records its sequence and predecessor.
 
 A later run may append another bounded batch to the same draft only when:
 
@@ -126,7 +133,7 @@ A later run may append another bounded batch to the same draft only when:
 - no conflict exists;
 - the pull-request documentation-block, file, and patch-size budgets remain available.
 
-The state records both the immutable base commit and the evolving proposal-branch head. Continuation never uses a bare array index without work-plan identity.
+The state records both the immutable base commit and the evolving proposal-branch head. Continuation never uses a bare array index without snapshot and work-plan identity.
 
 When the pull-request budget is reached, the adapter stops appending and moves to `awaiting-review` even if the campaign has remaining work.
 
@@ -138,9 +145,10 @@ After merge, the target branch has a new commit. The next run:
 2. reruns deterministic audit;
 3. observes merged documentation as compliant;
 4. reconciles remaining targets by stable identity;
-5. continues the same campaign lineage with a new work plan.
+5. continues the same campaign lineage with a new snapshot-scoped work plan;
+6. creates a new pull-request generation only when remaining work exists and the predecessor is terminal.
 
-It does not continue to mutate the old snapshot cursor as if the base were unchanged.
+It does not continue to mutate the old snapshot cursor as if the base were unchanged. The prior generation remains immutable lineage evidence and cannot be treated as the active pull request for the new snapshot.
 
 Unrelated base advancement before merge triggers reconciliation. If safe rebase and revalidation cannot be proven, the run records `stale-base` and stops.
 
@@ -163,12 +171,12 @@ The first adapter may use one managed issue per campaign:
 
 - the issue body contains the current schema version, campaign identity, checkpoint digest, and current summary;
 - comments contain append-only run and batch records;
-- every mutation has an operation ID;
+- every mutation has an operation ID bound to the snapshot identity, work-plan identity, intended transition, and pull-request generation when the operation belongs to one;
 - replay reconciles remote state before writing;
 - malformed, manually corrupted, deleted, or checksum-mismatched state fails closed;
 - large ledgers rotate under an explicit successor rule.
 
-The issue stores only machine identities, hashes, counts, budgets, status, bounded diagnostics, validation summaries, and GitHub URLs. It does not store source excerpts, prompts, raw provider responses, secrets, complete transcripts, or full diffs.
+The issue stores only machine identities, hashes, counts, budgets, status, bounded diagnostics, validation summaries, and GitHub URLs. It does not store source excerpts, private or complete prompt content, raw provider responses, secrets, complete transcripts, or full diffs.
 
 ## Scheduling
 
@@ -182,7 +190,7 @@ On same-snapshot resume, the campaign reuses local context identities and recons
 
 ## Concurrency and idempotency
 
-The Action uses a repository/target-branch/campaign concurrency key. The state adapter additionally enforces operation-level idempotency.
+The Action uses a repository/target-branch/campaign concurrency key. The state adapter additionally enforces operation-level idempotency. Operation IDs and replay keys bind the snapshot identity, work-plan identity, and transition-specific inputs; publication operations additionally bind the pull-request generation.
 
 Every mutation follows:
 
@@ -194,7 +202,9 @@ read current remote state
   -> read back and verify
 ```
 
-Partial failures never justify creating a second overlapping pull request.
+Partial failures never justify creating a second overlapping active campaign pull request.
+
+The M4 conformance corpus includes a collision vector in which two different base commits produce byte-identical canonical Audit Result artifacts. The new snapshot must still produce a distinct work-plan identity; the old cursor, batch, checkpoint, attempt, operation record, and pull-request generation must all be rejected for continuation or deduplication under the new snapshot.
 
 ## Host integration
 

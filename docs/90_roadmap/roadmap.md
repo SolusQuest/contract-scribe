@@ -245,13 +245,14 @@ Create deterministic work planning, multi-dimensional budgets, resume, retry, an
 
 ### Exit criteria
 
-- Identical audit results and policies produce identical work plans.
+- Within one snapshot, identical audit results and planning policies produce identical work-plan content and identity. Different snapshots may reuse an identical content digest but always have distinct execution identities.
 - Documentation-block, file, patch-size, provider-request, total/uncached-token, cost, attempt, and time budgets are independently enforced.
 - A crash or replay does not duplicate accepted work or lose a committed checkpoint.
 - Same-snapshot continuation binds the work-plan identity and evolving proposal head.
 - Merge lineage creates a new snapshot on the new base while preserving the campaign identity.
 - Stale base, terminal target failure, retryable provider failure, budget exhaustion, and supersession have executable state transitions.
-- State contains no private source, prompt, raw provider response, or full diff.
+- State contains no private source, private or complete prompt content, raw provider response, or full diff.
+- Two different base commits that produce byte-identical canonical Audit Result artifacts still produce distinct snapshot-scoped work-plan and batch identities; old cursors, checkpoints, operations, and pull-request generations fail closed under the new snapshot.
 - No GitHub mutation is required to validate the core.
 
 ## M5 — GitHub proposal workflow
@@ -265,7 +266,7 @@ Implement the GitHub Issue state adapter and an idempotent branch, commit, and r
 - GitHub Issue checkpoint and append-only run records.
 - Branch and commit ownership.
 - A .NET GitHub adapter that owns all publication and reconciliation rules.
-- One bot-owned rolling draft pull request per campaign.
+- At most one active bot-owned proposal pull request per campaign at a time; the adapter creates draft generations, and a human-promoted ready pull request remains active until terminal.
 - Same-snapshot batch append while safety conditions and pull-request budgets hold.
 - Merge, close, conflict, base drift, human modification, corruption, and retry reconciliation.
 - Caller-owned schedule and manual workflow integration.
@@ -276,6 +277,7 @@ Implement the GitHub Issue state adapter and an idempotent branch, commit, and r
 
 - Every mutation reads, reconciles, applies at most one idempotent transition, and verifies the result.
 - Reruns do not create duplicate issues, branches, commits, or pull requests.
+- Pull-request state records the active identity, generation, bound snapshot, terminal predecessor, and legal conditions for creating the next generation.
 - A compatible bot-owned draft may receive another bounded batch; an unsafe or over-budget draft is not modified.
 - Reaching the pull-request budget transitions to awaiting review.
 - Merge starts a new snapshot and continues campaign lineage.
