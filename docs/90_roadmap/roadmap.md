@@ -78,6 +78,12 @@ Establish product boundaries, provisional contract baselines, and an evidence-ba
 - M0.7 independently validated that baseline on a separate synthetic repository shape.
 - ADR 0002 selected the in-process M1 production topology and defined reconsideration triggers.
 
+### Enduring semantic assets
+
+M0 established a [semantic foundation](../20_architecture/semantic-foundation.md), not a production audit implementation. Policy provides the normative expectation, Symbol and Evidence Taxonomy provides the descriptive target and bounded-evidence vocabulary, and Audit Result provides the deterministic judgment. Canonical encoding, ordering, identity, provenance, public fixtures, and conformance oracles make that language executable across fresh processes and later milestones.
+
+M1 through M6 reuse the foundation while owning capability-specific contracts for production observation, work planning, context, style, proposals, patches, campaign state, publication, and release. Audit evidence is not automatically a complete Scribe context pack; `SymbolRef` is compilation-context-bound rather than a permanent cross-revision entity identity; and canonical Audit Result content does not replace snapshot-scoped execution identity.
+
 ### Contract interpretation
 
 M0 created a commit-pinned milestone baseline, not an external compatibility freeze. Pre-release v1 contracts may be completed through a coordinated amendment and revalidation. M0 historical evidence remains bound to the exact revision that produced it.

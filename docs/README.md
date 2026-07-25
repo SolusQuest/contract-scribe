@@ -24,6 +24,7 @@ The contract lifecycle is especially important before the first release: version
 ## Architecture
 
 - [Architecture overview](20_architecture/architecture.md)
+- [Semantic foundation](20_architecture/semantic-foundation.md)
 - [Project structure](20_architecture/project-structure.md)
 - [Security boundary](20_architecture/security-boundary.md)
 - [Distribution boundary](20_architecture/distribution.md)

@@ -70,6 +70,12 @@ Batch identity inherits snapshot identity through work-plan identity. Every pers
 
 A campaign is the stable lineage that continues across snapshots as documentation pull requests merge and the target branch advances. A campaign does not pretend that two different base commits are one immutable snapshot.
 
+### Symbol and result identity
+
+`SymbolRef` is deterministic within its pinned compilation context; it is not a permanent entity identifier across arbitrary repository revisions. A rename, containing-type or signature change, target-framework change, or compilation-context change may produce a different identity. Cross-snapshot continuation reruns audit and applies explicit reconciliation rather than assuming continuity from a prior `SymbolRef`, method name, or array position.
+
+A canonical Audit Result digest identifies result content, not the complete campaign execution identity. Snapshot, policy, contract baseline, target-selection, proposal, style, agent-protocol, tool-registry, and context-selection inputs remain independently identity-bearing. See [Semantic foundation](semantic-foundation.md).
+
 ## Work unit and ordering
 
 The initial work unit is one documentation block attached to one canonical declaration. Summary, type-parameter, parameter, return, value, exception, and remarks fields for that declaration count as one block.

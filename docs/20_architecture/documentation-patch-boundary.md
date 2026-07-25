@@ -23,6 +23,12 @@ A patch request binds:
 
 The engine rejects stale source, an unresolved or ambiguous declaration, mismatched parameters or type parameters, unsupported XML structures, invalid Unicode, and proposals for unselected targets.
 
+## Representation boundary
+
+The structured proposal is an XML-documentation-specific intermediate representation between model-assisted writing and deterministic source rendering. The model owns proposed documentation meaning; the renderer owns XML and C# representation details.
+
+This compiler-like separation is not a language-neutral abstraction promise. Supporting another documentation format or programming language may require coordinated changes to taxonomy, target identity, proposal shape, locators, rendering, and validation rather than only replacing the renderer. See [Semantic foundation](semantic-foundation.md).
+
 ## Rendering
 
 The renderer owns:

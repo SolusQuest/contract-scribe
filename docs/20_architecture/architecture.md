@@ -22,6 +22,12 @@ The product value is the documentation proposal. The audit and patch engine are 
 
 Component boundaries are mapped to incrementally created C# projects in [Project structure](project-structure.md). The target project graph follows dependency and authority boundaries, not milestone names.
 
+## Semantic foundation
+
+M0 established a shared semantic foundation rather than a production audit implementation. Policy expresses normative documentation expectations; Symbol and Evidence Taxonomy describes targets, components, relations, provenance, support state, and bounded evidence; Audit Result combines those inputs into deterministic judgments.
+
+Later stages reuse that language while adding capability-specific contracts for work planning, context, style, proposals, patches, campaign state, and publication. No single artifact replaces snapshot, contract-baseline, source, work-plan, and run provenance. See [Semantic foundation](semantic-foundation.md).
+
 ## Component boundaries
 
 ### Deterministic audit

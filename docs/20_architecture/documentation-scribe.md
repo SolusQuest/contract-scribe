@@ -46,6 +46,14 @@ One run handles one documentation target or a small batch of targets sharing the
 
 Multiple Scribe runs may share immutable repository and scope context snapshots and the same underlying read-only indexes. They do not share hidden reasoning, mutable conversation history, target-specific tool results, or provider session identity.
 
+## Relationship to audit evidence
+
+The canonical Audit Result and deterministic work plan select the documentation target before the Scribe runs. The Scribe may submit a proposal or a structured insufficient-evidence skip for that target; it cannot add an unselected target, change classification or policy semantics, or reinterpret an audit outcome.
+
+Audit evidence proves that a bounded audit judgment is justified. Scribe target evidence supports writing useful documentation and may require additional signature, relation, implementation, test, usage, maintained-documentation, or style context. The two evidence sets share identity, repository-relative locator, source-revision, hash, authority, and truncation principles, but they are not the same artifact and need not contain the same material.
+
+Additional evidence is acquired only through the bounded tools below. It may justify proposal content or a skip, but it never grants source-mutation authority. See [Semantic foundation](semantic-foundation.md).
+
 ## Context pack
 
 The model input is assembled from three different reuse layers:
