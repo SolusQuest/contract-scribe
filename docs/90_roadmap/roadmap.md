@@ -259,7 +259,7 @@ Create deterministic work planning, multi-dimensional budgets, resume, retry, an
 
 ### Goal
 
-Implement the GitHub Issue state adapter and an idempotent branch, commit, and rolling draft pull-request workflow.
+Implement the GitHub Issue state adapter and an idempotent branch, commit, and generation-based active proposal pull-request workflow.
 
 ### Scope
 
@@ -307,7 +307,7 @@ Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound
 - Any TypeScript wrapper is a thin host around the CLI and does not duplicate provider, campaign, ledger, patch, or GitHub-publication behavior.
 - Caller-owned `schedule` and `workflow_dispatch` examples are documented.
 - Provider secrets and GitHub permissions are scoped and separated.
-- Concurrency, cancellation, failure, retry, and rolling-draft behavior match M5.
+- Concurrency, cancellation, failure, retry, active-pull-request uniqueness, and snapshot-bound generation behavior match M5.
 - Exact-version pinning, update, rollback, retirement, and provenance behavior are documented and validated.
 - A consumer repository completes the selected installation and workflow smoke.
 - License, notice, inventory, package metadata, and release-control obligations pass on the exact release candidate.

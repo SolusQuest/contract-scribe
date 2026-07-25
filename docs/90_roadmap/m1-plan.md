@@ -170,7 +170,7 @@ Use issue #25 for the CLI contract. It defines:
 - retained `--help`, `--version`, and `doctor` behavior;
 - explicit absence of provider, GitHub, auto-discovery, and auto-restore options.
 
-Use issue #30 for the thin CLI implementation and integration tests only. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
+Use issue #30 for the thin CLI implementation and integration tests only. Its exact-revision integration suite binds both the selected host revision and CLI revision, runs in the required Ubuntu and Windows X64 cells, and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code evidence. A change to any host-protected input invalidates the applicable host-validation execution evidence and requires that execution to rerun before M1 closure. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
 
 ### W5 — Executable validation
 
@@ -179,6 +179,8 @@ Refine issue #26 to one independently acceptable outcome: freeze the M1 validati
 Create a direct sibling M1 issue to execute the frozen protocol and publish bounded aggregate evidence against the exact implementation revision.
 
 The refocused #26 is independently acceptable because it creates the reviewed oracle for later execution. The execution issue is independently acceptable because it binds results to that frozen protocol and exact implementation revision. Each owns one focused pull request and its required validators. Neither issue is a second-level child; both are direct children of the M1 parent.
+
+The #26 protocol and its execution establish the validated host baseline; they are not described as final CLI-composition evidence. Final M1 evidence combines that host baseline, #30's exact-revision cross-platform CLI integration record, and the independent smoke. Host-protected input drift reopens the affected protocol execution even when the CLI-only checks remain green.
 
 The protocol covers:
 
@@ -298,7 +300,7 @@ validated host baseline + #25 CLI contract --> #30 CLI implementation
 independent read-only smoke --> M1 closure checklist
 ```
 
-Every executable node in this diagram is a direct child of the M1 execution parent. Arrows express native dependencies, not parentage. The CLI contract may draft in parallel after the target-surface decision, but the CLI implementation and smoke bind the final validated host baseline.
+Every executable node in this diagram is a direct child of the M1 execution parent. Arrows express native dependencies, not parentage. The CLI contract may draft in parallel after the target-surface decision, but #30's cross-platform integration evidence binds the exact CLI and validated host revisions, and the smoke exercises that final combination.
 
 ## Current tracker disposition after docs merge
 
