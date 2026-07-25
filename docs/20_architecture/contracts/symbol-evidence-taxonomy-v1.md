@@ -2,7 +2,9 @@
 
 ## Authority and status
 
-This provisional M0 contract defines taxonomy semantics and compatibility. The [registry](../../../schemas/symbol-evidence-taxonomy/v1.registry.json) owns the closed V1 identifiers; the [schema](../../../schemas/symbol-evidence-taxonomy/v1.schema.json) owns JSON shape; fixtures own executable conformance vectors. A disagreement is an implementation failure. V1 has no extension point; unknown properties, identifiers, or versions fail validation.
+This pre-release contract defines taxonomy semantics and compatibility for an exact repository revision. The [registry](../../../schemas/symbol-evidence-taxonomy/v1.registry.json) owns the closed V1 identifiers; the [schema](../../../schemas/symbol-evidence-taxonomy/v1.schema.json) owns JSON shape; fixtures own executable conformance vectors. A disagreement is an implementation failure. A conforming artifact has no extension point; unknown properties, identifiers, or versions fail validation.
+
+The artifact follows [Contract lifecycle](../../00_project/contract-lifecycle.md). M0 established a commit-pinned v1 baseline, not an external compatibility promise. Before the first downstream-consumable release, a coordinated contract amendment may add or change v1 identifiers and shape when incompatible revisions do not need to coexist, provided the registry, schema, fixtures, dependent audit contract, and cross-contract conformance are updated together. Released or coexisting incompatible semantics require a new integer artifact version.
 
 ## Classification boundary
 
@@ -64,7 +66,9 @@ All valid interface member forms keep their normal primary kind. Default body-be
 
 Supported records have no skip. Every other record has exactly one skip. Precedence is documentation-comment-id unavailable, generated provenance unavailable, semantic context unavailable, applicable unknown kind, partial ambiguity, mixed-origin ambiguity, synthesized non-target, then non-documentation component. The registry is authoritative for the exact values. An unrecognized primary/component uses its reserved unknown kind and the matching unsupported skip. Unknown required IDs, schema versions, and malformed bundles are contract failures rather than skips.
 
-Registry identifiers are lowercase ASCII dotted identifiers, compare ordinally, are never reused, and are opaque to consumers. Every registry entry declares an ID, normative definition, permitted record/status combinations, and `deprecated`/`replacementId` metadata. V1 entries have both metadata values null. A future deprecation retains a readable ID and supplies a replacement in the same registry section. Adding an ID, changing a definition, or changing a required document member requires a new integer artifact version; editorial changes that do not change behavior do not.
+Registry identifiers are lowercase ASCII dotted identifiers, compare ordinally, and are opaque to consumers. Within a milestone-baselined or released revision they are never silently reused. Every registry entry declares an ID, normative definition, permitted record/status combinations, and `deprecated`/`replacementId` metadata. Current entries have both metadata values null. A future deprecation retains a readable ID and supplies a replacement in the same registry section.
+
+Before release, adding an ID, changing a definition, or changing a required document member follows the coordinated amendment protocol and may retain version `1` when no incompatible revision must coexist. After release, the same changes require a new integer artifact version. Editorial changes that do not change behavior require neither a new artifact version nor compatibility handling.
 
 When several conditions apply, choose exactly one skip in this order: missing documentation comment ID; unavailable generated provenance; unavailable semantic context; unknown primary/component kind; ambiguous partial declaration; mixed origin; synthesized non-target; non-documentation component. `origin.unknown` is valid only for unavailable-context with a generated-provenance or semantic-context skip; `origin.mixed` with ambiguity uses the mixed-origin skip.
 

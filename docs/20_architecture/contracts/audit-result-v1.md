@@ -6,6 +6,10 @@ Audit Result v1 is a provisional, repository-neutral artifact for one determinis
 
 The normative rules in this document own audit outcomes, observations, policy aggregation, result-level evidence binding, reason precedence, and canonical property order. `schemas/audit-result/v1.schema.json` owns the result envelope shape. `schemas/audit-result/v1.registry.json` owns audit identifiers. The test-only oracle owns cross-contract and semantic validation, including full validation of embedded M0.3 records and evidence bundles against their checked-in schema and registry.
 
+This artifact is a pre-release draft governed by [Contract lifecycle](../../00_project/contract-lifecycle.md). M0 validated the exact commit-pinned v1 baseline. Before the first downstream-consumable release, a coordinated Policy/Taxonomy/Audit amendment may retain the v1 artifact number when no implementation must distinguish incompatible revisions at runtime. The amendment must update every normative artifact and rerun cross-contract conformance. Released or coexisting incompatible semantics require a new artifact version.
+
+A consumer rejects an unsupported `auditResultVersion`. A workflow that persists, transfers, or consumes this draft result across repository revisions must separately bind and validate the contract-baseline or provenance identity; `auditResultVersion: 1` alone cannot distinguish incompatible draft revisions. A verified same-revision workflow may rely on its pinned source and tool baseline.
+
 ## Document shape
 
 The top-level object has `auditResultVersion`, `policyConfigurationVersion`, and `taxonomyRegistryVersion`, all integer `1`, followed by `results`. Every result contains one embedded M0.3 `TargetClassification`, `ComponentClassification`, or `UnresolvedClassification`; `RelationObservation` is not an audit result in v1.
@@ -65,6 +69,8 @@ Canonical bytes are valid UTF-8 without BOM, one compact JSON document followed 
 Strings preserve Unicode scalar sequences without normalization and compare ordinally. Non-ASCII scalars are direct; quotation mark, reverse solidus, and control characters are escaped with the short JSON escapes for LF, CR, TAB, BACKSPACE, and FORM FEED, and lowercase `\\u00xx` for other controls. Solidus, U+2028, and U+2029 are not escaped. Unpaired UTF-16 surrogates are rejected. Numbers are signed integers in ordinary decimal notation; zero is `0`, negative zero, leading zero, fractional, and exponent forms are forbidden.
 
 Canonical serialization sorts logically unordered input. A separate test-only validator rejects noncanonical bytes. Run metadata, timestamps, durations, environment, command lines, derived summaries, and migration fields are not canonical members. No automatic migration or unknown-field preservation is defined.
+
+The contract-baseline or provenance identity required for a cross-revision draft workflow is carried by the surrounding run envelope, manifest, state record, or other explicitly defined transport boundary. It is not added to canonical Audit Result v1.
 
 ## Non-goals
 

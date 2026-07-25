@@ -6,7 +6,9 @@ Policy/Configuration v1 is a provisional, repository-neutral contract for select
 
 This document owns the semantic behavior, validation-stage order, and error-code meanings. [The JSON Schema](../../../schemas/policy-configuration/v1.schema.json) owns document-shape validation only. The schema has no remote `$ref` dependency.
 
-The contract is provisional until the M0 contract freeze. Before then, an exact semantic reference must pin a repository commit. After freeze, a breaking change requires a new schema version and identifier.
+The contract is a pre-release draft governed by [Contract lifecycle](../../00_project/contract-lifecycle.md). M0 established a commit-pinned, cross-consistent baseline; it did not create an external compatibility promise. Before the first downstream-consumable release, a coordinated breaking amendment may retain version `1` when incompatible revisions do not need to coexist. Exact draft semantics must pin a repository commit. After release, or when coexistence is required, a breaking change requires a new schema version and identifier.
+
+A consumer rejects an unsupported `schemaVersion`. A workflow that persists, transfers, or consumes this draft policy across repository revisions must separately bind and validate the contract-baseline or provenance identity; `schemaVersion: 1` alone cannot distinguish incompatible draft revisions. A verified same-revision workflow may rely on its pinned source and tool baseline. The repository revision is not a member of the canonical policy document.
 
 ## Document and input boundary
 
@@ -32,7 +34,7 @@ A selector accepts when at least one `include` pattern matches, if `include` is 
 
 Duplicate patterns are allowed and do not change selector behavior. Shape constraints belong to the schema: selectors must contain at least one of non-empty `include` or `exclude` arrays. Semantic validation runs only after shape validation. It scans all rule IDs first, then all priorities, then patterns. A duplicate ID or priority reports the pointer of the current (second) rule member. Pattern validation scans rule index ascending, `projectPaths` before `sourcePaths`, `include` before `exclude`, then pattern index ascending; its pointer identifies that exact pattern array element, including its index. This ordering is part of the structured error contract.
 
-V1 intentionally has no symbol-category selector. M0.3 owns taxonomy vocabulary, and any future selector requires a separately versioned contract change.
+The current M0 baseline intentionally has no symbol-category selector. M1 owns the target-surface and documentation-observation completion gate. A future selector requires a coordinated Policy/Taxonomy/Audit amendment. Before release that amendment may complete v1 in place under the contract lifecycle; after release it requires a new compatible artifact version.
 
 ## Lexical paths and globs
 
