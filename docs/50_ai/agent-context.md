@@ -4,4 +4,12 @@ Read this document after `AGENTS.md`. Then read `collaboration-layers.md`, the r
 
 Route long-lived rules to `docs/00_project`, `docs/10_workflow`, `docs/20_architecture`, or `docs/90_roadmap`. Route tool-neutral agent procedures to `docs/50_ai/skills`. Keep platform entrypoints thin.
 
-For a public-facing issue or PR, verify that every referenced document is on `main` at a stable commit before using a pinned link. Do not use private downstream material as public implementation context.
+For an issue or PR, use a full-commit-SHA repository-file link only after verifying that the commit is reachable from `main`. Treat live issue, pull-request, and milestone URLs as mutable tracker references. Do not use private downstream material as repository implementation context.
+
+Before changing a machine contract or claiming that a new artifact version is required, read `docs/00_project/contract-lifecycle.md`. Before changing milestone or issue scope, read `docs/90_roadmap/roadmap.md`, the milestone plan, and `docs/10_workflow/issue-workflow.md`.
+
+For proposal or GitHub-workflow work, preserve the component boundaries in `docs/20_architecture/architecture.md`: the Documentation Scribe is read-only and structured-output-only; the deterministic patch engine owns source changes; the GitHub adapter owns platform mutations.
+
+Before changing the Scribe Runtime, repository-read tools, project-context routing, provider transport, prompt construction, or token/cost accounting, read both `docs/20_architecture/documentation-scribe.md` and `docs/20_architecture/scribe-context-and-prompt-economics.md`. Prefix stability and uncached-input observability are architecture constraints, not optional provider tuning.
+
+Before creating, renaming, or moving a C# project, or adding a TypeScript Action package, read `docs/20_architecture/project-structure.md`. Do not create empty projects for future milestones or move GitHub publication rules into an Action wrapper.

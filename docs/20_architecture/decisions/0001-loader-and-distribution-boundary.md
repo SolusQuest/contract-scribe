@@ -211,7 +211,7 @@ The repository artifacts already merged to `main` below are pinned to public com
 - [Distribution policy](https://github.com/SolusQuest/contract-scribe/blob/749c339e3a8f54e000c2c6aebd1bb3b8d37720da/docs/20_architecture/distribution.md)
 - [Current M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/92dc5fbc9c432ff410e48eed1ea6e79226838d8b/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
 - [Original M0.4 experiment record](https://github.com/SolusQuest/contract-scribe/blob/19de6b7d742cb496523567d9ddef11304e07bf09/docs/20_architecture/experiments/m0.4-framework-dependent-loading.md)
-- [Current M0.4 transfer manifest](../../tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
+- [Current M0.4 transfer manifest](../../../tests/fixtures/roslyn-msbuild/v1/transfer-manifest.json)
 - [M0.5 experiment record](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/docs/20_architecture/experiments/m0.5-native-aot-feasibility.md)
 - [M0.5 manifest](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/m0.5-native-aot-manifest.json)
 - [M0.5 Ubuntu evidence](https://github.com/SolusQuest/contract-scribe/blob/63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e/tests/fixtures/roslyn-msbuild/v1/evidence/m0.5-linux-x64-evidence-v1.json)

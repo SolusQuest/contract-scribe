@@ -11,3 +11,5 @@
 # Test results and coverage
 TestResults/
 coverage/
+
+.tmp/

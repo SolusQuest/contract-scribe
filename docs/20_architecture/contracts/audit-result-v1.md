@@ -6,6 +6,8 @@ Audit Result v1 is a provisional, repository-neutral artifact for one determinis
 
 The normative rules in this document own audit outcomes, observations, policy aggregation, result-level evidence binding, reason precedence, and canonical property order. `schemas/audit-result/v1.schema.json` owns the result envelope shape. `schemas/audit-result/v1.registry.json` owns audit identifiers. The test-only oracle owns cross-contract and semantic validation, including full validation of embedded M0.3 records and evidence bundles against their checked-in schema and registry.
 
+This artifact is a pre-release draft governed by [Contract lifecycle](../../00_project/contract-lifecycle.md). M0 validated the exact commit-pinned v1 baseline. Before the first downstream-consumable release, a coordinated Policy/Taxonomy/Audit amendment may retain the v1 artifact number when no implementation must distinguish incompatible revisions at runtime. The amendment must update every normative artifact and rerun cross-contract conformance. Released or coexisting incompatible semantics require a new artifact version.
+
 ## Document shape
 
 The top-level object has `auditResultVersion`, `policyConfigurationVersion`, and `taxonomyRegistryVersion`, all integer `1`, followed by `results`. Every result contains one embedded M0.3 `TargetClassification`, `ComponentClassification`, or `UnresolvedClassification`; `RelationObservation` is not an audit result in v1.
