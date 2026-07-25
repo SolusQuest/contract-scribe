@@ -41,7 +41,7 @@ A model-generated proposal is never treated as a source patch or as evidence tha
 
 ## GitHub boundary
 
-Only the GitHub adapter receives a GitHub write token. Permissions are least privilege and scoped to the requested operation. The audit, planner, model runtime, and patch validator do not receive the token.
+Only the GitHub adapter may consume or use a GitHub write token to mutate GitHub. Permissions are least privilege and scoped to the requested operation. A selected Action host may receive and forward an explicitly allowlisted token to the CLI, so it is inside the credential-handling boundary, but it cannot interpret, persist, log, or independently use that token. The audit, planner, model runtime, and patch validator do not receive the token.
 
 Campaign and ledger records contain identifiers, hashes, statuses, counts, budgets, validation summaries, and GitHub URLs only. They exclude source excerpts, prompts, raw provider responses, secrets, and complete diffs.
 
@@ -49,10 +49,11 @@ All mutations are idempotent and reconciled before replay. Base drift, branch ow
 
 ## Action-wrapper boundary
 
-The Action wrapper is an unprivileged host around the .NET CLI, not an alternative GitHub adapter.
+The Action wrapper is a thin, non-authoritative host around the .NET CLI, not an alternative GitHub adapter.
 
 - It does not call the model provider or GitHub API directly.
-- It passes only documented, allowlisted inputs and secrets to the selected CLI command.
+- It receives and forwards only documented, explicitly allowlisted inputs and credentials to the selected CLI command.
+- It does not interpret, persist, log, or independently use forwarded credentials.
 - It does not parse repository source, audit evidence, provider responses, campaign checkpoints, or Issue ledger content.
 - It does not decide whether a mutation is safe.
 - It never logs tokens, provider secrets, raw event payloads, or complete child-process environments.

@@ -293,10 +293,9 @@ Target/observation decision
     --> exact-revision validation execution
     --> validated host baseline
 
-validated host baseline + #25 CLI contract
-    --> #30 CLI implementation
-    --> independent read-only smoke
-    --> M1 closure checklist
+validated host baseline + #25 CLI contract --> #30 CLI implementation
+#30 CLI implementation --> independent read-only smoke
+independent read-only smoke --> M1 closure checklist
 ```
 
 Every executable node in this diagram is a direct child of the M1 execution parent. Arrows express native dependencies, not parentage. The CLI contract may draft in parallel after the target-surface decision, but the CLI implementation and smoke bind the final validated host baseline.

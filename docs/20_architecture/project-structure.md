@@ -315,7 +315,7 @@ If a TypeScript wrapper is selected, it is a thin host only:
 - parse Action inputs;
 - locate, download, verify, or cache the exact .NET payload;
 - start the CLI and propagate cancellation;
-- pass explicitly allowlisted environment inputs;
+- receive and forward explicitly allowlisted environment inputs and credentials to the CLI;
 - mask secrets;
 - map CLI outcomes to Action outputs, annotations, summaries, and exit status.
 
@@ -326,6 +326,7 @@ It must not:
 - implement campaign transitions;
 - store or reconcile the Issue ledger;
 - create branches, commits, or pull requests;
+- interpret, persist, log, or independently use forwarded credentials;
 - duplicate Core contracts or GitHub adapter rules;
 - turn Action event payloads into trusted instructions without validation.
 

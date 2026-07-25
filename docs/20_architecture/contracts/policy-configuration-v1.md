@@ -8,6 +8,8 @@ This document owns the semantic behavior, validation-stage order, and error-code
 
 The contract is a pre-release draft governed by [Contract lifecycle](../../00_project/contract-lifecycle.md). M0 established a commit-pinned, cross-consistent baseline; it did not create an external compatibility promise. Before the first downstream-consumable release, a coordinated breaking amendment may retain version `1` when incompatible revisions do not need to coexist. Exact draft semantics must pin a repository commit. After release, or when coexistence is required, a breaking change requires a new schema version and identifier.
 
+A consumer rejects an unsupported `schemaVersion`. A workflow that persists, transfers, or consumes this draft policy across repository revisions must separately bind and validate the contract-baseline or provenance identity; `schemaVersion: 1` alone cannot distinguish incompatible draft revisions. A verified same-revision workflow may rely on its pinned source and tool baseline. The repository revision is not a member of the canonical policy document.
+
 ## Document and input boundary
 
 V1 accepts one supplied JSON policy document encoded as UTF-8 without a BOM. It does not define a file name, discovery, parent search, environment override, multi-file merge, inheritance, remote include, filesystem access, realpath, symlink behavior, or automatic migration.

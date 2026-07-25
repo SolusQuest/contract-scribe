@@ -22,6 +22,8 @@ Every behavioral change must update the normative specification, schema or regis
 
 There is no promise that a current implementation can read an artifact produced by a different pre-release commit merely because both artifacts carry the same integer version.
 
+Consumers must reject unsupported artifact versions. A workflow that persists, transfers, or consumes a draft artifact across repository revisions must also bind a separate contract-baseline or provenance identity and reject a missing or mismatched identity. The integer artifact version is not a substitute for that identity. A same-revision, commit-pinned workflow may rely on its verified source and tool baseline and does not need to add the repository revision to the canonical artifact unless the owning contract explicitly requires it.
+
 ### Milestone-baselined
 
 A milestone baseline is the exact contract revision that passed the owning milestone's validation. It is stable enough for later repository work to depend on, but it is not yet an external compatibility promise.
@@ -85,7 +87,7 @@ A contract amendment must:
 4. Preserve exact historical references to prior evidence.
 5. Run the full affected conformance suites and cross-contract checks.
 6. Record the new current baseline commit and revalidation outcome.
-7. Fail closed when an implementation sees an artifact from an unsupported revision or version.
+7. Reject unsupported artifact versions. For draft artifacts that cross repository revisions, bind and validate a separate contract-baseline or provenance identity and fail closed when it is missing or mismatched; a verified same-revision workflow may rely on its pinned source and tool baseline.
 
 Public issue and PR text must not imply that an un-released draft is a supported external compatibility promise.
 
