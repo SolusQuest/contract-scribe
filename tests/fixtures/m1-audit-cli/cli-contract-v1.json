@@ -1,0 +1,298 @@
+{
+  "contractId": "contract-scribe.audit-cli/v1",
+  "meta": {
+    "baselineCommit": "0806a98609b0eb97014496dcc4f4c8083ec57533",
+    "envelopeVersion": 1,
+    "protectedInputs": {
+      "docs/20_architecture/contracts/policy-configuration-v1.md": "82e352397d6b2e9996333f6819cb4e8f95662ebf60c6c4cadfb63508c8568ef5",
+      "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "d1983390d90515f88ccfdaeb9027690817e5eccf48b19d3e7fe26d466383163c",
+      "docs/20_architecture/contracts/audit-result-v1.md": "c6d051fd620679861aaf6b02616c3200a14b3bc6815c27f960a71dbf4a3d194a",
+      "schemas/policy-configuration/v1.schema.json": "0ff90bd80659540271d2a0772231e4a2ad1f408e26bc8fa8b5e4119b48f096a5",
+      "schemas/symbol-evidence-taxonomy/v1.schema.json": "e854727dc140c887e9868bc2f48b0140e23c0c21396f9abc3941728613012554",
+      "schemas/symbol-evidence-taxonomy/v1.registry.json": "26e751cf4f35804aeb65a187c3a78aeb11422e467f3269f319d99a17e07d5eee",
+      "schemas/symbol-evidence-taxonomy/v1.manifest.schema.json": "6fc4147d38eaa29e46d67574063f5caf1735a4ea9750fc8ab9e4f636a7b1574b",
+      "schemas/audit-result/v1.schema.json": "3cf20ea8102e25427f9f4c0e6d0bed6a9f51a45c09816e27d200422db6d81537",
+      "schemas/audit-result/v1.registry.json": "940d7434fa57bdacf361b95eaa2664dbf4c3139ecc8568103091834b28a03134",
+      "tests/fixtures/audit-result/v1/payloads/empty-results.json": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9",
+      "tests/fixtures/audit-result/v1/payloads/required-present.json": "9fc69410dfd287f245b2dd13154220844282823e7956ed6ac01aa288f0f2ee0a",
+      "tests/fixtures/audit-result/v1/payloads/required-absent.json": "757cf060eee294ab685cf6d247a32199aae980082a06829f16a2b28bae03ade4",
+      "tests/fixtures/audit-result/v1/payloads/classification-skipped.json": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08",
+      "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json": "6acd1722d53bcafb7bcc15aed031815fa44a8c3034b26513763c59609dec50ee",
+      "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "5e2977b7b98aa72f57eb11dbff894443bca6e1292b9cac5e723b41fcdfd6e065",
+      "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5",
+      "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5"
+    },
+    "oracleBindings": [
+      {
+        "path": "tests/ContractScribe.Tests/AuditResultConformance.cs",
+        "binding": "shared-usage",
+        "role": "Test-only Audit Result conformance oracle (strict parse, schema evaluation, semantic ValidateDocument) consumed by the M1 audit CLI checker."
+      }
+    ],
+    "reconciliationGate": "When the accepted #35 baseline merges, protected-input pins and canonical fixtures are regenerated against it before #25 is finalized. Run classification depends only on auditOutcome values."
+  },
+  "vocabularies": {
+    "terminalLayers": ["usage", "preflight", "execution", "audit", "host-contract-error"],
+    "usageClasses": ["unknown-option", "missing-required-option", "duplicate-option", "missing-option-value", "invalid-option-value", "unexpected-operand", "forbidden-combination"],
+    "executionClasses": ["invalid-input", "environment-unavailable", "load-failure", "audit-error", "publication-failure", "cancelled", "timeout"],
+    "dispositions": ["compliant", "compliant-with-skipped", "violations", "violations-with-skipped", "skipped-only", "no-results"],
+    "cliDiagnosticCodes": [
+      "cli.usage.unknown-command",
+      "cli.usage.unknown-option",
+      "cli.usage.missing-required-option",
+      "cli.usage.duplicate-option",
+      "cli.usage.missing-option-value",
+      "cli.usage.invalid-option-value",
+      "cli.usage.unexpected-operand",
+      "cli.usage.forbidden-combination",
+      "cli.preflight.repository-root",
+      "cli.preflight.input",
+      "cli.preflight.input-escape",
+      "cli.preflight.policy",
+      "cli.preflight.policy-escape",
+      "cli.preflight.output-parent",
+      "cli.preflight.output-inside-root",
+      "cli.preflight.output-reparse",
+      "cli.audit.skipped-summary",
+      "cli.cancel.requested",
+      "cli.host.unknown-terminal"
+    ]
+  },
+  "commands": [
+    { "caseId": "command.no-args", "argv": [], "meaning": "top-level-help", "stdout": "help-top-level", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.help", "argv": ["--help"], "meaning": "top-level-help", "stdout": "help-top-level", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.help-short", "argv": ["-h"], "meaning": "top-level-help", "stdout": "help-top-level", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.version", "argv": ["--version"], "meaning": "version", "stdout": "version-template", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.version-short", "argv": ["-v"], "meaning": "version", "stdout": "version-template", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.doctor", "argv": ["doctor"], "meaning": "doctor", "stdout": "doctor-keys", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.audit-help", "argv": ["audit", "--help"], "meaning": "audit-help", "stdout": "help-audit", "stderr": "empty", "exitCode": 0 },
+    { "caseId": "command.audit-help-short", "argv": ["audit", "-h"], "meaning": "audit-help", "stdout": "help-audit", "stderr": "empty", "exitCode": 0 }
+  ],
+  "options": [
+    { "name": "--repository-root", "required": true, "valueCount": 1, "caseSensitive": true, "forms": ["space", "equals"] },
+    { "name": "--input", "required": true, "valueCount": 1, "caseSensitive": true, "forms": ["space", "equals"] },
+    { "name": "--policy", "required": true, "valueCount": 1, "caseSensitive": true, "forms": ["space", "equals"] },
+    { "name": "--output", "required": true, "valueCount": 1, "caseSensitive": true, "forms": ["space", "equals"] }
+  ],
+  "helpCases": [
+    {
+      "caseId": "help.top-level",
+      "argvForms": [[], ["--help"], ["-h"]],
+      "stdoutFixture": { "path": "tests/fixtures/m1-audit-cli/help-top-level.txt", "sha256": "4e021c347b18e4d4ca3094e730ba3d7049a6279bc502f854c0e73d6db6a6e4b7" },
+      "stderr": "empty",
+      "exitCode": 0
+    },
+    {
+      "caseId": "help.audit",
+      "argvForms": [["audit", "--help"], ["audit", "-h"]],
+      "stdoutFixture": { "path": "tests/fixtures/m1-audit-cli/help-audit.txt", "sha256": "531c831248dfda2e4694bde20153e5eb90eaba66d8c1640db19d6441ee9366bf" },
+      "stderr": "empty",
+      "exitCode": 0
+    },
+    {
+      "caseId": "help.version",
+      "argvForms": [["--version"], ["-v"]],
+      "stdoutTemplate": "ContractScribe ${TOOL_VERSION}\n",
+      "stderr": "empty",
+      "exitCode": 0
+    },
+    {
+      "caseId": "help.doctor",
+      "argvForms": [["doctor"]],
+      "stdoutKeyOrder": ["application_version", "runtime_description", "process_architecture", "runtime_identifier", "network_access", "credential_access"],
+      "stdoutFixedValues": { "network_access": "not performed", "credential_access": "not performed" },
+      "stderr": "empty",
+      "exitCode": 0
+    }
+  ],
+  "parseCases": [
+    { "caseId": "parse.accepted.space-form", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "accepted" },
+    { "caseId": "parse.accepted.equals-form", "argv": ["audit", "--repository-root=${REPOSITORY_ROOT}", "--input=${INPUT}", "--policy=${POLICY}", "--output=${OUTPUT}"], "outcome": "accepted" },
+    { "caseId": "parse.accepted.any-order", "argv": ["audit", "--output", "${OUTPUT}", "--policy", "${POLICY}", "--input", "${INPUT}", "--repository-root", "${REPOSITORY_ROOT}"], "outcome": "accepted" },
+    { "caseId": "parse.accepted.extension-case", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "src/App.CSPROJ", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "accepted", "note": "Input extensions are matched ASCII case-insensitively." },
+    { "caseId": "parse.usage.unknown-option", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}", "--bogus"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.unknown-option-abbreviation", "argv": ["audit", "--rep", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.unknown-option-short-alias", "argv": ["audit", "-r", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.unknown-option-case", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--Input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.unknown-option-double-dash", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}", "--"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.unknown-option-version-on-audit", "argv": ["audit", "--version"], "outcome": "usage-failure", "usageClass": "unknown-option", "code": "cli.usage.unknown-option", "envelope": "usage" },
+    { "caseId": "parse.usage.missing-repository-root", "argv": ["audit", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "missing-required-option", "code": "cli.usage.missing-required-option", "envelope": "usage" },
+    { "caseId": "parse.usage.missing-input", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "missing-required-option", "code": "cli.usage.missing-required-option", "envelope": "usage" },
+    { "caseId": "parse.usage.missing-policy", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "missing-required-option", "code": "cli.usage.missing-required-option", "envelope": "usage" },
+    { "caseId": "parse.usage.missing-output", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}"], "outcome": "usage-failure", "usageClass": "missing-required-option", "code": "cli.usage.missing-required-option", "envelope": "usage" },
+    { "caseId": "parse.usage.duplicate-option", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "duplicate-option", "code": "cli.usage.duplicate-option", "envelope": "usage" },
+    { "caseId": "parse.usage.missing-option-value", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output"], "outcome": "usage-failure", "usageClass": "missing-option-value", "code": "cli.usage.missing-option-value", "envelope": "usage" },
+    { "caseId": "parse.usage.invalid-option-value", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "bad\u0001path.json"], "outcome": "usage-failure", "usageClass": "invalid-option-value", "code": "cli.usage.invalid-option-value", "envelope": "usage", "note": "The output value contains a control character." },
+    { "caseId": "parse.usage.unexpected-operand", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}", "extra.sln"], "outcome": "usage-failure", "usageClass": "unexpected-operand", "code": "cli.usage.unexpected-operand", "envelope": "usage" },
+    { "caseId": "parse.usage.forbidden-combination-help-with-options", "argv": ["audit", "--help", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "forbidden-combination", "code": "cli.usage.forbidden-combination", "envelope": "usage" },
+    { "caseId": "parse.usage.forbidden-combination-help-with-operand", "argv": ["audit", "--help", "extra"], "outcome": "usage-failure", "usageClass": "forbidden-combination", "code": "cli.usage.forbidden-combination", "envelope": "usage" },
+    { "caseId": "parse.top-level.unknown-command", "argv": ["bogus"], "outcome": "usage-failure", "code": "cli.usage.unknown-command", "envelope": "none" },
+    { "caseId": "parse.top-level.help-with-operand", "argv": ["--help", "audit"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
+    { "caseId": "parse.top-level.version-with-operand", "argv": ["--version", "audit"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
+    { "caseId": "parse.top-level.doctor-with-operand", "argv": ["doctor", "anything"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
+    { "caseId": "parse.top-level.multiple-options", "argv": ["--version", "--help"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" }
+  ],
+  "pathCases": [
+    { "caseId": "path.root.absolute", "platformScope": "all", "argument": "${REPOSITORY_ROOT}", "outcome": "accepted" },
+    { "caseId": "path.root.relative-cwd", "platformScope": "all", "argument": "relative/repo-root", "outcome": "accepted", "note": "Relative roots are resolved against the process working directory as argument preprocessing." },
+    { "caseId": "path.root.missing", "platformScope": "all", "argument": "${REPOSITORY_ROOT}", "outcome": "preflight-failure", "code": "cli.preflight.repository-root" },
+    { "caseId": "path.root.not-directory", "platformScope": "all", "argument": "${REPOSITORY_ROOT}", "outcome": "preflight-failure", "code": "cli.preflight.repository-root" },
+    { "caseId": "path.input.absolute-confined", "platformScope": "all", "argument": "${REPOSITORY_ROOT}/src/App.sln", "outcome": "accepted" },
+    { "caseId": "path.input.relative", "platformScope": "all", "argument": "src/App.slnx", "outcome": "accepted" },
+    { "caseId": "path.input.dot-segments", "platformScope": "all", "argument": "src/../src/App.csproj", "outcome": "accepted", "note": "Dot segments are normalized before confinement evaluation." },
+    { "caseId": "path.input.missing", "platformScope": "all", "argument": "${INPUT}", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.input.not-regular-file", "platformScope": "all", "argument": "src", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.input.unsupported-extension-slnf", "platformScope": "all", "argument": "src/App.slnf", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.input.unsupported-extension-other", "platformScope": "all", "argument": "src/App.fsproj", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.input.escape", "platformScope": "all", "argument": "../outside/App.sln", "outcome": "preflight-failure", "code": "cli.preflight.input-escape" },
+    { "caseId": "path.input.lexical-inside-resolved-outside", "platformScope": "all", "argument": "src/link-outside/App.sln", "outcome": "preflight-failure", "code": "cli.preflight.input-escape", "note": "An existing ancestor is a reparse point that resolves outside the resolved root." },
+    { "caseId": "path.input.broken-ancestor-link", "platformScope": "all", "argument": "src/broken-link/App.sln", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.input.device-name", "platformScope": "windows", "argument": "NUL.sln", "outcome": "preflight-failure", "code": "cli.preflight.input" },
+    { "caseId": "path.policy.missing", "platformScope": "all", "argument": "${POLICY}", "outcome": "preflight-failure", "code": "cli.preflight.policy" },
+    { "caseId": "path.policy.escape", "platformScope": "all", "argument": "../outside/policy.json", "outcome": "preflight-failure", "code": "cli.preflight.policy-escape" },
+    { "caseId": "path.output.absolute-outside", "platformScope": "all", "argument": "${OUTSIDE_ROOT}/results/audit-result.json", "outcome": "accepted" },
+    { "caseId": "path.output.in-repository", "platformScope": "all", "argument": "${REPOSITORY_ROOT}/artifacts/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-inside-root", "note": "In-repository output is rejected in P0 before invalidation." },
+    { "caseId": "path.output.lexical-outside-resolved-inside", "platformScope": "all", "argument": "${OUTSIDE_ROOT}/link-into-root/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-inside-root", "note": "The resolved parent must be outside the resolved root." },
+    { "caseId": "path.output.lexical-inside-resolved-outside", "platformScope": "all", "argument": "${REPOSITORY_ROOT}/link-outside/audit-result.json", "outcome": "accepted", "note": "The resolved parent is outside the resolved root; the deterministic rule evaluates resolved paths." },
+    { "caseId": "path.output.final-symlink", "platformScope": "all", "argument": "${OUTSIDE_ROOT}/results/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-reparse", "note": "A final symlink is never followed and never replaced." },
+    { "caseId": "path.output.final-reparse-point", "platformScope": "windows", "argument": "${OUTSIDE_ROOT}/results/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-reparse" },
+    { "caseId": "path.output.broken-ancestor-link", "platformScope": "all", "argument": "${OUTSIDE_ROOT}/broken-link/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-parent" },
+    { "caseId": "path.output.missing-parent", "platformScope": "all", "argument": "${OUTSIDE_ROOT}/missing/audit-result.json", "outcome": "preflight-failure", "code": "cli.preflight.output-parent", "note": "The parent must pre-exist; the CLI creates none." },
+    { "caseId": "path.output.aliases-confined-input", "platformScope": "all", "argument": "${REPOSITORY_ROOT}/src/App.sln", "outcome": "preflight-failure", "code": "cli.preflight.output-inside-root", "note": "The output can never alias a confined input or policy path." }
+  ],
+  "resultValidationCases": [
+    { "caseId": "result.bom", "mutation": "utf8-bom", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.crlf", "mutation": "crlf-newlines", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.missing-trailing-lf", "mutation": "missing-trailing-lf", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.duplicate-property", "mutation": "duplicate-property", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.invalid-outcome-reason", "mutation": "invalid-outcome-reason-combination", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.wrong-baseline", "mutation": "version-mismatch", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.unreadable", "mutation": "unreadable-bytes", "hostClass": "audit-error", "exitCode": 5 }
+  ],
+  "classificationCases": [
+    { "caseId": "classify.violation-only", "mixture": { "violation": true, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-absent.json", "sha256": "757cf060eee294ab685cf6d247a32199aae980082a06829f16a2b28bae03ade4" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 0 } },
+    { "caseId": "classify.violation-compliant", "mixture": { "violation": true, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant.json", "sha256": "ead01f10afb4f8965268414114ef1a8958497df353133b6d66144f43c5f0ac3b" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 0 } },
+    { "caseId": "classify.violation-skipped", "mixture": { "violation": true, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-skipped.json", "sha256": "aa1cbe765cc91137a7d9a8b1462ca7bd2aa1b2dab68e5a94421bcf4d5029571f" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 1 } },
+    { "caseId": "classify.violation-compliant-skipped", "mixture": { "violation": true, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant-skipped.json", "sha256": "09d10d3471d449585a7d0582324b7a96b408f7b56fc503c00e18e244dffcd936" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 1 } },
+    { "caseId": "classify.compliant-only", "mixture": { "violation": false, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-present.json", "sha256": "9fc69410dfd287f245b2dd13154220844282823e7956ed6ac01aa288f0f2ee0a" }, "disposition": "compliant", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 0 } },
+    { "caseId": "classify.compliant-skipped", "mixture": { "violation": false, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-compliant-skipped.json", "sha256": "4f0fc5cf010d78da97d42a74f80d494b58d195e8ec074ffa9d5ac66204b12913" }, "disposition": "compliant-with-skipped", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 1 } },
+    { "caseId": "classify.skipped-only", "mixture": { "violation": false, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08" }, "disposition": "skipped-only", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 1 } },
+    { "caseId": "classify.no-results", "mixture": { "violation": false, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9" }, "disposition": "no-results", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 0 } }
+  ],
+  "skippedReasonCases": [
+    { "caseId": "skipped-reason.classification-skipped", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.classification-skipped"] },
+    { "caseId": "skipped-reason.policy-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json", "sha256": "6acd1722d53bcafb7bcc15aed031815fa44a8c3034b26513763c59609dec50ee" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-unavailable"] },
+    { "caseId": "skipped-reason.documentation-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json", "sha256": "5e2977b7b98aa72f57eb11dbff894443bca6e1292b9cac5e723b41fcdfd6e065" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.documentation-unavailable"] },
+    { "caseId": "skipped-reason.evidence-incomplete", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json", "sha256": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.evidence-incomplete"] },
+    { "caseId": "skipped-reason.policy-conflict", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-conflict.json", "sha256": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-conflict"] }
+  ],
+  "streamCases": [
+    {
+      "caseId": "stream.usage-envelope",
+      "variant": "usage",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"usage\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.usage.unknown-option\"],\"usageClass\":\"unknown-option\"}\n",
+      "stderr": "One diagnostic record per emitted usage code; bounded; no raw argument echo.",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+    },
+    {
+      "caseId": "stream.preflight-envelope",
+      "variant": "preflight",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"preflight\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.preflight.input\"],\"executionClass\":\"invalid-input\"}\n",
+      "stderr": "One diagnostic record per emitted preflight code; repository-relative paths or closed placeholders only.",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+    },
+    {
+      "caseId": "stream.execution-envelope",
+      "variant": "execution",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"cancelled\"}\n",
+      "stderr": "Diagnostic records carry cli.* codes or verbatim host codes.",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.audit-envelope",
+      "variant": "audit",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":1,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderr": "The skipped breakdown is one cli.audit.skipped-summary record; reasonCode values are verbatim message data.",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.host-contract-error-envelope",
+      "variant": "host-contract-error",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"host-contract-error\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.host.unknown-terminal\"]}\n",
+      "stderr": "Exactly one cli.host.unknown-terminal record; all host provenance fields are forbidden.",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+    },
+    {
+      "caseId": "stream.top-level-usage-failure",
+      "variant": "none",
+      "stdout": "empty",
+      "stderr": "Bounded stable diagnostic records; exit 2; no envelope; no raw argument echo."
+    },
+    {
+      "caseId": "stream.canonical-result-placement",
+      "variant": "none",
+      "stdout": "Canonical Audit Result bytes appear only at --output, atomically published; they never appear on any stream.",
+      "stderr": "No canonical bytes."
+    }
+  ],
+  "terminalLifecycleCases": [
+    { "caseId": "lifecycle.non-success-commit-then-crash", "sequence": "P4a non-success commit, then crash before envelope emission", "authoritative": "committed-non-success-outcome", "envelope": "may-never-exist" },
+    { "caseId": "lifecycle.non-success-commit-then-stdout-failure", "sequence": "P4a non-success commit, then stdout write failure", "authoritative": "committed-non-success-outcome", "envelope": "not-authoritative" },
+    { "caseId": "lifecycle.success-commit-then-crash", "sequence": "P4b atomic result replacement, then crash before envelope emission", "authoritative": "committed-result", "envelope": "may-never-exist" },
+    { "caseId": "lifecycle.success-commit-then-stdout-failure", "sequence": "P4b atomic result replacement, then stdout write failure", "authoritative": "committed-result", "envelope": "not-authoritative" },
+    { "caseId": "lifecycle.crash-before-any-commit", "sequence": "Crash after run-start invalidation before either applicable commit", "authoritative": "platform-status-only", "envelope": "none", "artifact": "no-artifact-readable-as-current-result" },
+    { "caseId": "lifecycle.orphan-staging", "sequence": "Uncatchable termination after staging creation", "authoritative": "platform-status-only", "envelope": "none", "artifact": "orphan-staging-never-authoritative" }
+  ],
+  "exitCodeCases": [
+    { "caseId": "exit.0.compliant", "controlledClass": "compliant", "layer": "audit", "exitCode": 0 },
+    { "caseId": "exit.0.compliant-with-skipped", "controlledClass": "compliant-with-skipped", "layer": "audit", "exitCode": 0 },
+    { "caseId": "exit.0.help", "controlledClass": "help", "layer": "retained", "exitCode": 0 },
+    { "caseId": "exit.0.version", "controlledClass": "version", "layer": "retained", "exitCode": 0 },
+    { "caseId": "exit.0.doctor", "controlledClass": "doctor", "layer": "retained", "exitCode": 0 },
+    { "caseId": "exit.1.violations", "controlledClass": "violations", "layer": "audit", "exitCode": 1 },
+    { "caseId": "exit.1.violations-with-skipped", "controlledClass": "violations-with-skipped", "layer": "audit", "exitCode": 1 },
+    { "caseId": "exit.2.usage", "controlledClass": "usage-failure", "layer": "usage", "exitCode": 2 },
+    { "caseId": "exit.3.no-results", "controlledClass": "no-results", "layer": "audit", "exitCode": 3 },
+    { "caseId": "exit.3.skipped-only", "controlledClass": "skipped-only", "layer": "audit", "exitCode": 3 },
+    { "caseId": "exit.4.invalid-input-preflight", "controlledClass": "invalid-input", "layer": "preflight", "exitCode": 4 },
+    { "caseId": "exit.4.invalid-input-host", "controlledClass": "invalid-input", "layer": "execution", "exitCode": 4 },
+    { "caseId": "exit.4.environment-unavailable", "controlledClass": "environment-unavailable", "layer": "execution", "exitCode": 4 },
+    { "caseId": "exit.5.load-failure", "controlledClass": "load-failure", "layer": "execution", "exitCode": 5 },
+    { "caseId": "exit.5.audit-error", "controlledClass": "audit-error", "layer": "execution", "exitCode": 5 },
+    { "caseId": "exit.5.publication-failure", "controlledClass": "publication-failure", "layer": "execution", "exitCode": 5 },
+    { "caseId": "exit.5.host-contract-error", "controlledClass": "host-contract-error", "layer": "host-contract-error", "exitCode": 5 },
+    { "caseId": "exit.6.cancelled", "controlledClass": "cancelled", "layer": "execution", "exitCode": 6 },
+    { "caseId": "exit.7.timeout", "controlledClass": "timeout", "layer": "execution", "exitCode": 7 },
+    { "caseId": "exit.codeless.pre-entry", "controlledClass": "process.pre-entry", "layer": "process", "exitCode": null },
+    { "caseId": "exit.codeless.pre-commit-crash", "controlledClass": "process.pre-commit-crash", "layer": "process", "exitCode": null },
+    { "caseId": "exit.codeless.post-commit-abnormal", "controlledClass": "process.post-commit-abnormal", "layer": "process", "exitCode": null }
+  ],
+  "cancellationCases": [
+    { "caseId": "cancel.windows-ctrl-c", "platformScope": "windows", "signal": "Ctrl+C", "handling": "cooperative", "expectation": "first-handled-signal" },
+    { "caseId": "cancel.windows-ctrl-break", "platformScope": "windows", "signal": "Ctrl+Break", "handling": "cooperative", "expectation": "first-handled-signal" },
+    { "caseId": "cancel.windows-terminateprocess", "platformScope": "windows", "signal": "TerminateProcess", "handling": "unhandleable", "expectation": "platform-observation" },
+    { "caseId": "cancel.unix-sigint", "platformScope": "unix", "signal": "SIGINT", "handling": "cooperative", "expectation": "first-handled-signal" },
+    { "caseId": "cancel.unix-sigterm", "platformScope": "unix", "signal": "SIGTERM", "handling": "cooperative", "expectation": "first-handled-signal" },
+    { "caseId": "cancel.unix-sigkill", "platformScope": "unix", "signal": "SIGKILL", "handling": "unhandleable", "expectation": "platform-observation" },
+    { "caseId": "cancel.before-handler-registration", "platformScope": "all", "signal": "any", "handling": "unregistered", "expectation": "platform-observation" },
+    { "caseId": "cancel.repeated-signals", "platformScope": "all", "signal": "any", "handling": "cooperative", "expectation": "no-escalation", "note": "Repeated signals do not escalate and never change the selected class." },
+    { "caseId": "cancel.pre-commit", "platformScope": "all", "signal": "any", "handling": "cooperative", "expectation": "cancelled-committed", "exitCode": 6, "firstRecord": "cli.cancel.requested" },
+    { "caseId": "cancel.post-commit", "platformScope": "all", "signal": "any", "handling": "cooperative", "expectation": "committed-outcome-stands", "note": "A signal after commit is an external observation." },
+    { "caseId": "cancel.timeout-committed", "platformScope": "all", "signal": "none", "handling": "host-timeout", "expectation": "timeout-committed", "exitCode": 7 },
+    { "caseId": "cancel.retained-surface", "platformScope": "all", "signal": "any", "handling": "none", "expectation": "no-cancellation-behavior", "note": "Help, version, and doctor invocations have no cancellation behavior." }
+  ],
+  "publicSafetyConstraints": {
+    "pathTemplates": ["${REPOSITORY_ROOT}", "${OUTSIDE_ROOT}", "${INPUT}", "${POLICY}", "${OUTPUT}"],
+    "envelopeTokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
+    "placeholders": ["<repository-root>", "<input>", "<policy>", "<output>"],
+    "forbidden": [
+      "absolute machine-local paths",
+      "URLs in fixture payloads",
+      "credentials or secrets",
+      "raw argument echo",
+      "ANSI escape sequences",
+      "timestamps, durations, or process IDs in envelopes"
+    ],
+    "maxStringLength": 2048
+  }
+}
