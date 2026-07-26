@@ -350,6 +350,7 @@ This track never counts toward M1 progress while it remains non-gating.
 - richer exception documentation;
 - analyzer, generator, custom-target, and multi-targeting support expansion;
 - additional private or specialized target profiles;
+- marker-based opt-in private XML documentation targets using declaration-local `cscribe:doc` and `cscribe:doc+components` placeholders, with deterministic selection and evidence, placeholder consumption, incremental indexing, and no descendant propagation;
 - incremental audit and evidence caches;
 - additional provider adapters and evaluation datasets;
 - child-process or stronger isolation topology;
