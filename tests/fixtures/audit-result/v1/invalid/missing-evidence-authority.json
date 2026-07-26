@@ -8,8 +8,8 @@
       "classification": {
         "recordType": "TargetClassification",
         "symbolRef": {
-          "compilationContextRef": "synthetic.agree",
-          "documentationCommentId": "T:AuditFixtures.AgreeWidget"
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:AuditFixtures.Widget"
         },
         "primaryKind": "symbol.type.class",
         "traits": [],
@@ -19,19 +19,13 @@
       "policyContributions": [
         {
           "projectPath": "src/Audit.csproj",
-          "sourcePath": "generated/AgreeWidget.cs",
-          "policyExpectation": "required",
-          "matchedRuleId": null
-        },
-        {
-          "projectPath": "src/Audit.csproj",
-          "sourcePath": "src/AgreeWidget.cs",
+          "sourcePath": "src/Widget.cs",
           "policyExpectation": "required",
           "matchedRuleId": "required-docs"
         }
       ],
       "policyExpectation": "required",
-      "policyResolution": "all-declarations-agree",
+      "policyResolution": "single",
       "documentationObservation": "documentation.present",
       "auditOutcome": "audit.outcome.compliant",
       "reasonCode": "audit.reason.required-present",
@@ -45,46 +39,34 @@
           {
             "evidenceId": "evidence.xml-doc",
             "subject": {
-              "compilationContextRef": "synthetic.agree",
-              "documentationCommentId": "T:AuditFixtures.AgreeWidget"
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:AuditFixtures.Widget"
             },
             "kind": "evidence.source.xml-documentation",
             "relation": "evidence.documents",
-            "excerpt": "x",
-            "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
-            "originalUtf8ByteCount": 1,
-            "includedUtf8ByteCount": 1,
+            "excerpt": "/// <summary>Widget docs.</summary>",
+            "sha256": "7245070ca7cb1427ad4e7c502148e744d7f50f07ba86091b570795d5c1f7537f",
+            "originalUtf8ByteCount": 35,
+            "includedUtf8ByteCount": 35,
             "omittedUtf8ByteCount": 0,
             "isTruncated": false,
             "locator": {
               "repository": {
-                "path": "src/AgreeWidget.cs"
+                "path": "src/Widget.cs"
               }
             }
           }
         ],
         "observationSubject": {
-          "observationSubjectRef": "obs.e616a188638e8e8f1e17a64ed0f7b7ae173b8a4b4ba695ae48773c0d8e624e3d",
-          "compilationContextRef": "synthetic.agree",
+          "observationSubjectRef": "obs.f79ccdb22a557b971920bba749947a85380529f54a466632ad56017582e034e8",
+          "compilationContextRef": "synthetic.v1",
           "subject": {
-            "compilationContextRef": "synthetic.agree",
-            "documentationCommentId": "T:AuditFixtures.AgreeWidget"
+            "compilationContextRef": "synthetic.v1",
+            "documentationCommentId": "T:AuditFixtures.Widget"
           },
           "authoritativeDeclarationSetDigest": "af26d32cc3409fe7f4e8a577976b71372af4e07f7a87ac8ed1fb762149299589",
           "authoritativeDeclarationCount": 1
         }
-      },
-      "evidenceAuthority": {
-        "declarationSetId": "dset.af26d32cc3409fe7f4e8a577976b71372af4e07f7a87ac8ed1fb762149299589",
-        "completeness": "positive-only",
-        "declarations": [
-          {
-            "declarationId": "decl.4541d3a25f66ffaa85045c1a282d920787acabab63d6380a1262fbc037e78f5a",
-            "authorityRole": "ordinary",
-            "blockState": "well-formed",
-            "evidenceId": "evidence.xml-doc"
-          }
-        ]
       }
     }
   ]

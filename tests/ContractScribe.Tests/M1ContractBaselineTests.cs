@@ -6,6 +6,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ContractScribe.ContractBaselineProbe;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -161,6 +162,20 @@ public sealed class M1ContractBaselineTests
             .ToDictionary(row => row.GetProperty("caseId").GetString()!, row => JsonNode.Parse(row.GetRawText())!.AsObject(), StringComparer.Ordinal);
         Assert.All(cases.Values, value => Assert.True(IsValidAuthorityCase(value)));
 
+        var canonical = cases["component-complete-absent"];
+        var permuted = (JsonObject)canonical.DeepClone();
+        var permutedDeclarations = permuted["evidenceAuthority"]!["declarations"]!.AsArray();
+        permutedDeclarations.Reverse();
+        for (var index = 0; index < permutedDeclarations.Count; index++)
+        {
+            var row = permutedDeclarations[index]!.AsObject();
+            permutedDeclarations[index] = new JsonObject(row.Reverse().Select(property => KeyValuePair.Create(property.Key, property.Value?.DeepClone())));
+        }
+        Assert.True(IsValidAuthorityCase(permuted));
+        Assert.Equal(
+            AuditResultCanonicalizer.CanonicalizeDeclarations(Element(canonical["evidenceAuthority"]!["declarations"]!)),
+            AuditResultCanonicalizer.CanonicalizeDeclarations(Element(permutedDeclarations)));
+
         foreach (var mutation in fixture.RootElement.GetProperty("invalidMutations").EnumerateArray())
         {
             var value = (JsonObject)cases[mutation.GetProperty("sourceCaseId").GetString()!].DeepClone();
@@ -174,9 +189,8 @@ public sealed class M1ContractBaselineTests
     {
         var identity = JsonNode.Parse(File.ReadAllText(Path.Join(FixtureRoot, "generated-identity-vectors.json")))!.AsObject();
         var designatedInputs = new List<string>();
-        foreach (var vector in identity["designatedOpaqueSourceGeneratorInputs"]!.AsArray().OfType<JsonObject>())
+        foreach (var values in identity["designatedOpaqueSourceGeneratorInputs"]!.AsArray().OfType<JsonObject>().Select(vector => vector["fields"]!.AsArray()))
         {
-            var values = vector["fields"]!.AsArray();
             for (var index = 0; index < values.Count; index++)
             {
                 var value = values[index]!;
@@ -238,7 +252,7 @@ public sealed class M1ContractBaselineTests
             }
 
             var declarations = authority["declarations"]!.AsArray();
-            var declarationDigest = Sha256(Encoding.UTF8.GetBytes(declarations.ToJsonString(CanonicalJsonOptions)));
+            var declarationDigest = AuditResultCanonicalizer.ComputeDeclarationDigest(Element(declarations));
             if (observation["authoritativeDeclarationSetDigest"]!.GetValue<string>() != declarationDigest
                 || observation["authoritativeDeclarationCount"]!.GetValue<int>() != declarations.Count
                 || authority["declarationSetId"]!.GetValue<string>() != $"dset.{declarationDigest}")
@@ -246,14 +260,7 @@ public sealed class M1ContractBaselineTests
                 return false;
             }
 
-            var observationPreimage = new JsonObject
-            {
-                ["compilationContextRef"] = observation["compilationContextRef"]!.DeepClone(),
-                ["subject"] = observation["subject"]!.DeepClone(),
-                ["authoritativeDeclarationSetDigest"] = observation["authoritativeDeclarationSetDigest"]!.DeepClone(),
-                ["authoritativeDeclarationCount"] = observation["authoritativeDeclarationCount"]!.DeepClone()
-            };
-            var computedObservationRef = $"obs.{Sha256(Encoding.UTF8.GetBytes(observationPreimage.ToJsonString(CanonicalJsonOptions)))}";
+            var computedObservationRef = AuditResultCanonicalizer.ComputeObservationSubjectRef(Element(observation));
             if (observation["observationSubjectRef"]!.GetValue<string>() != computedObservationRef)
             {
                 return false;
@@ -264,7 +271,6 @@ public sealed class M1ContractBaselineTests
             var declarationIds = new HashSet<string>(StringComparer.Ordinal);
             var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
             var authorityRoles = new HashSet<string>(StringComparer.Ordinal);
-            string? previousDeclarationId = null;
             foreach (var declaration in declarations.OfType<JsonObject>())
             {
                 var declarationId = declaration["declarationId"]!.GetValue<string>();
@@ -273,8 +279,6 @@ public sealed class M1ContractBaselineTests
                 {
                     return false;
                 }
-                if (previousDeclarationId is not null && StringComparer.Ordinal.Compare(previousDeclarationId, declarationId) >= 0) return false;
-                previousDeclarationId = declarationId;
                 authorityRoles.Add(declaration["authorityRole"]!.GetValue<string>());
 
                 var hasLocalName = declaration.ContainsKey("componentLocalName");
@@ -305,7 +309,19 @@ public sealed class M1ContractBaselineTests
 
             return true;
         }
-        catch
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (KeyNotFoundException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (FormatException)
         {
             return false;
         }
@@ -353,8 +369,8 @@ public sealed class M1ContractBaselineTests
     }
 
     private static string Context(JsonObject subject) =>
-        subject.ContainsKey("parentSymbolRef")
-            ? subject["parentSymbolRef"]!["compilationContextRef"]!.GetValue<string>()
+        subject.TryGetPropertyValue("parentSymbolRef", out var parentSymbolRef)
+            ? parentSymbolRef!["compilationContextRef"]!.GetValue<string>()
             : subject["compilationContextRef"]!.GetValue<string>();
 
     private static string? RegisterIdentity(Dictionary<string, string> registrations, string id, string normalizedPreimage)
@@ -466,7 +482,7 @@ public sealed class M1ContractBaselineTests
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "ContractScribe.slnx"))) return current.FullName;
+            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx"))) return current.FullName;
             current = current.Parent;
         }
         throw new InvalidOperationException("Could not find the repository root.");

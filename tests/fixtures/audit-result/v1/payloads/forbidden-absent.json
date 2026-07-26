@@ -5,15 +5,81 @@
   "targetProfile": "profile.external-api",
   "results": [
     {
-      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.forbidden", "documentationCommentId": "T:AuditFixtures.ForbiddenWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
-      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/ForbiddenWidget.cs", "policyExpectation": "forbidden", "matchedRuleId": "forbidden-docs" } ],
+      "classification": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.forbidden",
+          "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Audit.csproj",
+          "sourcePath": "src/ForbiddenWidget.cs",
+          "policyExpectation": "forbidden",
+          "matchedRuleId": "forbidden-docs"
+        }
+      ],
       "policyExpectation": "forbidden",
       "policyResolution": "single",
       "documentationObservation": "documentation.absent",
       "auditOutcome": "audit.outcome.compliant",
       "reasonCode": "audit.reason.forbidden-absent",
-      "evidenceIds": [ "evidence.declaration" ],
-      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.declaration", "subject": { "compilationContextRef": "synthetic.forbidden", "documentationCommentId": "T:AuditFixtures.ForbiddenWidget" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "public sealed class Widget {}", "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad", "originalUtf8ByteCount": 29, "includedUtf8ByteCount": 29, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/ForbiddenWidget.cs" } } } ] }
+      "evidenceIds": [
+        "evidence.declaration"
+      ],
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.declaration",
+            "subject": {
+              "compilationContextRef": "synthetic.forbidden",
+              "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "public sealed class Widget {}",
+            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
+            "originalUtf8ByteCount": 29,
+            "includedUtf8ByteCount": 29,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/ForbiddenWidget.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.0784ee269d43748498a356c49c907e97a5acc6b45ac955ccd3b383a2511e6df1",
+          "compilationContextRef": "synthetic.forbidden",
+          "subject": {
+            "compilationContextRef": "synthetic.forbidden",
+            "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+          },
+          "authoritativeDeclarationSetDigest": "1963cbde30bdb976918defc29f6630a1b5c9ca1c349bf8b0b5c53dfde16ef172",
+          "authoritativeDeclarationCount": 1
+        }
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.1963cbde30bdb976918defc29f6630a1b5c9ca1c349bf8b0b5c53dfde16ef172",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
+            "authorityRole": "ordinary",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.declaration"
+          }
+        ]
+      }
     }
   ]
 }

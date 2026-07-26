@@ -1,61 +1,50 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using ContractScribe.ContractBaselineProbe;
+using Json.Schema;
 
 if (args.Length != 1)
 {
-    Console.Error.WriteLine("Usage: ContractScribe.ContractBaselineProbe <json-file>");
+    Console.Error.WriteLine("Usage: ContractScribe.ContractBaselineProbe <replay-json-file>");
     return 2;
 }
 
-using var document = JsonDocument.Parse(
+using var replay = JsonDocument.Parse(
     File.ReadAllBytes(args[0]),
     new JsonDocumentOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow });
-using var stream = new MemoryStream();
-using (var writer = new Utf8JsonWriter(stream))
+var repositoryRoot = FindRepositoryRoot();
+var auditSchema = JsonSchema.FromText(File.ReadAllText(Path.Join(repositoryRoot, "schemas", "audit-result", "v1.schema.json")));
+var canonicalInputs = new List<byte[]>();
+foreach (var logicalInput in replay.RootElement.GetProperty("logicalInputs").EnumerateArray())
 {
-    WriteCanonical(writer, document.RootElement);
+    if (!auditSchema.Evaluate(logicalInput).IsValid)
+    {
+        Console.Error.WriteLine("Replay input failed the Audit Result v1 schema.");
+        return 3;
+    }
+    AuditResultCanonicalizer.ValidateReplayDocument(logicalInput);
+    canonicalInputs.Add(AuditResultCanonicalizer.Canonicalize(logicalInput));
 }
 
-Console.WriteLine(Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant());
+if (canonicalInputs.Count < 2 || canonicalInputs.Skip(1).Any(candidate => !candidate.SequenceEqual(canonicalInputs[0])))
+{
+    Console.Error.WriteLine("Replay inputs did not canonicalize to identical Audit Result bytes.");
+    return 4;
+}
+
+Console.WriteLine(Convert.ToHexString(SHA256.HashData(canonicalInputs[0])).ToLowerInvariant());
 return 0;
 
-static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
+static string FindRepositoryRoot()
 {
-    switch (value.ValueKind)
+    var current = new DirectoryInfo(AppContext.BaseDirectory);
+    while (current is not null)
     {
-        case JsonValueKind.Object:
-            writer.WriteStartObject();
-            foreach (var property in value.EnumerateObject().OrderBy(property => property.Name, StringComparer.Ordinal))
-            {
-                writer.WritePropertyName(property.Name);
-                WriteCanonical(writer, property.Value);
-            }
-            writer.WriteEndObject();
-            break;
-        case JsonValueKind.Array:
-            writer.WriteStartArray();
-            foreach (var item in value.EnumerateArray())
-            {
-                WriteCanonical(writer, item);
-            }
-            writer.WriteEndArray();
-            break;
-        case JsonValueKind.String:
-            writer.WriteStringValue(value.GetString());
-            break;
-        case JsonValueKind.Number:
-            writer.WriteRawValue(value.GetRawText(), skipInputValidation: false);
-            break;
-        case JsonValueKind.True:
-            writer.WriteBooleanValue(true);
-            break;
-        case JsonValueKind.False:
-            writer.WriteBooleanValue(false);
-            break;
-        case JsonValueKind.Null:
-            writer.WriteNullValue();
-            break;
-        default:
-            throw new InvalidOperationException($"Unsupported JSON kind {value.ValueKind}.");
+        if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+        {
+            return current.FullName;
+        }
+        current = current.Parent;
     }
+    throw new DirectoryNotFoundException("Repository root not found.");
 }

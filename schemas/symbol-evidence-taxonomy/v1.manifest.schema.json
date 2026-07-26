@@ -580,11 +580,41 @@
               "properties": {
                 "generatorId": {
                   "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                  "pattern": "^sgp\\.[0-9a-f]{64}$"
                 },
                 "hintNameId": {
                   "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                  "pattern": "^sgo\\.[0-9a-f]{64}$"
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "toolGenerated"
+          ],
+          "properties": {
+            "toolGenerated": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "producerId",
+                "outputId"
+              ],
+              "properties": {
+                "producerId": {
+                  "type": "string",
+                  "pattern": "^tgp\\.[0-9a-f]{64}$"
+                },
+                "outputId": {
+                  "type": "string",
+                  "pattern": "^tgo\\.[0-9a-f]{64}$"
                 },
                 "span": {
                   "$ref": "#/$defs/span"

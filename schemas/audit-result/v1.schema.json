@@ -141,7 +141,80 @@
         "evidenceAuthority": {
           "$ref": "#/$defs/evidenceAuthority"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "documentationObservation": {
+                    "enum": [
+                      "documentation.present",
+                      "documentation.absent"
+                    ]
+                  }
+                },
+                "required": [
+                  "documentationObservation"
+                ]
+              },
+              {
+                "properties": {
+                  "reasonCode": {
+                    "const": "audit.reason.documentation-unavailable.malformed-xml"
+                  }
+                },
+                "required": [
+                  "reasonCode"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "evidenceAuthority"
+            ],
+            "properties": {
+              "evidenceBundle": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidenceBundle"
+                  },
+                  {
+                    "required": [
+                      "observationSubject"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "evidenceAuthority"
+              ]
+            },
+            "properties": {
+              "evidenceBundle": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidenceBundle"
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "observationSubject"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "policyContribution": {
       "oneOf": [

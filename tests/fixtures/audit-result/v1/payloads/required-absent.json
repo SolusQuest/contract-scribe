@@ -5,15 +5,81 @@
   "targetProfile": "profile.external-api",
   "results": [
     {
-      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },
-      "policyContributions": [ { "projectPath": "src/Audit.csproj", "sourcePath": "src/Widget.cs", "policyExpectation": "required", "matchedRuleId": "required-docs" } ],
+      "classification": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:AuditFixtures.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Audit.csproj",
+          "sourcePath": "src/Widget.cs",
+          "policyExpectation": "required",
+          "matchedRuleId": "required-docs"
+        }
+      ],
       "policyExpectation": "required",
       "policyResolution": "single",
       "documentationObservation": "documentation.absent",
       "auditOutcome": "audit.outcome.violation",
       "reasonCode": "audit.reason.required-absent",
-      "evidenceIds": [ "evidence.declaration" ],
-      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.declaration", "subject": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "kind": "evidence.source.declaration", "relation": "evidence.declares", "excerpt": "public sealed class Widget {}", "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad", "originalUtf8ByteCount": 29, "includedUtf8ByteCount": 29, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "repository": { "path": "src/Widget.cs" } } } ] }
+      "evidenceIds": [
+        "evidence.declaration"
+      ],
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.declaration",
+            "subject": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:AuditFixtures.Widget"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "public sealed class Widget {}",
+            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
+            "originalUtf8ByteCount": 29,
+            "includedUtf8ByteCount": 29,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Widget.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.a884fd8f5d19abe4c32d995db77e86a4c19f1e274a4de597add3bd12de195602",
+          "compilationContextRef": "synthetic.v1",
+          "subject": {
+            "compilationContextRef": "synthetic.v1",
+            "documentationCommentId": "T:AuditFixtures.Widget"
+          },
+          "authoritativeDeclarationSetDigest": "1963cbde30bdb976918defc29f6630a1b5c9ca1c349bf8b0b5c53dfde16ef172",
+          "authoritativeDeclarationCount": 1
+        }
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.1963cbde30bdb976918defc29f6630a1b5c9ca1c349bf8b0b5c53dfde16ef172",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
+            "authorityRole": "ordinary",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.declaration"
+          }
+        ]
+      }
     }
   ]
 }

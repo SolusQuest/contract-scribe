@@ -5,15 +5,88 @@
   "targetProfile": "profile.assembly-visible",
   "results": [
     {
-      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.generated-policy", "documentationCommentId": "T:AuditFixtures.GeneratedWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.tool-generated", "supportStatus": "support.supported" },
-      "policyContributions": [ { "projectPath": "src/Audit.csproj", "generatedOutput": { "producerKind": "tool-generated", "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111", "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222" }, "policyExpectation": "required", "matchedRuleId": "generated-required" } ],
+      "classification": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.generated-policy",
+          "documentationCommentId": "T:AuditFixtures.GeneratedWidget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Audit.csproj",
+          "generatedOutput": {
+            "producerKind": "tool-generated",
+            "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111",
+            "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          "policyExpectation": "required",
+          "matchedRuleId": "generated-required"
+        }
+      ],
       "policyExpectation": "required",
       "policyResolution": "single",
       "documentationObservation": "documentation.present",
       "auditOutcome": "audit.outcome.compliant",
       "reasonCode": "audit.reason.required-present",
-      "evidenceIds": [ "evidence.generated-doc" ],
-      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.generated-doc", "subject": { "compilationContextRef": "synthetic.generated-policy", "documentationCommentId": "T:AuditFixtures.GeneratedWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "/// <summary>Generated widget docs.</summary>", "sha256": "19a3119f73abd34359b747a51d53582f429b99ef99decd79d8dd50d9d966f99c", "originalUtf8ByteCount": 45, "includedUtf8ByteCount": 45, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "generatedOutput": { "producerKind": "tool-generated", "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111", "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222", "sourceSha256": "3333333333333333333333333333333333333333333333333333333333333333" } } } ] }
+      "evidenceIds": [
+        "evidence.generated-doc"
+      ],
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.generated-doc",
+            "subject": {
+              "compilationContextRef": "synthetic.generated-policy",
+              "documentationCommentId": "T:AuditFixtures.GeneratedWidget"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <summary>Generated widget docs.</summary>",
+            "sha256": "19a3119f73abd34359b747a51d53582f429b99ef99decd79d8dd50d9d966f99c",
+            "originalUtf8ByteCount": 45,
+            "includedUtf8ByteCount": 45,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "generatedOutput": {
+                "producerKind": "tool-generated",
+                "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111",
+                "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222",
+                "sourceSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.29d9b81c9f70284180206c64b64afa6a18e0a0eb4e4260657f81613cae4d82cb",
+          "compilationContextRef": "synthetic.generated-policy",
+          "subject": {
+            "compilationContextRef": "synthetic.generated-policy",
+            "documentationCommentId": "T:AuditFixtures.GeneratedWidget"
+          },
+          "authoritativeDeclarationSetDigest": "5b36e95c4cd861409427f97063ffb57c2c191c00ffc0b801f9d7134be01b6a05",
+          "authoritativeDeclarationCount": 1
+        }
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.5b36e95c4cd861409427f97063ffb57c2c191c00ffc0b801f9d7134be01b6a05",
+        "completeness": "positive-only",
+        "declarations": [
+          {
+            "declarationId": "decl.e3c6b6cdbea330743b4fc300b55873a9f35b632570ad5269bff9be8fde344f85",
+            "authorityRole": "ordinary",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.generated-doc"
+          }
+        ]
+      }
     }
   ]
 }
