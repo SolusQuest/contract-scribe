@@ -29,7 +29,8 @@ public sealed class M1AuditCliContractTests
         "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json",
         "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json",
         "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json",
-        "tests/fixtures/audit-result/v1/payloads/policy-conflict.json"
+        "tests/fixtures/audit-result/v1/payloads/policy-conflict.json",
+        "tests/ContractScribe.Tests/AuditResultConformance.cs"
     ];
 
     private static readonly string[] ExpectedTerminalLayers = ["usage", "preflight", "execution", "audit", "host-contract-error"];
@@ -401,25 +402,33 @@ public sealed class M1AuditCliContractTests
         using var annex = LoadAnnex();
         var doc = File.ReadAllText(DocPath);
         var rows = annex.RootElement.GetProperty("streamCases").EnumerateArray().Where(row => row.GetProperty("variant").GetString() != "none").ToArray();
-        Assert.Equal(5, rows.Length);
-        var cliCodes = ExpectedCliCodes.ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(16, rows.Length);
+        var cliCodes = ExpectedCliCodes.Concat(["<verbatim-host-code>"]).ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows)
         {
             var variant = row.GetProperty("variant").GetString()!;
             var template = row.GetProperty("stdoutTemplate").GetString()!;
             Assert.EndsWith("\n", template);
             Assert.DoesNotContain("\r", template, StringComparison.Ordinal);
-            Assert.Contains(template + "```", doc, StringComparison.Ordinal);
+            if (row.TryGetProperty("representative", out var representative) && representative.GetBoolean())
+            {
+                Assert.Contains(template + "```", doc, StringComparison.Ordinal);
+            }
 
             var tokens = System.Text.RegularExpressions.Regex.Matches(template, @"\$\{[A-Z_]+\}").Select(match => match.Value).ToArray();
             Assert.Equal(tokens.Length, tokens.Distinct(StringComparer.Ordinal).Count());
             Assert.Equal(Strings(row, "tokens"), tokens);
-            Assert.Equal(PermittedTokens[variant].Order(StringComparer.Ordinal), tokens.Order(StringComparer.Ordinal));
+            Assert.All(tokens, token => Assert.Contains(token, PermittedTokens[variant]));
 
             var substituted = tokens.Aggregate(template, (current, token) => current.Replace(token, "x", StringComparison.Ordinal));
             using var envelope = AuditResultConformance.ParseStrict(Encoding.UTF8.GetBytes(substituted));
             var fields = envelope.RootElement.EnumerateObject().Select(property => property.Name).ToArray();
-            Assert.Equal(EnvelopeFieldOrder[variant], fields);
+            var expectedOrder = EnvelopeFieldOrder[variant];
+            if (!fields.Contains("toolchain", StringComparer.Ordinal))
+            {
+                expectedOrder = expectedOrder.Where(field => field != "toolchain").ToArray();
+            }
+            Assert.Equal(expectedOrder, fields);
             Assert.Equal(1, envelope.RootElement.GetProperty("envelopeVersion").GetInt32());
             Assert.Equal(variant, envelope.RootElement.GetProperty("terminalLayer").GetString());
             foreach (var code in envelope.RootElement.GetProperty("diagnosticCodes").EnumerateArray())
@@ -441,9 +450,97 @@ public sealed class M1AuditCliContractTests
                 Assert.Equal(CommonEnvelopeFields, fields);
                 Assert.Equal("cli.host.unknown-terminal", envelope.RootElement.GetProperty("diagnosticCodes")[0].GetString());
             }
-            if (variant is "usage" or "preflight" or "execution" or "audit")
+            if (variant == "audit")
             {
-                Assert.NotEqual(CommonEnvelopeFields, fields);
+                Assert.Equal(["compliant", "violation", "skipped"], envelope.RootElement.GetProperty("counts").EnumerateObject().Select(property => property.Name));
+            }
+        }
+
+        var environmentUnavailable = rows.Single(row => row.GetProperty("caseId").GetString() == "stream.execution.environment-unavailable");
+        Assert.DoesNotContain("toolchain", environmentUnavailable.GetProperty("stdoutTemplate").GetString()!, StringComparison.Ordinal);
+        Assert.Contains(rows, row =>
+        {
+            using var envelope = AuditResultConformance.ParseStrict(Encoding.UTF8.GetBytes(SubstituteTokens(row.GetProperty("stdoutTemplate").GetString()!)));
+            return row.GetProperty("variant").GetString() == "audit" && envelope.RootElement.GetProperty("diagnosticCodes").GetArrayLength() == 0;
+        });
+    }
+
+    [Fact]
+    public void EnvelopeCoverage_MapsEveryControlledClassToExactlyOneStreamForm()
+    {
+        using var annex = LoadAnnex();
+        var root = annex.RootElement;
+        var claims = root.GetProperty("streamCases").EnumerateArray()
+            .Where(row => row.TryGetProperty("controlledClasses", out _))
+            .SelectMany(row => Strings(row, "controlledClasses"))
+            .ToArray();
+        Assert.Equal(claims.Length, claims.Distinct(StringComparer.Ordinal).Count());
+
+        var expected = new List<string>();
+        foreach (var row in root.GetProperty("exitCodeCases").EnumerateArray())
+        {
+            var layer = row.GetProperty("layer").GetString()!;
+            if (layer is "retained" or "process")
+            {
+                continue;
+            }
+            expected.Add(layer + ":" + row.GetProperty("controlledClass").GetString());
+        }
+
+        Assert.Equal(expected.Order(StringComparer.Ordinal), claims.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(claims, claim => claim.StartsWith("process:", StringComparison.Ordinal));
+
+        var helpCaseIds = root.GetProperty("helpCases").EnumerateArray().Select(row => row.GetProperty("caseId").GetString()).ToArray();
+        Assert.Contains("help.top-level", helpCaseIds);
+        Assert.Contains("help.version", helpCaseIds);
+        Assert.Contains("help.doctor", helpCaseIds);
+
+        var auditClaims = claims.Where(claim => claim.StartsWith("audit:", StringComparison.Ordinal)).Select(claim => claim["audit:".Length..]).ToArray();
+        Assert.Equal(ExpectedDispositions.Order(StringComparer.Ordinal), auditClaims.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void StderrTemplates_MatchDocMessageTableAndDiagnosticCodes()
+    {
+        using var annex = LoadAnnex();
+        var doc = File.ReadAllText(DocPath);
+        var messageTemplates = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in doc.Split('\n'))
+        {
+            if (!line.StartsWith("| `cli.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var cells = line.Split('|');
+            var code = cells[1].Trim().Trim('`');
+            var message = cells[2].Trim().Replace("`", string.Empty, StringComparison.Ordinal);
+            Assert.True(messageTemplates.TryAdd(code, message), $"Duplicate message template: {code}");
+        }
+
+        Assert.Equal(ExpectedCliCodes.Order(StringComparer.Ordinal), messageTemplates.Keys.Order(StringComparer.Ordinal));
+
+        foreach (var row in annex.RootElement.GetProperty("streamCases").EnumerateArray())
+        {
+            var stderr = row.GetProperty("stderrTemplate").GetString()!;
+            Assert.DoesNotContain("\r", stderr, StringComparison.Ordinal);
+            Assert.True(stderr.Length == 0 || stderr.EndsWith("\n", StringComparison.Ordinal));
+            var lines = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            string[] codes;
+            if (row.TryGetProperty("stdoutTemplate", out var stdoutTemplate))
+            {
+                using var envelope = AuditResultConformance.ParseStrict(Encoding.UTF8.GetBytes(SubstituteTokens(stdoutTemplate.GetString()!)));
+                codes = envelope.RootElement.GetProperty("diagnosticCodes").EnumerateArray().Select(code => code.GetString()!).ToArray();
+            }
+            else
+            {
+                codes = lines.Select(line => line.Split(": ", 2)[0]).ToArray();
+            }
+
+            Assert.Equal(codes.Length, lines.Length);
+            foreach (var (code, line) in codes.Zip(lines))
+            {
+                var expectedMessage = code == "<verbatim-host-code>" ? "<bounded host message>" : messageTemplates[code];
+                Assert.Equal(code + ": " + expectedMessage, line);
             }
         }
     }
@@ -457,10 +554,15 @@ public sealed class M1AuditCliContractTests
         var lifecycle = root.GetProperty("terminalLifecycleCases").EnumerateArray().ToArray();
         Assert.Equal(
             [
+                "lifecycle.abrupt-termination-during-invalidation",
+                "lifecycle.cancellation-during-invalidation",
                 "lifecycle.crash-before-any-commit",
+                "lifecycle.invalidation-failure-while-alive",
                 "lifecycle.non-success-commit-then-crash",
                 "lifecycle.non-success-commit-then-stdout-failure",
                 "lifecycle.orphan-staging",
+                "lifecycle.pre-entry-managed-bootstrap-failure",
+                "lifecycle.pre-entry-os-launch-failure",
                 "lifecycle.success-commit-then-crash",
                 "lifecycle.success-commit-then-stdout-failure"
             ],
@@ -468,16 +570,43 @@ public sealed class M1AuditCliContractTests
         foreach (var row in lifecycle)
         {
             Assert.Contains(row.GetProperty("authoritative").GetString(), new[] { "committed-non-success-outcome", "committed-result", "platform-status-only" });
-            Assert.Contains(row.GetProperty("envelope").GetString(), new[] { "may-never-exist", "not-authoritative", "none" });
+            Assert.Contains(row.GetProperty("envelope").GetString(), new[] { "may-never-exist", "not-authoritative", "none", "execution" });
+            if (!row.TryGetProperty("invalidationCompleted", out var invalidationCompleted))
+            {
+                continue;
+            }
+
+            Assert.Contains(invalidationCompleted.GetString(), new[] { "completed", "not-completed", "may-be-partial" });
+            Assert.Contains(row.GetProperty("priorArtifactState").GetString(), new[] { "may-remain-not-evidence", "may-be-removed-or-remain-not-evidence" });
+            Assert.Contains(row.GetProperty("currentResultState").GetString(), new[] { "none", "none-readable" });
+            Assert.Contains(row.GetProperty("terminalCommit").GetString(), new[] { "none", "publication-failure", "cancelled" });
+            Assert.Contains(row.GetProperty("diagnosticOwnership").GetString(), new[] { "platform", "verbatim-host-code", "cli-cancel-requested-first" });
+            if (row.GetProperty("exitCode").ValueKind != JsonValueKind.Null)
+            {
+                Assert.Contains(row.GetProperty("exitCode").GetInt32(), new[] { 5, 6 });
+            }
         }
 
+        var invalidationFailure = lifecycle.Single(row => row.GetProperty("caseId").GetString() == "lifecycle.invalidation-failure-while-alive");
+        Assert.Equal("publication-failure", invalidationFailure.GetProperty("terminalCommit").GetString());
+        Assert.Equal(5, invalidationFailure.GetProperty("exitCode").GetInt32());
+        var cancellationDuringInvalidation = lifecycle.Single(row => row.GetProperty("caseId").GetString() == "lifecycle.cancellation-during-invalidation");
+        Assert.Equal("cancelled", cancellationDuringInvalidation.GetProperty("terminalCommit").GetString());
+        Assert.Equal(6, cancellationDuringInvalidation.GetProperty("exitCode").GetInt32());
+
         var resultValidation = root.GetProperty("resultValidationCases").EnumerateArray().ToArray();
-        Assert.Equal(7, resultValidation.Length);
+        Assert.Equal(8, resultValidation.Length);
         foreach (var row in resultValidation)
         {
             Assert.Equal("audit-error", row.GetProperty("hostClass").GetString());
             Assert.Equal(5, row.GetProperty("exitCode").GetInt32());
         }
+
+        var unsupportedVersion = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.unsupported-artifact-version");
+        var baselineMismatch = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.baseline-mismatch");
+        Assert.NotEqual(unsupportedVersion.GetProperty("mutation").GetString(), baselineMismatch.GetProperty("mutation").GetString());
+        Assert.True(unsupportedVersion.GetProperty("canonicalMutation").GetBoolean());
+        Assert.False(baselineMismatch.GetProperty("canonicalMutation").GetBoolean());
 
         var cancellation = root.GetProperty("cancellationCases").EnumerateArray().ToArray();
         Assert.Equal(12, cancellation.Length);
@@ -511,6 +640,9 @@ public sealed class M1AuditCliContractTests
                 .Order(StringComparer.Ordinal),
             synthetic.Order(StringComparer.Ordinal));
     }
+
+    private static string SubstituteTokens(string template)
+        => System.Text.RegularExpressions.Regex.Replace(template, @"\$\{[A-Z_]+\}", "x");
 
     private static (string Disposition, int ExitCode) Classify(bool violation, bool compliant, bool skipped)
     {

@@ -10,7 +10,7 @@ This document is the normative contract for the `contract-scribe` M1 command-lin
 
 The executable annex at `tests/fixtures/m1-audit-cli/cli-contract-v1.json` and the test-only checker `tests/ContractScribe.Tests/M1AuditCliContractTests.cs` are the executable conformance oracle for this contract. Annex, raw fixtures, and this document are one normative decision; disagreement blocks merge.
 
-This contract and its annex are a commit-pinned draft under [Contract lifecycle](../00_project/contract-lifecycle.md). The annex pins every cross-contract artifact it consumes by SHA-256 against baseline commit `0806a98609b0eb97014496dcc4f4c8083ec57533`; the checker fails on any single-file drift (partial-baseline rejection). When the accepted #35 baseline merges, the pins and canonical fixtures are regenerated against it before #25 is finalized. That reconciliation gate also covers the test-only Audit Result oracle binding `tests/ContractScribe.Tests/AuditResultConformance.cs`, which is introduced by this change and consumed by the checker through shared usage rather than by a pre-existing SHA-256 pin. Run classification itself depends only on `auditOutcome` values, so a #35 contract amendment that preserves the outcome vocabulary does not change classification semantics.
+This contract and its annex are a commit-pinned draft under [Contract lifecycle](../00_project/contract-lifecycle.md). The annex pins every cross-contract artifact it consumes by SHA-256 against baseline commit `0806a98609b0eb97014496dcc4f4c8083ec57533`; the checker fails on any single-file drift (partial-baseline rejection). When the accepted #35 baseline merges, the pins and canonical fixtures are regenerated in the same coordinated change or an immediately following reconciliation change; until then the checker enforces the pinned baseline. The shared test-only Audit Result oracle `tests/ContractScribe.Tests/AuditResultConformance.cs`, introduced by this change, is pinned by SHA-256 in the annex as a protected input; the pins are regenerated when the accepted #35 baseline merges or when the shared oracle changes. Run classification itself depends only on `auditOutcome` values, so a #35 contract amendment that preserves the outcome vocabulary does not change classification semantics.
 
 ## Grammar and retained surface
 
@@ -89,9 +89,33 @@ Four disjoint namespaces carry diagnostic identity:
 
 ## Diagnostic records and stderr
 
-Every stderr line is exactly one diagnostic record carrying exactly one code: either a `cli.*` code or a verbatim host code. Records are bounded, deterministically ordered and deduplicated, render paths repository-relative or through the closed placeholders, escape control characters, and never echo raw argument text.
+Every stderr line is exactly one diagnostic record, LF-terminated, in the form `<code>: <message>`. `<code>` is either a `cli.*` code or a verbatim #24 host code. `<message>` is a fixed per-code template whose only variable data slots are the closed placeholders (`<repository-root>`, `<input>`, `<policy>`, `<output>`) or repository-relative paths rendered after safe confinement; the `cli.audit.skipped-summary` record additionally carries the `<skipped-reason-breakdown>` slot defined below. Control characters in data are escaped as `\r`, `\n`, `\t`, or `\u00xx`. Messages never echo raw argument text. Records are bounded and deterministically ordered and deduplicated.
 
-The skipped breakdown is a single `cli.audit.skipped-summary` record; the verbatim canonical `reasonCode` values and their counts are message data of that record, not diagnostic identifiers. The envelope `diagnosticCodes` array lists each emitted record's code in emission order; duplicate codes are permitted when multiple emitted records share one code.
+The fixed message template for each `cli.*` code is:
+
+| Code | Message template |
+| --- | --- |
+| `cli.usage.unknown-command` | the command is not recognized; run 'contract-scribe --help' for usage |
+| `cli.usage.unknown-option` | the option is not recognized for this command |
+| `cli.usage.missing-required-option` | a required option is missing |
+| `cli.usage.duplicate-option` | an option was specified more than once |
+| `cli.usage.missing-option-value` | an option is missing its required value |
+| `cli.usage.invalid-option-value` | an option value is not permitted |
+| `cli.usage.unexpected-operand` | positional operands are not supported |
+| `cli.usage.forbidden-combination` | the argument combination is not permitted |
+| `cli.preflight.repository-root` | `<repository-root>` does not exist or is not a directory |
+| `cli.preflight.input` | `<input>` does not exist, is not a regular file, or has an unsupported extension |
+| `cli.preflight.input-escape` | `<input>` resolves outside `<repository-root>` |
+| `cli.preflight.policy` | `<policy>` does not exist or is not a regular file |
+| `cli.preflight.policy-escape` | `<policy>` resolves outside `<repository-root>` |
+| `cli.preflight.output-parent` | the parent directory of `<output>` does not exist |
+| `cli.preflight.output-inside-root` | `<output>` does not resolve outside `<repository-root>` |
+| `cli.preflight.output-reparse` | `<output>` is a symbolic link, junction, or reparse point |
+| `cli.audit.skipped-summary` | skipped results by reason: `<skipped-reason-breakdown>` |
+| `cli.cancel.requested` | a cancellation signal was received; cancelling |
+| `cli.host.unknown-terminal` | the host reported an unknown or unmapped terminal class |
+
+The skipped breakdown is a single `cli.audit.skipped-summary` record; the verbatim canonical `reasonCode` values and their counts are message data of that record, not diagnostic identifiers. The `<skipped-reason-breakdown>` slot is rendered as comma-joined `<reasonCode>=<count>` pairs in ordinal `reasonCode` order, using only verbatim closed-registry identifiers and decimal counts. Host codes pass through in the form `<verbatim-host-code>: <bounded host message>` with the same escaping rules; in annex templates, `<verbatim-host-code>` and `<bounded host message>` are the closed slots for that pass-through form. The envelope `diagnosticCodes` array lists each emitted record's code in emission order and corresponds 1:1 to the emitted stderr records; duplicate codes are permitted when multiple emitted records share one code.
 
 ## Phase state graph and terminal commits
 
@@ -107,10 +131,10 @@ The four terminal rows are:
 
 - **CLI usage failure**: `usage` layer; exit 2; CLI envelope variant; output untouched; no host record. The deterministic envelope emission is the single observable CLI terminal disposition.
 - **CLI preflight input failure**: `preflight` layer; `invalid-input` class; exit 4; CLI envelope variant; output untouched; no host record. A pre-existing output artifact is not evidence of the failed invocation.
-- **Host execution non-success**: after the P1 run-start invalidation (ADR 0002 §9, before the first failure-prone stage), a handled non-success commits the host's normalized non-success terminal record (P4a); `execution` layer; exits 4/5/6/7 per class; no canonical result exists.
+- **Host execution non-success**: after the P1 run-start invalidation (ADR 0002 §9, before the first failure-prone stage), a handled non-success commits the host's normalized non-success terminal record (P4a); `execution` layer; exits 4/5/6/7 per class; no canonical result exists. A failure of the run-start invalidation itself — a prior output locked or unremovable while the process remains alive — commits the `publication-failure` record; cancellation accepted during invalidation commits the `cancelled` record.
 - **Host audit success**: the atomic canonical-result replacement is the terminal commit (P4b: staging in the resolved destination directory, full write, rename); `audit` layer; exits 0/1/3. The success terminal record is derived from the committed bytes, not from a second commit.
 
-Envelope emission (P5) is a later, non-authoritative presentation step for host outcomes, and is the disposition itself for CLI-only outcomes. The lifecycle matrix is closed: a non-success commit followed by a crash before envelope emission, or by an stdout failure, leaves the committed outcome authoritative; a success commit followed by a crash before envelope emission leaves the committed result authoritative and the envelope may never exist (external observation per the host contract); a success commit followed by an stdout failure leaves the result standing; a crash before either applicable commit leaves only a platform status.
+Envelope emission (P5) is a later, non-authoritative presentation step for host outcomes, and is the disposition itself for CLI-only outcomes. The lifecycle matrix is closed: a non-success commit followed by a crash before envelope emission, or by an stdout failure, leaves the committed outcome authoritative; a success commit followed by a crash before envelope emission leaves the committed result authoritative and the envelope may never exist (external observation per the host contract); a success commit followed by an stdout failure leaves the result standing; a crash before either applicable commit leaves only a platform status. The matrix also covers the invalidation window: pre-entry failure before invalidation completes (platform status only; a prior artifact may remain and is never evidence of the invocation); invalidation failure while the process remains alive (the `publication-failure` commit); cancellation during invalidation (the `cancelled` commit); and abrupt termination during invalidation (invalidation may be partial; the prior artifact may be removed or remain and is never evidence; nothing is readable as the current result).
 
 ## Paths
 
@@ -156,7 +180,7 @@ The closed envelope model includes a CLI-owned adapter-failure representation fo
 
 ### Representative envelope templates
 
-The annex pins the exact expected stdout templates per controlled return. Representative templates (each followed by exactly one LF):
+The annex pins one exact expected stdout template per controlled class (every `exitCodeCases` row with a controlled return maps to exactly one envelope or stream form, including a toolchain-omitted `environment-unavailable` form and empty-`diagnosticCodes` audit forms). The following representative templates (each followed by exactly one LF) are reproduced verbatim from the annex:
 
 ```text
 {"envelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.usage.unknown-option"],"usageClass":"unknown-option"}
@@ -184,7 +208,7 @@ There is no stable cross-stream byte ordering. A broken pipe or stream-write fai
 
 Classification is non-canonical CLI behavior layered on a committed canonical result. Three semantic layers are never conflated: `auditOutcome` (outcome), `documentationObservation` (observation), and `reasonCode` (canonical reasons). `documentation.unavailable` is never a run disposition; `policy-unavailable` is never an execution failure.
 
-Precondition: successful host execution and a produced canonical result passing validation — UTF-8 without BOM, a single trailing LF, and schema plus semantic validity against the pinned baseline with a complete `results` array. A produced result failing validation is the host execution class `audit-error`, never a disposition. Classification reads only `auditOutcome` values. Writing V, C, S for the presence of at least one `audit.outcome.violation`, `audit.outcome.compliant`, and `audit.outcome.skipped` result:
+Precondition: successful host execution and a produced canonical result passing validation — UTF-8 without BOM, a single trailing LF, and schema plus semantic validity against the pinned baseline with a complete `results` array. A produced result failing validation is the host execution class `audit-error`, never a disposition. Artifact-version rejection (an unsupported `auditResultVersion` integer) and contract-baseline/provenance identity mismatch are distinct fail-closed paths, both `audit-error`; the baseline identity lives outside the canonical Audit Result bytes, in the host terminal record. Classification reads only `auditOutcome` values. Writing V, C, S for the presence of at least one `audit.outcome.violation`, `audit.outcome.compliant`, and `audit.outcome.skipped` result:
 
 | V | C | S | Disposition | Exit |
 | --- | --- | --- | --- | --- |
@@ -219,6 +243,7 @@ Sharing is exactly as documented per row; no other sharing is permitted.
 Process outcomes carry no application-selected code.
 
 - **Pre-entry failure** (OS launch, runtime load, permission, managed bootstrap before run-start invalidation completes): platform status only; no committed record; no envelope; no new result. A pre-existing artifact cannot be guaranteed removed and must not be consumed. Startup and pre-entry timeouts are caller- or OS-enforced and codeless.
+- **Invalidation-window outcomes**: a run-start invalidation failure while the process remains alive (prior output locked or unremovable) maps to the controlled `publication-failure` commit (exit 5); cancellation accepted during invalidation maps to the controlled `cancelled` commit (exit 6); an abrupt termination during invalidation is a platform observation only — invalidation may be partial, the prior artifact may be removed or remain and is never evidence of the invocation, and nothing is readable as the current result.
 - **Abrupt crash, abort, or kill after invalidation but before the applicable commit**: platform status or signal; no committed outcome; no artifact readable as the current result; orphan staging is never authoritative; no forced cleanup is claimed.
 - **Post-commit precedence**: the committed P4a/P4b outcome is authoritative; any later abnormal platform status, including a signal or a graceful-shutdown timeout after commit, is an external observation.
 

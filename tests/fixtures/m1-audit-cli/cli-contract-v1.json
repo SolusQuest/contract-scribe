@@ -20,16 +20,17 @@
       "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json": "6acd1722d53bcafb7bcc15aed031815fa44a8c3034b26513763c59609dec50ee",
       "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "5e2977b7b98aa72f57eb11dbff894443bca6e1292b9cac5e723b41fcdfd6e065",
       "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5",
-      "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5"
+      "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5",
+      "tests/ContractScribe.Tests/AuditResultConformance.cs": "99937f383d848d9c7c75a952b7e860c2913d92e5279706222273847369c77828"
     },
     "oracleBindings": [
       {
         "path": "tests/ContractScribe.Tests/AuditResultConformance.cs",
         "binding": "shared-usage",
-        "role": "Test-only Audit Result conformance oracle (strict parse, schema evaluation, semantic ValidateDocument) consumed by the M1 audit CLI checker."
+        "role": "Test-only Audit Result conformance oracle (strict parse, schema evaluation, semantic ValidateDocument) consumed by the M1 audit CLI checker; pinned by SHA-256 in protectedInputs as the guard."
       }
     ],
-    "reconciliationGate": "When the accepted #35 baseline merges, protected-input pins and canonical fixtures are regenerated against it before #25 is finalized. Run classification depends only on auditOutcome values."
+    "reconciliationGate": "Pins and canonical fixtures are regenerated when the accepted #35 baseline merges or when the shared oracle changes, in the same coordinated change or an immediately following reconciliation change; until then the checker enforces the pinned baseline. Run classification depends only on auditOutcome values."
   },
   "vocabularies": {
     "terminalLayers": ["usage", "preflight", "execution", "audit", "host-contract-error"],
@@ -166,7 +167,8 @@
     { "caseId": "result.missing-trailing-lf", "mutation": "missing-trailing-lf", "hostClass": "audit-error", "exitCode": 5 },
     { "caseId": "result.duplicate-property", "mutation": "duplicate-property", "hostClass": "audit-error", "exitCode": 5 },
     { "caseId": "result.invalid-outcome-reason", "mutation": "invalid-outcome-reason-combination", "hostClass": "audit-error", "exitCode": 5 },
-    { "caseId": "result.wrong-baseline", "mutation": "version-mismatch", "hostClass": "audit-error", "exitCode": 5 },
+    { "caseId": "result.unsupported-artifact-version", "mutation": "audit-result-version-unsupported", "canonicalMutation": true, "hostClass": "audit-error", "exitCode": 5, "note": "Artifact-version rejection: the auditResultVersion integer is unsupported." },
+    { "caseId": "result.baseline-mismatch", "mutation": "baseline-identity-mismatch", "canonicalMutation": false, "hostClass": "audit-error", "exitCode": 5, "note": "The contract-baseline/provenance identity in the host terminal record is missing or mismatched; fail-closed per the draft lifecycle. Baseline identity lives outside the canonical Audit Result bytes." },
     { "caseId": "result.unreadable", "mutation": "unreadable-bytes", "hostClass": "audit-error", "exitCode": 5 }
   ],
   "classificationCases": [
@@ -190,49 +192,147 @@
     {
       "caseId": "stream.usage-envelope",
       "variant": "usage",
+      "controlledClasses": ["usage:usage-failure"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"usage\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.usage.unknown-option\"],\"usageClass\":\"unknown-option\"}\n",
-      "stderr": "One diagnostic record per emitted usage code; bounded; no raw argument echo.",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+      "stderrTemplate": "cli.usage.unknown-option: the option is not recognized for this command\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
+      "representative": true
     },
     {
       "caseId": "stream.preflight-envelope",
       "variant": "preflight",
+      "controlledClasses": ["preflight:invalid-input"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"preflight\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.preflight.input\"],\"executionClass\":\"invalid-input\"}\n",
-      "stderr": "One diagnostic record per emitted preflight code; repository-relative paths or closed placeholders only.",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+      "stderrTemplate": "cli.preflight.input: <input> does not exist, is not a regular file, or has an unsupported extension\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
+      "representative": true
+    },
+    {
+      "caseId": "stream.execution.invalid-input",
+      "variant": "execution",
+      "controlledClasses": ["execution:invalid-input"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"invalid-input\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.execution.environment-unavailable",
+      "variant": "execution",
+      "controlledClasses": ["execution:environment-unavailable"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"environment-unavailable\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+    },
+    {
+      "caseId": "stream.execution.load-failure",
+      "variant": "execution",
+      "controlledClasses": ["execution:load-failure"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"load-failure\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.execution.audit-error",
+      "variant": "execution",
+      "controlledClasses": ["execution:audit-error"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"audit-error\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.execution.publication-failure",
+      "variant": "execution",
+      "controlledClasses": ["execution:publication-failure"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"publication-failure\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
       "caseId": "stream.execution-envelope",
       "variant": "execution",
+      "controlledClasses": ["execution:cancelled"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"cancelled\"}\n",
-      "stderr": "Diagnostic records carry cli.* codes or verbatim host codes.",
+      "stderrTemplate": "cli.cancel.requested: a cancellation signal was received; cancelling\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
+      "representative": true
+    },
+    {
+      "caseId": "stream.execution.timeout",
+      "variant": "execution",
+      "controlledClasses": ["execution:timeout"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"timeout\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.audit.violations",
+      "variant": "audit",
+      "controlledClasses": ["audit:violations"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations\",\"counts\":{\"compliant\":0,\"violation\":1,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderrTemplate": "",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.audit-envelope",
       "variant": "audit",
+      "controlledClasses": ["audit:violations-with-skipped"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":1,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
-      "stderr": "The skipped breakdown is one cli.audit.skipped-summary record; reasonCode values are verbatim message data.",
+      "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
+      "representative": true
+    },
+    {
+      "caseId": "stream.audit.compliant",
+      "variant": "audit",
+      "controlledClasses": ["audit:compliant"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderrTemplate": "",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.audit.compliant-with-skipped",
+      "variant": "audit",
+      "controlledClasses": ["audit:compliant-with-skipped"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.audit.skipped-only",
+      "variant": "audit",
+      "controlledClasses": ["audit:skipped-only"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"skipped-only\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+    },
+    {
+      "caseId": "stream.audit.no-results",
+      "variant": "audit",
+      "controlledClasses": ["audit:no-results"],
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"no-results\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stderrTemplate": "",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.host-contract-error-envelope",
       "variant": "host-contract-error",
+      "controlledClasses": ["host-contract-error:host-contract-error"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"host-contract-error\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.host.unknown-terminal\"]}\n",
-      "stderr": "Exactly one cli.host.unknown-terminal record; all host provenance fields are forbidden.",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"]
+      "stderrTemplate": "cli.host.unknown-terminal: the host reported an unknown or unmapped terminal class\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
+      "representative": true
     },
     {
       "caseId": "stream.top-level-usage-failure",
       "variant": "none",
       "stdout": "empty",
-      "stderr": "Bounded stable diagnostic records; exit 2; no envelope; no raw argument echo."
+      "stderrTemplate": "cli.usage.unknown-command: the command is not recognized; run 'contract-scribe --help' for usage\n"
     },
     {
       "caseId": "stream.canonical-result-placement",
       "variant": "none",
       "stdout": "Canonical Audit Result bytes appear only at --output, atomically published; they never appear on any stream.",
-      "stderr": "No canonical bytes."
+      "stderrTemplate": ""
     }
   ],
   "terminalLifecycleCases": [
@@ -242,6 +342,67 @@
     { "caseId": "lifecycle.success-commit-then-stdout-failure", "sequence": "P4b atomic result replacement, then stdout write failure", "authoritative": "committed-result", "envelope": "not-authoritative" },
     { "caseId": "lifecycle.crash-before-any-commit", "sequence": "Crash after run-start invalidation before either applicable commit", "authoritative": "platform-status-only", "envelope": "none", "artifact": "no-artifact-readable-as-current-result" },
     { "caseId": "lifecycle.orphan-staging", "sequence": "Uncatchable termination after staging creation", "authoritative": "platform-status-only", "envelope": "none", "artifact": "orphan-staging-never-authoritative" }
+,
+    {
+      "caseId": "lifecycle.pre-entry-os-launch-failure",
+      "sequence": "OS launch, runtime-load, or permission failure before run-start invalidation completes",
+      "invalidationCompleted": "not-completed",
+      "priorArtifactState": "may-remain-not-evidence",
+      "currentResultState": "none",
+      "terminalCommit": "none",
+      "authoritative": "platform-status-only",
+      "envelope": "none",
+      "exitCode": null,
+      "diagnosticOwnership": "platform"
+    },
+    {
+      "caseId": "lifecycle.pre-entry-managed-bootstrap-failure",
+      "sequence": "Managed bootstrap failure before run-start invalidation completes",
+      "invalidationCompleted": "not-completed",
+      "priorArtifactState": "may-remain-not-evidence",
+      "currentResultState": "none",
+      "terminalCommit": "none",
+      "authoritative": "platform-status-only",
+      "envelope": "none",
+      "exitCode": null,
+      "diagnosticOwnership": "platform"
+    },
+    {
+      "caseId": "lifecycle.invalidation-failure-while-alive",
+      "sequence": "Prior output locked or unremovable while the process remains alive",
+      "invalidationCompleted": "not-completed",
+      "priorArtifactState": "may-remain-not-evidence",
+      "currentResultState": "none",
+      "terminalCommit": "publication-failure",
+      "authoritative": "committed-non-success-outcome",
+      "envelope": "execution",
+      "exitCode": 5,
+      "diagnosticOwnership": "verbatim-host-code"
+    },
+    {
+      "caseId": "lifecycle.cancellation-during-invalidation",
+      "sequence": "Cancellation accepted during invalidation before any commit",
+      "invalidationCompleted": "not-completed",
+      "priorArtifactState": "may-be-removed-or-remain-not-evidence",
+      "currentResultState": "none",
+      "terminalCommit": "cancelled",
+      "authoritative": "committed-non-success-outcome",
+      "envelope": "execution",
+      "exitCode": 6,
+      "diagnosticOwnership": "cli-cancel-requested-first"
+    },
+    {
+      "caseId": "lifecycle.abrupt-termination-during-invalidation",
+      "sequence": "Crash, abort, or kill during invalidation",
+      "invalidationCompleted": "may-be-partial",
+      "priorArtifactState": "may-be-removed-or-remain-not-evidence",
+      "currentResultState": "none-readable",
+      "terminalCommit": "none",
+      "authoritative": "platform-status-only",
+      "envelope": "none",
+      "exitCode": null,
+      "diagnosticOwnership": "platform"
+    }
   ],
   "exitCodeCases": [
     { "caseId": "exit.0.compliant", "controlledClass": "compliant", "layer": "audit", "exitCode": 0 },
@@ -284,7 +445,7 @@
   "publicSafetyConstraints": {
     "pathTemplates": ["${REPOSITORY_ROOT}", "${OUTSIDE_ROOT}", "${INPUT}", "${POLICY}", "${OUTPUT}"],
     "envelopeTokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
-    "placeholders": ["<repository-root>", "<input>", "<policy>", "<output>"],
+    "placeholders": ["<repository-root>", "<input>", "<policy>", "<output>", "<skipped-reason-breakdown>", "<verbatim-host-code>", "<bounded host message>"],
     "forbidden": [
       "absolute machine-local paths",
       "URLs in fixture payloads",
