@@ -1,0 +1,240 @@
+{
+  "targetProfile": "profile.assembly-visible",
+  "generatedOutputs": [
+    {
+      "producerKind": "source-generator",
+      "producerId": "sgp.eb4b88ed45ba3df3f61272b558ac7cdf2854f07433dbf4faf26c0be373c82414",
+      "outputId": "sgo.54235a1180ce62bdca90001c8eedf3da4b4cdee29922080cd36237a065c1f08b"
+    },
+    {
+      "producerKind": "tool-generated",
+      "producerId": "tgp.b81dde47b7e9c0817840a0b4474e2bb97d065e51002b3284c5f86035876c64ff",
+      "outputId": "tgo.7e1870c562ae94050fe6316df0a558bc534f3b16814c6fd558a33cbebc70ee78"
+    },
+    {
+      "producerKind": "source-generator",
+      "producerId": "sgp.eb4b88ed45ba3df3f61272b558ac7cdf2854f07433dbf4faf26c0be373c82414",
+      "outputId": "sgo.6434b1860ffc4e76c55ca2a70136cea27c143e1c221459f54ddf0186d7172873"
+    }
+  ],
+  "authorityCases": [
+    {
+      "caseId": "target-complete-present",
+      "observationSubject": {
+        "observationSubjectRef": "obs.b226c47bacf0fcdbca04cd7645c7b0cb1eec76d7ca079eba2f8d68e19e03f4c6",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "compilationContextRef": "fixture.context",
+          "documentationCommentId": "M:Fixture.Api.Run"
+        },
+        "authoritativeDeclarationSetDigest": "0694b320112269a032a247ec30637815bae269df8fc92ba258bce6a67f446318",
+        "authoritativeDeclarationCount": 1
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.0694b320112269a032a247ec30637815bae269df8fc92ba258bce6a67f446318",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "authorityRole": "ordinary",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.target.docs"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "component-complete-absent",
+      "observationSubject": {
+        "observationSubjectRef": "obs.a34d8f544f127f871dac92e601e401d28cdf12499f79bc4b39c16bcaa2c674fd",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "parentSymbolRef": {
+            "compilationContextRef": "fixture.context",
+            "documentationCommentId": "T:Fixture.Partial`1"
+          },
+          "componentKind": "component.type-parameter",
+          "identity": "type-parameter/0"
+        },
+        "authoritativeDeclarationSetDigest": "efd9c674767253305104631aaa704b31cd3a4bd96ed3a86e60ad4564e2411b1c",
+        "authoritativeDeclarationCount": 2
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.efd9c674767253305104631aaa704b31cd3a4bd96ed3a86e60ad4564e2411b1c",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.1111111111111111111111111111111111111111111111111111111111111111",
+            "authorityRole": "partial-type-part",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.component.part-a",
+            "componentLocalName": "T",
+            "componentMatch": "absent"
+          },
+          {
+            "declarationId": "decl.ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "authorityRole": "partial-type-part",
+            "blockState": "no-block",
+            "evidenceId": "evidence.component.part-b",
+            "componentLocalName": "T",
+            "componentMatch": "absent"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "component-implementing-name-present",
+      "observationSubject": {
+        "observationSubjectRef": "obs.be0f8341bbec0d0e0dbead853bac4c314510b81700d11c3697a9b4dc4b6d63b8",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "parentSymbolRef": {
+            "compilationContextRef": "fixture.context",
+            "documentationCommentId": "M:Fixture.Partial.Run(System.String)"
+          },
+          "componentKind": "component.parameter",
+          "identity": "parameter/0"
+        },
+        "authoritativeDeclarationSetDigest": "9320811013309d44fc546b46d5b820c8d8d41f35973d271228ae17dc20389145",
+        "authoritativeDeclarationCount": 1
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.9320811013309d44fc546b46d5b820c8d8d41f35973d271228ae17dc20389145",
+        "completeness": "positive-only",
+        "declarations": [
+          {
+            "declarationId": "decl.5555555555555555555555555555555555555555555555555555555555555555",
+            "authorityRole": "partial-member-implementing",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.component.implementing",
+            "componentLocalName": "actualName",
+            "componentMatch": "present"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "component-defining-fallback-present",
+      "observationSubject": {
+        "observationSubjectRef": "obs.ca9622f4bdad230a190268cec6facd1e3726c813346334b3c4d72d8137c96caf",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "parentSymbolRef": {
+            "compilationContextRef": "fixture.context",
+            "documentationCommentId": "M:Fixture.Partial.Run(System.String)"
+          },
+          "componentKind": "component.parameter",
+          "identity": "parameter/0"
+        },
+        "authoritativeDeclarationSetDigest": "9b344ba726a76d1d4811bfc122c171951495174d040fb2b608a32b43eeeafd50",
+        "authoritativeDeclarationCount": 1
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.9b344ba726a76d1d4811bfc122c171951495174d040fb2b608a32b43eeeafd50",
+        "completeness": "positive-only",
+        "declarations": [
+          {
+            "declarationId": "decl.6666666666666666666666666666666666666666666666666666666666666666",
+            "authorityRole": "partial-member-defining-fallback",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.component.defining",
+            "componentLocalName": "definingName",
+            "componentMatch": "present"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "target-implementing-whitespace-authority",
+      "observationSubject": {
+        "observationSubjectRef": "obs.b3d9e615e2bf87917150ab6089a7805eca2d5703076b3c9646d00d7f017359fd",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "compilationContextRef": "fixture.context",
+          "documentationCommentId": "M:Fixture.Partial.Whitespace"
+        },
+        "authoritativeDeclarationSetDigest": "e6d36b59c1e1f57b7c77887b1be6527f84bab976a1fc10598aeec96d8faafc5f",
+        "authoritativeDeclarationCount": 1
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.e6d36b59c1e1f57b7c77887b1be6527f84bab976a1fc10598aeec96d8faafc5f",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.7777777777777777777777777777777777777777777777777777777777777777",
+            "authorityRole": "partial-member-implementing",
+            "blockState": "whitespace-only",
+            "evidenceId": "evidence.target.implementing-whitespace"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "component-positive-plus-malformed",
+      "observationSubject": {
+        "observationSubjectRef": "obs.1fbe7434aacd7d30d9cb37f51e1aab343d6794f3211c2cc9aa2d419466beba24",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "parentSymbolRef": {
+            "compilationContextRef": "fixture.context",
+            "documentationCommentId": "T:Fixture.Partial`1"
+          },
+          "componentKind": "component.type-parameter",
+          "identity": "type-parameter/0"
+        },
+        "authoritativeDeclarationSetDigest": "781ae26a9ece5b2e04fe66e533cc22ed545d0a2ac933a83e39238e53893e56ad",
+        "authoritativeDeclarationCount": 2
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.781ae26a9ece5b2e04fe66e533cc22ed545d0a2ac933a83e39238e53893e56ad",
+        "completeness": "positive-only",
+        "declarations": [
+          {
+            "declarationId": "decl.8888888888888888888888888888888888888888888888888888888888888888",
+            "authorityRole": "partial-type-part",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.component.positive",
+            "componentLocalName": "T",
+            "componentMatch": "present"
+          },
+          {
+            "declarationId": "decl.9999999999999999999999999999999999999999999999999999999999999999",
+            "authorityRole": "partial-type-part",
+            "blockState": "malformed",
+            "evidenceId": "evidence.component.malformed-other",
+            "componentLocalName": "T"
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "component-malformed-xml",
+      "observationSubject": {
+        "observationSubjectRef": "obs.908223f5cec7670730e0770523f4046e31d76667537b247f29b0dcc6e9c00ba9",
+        "compilationContextRef": "fixture.context",
+        "subject": {
+          "parentSymbolRef": {
+            "compilationContextRef": "fixture.context",
+            "documentationCommentId": "P:Fixture.Api.Value"
+          },
+          "componentKind": "component.value",
+          "identity": "value"
+        },
+        "authoritativeDeclarationSetDigest": "68a20b8ac88d551d51d6ee7f9545c71c6fddc8da299bee307b3dc1e989e2da76",
+        "authoritativeDeclarationCount": 1
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.68a20b8ac88d551d51d6ee7f9545c71c6fddc8da299bee307b3dc1e989e2da76",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.4444444444444444444444444444444444444444444444444444444444444444",
+            "authorityRole": "ordinary",
+            "blockState": "malformed",
+            "evidenceId": "evidence.component.malformed"
+          }
+        ]
+      }
+    }
+  ]
+}

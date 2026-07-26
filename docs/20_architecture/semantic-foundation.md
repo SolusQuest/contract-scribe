@@ -12,7 +12,7 @@ The three M0 contract families own different kinds of authority:
 
 | Contract | Role | Question answered |
 | --- | --- | --- |
-| [Policy/Configuration](contracts/policy-configuration-v1.md) | Normative | What documentation expectation applies to the supplied project and source path? |
+| [Policy/Configuration](contracts/policy-configuration-v1.md) | Normative | Which run-level target profile and documentation expectation apply to the supplied project plus repository-source or generated-output identity? |
 | [Symbol and Evidence Taxonomy](contracts/symbol-evidence-taxonomy-v1.md) | Descriptive | What target, component, relation, provenance, support state, and bounded evidence exist? |
 | [Audit Result](contracts/audit-result-v1.md) | Judgment | What deterministic outcome follows from the policy, classification, documentation observation, and evidence? |
 
@@ -169,6 +169,6 @@ The architecture is evidence-centered and graph-shaped because symbols, componen
 
 ## Evolution
 
-M1 may complete the pre-release v1 Policy, Taxonomy, and Audit families through a coordinated amendment for target-profile and documentation-observation semantics. That amendment preserves the role separation above and updates normative docs, schemas, registries, fixtures, oracles, dependent contracts, and validation together.
+Issue #35 establishes the coordinated pre-release v1 Policy, Taxonomy, and Audit baseline for target-profile and documentation-observation semantics. The [baseline inventory](contracts/pre-release-v1-baseline.md) preserves the role separation above and binds the normative docs, schemas, registries, fixtures, oracles, dependent contracts, validation, and downstream production disposition.
 
 M2 and later contract families extend the chain rather than silently adding meaning to M0 artifacts. A new cross-stage abstraction is justified only by a concrete consumer, an independently testable contract, and evidence that the existing boundaries cannot express the required behavior.

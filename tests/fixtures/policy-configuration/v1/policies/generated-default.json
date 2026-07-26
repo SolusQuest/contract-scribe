@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "targetProfile": "profile.external-api",
+  "defaultDecision": "forbidden",
+  "rules": [
+    { "id": "source-only", "priority": 0, "decision": "required", "sourcePaths": { "exclude": [ "excluded/**" ] } }
+  ]
+}

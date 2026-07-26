@@ -3182,8 +3182,8 @@
       "parentDocumentationCommentId": "T:TaxonomyFixtures.SampleStruct",
       "candidateLocator": {
         "generatedSource": {
-          "generatorId": "fixture.generator",
-          "hintNameId": "unknown-struct.g.cs"
+          "generatorId": "sgp.1111111111111111111111111111111111111111111111111111111111111111",
+          "hintNameId": "sgo.2222222222222222222222222222222222222222222222222222222222222222"
         }
       }
     }

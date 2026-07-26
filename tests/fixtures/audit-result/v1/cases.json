@@ -18,6 +18,8 @@
     { "caseId": "classification-not-applicable", "payloadFile": "payloads/classification-not-applicable.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.classification-skipped" },
     { "caseId": "empty-results", "payloadFile": "payloads/empty-results.json" },
     { "caseId": "locator-variants", "payloadFile": "payloads/locator-variants.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.required-present" },
-    { "caseId": "non-ascii", "payloadFile": "payloads/non-ascii.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.required-present" }
+    { "caseId": "non-ascii", "payloadFile": "payloads/non-ascii.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.required-present" },
+    { "caseId": "generated-policy-contribution", "payloadFile": "payloads/generated-policy-contribution.json", "outcome": "audit.outcome.compliant", "reason": "audit.reason.required-present" },
+    { "caseId": "malformed-component-documentation", "payloadFile": "payloads/malformed-component-documentation.json", "outcome": "audit.outcome.skipped", "reason": "audit.reason.documentation-unavailable.malformed-xml" }
   ]
 }

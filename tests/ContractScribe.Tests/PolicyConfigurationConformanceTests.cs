@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -71,7 +72,7 @@ public sealed class PolicyConfigurationConformanceTests
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":2,\"schemaVersion\":1,\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
         Assert.Equal(
             "optional",
-            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":1.0,\"defaultDecision\":\"optional\"}"), schema, input).Decision);
+            PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":1.0,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"optional\"}"), schema, input).Decision);
         Assert.Equal(
             "policy.schema.invalid-document",
             PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes("{\"schemaVersion\":\"2\",\"defaultDecision\":\"optional\"}"), schema, input).Error?.Code);
@@ -116,9 +117,9 @@ public sealed class PolicyConfigurationConformanceTests
     {
         var schema = PolicySchema.Value;
         var input = new EvaluationInput("projects/App/App.csproj", "a/b");
-        var zeroSegmentGlob = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"glob\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a/**/b\"]}}]}";
-        var excludeWins = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"excluded\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"**\"],\"exclude\":[\"a/**\"]}}]}";
-        var semanticPriority = "{\"schemaVersion\":1,\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"same\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a**b\"]}},{\"id\":\"same\",\"priority\":0,\"decision\":\"forbidden\"}]}";
+        var zeroSegmentGlob = "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"glob\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a/**/b\"]}}]}";
+        var excludeWins = "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"excluded\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"**\"],\"exclude\":[\"a/**\"]}}]}";
+        var semanticPriority = "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"optional\",\"rules\":[{\"id\":\"same\",\"priority\":0,\"decision\":\"required\",\"sourcePaths\":{\"include\":[\"a**b\"]}},{\"id\":\"same\",\"priority\":0,\"decision\":\"forbidden\"}]}";
 
         Assert.Equal("required", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(zeroSegmentGlob), schema, input).Decision);
         Assert.Equal("optional", PolicyConfigurationV1Conformance.EvaluateBytes(Encoding.UTF8.GetBytes(excludeWins), schema, input).Decision);
@@ -165,7 +166,13 @@ internal sealed record ConformanceCase(
 
 internal sealed record EvaluationInput(
     [property: JsonPropertyName("projectPath")] string ProjectPath,
-    [property: JsonPropertyName("sourcePath")] string SourcePath);
+    [property: JsonPropertyName("sourcePath")] string? SourcePath,
+    [property: JsonPropertyName("generatedOutput")] GeneratedOutputInput? GeneratedOutput = null);
+
+internal sealed record GeneratedOutputInput(
+    [property: JsonPropertyName("producerKind")] string ProducerKind,
+    [property: JsonPropertyName("producerId")] string ProducerId,
+    [property: JsonPropertyName("outputId")] string OutputId);
 
 internal sealed record ExpectedOutcome(
     [property: JsonPropertyName("decision")] string? Decision,
@@ -217,6 +224,12 @@ internal static class PolicyConfigurationV1Conformance
             if (conformanceCase.Input is null || conformanceCase.Expected is null)
             {
                 throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' must declare input and expected outcome.");
+            }
+
+            var validContributionShape = (conformanceCase.Input.SourcePath is null) != (conformanceCase.Input.GeneratedOutput is null);
+            if (!validContributionShape && conformanceCase.Expected.Error?.Code != "policy.input.invalid-contribution")
+            {
+                throw new InvalidOperationException($"Conformance case '{conformanceCase.CaseId}' has an invalid contribution union without expecting policy.input.invalid-contribution.");
             }
 
             var hasPolicyFile = conformanceCase.PolicyFile is not null;
@@ -285,9 +298,10 @@ internal static class PolicyConfigurationV1Conformance
             "policy.document.invalid-encoding" or "policy.document.bom-not-allowed" => "raw-bytes",
             "policy.document.invalid-json" or "policy.document.duplicate-property" => "json",
             "policy.schema.unsupported-version" => "version",
+            "policy.target-profile.required" or "policy.target-profile.invalid" => "profile",
             "policy.schema.invalid-document" => "schema",
             "policy.semantic.duplicate-rule-id" or "policy.semantic.duplicate-priority" or "policy.semantic.invalid-pattern" => "semantic",
-            "policy.input.invalid-path" => "input",
+            "policy.input.invalid-path" or "policy.input.invalid-contribution" => "input",
             _ => throw new InvalidOperationException($"Unknown conformance error code '{errorCode}'.")
         };
     }
@@ -350,6 +364,24 @@ internal static class PolicyConfigurationV1Conformance
                 return Error("policy.schema.unsupported-version", "/schemaVersion");
             }
 
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("schemaVersion", out version)
+                && version.ValueKind == JsonValueKind.Number
+                && version.TryGetInt32(out var schemaVersion)
+                && schemaVersion == 1)
+            {
+                if (!root.TryGetProperty("targetProfile", out var targetProfile))
+                {
+                    return Error("policy.target-profile.required", "/targetProfile");
+                }
+
+                if (targetProfile.ValueKind != JsonValueKind.String
+                    || targetProfile.GetString() is not ("profile.external-api" or "profile.assembly-visible"))
+                {
+                    return Error("policy.target-profile.invalid", "/targetProfile");
+                }
+            }
+
             var evaluation = schema.Evaluate(root, new EvaluationOptions { OutputFormat = OutputFormat.List });
             if (!evaluation.IsValid)
             {
@@ -369,17 +401,53 @@ internal static class PolicyConfigurationV1Conformance
                 return new ConformanceOutcome(Error: normalizedProject.Error);
             }
 
-            var normalizedSource = NormalizeInputPath(input.SourcePath, "/sourcePath");
-            if (normalizedSource.Error is not null)
+            if (input.SourcePath is null && input.GeneratedOutput is null)
             {
-                return new ConformanceOutcome(Error: normalizedSource.Error);
+                return Error("policy.input.invalid-contribution", "/sourcePath");
             }
 
-            return Resolve(root, normalizedProject.Value!, normalizedSource.Value!);
+            if (input.SourcePath is not null && input.GeneratedOutput is not null)
+            {
+                return Error("policy.input.invalid-contribution", "/generatedOutput");
+            }
+
+            string? normalizedSource = null;
+            if (input.GeneratedOutput is not null)
+            {
+                var generated = input.GeneratedOutput;
+                if (generated.ProducerKind is not ("source-generator" or "tool-generated"))
+                {
+                    return Error("policy.input.invalid-contribution", "/generatedOutput/producerKind");
+                }
+
+                var producerPattern = generated.ProducerKind == "source-generator" ? "^sgp\\.[0-9a-f]{64}$" : "^tgp\\.[0-9a-f]{64}$";
+                var outputPattern = generated.ProducerKind == "source-generator" ? "^sgo\\.[0-9a-f]{64}$" : "^tgo\\.[0-9a-f]{64}$";
+                if (generated.ProducerId is null || !Regex.IsMatch(generated.ProducerId, producerPattern, RegexOptions.CultureInvariant))
+                {
+                    return Error("policy.input.invalid-contribution", "/generatedOutput/producerId");
+                }
+
+                if (generated.OutputId is null || !Regex.IsMatch(generated.OutputId, outputPattern, RegexOptions.CultureInvariant))
+                {
+                    return Error("policy.input.invalid-contribution", "/generatedOutput/outputId");
+                }
+            }
+            else
+            {
+                var sourceOutcome = NormalizeInputPath(input.SourcePath!, "/sourcePath");
+                if (sourceOutcome.Error is not null)
+                {
+                    return new ConformanceOutcome(Error: sourceOutcome.Error);
+                }
+
+                normalizedSource = sourceOutcome.Value;
+            }
+
+            return Resolve(root, normalizedProject.Value!, normalizedSource);
         }
     }
 
-    private static ConformanceOutcome Resolve(JsonElement root, string projectPath, string sourcePath)
+    private static ConformanceOutcome Resolve(JsonElement root, string projectPath, string? sourcePath)
     {
         JsonElement? selectedRule = null;
         var selectedPriority = -1;
@@ -400,10 +468,11 @@ internal static class PolicyConfigurationV1Conformance
             : new ConformanceOutcome(root.GetProperty("defaultDecision").GetString());
     }
 
-    private static bool RuleApplies(JsonElement rule, string projectPath, string sourcePath)
+    private static bool RuleApplies(JsonElement rule, string projectPath, string? sourcePath)
     {
         return (!rule.TryGetProperty("projectPaths", out var projectSelector) || SelectorAccepts(projectSelector, projectPath))
-            && (!rule.TryGetProperty("sourcePaths", out var sourceSelector) || SelectorAccepts(sourceSelector, sourcePath));
+            && (!rule.TryGetProperty("sourcePaths", out var sourceSelector)
+                || sourcePath is not null && SelectorAccepts(sourceSelector, sourcePath));
     }
 
     private static bool SelectorAccepts(JsonElement selector, string path)

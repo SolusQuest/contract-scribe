@@ -2,6 +2,7 @@
   "auditResultVersion": 1,
   "policyConfigurationVersion": 1,
   "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
   "results": [
     {
       "classification": { "recordType": "ComponentClassification", "parentSymbolRef": { "compilationContextRef": "synthetic.v1", "documentationCommentId": "T:AuditFixtures.Widget" }, "componentKind": "component.return", "identity": "return", "origin": "origin.source", "supportStatus": "support.supported" },

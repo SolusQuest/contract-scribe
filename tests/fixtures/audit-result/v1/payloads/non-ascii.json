@@ -2,6 +2,7 @@
   "auditResultVersion": 1,
   "policyConfigurationVersion": 1,
   "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
   "results": [
     {
       "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.unicode", "documentationCommentId": "T:AuditFixtures.UnicodeWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.source", "supportStatus": "support.supported" },

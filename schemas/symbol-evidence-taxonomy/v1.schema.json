@@ -35,6 +35,9 @@
       "items": {
         "$ref": "#/$defs/item"
       }
+    },
+    "observationSubject": {
+      "$ref": "#/$defs/observationSubject"
     }
   },
   "$defs": {
@@ -61,7 +64,14 @@
           "maxLength": 128
         },
         "subject": {
-          "$ref": "#/$defs/symbolRef"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/symbolRef"
+            },
+            {
+              "$ref": "#/$defs/componentSubject"
+            }
+          ]
         },
         "kind": {
           "enum": [
@@ -219,6 +229,18 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "generatedOutput"
+          ],
+          "properties": {
+            "generatedOutput": {
+              "$ref": "#/$defs/generatedOutput"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
             "synthetic"
           ],
           "properties": {
@@ -283,11 +305,41 @@
               "properties": {
                 "generatorId": {
                   "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                  "pattern": "^sgp\\.[0-9a-f]{64}$"
                 },
                 "hintNameId": {
                   "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                  "pattern": "^sgo\\.[0-9a-f]{64}$"
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "toolGenerated"
+          ],
+          "properties": {
+            "toolGenerated": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "producerId",
+                "outputId"
+              ],
+              "properties": {
+                "producerId": {
+                  "type": "string",
+                  "pattern": "^tgp\\.[0-9a-f]{64}$"
+                },
+                "outputId": {
+                  "type": "string",
+                  "pattern": "^tgo\\.[0-9a-f]{64}$"
                 },
                 "span": {
                   "$ref": "#/$defs/span"
@@ -600,6 +652,140 @@
         },
         {
           "$ref": "#/$defs/unresolvedClassification"
+        }
+      ]
+    },
+    "componentSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parentSymbolRef",
+        "componentKind",
+        "identity"
+      ],
+      "properties": {
+        "parentSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "componentKind": {
+          "type": "string",
+          "pattern": "^component\\."
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "observationSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationSubjectRef",
+        "compilationContextRef",
+        "subject",
+        "authoritativeDeclarationSetDigest",
+        "authoritativeDeclarationCount"
+      ],
+      "properties": {
+        "observationSubjectRef": {
+          "type": "string",
+          "pattern": "^obs\\.[0-9a-f]{64}$"
+        },
+        "compilationContextRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/symbolRef"
+            },
+            {
+              "$ref": "#/$defs/componentSubject"
+            }
+          ]
+        },
+        "authoritativeDeclarationSetDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authoritativeDeclarationCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "generatedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producerKind",
+        "producerId",
+        "outputId",
+        "sourceSha256"
+      ],
+      "properties": {
+        "producerKind": {
+          "enum": [
+            "source-generator",
+            "tool-generated"
+          ]
+        },
+        "producerId": {
+          "type": "string",
+          "pattern": "^(sgp|tgp)\\.[0-9a-f]{64}$"
+        },
+        "outputId": {
+          "type": "string",
+          "pattern": "^(sgo|tgo)\\.[0-9a-f]{64}$"
+        },
+        "sourceSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "producerKind": {
+                "const": "source-generator"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "producerId": {
+                "pattern": "^sgp\\.[0-9a-f]{64}$"
+              },
+              "outputId": {
+                "pattern": "^sgo\\.[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "producerKind": {
+                "const": "tool-generated"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "producerId": {
+                "pattern": "^tgp\\.[0-9a-f]{64}$"
+              },
+              "outputId": {
+                "pattern": "^tgo\\.[0-9a-f]{64}$"
+              }
+            }
+          }
         }
       ]
     }

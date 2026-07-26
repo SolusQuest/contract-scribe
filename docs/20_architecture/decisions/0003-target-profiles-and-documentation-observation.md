@@ -1,6 +1,6 @@
 # ADR 0003: Target profiles and direct documentation observation
 
-Status: Accepted for M1; coordinated contract and production implementation pending
+Status: Accepted for M1; coordinated contract amendment proposed by Issue #35; production implementation pending
 
 Date: 2026-07-26
 
@@ -10,7 +10,7 @@ Decision owner: Repository owner; this ADR becomes a repository decision through
 
 M1 needs one deterministic answer to two questions before Policy, Taxonomy, Audit Result, classification, observation, evidence, aggregation, validation, and CLI work can proceed: which C# declarations are audit targets, and what direct XML documentation means for each target and component.
 
-This ADR decides those semantics. It does not amend the current v1 schemas, registries, conformance fixtures, oracles, production code, ADR 0001, or ADR 0002. The executable annex at `tests/fixtures/m1-target-observation/adr-0003-vectors.json` enumerates this decision against the registries pinned at commit `beada966b3c06e1b823e488472a9f515b87b0760`. ADR prose and the annex are one normative decision; disagreement blocks merge.
+This ADR decides those semantics; it does not itself amend schemas, registries, conformance fixtures, oracles, production code, ADR 0001, or ADR 0002. Issue #35 carries the coordinated contract amendment and keeps production implementation downstream. The executable annex at `tests/fixtures/m1-target-observation/adr-0003-vectors.json` enumerates this decision against the registries pinned at commit `beada966b3c06e1b823e488472a9f515b87b0760`. ADR prose and the annex are one normative decision; disagreement blocks merge.
 
 ## Target-profile ownership
 

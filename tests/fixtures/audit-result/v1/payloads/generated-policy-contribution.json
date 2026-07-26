@@ -1,0 +1,19 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.assembly-visible",
+  "results": [
+    {
+      "classification": { "recordType": "TargetClassification", "symbolRef": { "compilationContextRef": "synthetic.generated-policy", "documentationCommentId": "T:AuditFixtures.GeneratedWidget" }, "primaryKind": "symbol.type.class", "traits": [], "origin": "origin.tool-generated", "supportStatus": "support.supported" },
+      "policyContributions": [ { "projectPath": "src/Audit.csproj", "generatedOutput": { "producerKind": "tool-generated", "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111", "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222" }, "policyExpectation": "required", "matchedRuleId": "generated-required" } ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.required-present",
+      "evidenceIds": [ "evidence.generated-doc" ],
+      "evidenceBundle": { "evidenceBundleVersion": 1, "availabilityStatus": "evidence.bundle.complete", "items": [ { "evidenceId": "evidence.generated-doc", "subject": { "compilationContextRef": "synthetic.generated-policy", "documentationCommentId": "T:AuditFixtures.GeneratedWidget" }, "kind": "evidence.source.xml-documentation", "relation": "evidence.documents", "excerpt": "/// <summary>Generated widget docs.</summary>", "sha256": "19a3119f73abd34359b747a51d53582f429b99ef99decd79d8dd50d9d966f99c", "originalUtf8ByteCount": 45, "includedUtf8ByteCount": 45, "omittedUtf8ByteCount": 0, "isTruncated": false, "locator": { "generatedOutput": { "producerKind": "tool-generated", "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111", "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222", "sourceSha256": "3333333333333333333333333333333333333333333333333333333333333333" } } } ] }
+    }
+  ]
+}

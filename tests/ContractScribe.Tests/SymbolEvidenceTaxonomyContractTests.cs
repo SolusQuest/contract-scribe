@@ -23,14 +23,41 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var identifiers = entries.Select(entry => entry.GetProperty("id").GetString()!).ToArray();
         Assert.Equal(identifiers.Length, identifiers.Distinct(StringComparer.Ordinal).Count());
         Assert.All(identifiers, id => Assert.Matches("^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", id));
-        Assert.All(entries, entry =>
+        var entryTypes = registry.RootElement.GetProperty("sectionEntryTypes");
+        Assert.Equal(
+            registry.RootElement.GetProperty("sections").EnumerateObject().Select(section => section.Name).Order(StringComparer.Ordinal),
+            entryTypes.EnumerateObject().Select(section => section.Name).Order(StringComparer.Ordinal));
+        foreach (var section in registry.RootElement.GetProperty("sections").EnumerateObject())
         {
-            Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
-            Assert.Equal(JsonValueKind.Array, entry.GetProperty("applicability").ValueKind);
-            Assert.Equal(JsonValueKind.Array, entry.GetProperty("recordTypes").ValueKind);
-            Assert.NotEmpty(entry.GetProperty("recordTypes").EnumerateArray());
-            Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
-            Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
+            var entryType = entryTypes.GetProperty(section.Name).GetString();
+            Assert.Contains(entryType, new[] { "record-vocabulary", "profile-vocabulary", "run-failure" });
+            Assert.All(section.Value.EnumerateArray(), entry =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
+                Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
+                Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
+                if (entryType == "record-vocabulary")
+                {
+                    Assert.Equal(JsonValueKind.Array, entry.GetProperty("applicability").ValueKind);
+                    Assert.Equal(JsonValueKind.Array, entry.GetProperty("recordTypes").ValueKind);
+                    Assert.NotEmpty(entry.GetProperty("recordTypes").EnumerateArray());
+                }
+                else
+                {
+                    Assert.False(entry.TryGetProperty("applicability", out _));
+                    Assert.False(entry.TryGetProperty("recordTypes", out _));
+                }
+            });
+        }
+
+        Assert.Equal(
+            new[] { "profile.assembly-visible", "profile.external-api" },
+            RegistryIds.Value["targetProfiles"].Order(StringComparer.Ordinal));
+        Assert.All(registry.RootElement.GetProperty("sections").GetProperty("runFailures").EnumerateArray(), entry =>
+        {
+            Assert.False(entry.GetProperty("serialized").GetBoolean());
+            Assert.Contains(entry.GetProperty("producingStage").GetString(), new[] { "classification-normalization", "generated-fact-validation" });
+            Assert.Contains(entry.GetProperty("downstreamIssue").GetInt32(), new[] { 36, 37 });
         });
         var synthesized = registry.RootElement.GetProperty("sections").GetProperty("componentKinds").EnumerateArray().Where(entry => entry.GetProperty("id").GetString()!.StartsWith("component.synthesized.", StringComparison.Ordinal));
         Assert.All(synthesized, entry =>
@@ -87,11 +114,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         using var unknownOrigin = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.v1\",\"origin\":\"origin.unknown\",\"supportStatus\":\"support.unavailable-context\",\"skipReason\":\"skip.unavailable.documentation-comment-id\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"x\"}}}");
         using var unknownTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Unknown\"},\"primaryKind\":\"symbol.unknown\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.unsupported\",\"skipReason\":\"skip.unsupported.symbol-kind\"}");
         using var partialTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Partial\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.ambiguous\",\"skipReason\":\"skip.ambiguous.partial-declaration\"}");
+        using var partialMixedTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:PartialMixed\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.mixed\",\"supportStatus\":\"support.ambiguous\",\"skipReason\":\"skip.ambiguous.partial-declaration\"}");
         Assert.False(IsValidClassificationRecord(knownUnsupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownSupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownOrigin.RootElement));
         Assert.True(IsValidClassificationRecord(unknownTarget.RootElement));
         Assert.True(IsValidClassificationRecord(partialTarget.RootElement));
+        Assert.True(IsValidClassificationRecord(partialMixedTarget.RootElement));
     }
 
     [Fact]
@@ -855,7 +884,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
         if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
         if (origin == "origin.unknown" && (status != "support.unavailable-context" || skip.GetString() is not ("skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
-        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() == "skip.ambiguous.mixed-origin") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
+        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
         return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
     }
