@@ -25,6 +25,7 @@ contract-scribe audit --repository-root <path> --input <path> --policy <path> --
 - Duplicate options are rejected. Option names are case-sensitive; no abbreviations and no short aliases exist. There are no positional operands; `--` is unsupported; response files are unsupported; the CLI performs no environment-variable or glob expansion.
 - `--input` extensions are matched ASCII case-insensitively against the closed set `.sln`, `.slnx`, `.csproj`.
 - Option values containing control characters are rejected at the usage layer.
+- An empty `--option=` value reports `missing-option-value`. In the space form, a token beginning with `--` is never consumed as an option value: the preceding option reports `missing-option-value`, and that token is then classified on its own merits.
 
 Retained bootstrap surface: no arguments prints the top-level help (stdout, exit 0); `--help`/`-h`, `--version`/`-v`, and `doctor` keep their command meaning, target stream, and exit code. The top-level help is extended to list `audit`. `audit --help` and `audit -h` print the complete fixed audit help (stdout, exit 0). `contract-scribe --help audit`, `contract-scribe --version audit`, `audit --version`, and `doctor` with any trailing argument are invalid usage (stderr, exit 2). An unknown command or option produces a bounded, stable stderr diagnostic with exit 2 and never echoes raw argument text.
 
@@ -119,17 +120,17 @@ The skipped breakdown is a single `cli.audit.skipped-summary` record; the verbat
 
 ## Phase state graph and terminal commits
 
-P0 validation runs in a fixed order; the first failure wins, and each check commits to exactly one terminal row:
+P0 validation runs in a fixed order; the first failure wins, and each check commits to exactly one terminal row. Within a stage, simultaneous faults resolve by the stage's sub-precedence order, so every invocation selects exactly one fault and one diagnostic code:
 
-1. Grammar and usage (unknown, duplicate, or missing options or values; operands; forbidden combinations) → CLI usage failure.
-2. Repository root exists and is a directory → CLI preflight input failure (`cli.preflight.repository-root`).
-3. Input exists, is a regular file, has an accepted extension, and resolves confined → CLI preflight input failure (`cli.preflight.input`, `cli.preflight.input-escape`).
-4. Policy exists, is a regular file, and resolves confined → CLI preflight input failure (`cli.preflight.policy`, `cli.preflight.policy-escape`).
-5. Output parent exists, the resolved parent is outside the resolved root, and the final-component rules hold → CLI preflight input failure (`cli.preflight.output-parent`, `cli.preflight.output-inside-root`, `cli.preflight.output-reparse`).
+1. Grammar and usage (unknown, duplicate, or missing options or values; operands; forbidden combinations) → CLI usage failure. Sub-precedence: `forbidden-combination` → `unknown-option` → `duplicate-option` → `missing-option-value` → `invalid-option-value` → `unexpected-operand` → `missing-required-option`. Whole-argv structural faults outrank token-identity faults, which outrank value faults; `missing-required-option` ranks last because it can only be judged once the full argument list is known.
+2. Repository root exists and is a directory → CLI preflight input failure (`cli.preflight.repository-root`). Single check; no sub-precedence.
+3. Input exists, is a regular file, has an accepted extension, and resolves confined → CLI preflight input failure (`cli.preflight.input`, `cli.preflight.input-escape`). Sub-precedence: `input-escape` → `input-nonexistence` → `input-not-regular-file` → `input-unsupported-extension`. Confinement is judged on the resolved path before filesystem probes, so an escape always outranks existence and shape faults.
+4. Policy exists, is a regular file, and resolves confined → CLI preflight input failure (`cli.preflight.policy`, `cli.preflight.policy-escape`). Sub-precedence: `policy-escape` → `policy-nonexistence`.
+5. Output parent exists, the resolved parent is outside the resolved root, and the final-component rules hold → CLI preflight input failure (`cli.preflight.output-parent`, `cli.preflight.output-inside-root`, `cli.preflight.output-reparse`). Sub-precedence: `output-inside-root` → `output-missing-parent` → `output-final-reparse`.
 
 The four terminal rows are:
 
-- **CLI usage failure**: `usage` layer; exit 2; CLI envelope variant; output untouched; no host record. The deterministic envelope emission is the single observable CLI terminal disposition.
+- **CLI usage failure**: `usage` layer; exit 2; output untouched; no host record. Two controlled classes share this row: `top-level-usage-failure` (top-level grammar faults — unknown command, `doctor` with operands, `--help`/`--version` combined with anything — no envelope, bounded stderr records only) and `audit-usage-failure` (audit-grammar faults; CLI usage envelope variant). The deterministic envelope emission is the single observable CLI terminal disposition.
 - **CLI preflight input failure**: `preflight` layer; `invalid-input` class; exit 4; CLI envelope variant; output untouched; no host record. A pre-existing output artifact is not evidence of the failed invocation.
 - **Host execution non-success**: after the P1 run-start invalidation (ADR 0002 §9, before the first failure-prone stage), a handled non-success commits the host's normalized non-success terminal record (P4a); `execution` layer; exits 4/5/6/7 per class; no canonical result exists. A failure of the run-start invalidation itself — a prior output locked or unremovable while the process remains alive — commits the `publication-failure` record; cancellation accepted during invalidation commits the `cancelled` record.
 - **Host audit success**: the atomic canonical-result replacement is the terminal commit (P4b: staging in the resolved destination directory, full write, rename); `audit` layer; exits 0/1/3. The success terminal record is derived from the committed bytes, not from a second commit.
@@ -148,14 +149,26 @@ Envelope emission (P5) is a later, non-authoritative presentation step for host 
 
 Canonical Audit Result bytes appear only at `--output`, atomically published; they never appear on any stream.
 
-`audit` stdout carries exactly one execution envelope per controlled return of a recognized `audit` invocation. Top-level grammar failures (unknown command, `doctor` with operands, `--help` or `--version` combined with anything) emit no envelope — only bounded stderr records with exit 2.
+`audit` stdout carries exactly one execution envelope per controlled return of a recognized `audit` invocation. Usage failures split into two controlled classes: `audit-usage-failure` (a grammar fault inside a recognized `audit` invocation) emits the usage envelope, while `top-level-usage-failure` (unknown command, `doctor` with operands, `--help` or `--version` combined with anything) emits no envelope — only bounded stderr records with exit 2.
 
 The envelope is a draft machine-readable CLI contract: `envelopeVersion: 1` is its artifact compatibility-family identifier and `cliContractBaseline` identifies its exact draft semantics (the exact source commit of the CLI/contract revision). Consumers reject an unsupported `envelopeVersion`; no cross-revision compatibility is promised without matching baseline identity. The version remains 1 while no incompatible consumer requires coexistence. The annex and checker are the executable conformance oracle.
 
 Two explicit variants share the common fields, in fixed order: `envelopeVersion`, `terminalLayer`, `cliContractBaseline`, `toolVersion` (assembly informational version, for example `0.1.0-dev+<sha>`), `diagnosticCodes`.
 
 - **CLI variant** (`terminalLayer`: `usage` or `preflight`): adds `usageClass` (usage only; closed set `unknown-option`, `missing-required-option`, `duplicate-option`, `missing-option-value`, `invalid-option-value`, `unexpected-operand`, `forbidden-combination`) or `executionClass: invalid-input` (preflight only). Forbidden: `terminalState`, `auditContractBaseline`, `sourceRevision`, `toolchain`, `disposition`, `counts`, `resultDigest`, `outputCommit`.
-- **Host variant** (`terminalLayer`: `execution` or `audit`): the CLI-owned serialization of the host's normalized terminal record. Adds `terminalState: committed`, `auditContractBaseline` (host-bound contract-baseline/provenance identity), `sourceRevision` (exact source revision from host/tool provenance), `executionClass` (execution only: `invalid-input`, `environment-unavailable`, `load-failure`, `audit-error`, `publication-failure`, `cancelled`, `timeout`), `disposition` (audit only), `counts` (audit only: `compliant`, `violation`, `skipped`), `toolchain` (selected normalized SDK/MSBuild identity; omitted when selection never completed), and `resultDigest` plus `outputCommit` (audit only; `outputCommit` is the host contract's closed structure — commit status plus an opaque public-safe commit identity — never a path or placeholder).
+- **Host variant** (`terminalLayer`: `execution` or `audit`): the CLI-owned serialization of the host's normalized terminal record. Adds `terminalState: committed`, `auditContractBaseline` (host-bound contract-baseline/provenance identity), `sourceRevision` (exact source revision from host/tool provenance), `executionClass` (execution only: `invalid-input`, `environment-unavailable`, `load-failure`, `audit-error`, `publication-failure`, `cancelled`, `timeout`), `disposition` (audit only), `counts` (audit only: `compliant`, `violation`, `skipped`), `toolchain` (selected normalized SDK/MSBuild identity; present exactly in the `selected` forms of the toolchain-state matrix below), and `resultDigest` plus `outputCommit` (audit only; `outputCommit` is the host contract's closed structure — commit status plus an opaque public-safe commit identity — never a path or placeholder).
+
+Execution stream forms are keyed by a closed `toolchainState` dimension (`selected` or `not-selected`) in the annex; a `not-selected` form omits `toolchain`. The closed matrix is:
+
+| execution class | permitted toolchainState forms |
+| --- | --- |
+| `invalid-input` | `not-selected` only — policy and configuration validation precede SDK resolution (ADR 0002) |
+| `environment-unavailable` | `not-selected` only — no toolchain could be selected |
+| `load-failure` | `selected` only |
+| `audit-error` | `selected` only |
+| `publication-failure` | `not-selected` (run-start invalidation failure) or `selected` (final publication failure) |
+| `cancelled` | `not-selected` (cancellation during invalidation) or `selected` (cancellation after selection) |
+| `timeout` | `selected` only |
 
 The envelope encoding is compact JSON, UTF-8 without BOM, exactly one trailing LF, fixed property order, fields omitted when not applicable (no explicit nulls), and no timestamps, durations, process IDs, or absolute paths.
 
@@ -180,7 +193,7 @@ The closed envelope model includes a CLI-owned adapter-failure representation fo
 
 ### Representative envelope templates
 
-The annex pins one exact expected stdout template per controlled class (every `exitCodeCases` row with a controlled return maps to exactly one envelope or stream form, including a toolchain-omitted `environment-unavailable` form and empty-`diagnosticCodes` audit forms). The following representative templates (each followed by exactly one LF) are reproduced verbatim from the annex:
+The annex pins one exact expected stdout template per controlled stream form (every `exitCodeCases` row with a controlled return maps to exactly one envelope or stream form, with execution forms keyed by the closed `toolchainState` dimension — including the toolchain-omitted `invalid-input`, `environment-unavailable`, and invalidation-window `publication-failure`/`cancelled` forms — and empty-`diagnosticCodes` audit forms). The following representative templates (each followed by exactly one LF) are reproduced verbatim from the annex:
 
 ```text
 {"envelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.usage.unknown-option"],"usageClass":"unknown-option"}
@@ -229,7 +242,7 @@ Exit codes are selected by ContractScribe only on controlled return paths. They 
 | --- | --- |
 | 0 | `compliant`, `compliant-with-skipped`; retained `--help`, `--version`, `doctor` |
 | 1 | `violations`, `violations-with-skipped` (successful execution carrying violation outcomes; stated in help) |
-| 2 | CLI usage failure (any usage class) |
+| 2 | `top-level-usage-failure` (no envelope) and `audit-usage-failure` (usage envelope); any usage class |
 | 3 | `no-results`, `skipped-only` |
 | 4 | `invalid-input` (CLI preflight or host) and `environment-unavailable` (host); distinguished by layer and host codes |
 | 5 | `load-failure`, `audit-error` (including an invalid produced result), `publication-failure`, and the CLI adapter failure for an unknown host terminal class (`host-contract-error`) |
@@ -257,9 +270,9 @@ The following are normative absences, proven by the absence of any accepting par
 
 ## Executable annex and checker
 
-The annex `tests/fixtures/m1-audit-cli/cli-contract-v1.json` carries: `meta` (contract identity, baseline commit, protected-input SHA-256 pins, oracle bindings, reconciliation gate); `commands` and `options` (closed grammar tables); `helpCases` (static help byte fixtures, the version template, the doctor key order and value grammar); `parseCases`; `pathCases` with platform scoping and the closed path templates `${REPOSITORY_ROOT}`, `${OUTSIDE_ROOT}`, `${INPUT}`, `${POLICY}`, `${OUTPUT}`; `resultValidationCases`; `classificationCases` including `skippedReasonCases`; `streamCases`; `terminalLifecycleCases`; `exitCodeCases`; `cancellationCases`; and `publicSafetyConstraints`.
+The annex `tests/fixtures/m1-audit-cli/cli-contract-v1.json` carries: `meta` (contract identity, baseline commit, protected-input SHA-256 pins, oracle bindings, reconciliation gate); `commands` and `options` (closed grammar tables); `helpCases` (static help byte fixtures, the version template, the doctor key order and value grammar); `parseCases`; `precedenceCases` (multi-fault collision rows pinning each stage's sub-precedence — the selected first-failure code and stream form); `pathCases` with platform scoping and the closed path templates `${REPOSITORY_ROOT}`, `${OUTSIDE_ROOT}`, `${INPUT}`, `${POLICY}`, `${OUTPUT}`; `resultValidationCases`; `classificationCases` including `skippedReasonCases`; `streamCases`; `terminalLifecycleCases`; `exitCodeCases`; `cancellationCases`; and `publicSafetyConstraints`.
 
-The checker `tests/ContractScribe.Tests/M1AuditCliContractTests.cs` enforces: closed vocabularies; every (V, C, S) mixture mapping to exactly one disposition; every controlled class mapping to exactly one exit code with no undeclared sharing; both envelope variants' required and forbidden fields including the `host-contract-error` adapter failure; annex-to-document consistency for the option table, exit-code table, help bytes, and envelope templates; raw-fixture SHA-256 integrity; protected-input digests (failing on any drift); validity of reused and synthetic payloads through the shared `AuditResultConformance` oracle; and public safety (closed `${...}` path templates only, no machine-local absolute paths, no credentials, bounded strings).
+The checker `tests/ContractScribe.Tests/M1AuditCliContractTests.cs` enforces: closed vocabularies; stage-internal validation precedence via the collision rows; the closed `toolchainState` dimension on execution stream forms; every (V, C, S) mixture mapping to exactly one disposition; every controlled class mapping to exactly one exit code with no undeclared sharing; both envelope variants' required and forbidden fields including the `host-contract-error` adapter failure; annex-to-document consistency for the option table, exit-code table, help bytes, and envelope templates; raw-fixture SHA-256 integrity; protected-input digests (failing on any drift); validity of reused and synthetic payloads through the shared `AuditResultConformance` oracle; and public safety (closed `${...}` path templates only, no machine-local absolute paths, no credentials, bounded strings).
 
 ## References
 

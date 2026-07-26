@@ -90,7 +90,8 @@ public sealed class M1AuditCliContractTests
         ["doctor"] = 0,
         ["violations"] = 1,
         ["violations-with-skipped"] = 1,
-        ["usage-failure"] = 2,
+        ["top-level-usage-failure"] = 2,
+        ["audit-usage-failure"] = 2,
         ["no-results"] = 3,
         ["skipped-only"] = 3,
         ["invalid-input"] = 4,
@@ -104,6 +105,45 @@ public sealed class M1AuditCliContractTests
         ["process.pre-entry"] = null,
         ["process.pre-commit-crash"] = null,
         ["process.post-commit-abnormal"] = null
+    };
+
+    private static readonly IReadOnlyDictionary<string, string[]> ExecutionToolchainStates = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["invalid-input"] = ["not-selected"],
+        ["environment-unavailable"] = ["not-selected"],
+        ["load-failure"] = ["selected"],
+        ["audit-error"] = ["selected"],
+        ["publication-failure"] = ["selected", "not-selected"],
+        ["cancelled"] = ["selected", "not-selected"],
+        ["timeout"] = ["selected"]
+    };
+
+    private static readonly string[][] StagePrecedenceOrders =
+    [
+        ["forbidden-combination", "unknown-option", "duplicate-option", "missing-option-value", "invalid-option-value", "unexpected-operand", "missing-required-option"],
+        ["input-escape", "input-nonexistence", "input-not-regular-file", "input-unsupported-extension"],
+        ["policy-escape", "policy-nonexistence"],
+        ["output-inside-root", "output-missing-parent", "output-final-reparse"]
+    ];
+
+    private static readonly IReadOnlyDictionary<string, string> FaultCodes = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["forbidden-combination"] = "cli.usage.forbidden-combination",
+        ["unknown-option"] = "cli.usage.unknown-option",
+        ["duplicate-option"] = "cli.usage.duplicate-option",
+        ["missing-option-value"] = "cli.usage.missing-option-value",
+        ["invalid-option-value"] = "cli.usage.invalid-option-value",
+        ["unexpected-operand"] = "cli.usage.unexpected-operand",
+        ["missing-required-option"] = "cli.usage.missing-required-option",
+        ["input-escape"] = "cli.preflight.input-escape",
+        ["input-nonexistence"] = "cli.preflight.input",
+        ["input-not-regular-file"] = "cli.preflight.input",
+        ["input-unsupported-extension"] = "cli.preflight.input",
+        ["policy-escape"] = "cli.preflight.policy-escape",
+        ["policy-nonexistence"] = "cli.preflight.policy",
+        ["output-inside-root"] = "cli.preflight.output-inside-root",
+        ["output-missing-parent"] = "cli.preflight.output-parent",
+        ["output-final-reparse"] = "cli.preflight.output-reparse"
     };
 
     [Fact]
@@ -402,7 +442,7 @@ public sealed class M1AuditCliContractTests
         using var annex = LoadAnnex();
         var doc = File.ReadAllText(DocPath);
         var rows = annex.RootElement.GetProperty("streamCases").EnumerateArray().Where(row => row.GetProperty("variant").GetString() != "none").ToArray();
-        Assert.Equal(16, rows.Length);
+        Assert.Equal(18, rows.Length);
         var cliCodes = ExpectedCliCodes.Concat(["<verbatim-host-code>"]).ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows)
         {
@@ -431,6 +471,19 @@ public sealed class M1AuditCliContractTests
             Assert.Equal(expectedOrder, fields);
             Assert.Equal(1, envelope.RootElement.GetProperty("envelopeVersion").GetInt32());
             Assert.Equal(variant, envelope.RootElement.GetProperty("terminalLayer").GetString());
+            if (variant == "execution")
+            {
+                var toolchainState = row.GetProperty("toolchainState").GetString()!;
+                Assert.Contains(toolchainState, new[] { "selected", "not-selected" });
+                var executionClass = envelope.RootElement.GetProperty("executionClass").GetString()!;
+                Assert.Contains(toolchainState, ExecutionToolchainStates[executionClass]);
+                Assert.Equal(toolchainState == "selected", template.Contains("\"toolchain\"", StringComparison.Ordinal));
+                Assert.Equal(toolchainState == "selected", tokens.Contains("${TOOLCHAIN_IDENTITY}", StringComparer.Ordinal));
+            }
+            else
+            {
+                Assert.False(row.TryGetProperty("toolchainState", out _));
+            }
             foreach (var code in envelope.RootElement.GetProperty("diagnosticCodes").EnumerateArray())
             {
                 Assert.Contains(code.GetString()!, cliCodes);
@@ -484,10 +537,29 @@ public sealed class M1AuditCliContractTests
             {
                 continue;
             }
-            expected.Add(layer + ":" + row.GetProperty("controlledClass").GetString());
+            var controlledClass = row.GetProperty("controlledClass").GetString()!;
+            if (layer == "execution")
+            {
+                foreach (var state in ExecutionToolchainStates[controlledClass])
+                {
+                    expected.Add("execution:" + controlledClass + ":" + state);
+                }
+                continue;
+            }
+            expected.Add(layer + ":" + controlledClass);
         }
 
         Assert.Equal(expected.Order(StringComparer.Ordinal), claims.Order(StringComparer.Ordinal));
+        Assert.Equal(ExpectedExecutionClasses.Order(StringComparer.Ordinal), ExecutionToolchainStates.Keys.Order(StringComparer.Ordinal));
+        foreach (var row in root.GetProperty("streamCases").EnumerateArray().Where(row => row.GetProperty("variant").GetString() == "execution"))
+        {
+            var claim = Assert.Single(Strings(row, "controlledClasses"));
+            var parts = claim.Split(':');
+            Assert.Equal(3, parts.Length);
+            Assert.Equal("execution", parts[0]);
+            Assert.Equal(row.GetProperty("toolchainState").GetString(), parts[2]);
+            Assert.Contains(parts[2], ExecutionToolchainStates[parts[1]]);
+        }
         Assert.DoesNotContain(claims, claim => claim.StartsWith("process:", StringComparison.Ordinal));
 
         var helpCaseIds = root.GetProperty("helpCases").EnumerateArray().Select(row => row.GetProperty("caseId").GetString()).ToArray();
@@ -497,6 +569,47 @@ public sealed class M1AuditCliContractTests
 
         var auditClaims = claims.Where(claim => claim.StartsWith("audit:", StringComparison.Ordinal)).Select(claim => claim["audit:".Length..]).ToArray();
         Assert.Equal(ExpectedDispositions.Order(StringComparer.Ordinal), auditClaims.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void PrecedenceCases_SelectFirstFailureCodeAndStreamForm()
+    {
+        using var annex = LoadAnnex();
+        var doc = File.ReadAllText(DocPath);
+        var rows = annex.RootElement.GetProperty("precedenceCases").EnumerateArray().ToArray();
+        Assert.Equal(
+            [
+                "precedence.duplicate-option-vs-missing-required-option",
+                "precedence.forbidden-combination-vs-unknown-option",
+                "precedence.input-escape-vs-nonexistence",
+                "precedence.input-escape-vs-unsupported-extension",
+                "precedence.output-inside-root-vs-final-reparse",
+                "precedence.output-inside-root-vs-missing-parent",
+                "precedence.policy-escape-vs-nonexistence",
+                "precedence.unknown-option-vs-duplicate-option"
+            ],
+            rows.Select(row => row.GetProperty("caseId").GetString()!).Order(StringComparer.Ordinal));
+        Assert.Subset(ExpectedCliCodes.ToHashSet(StringComparer.Ordinal), FaultCodes.Values.ToHashSet(StringComparer.Ordinal));
+        foreach (var row in rows)
+        {
+            Assert.NotEqual(row.TryGetProperty("argv", out _), row.TryGetProperty("argument", out _));
+            var faults = Strings(row, "faults");
+            Assert.True(faults.Length >= 2, $"Precedence row needs at least two faults: {row.GetProperty("caseId")}");
+            Assert.Equal(faults.Length, faults.Distinct(StringComparer.Ordinal).Count());
+            Assert.All(faults, fault => Assert.True(FaultCodes.ContainsKey(fault), $"Unknown fault: {fault}"));
+            var order = Assert.Single(StagePrecedenceOrders, stage => faults.All(stage.Contains));
+            var winner = faults.MinBy(fault => Array.IndexOf(order, fault))!;
+            var selectedCode = row.GetProperty("selectedCode").GetString()!;
+            Assert.Equal(FaultCodes[winner], selectedCode);
+            var expectedForm = selectedCode.StartsWith("cli.usage.", StringComparison.Ordinal) ? "usage" : "preflight";
+            Assert.Equal(expectedForm, row.GetProperty("streamForm").GetString());
+        }
+
+        foreach (var stage in StagePrecedenceOrders)
+        {
+            var chain = string.Join(" → ", stage.Select(fault => $"`{fault}`"));
+            Assert.Contains(chain, doc, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

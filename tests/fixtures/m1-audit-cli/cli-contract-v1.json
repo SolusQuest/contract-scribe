@@ -131,7 +131,19 @@
     { "caseId": "parse.top-level.help-with-operand", "argv": ["--help", "audit"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
     { "caseId": "parse.top-level.version-with-operand", "argv": ["--version", "audit"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
     { "caseId": "parse.top-level.doctor-with-operand", "argv": ["doctor", "anything"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
-    { "caseId": "parse.top-level.multiple-options", "argv": ["--version", "--help"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" }
+    { "caseId": "parse.top-level.multiple-options", "argv": ["--version", "--help"], "outcome": "usage-failure", "code": "cli.usage.forbidden-combination", "envelope": "none" },
+    { "caseId": "parse.usage.missing-option-value-empty-equals", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output="], "outcome": "usage-failure", "usageClass": "missing-option-value", "code": "cli.usage.missing-option-value", "envelope": "usage", "note": "An empty equals value is classified as a missing value." },
+    { "caseId": "parse.usage.missing-option-value-option-token", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "--policy", "${POLICY}", "--output", "${OUTPUT}"], "outcome": "usage-failure", "usageClass": "missing-option-value", "code": "cli.usage.missing-option-value", "envelope": "usage", "note": "A token beginning with -- is never consumed as a space-form value." }
+  ],
+  "precedenceCases": [
+    { "caseId": "precedence.forbidden-combination-vs-unknown-option", "argv": ["audit", "--help", "--bogus"], "faults": ["forbidden-combination", "unknown-option"], "selectedCode": "cli.usage.forbidden-combination", "streamForm": "usage" },
+    { "caseId": "precedence.unknown-option-vs-duplicate-option", "argv": ["audit", "--repository-root", "${REPOSITORY_ROOT}", "--input", "${INPUT}", "--policy", "${POLICY}", "--output", "${OUTPUT}", "--bogus", "--input", "${INPUT}"], "faults": ["unknown-option", "duplicate-option"], "selectedCode": "cli.usage.unknown-option", "streamForm": "usage" },
+    { "caseId": "precedence.duplicate-option-vs-missing-required-option", "argv": ["audit", "--input", "${INPUT}", "--input", "${INPUT}"], "faults": ["duplicate-option", "missing-required-option"], "selectedCode": "cli.usage.duplicate-option", "streamForm": "usage" },
+    { "caseId": "precedence.input-escape-vs-unsupported-extension", "argument": "../outside/App.fsproj", "faults": ["input-escape", "input-unsupported-extension"], "selectedCode": "cli.preflight.input-escape", "streamForm": "preflight" },
+    { "caseId": "precedence.input-escape-vs-nonexistence", "argument": "../outside/App.sln", "faults": ["input-escape", "input-nonexistence"], "selectedCode": "cli.preflight.input-escape", "streamForm": "preflight" },
+    { "caseId": "precedence.policy-escape-vs-nonexistence", "argument": "../outside/policy.json", "faults": ["policy-escape", "policy-nonexistence"], "selectedCode": "cli.preflight.policy-escape", "streamForm": "preflight" },
+    { "caseId": "precedence.output-inside-root-vs-missing-parent", "argument": "${REPOSITORY_ROOT}/missing-parent/audit-result.json", "faults": ["output-inside-root", "output-missing-parent"], "selectedCode": "cli.preflight.output-inside-root", "streamForm": "preflight" },
+    { "caseId": "precedence.output-inside-root-vs-final-reparse", "argument": "${REPOSITORY_ROOT}/results/audit-result.json", "faults": ["output-inside-root", "output-final-reparse"], "selectedCode": "cli.preflight.output-inside-root", "streamForm": "preflight" }
   ],
   "pathCases": [
     { "caseId": "path.root.absolute", "platformScope": "all", "argument": "${REPOSITORY_ROOT}", "outcome": "accepted" },
@@ -192,7 +204,7 @@
     {
       "caseId": "stream.usage-envelope",
       "variant": "usage",
-      "controlledClasses": ["usage:usage-failure"],
+      "controlledClasses": ["usage:audit-usage-failure"],
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"usage\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.usage.unknown-option\"],\"usageClass\":\"unknown-option\"}\n",
       "stderrTemplate": "cli.usage.unknown-option: the option is not recognized for this command\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
@@ -210,15 +222,17 @@
     {
       "caseId": "stream.execution.invalid-input",
       "variant": "execution",
-      "controlledClasses": ["execution:invalid-input"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"invalid-input\"}\n",
+      "controlledClasses": ["execution:invalid-input:not-selected"],
+      "toolchainState": "not-selected",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"invalid-input\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.execution.environment-unavailable",
       "variant": "execution",
-      "controlledClasses": ["execution:environment-unavailable"],
+      "controlledClasses": ["execution:environment-unavailable:not-selected"],
+      "toolchainState": "not-selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"environment-unavailable\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
@@ -226,7 +240,8 @@
     {
       "caseId": "stream.execution.load-failure",
       "variant": "execution",
-      "controlledClasses": ["execution:load-failure"],
+      "controlledClasses": ["execution:load-failure:selected"],
+      "toolchainState": "selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"load-failure\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
@@ -234,7 +249,8 @@
     {
       "caseId": "stream.execution.audit-error",
       "variant": "execution",
-      "controlledClasses": ["execution:audit-error"],
+      "controlledClasses": ["execution:audit-error:selected"],
+      "toolchainState": "selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"audit-error\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
@@ -242,24 +258,45 @@
     {
       "caseId": "stream.execution.publication-failure",
       "variant": "execution",
-      "controlledClasses": ["execution:publication-failure"],
+      "controlledClasses": ["execution:publication-failure:selected"],
+      "toolchainState": "selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"publication-failure\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
+      "caseId": "stream.execution.publication-failure-invalidation",
+      "variant": "execution",
+      "controlledClasses": ["execution:publication-failure:not-selected"],
+      "toolchainState": "not-selected",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"publication-failure\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+    },
+    {
       "caseId": "stream.execution-envelope",
       "variant": "execution",
-      "controlledClasses": ["execution:cancelled"],
+      "controlledClasses": ["execution:cancelled:selected"],
+      "toolchainState": "selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"cancelled\"}\n",
       "stderrTemplate": "cli.cancel.requested: a cancellation signal was received; cancelling\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
       "representative": true
     },
     {
+      "caseId": "stream.execution.cancelled-invalidation",
+      "variant": "execution",
+      "controlledClasses": ["execution:cancelled:not-selected"],
+      "toolchainState": "not-selected",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"cancelled\"}\n",
+      "stderrTemplate": "cli.cancel.requested: a cancellation signal was received; cancelling\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+    },
+    {
       "caseId": "stream.execution.timeout",
       "variant": "execution",
-      "controlledClasses": ["execution:timeout"],
+      "controlledClasses": ["execution:timeout:selected"],
+      "toolchainState": "selected",
       "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"timeout\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
@@ -325,6 +362,7 @@
     {
       "caseId": "stream.top-level-usage-failure",
       "variant": "none",
+      "controlledClasses": ["usage:top-level-usage-failure"],
       "stdout": "empty",
       "stderrTemplate": "cli.usage.unknown-command: the command is not recognized; run 'contract-scribe --help' for usage\n"
     },
@@ -412,7 +450,8 @@
     { "caseId": "exit.0.doctor", "controlledClass": "doctor", "layer": "retained", "exitCode": 0 },
     { "caseId": "exit.1.violations", "controlledClass": "violations", "layer": "audit", "exitCode": 1 },
     { "caseId": "exit.1.violations-with-skipped", "controlledClass": "violations-with-skipped", "layer": "audit", "exitCode": 1 },
-    { "caseId": "exit.2.usage", "controlledClass": "usage-failure", "layer": "usage", "exitCode": 2 },
+    { "caseId": "exit.2.top-level-usage", "controlledClass": "top-level-usage-failure", "layer": "usage", "exitCode": 2 },
+    { "caseId": "exit.2.audit-usage", "controlledClass": "audit-usage-failure", "layer": "usage", "exitCode": 2 },
     { "caseId": "exit.3.no-results", "controlledClass": "no-results", "layer": "audit", "exitCode": 3 },
     { "caseId": "exit.3.skipped-only", "controlledClass": "skipped-only", "layer": "audit", "exitCode": 3 },
     { "caseId": "exit.4.invalid-input-preflight", "controlledClass": "invalid-input", "layer": "preflight", "exitCode": 4 },
