@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -29,7 +30,7 @@ public sealed class M1TargetObservationDecisionTests
         Assert.Equal(Sha256(AuditRegistryPath), root.GetProperty("registryDigests").GetProperty("auditResultV1Sha256").GetString());
 
         var text = Encoding.UTF8.GetString(bytes);
-        Assert.DoesNotMatch(@"(?i)([a-z]:\\|/users/|\\users\\|/tmp/|\\temp\\|password\s*[=:]|token\s*[=:]|secret\s*[=:]|-----begin [a-z ]+private key-----)", text);
+        Assert.DoesNotMatch(@"(?i)([a-z]:\\users\\|/users/[^/]+/|password\s*[=:]|access[_-]?token\s*[=:]|api[_-]?key\s*[=:]|client[_-]?secret\s*[=:]|-----begin [a-z ]+private key-----)", text);
         Assert.DoesNotContain("file://", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("https://", text, StringComparison.OrdinalIgnoreCase);
     }
@@ -54,7 +55,24 @@ public sealed class M1TargetObservationDecisionTests
         AssertRows(root, "primaryKinds", ["externalApi", "assemblyVisible", "selected", "excluded", "support", "representation"]);
         AssertRows(root, "componentKinds", ["parentProfile", "result", "support", "origin", "observationSubject", "evidenceSubject", "representation"]);
         AssertRows(root, "relationKinds", ["profileInteraction", "targetEffect", "resultEffect", "documentation", "evidenceSubject", "authority", "unavailable", "supportSkipEffect", "ordinaryEvidenceEffect", "representation"]);
-        AssertRows(root, "observationCases", ["subject", "input", "outcome", "completeness", "evidence", "failClosed"]);
+        AssertRows(root, "observationCases", ["subject", "input", "outcome", "completeness", "evidence", "failClosed", "evidenceType", "representation"]);
+
+        var assembly = root.GetProperty("profiles").EnumerateArray().Single(row => row.GetProperty("id").GetString() == "profile.assembly-visible");
+        var external = root.GetProperty("profiles").EnumerateArray().Single(row => row.GetProperty("id").GetString() == "profile.external-api");
+        Assert.Equal(new[] { "internal", "protected-internal", "public" }, Strings(assembly, "declaredAccessibilities"));
+        Assert.Equal(new[] { "private-protected", "protected" }, Strings(assembly, "conditionalAccessibilities"));
+        Assert.Equal(new[] { "public" }, Strings(external, "declaredAccessibilities"));
+        Assert.Equal(new[] { "protected", "protected-internal" }, Strings(external, "conditionalAccessibilities"));
+        foreach (var profile in new[] { assembly, external })
+        {
+            var declared = Strings(profile, "declaredAccessibilities");
+            var conditional = Strings(profile, "conditionalAccessibilities");
+            var excluded = Strings(profile, "excludedAccessibilities");
+            Assert.Empty(declared.Intersect(conditional, StringComparer.Ordinal));
+            Assert.Empty(declared.Intersect(excluded, StringComparer.Ordinal));
+            Assert.Empty(conditional.Intersect(excluded, StringComparer.Ordinal));
+            Assert.Equal(new[] { "file", "internal", "private", "private-protected", "protected", "protected-internal", "public" }, declared.Concat(conditional).Concat(excluded).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        }
 
         foreach (var row in root.GetProperty("componentKinds").EnumerateArray())
         {
@@ -69,21 +87,7 @@ public sealed class M1TargetObservationDecisionTests
             Assert.Equal("semantic-compilation", row.GetProperty("authority").GetString());
         }
 
-        foreach (var row in root.GetProperty("primaryKinds").EnumerateArray().Concat(root.GetProperty("componentKinds").EnumerateArray()).Concat(root.GetProperty("relationKinds").EnumerateArray()))
-        {
-            var representation = row.GetProperty("representation");
-            var mode = representation.GetProperty("mode").GetString();
-            Assert.Contains(mode, new[] { "existing-v1", "coordinated-amendment" });
-            if (mode == "existing-v1")
-            {
-                Assert.NotEmpty(representation.GetProperty("ids").EnumerateArray());
-            }
-            else
-            {
-                Assert.Equal(35, representation.GetProperty("issue").GetInt32());
-                Assert.NotEmpty(representation.GetProperty("surfaces").EnumerateArray());
-            }
-        }
+        ValidateAll(root);
     }
 
     [Fact]
@@ -101,12 +105,24 @@ public sealed class M1TargetObservationDecisionTests
             "component.match-plus-other-malformed",
             "component.no-block-partial",
             "component.wrong-name",
+            "conditional.active",
+            "conditional.removed",
+            "generated.source.absent",
+            "generated.source.present",
+            "generated.source.unavailable",
+            "generated.tool.absent",
+            "generated.tool.present",
+            "generated.tool.unavailable",
+            "inheritance.interface-direct-only",
+            "inheritance.override-direct-only",
             "parent.inheritdoc",
             "parent.malformed",
             "parent.missing",
             "parent.positive-plus-unreadable",
             "parent.unreadable",
             "parent.whitespace",
+            "partial.ambiguity",
+            "partial.ambiguity-plus-mixed",
             "partial.defining-fallback",
             "partial.implementing-authority"
         ];
@@ -114,6 +130,15 @@ public sealed class M1TargetObservationDecisionTests
         Assert.Equal("documentation.unavailable", observations["component.malformed-readable"].GetProperty("outcome").GetString());
         Assert.Equal("audit.reason.documentation-unavailable.malformed-xml", observations["component.malformed-readable"].GetProperty("failClosed").GetString());
         Assert.Equal("documentation.present", observations["parent.positive-plus-unreadable"].GetProperty("outcome").GetString());
+
+        var relationCases = root.GetProperty("relationCases").EnumerateArray().ToArray();
+        foreach (var kind in root.GetProperty("relationKinds").EnumerateArray().Select(row => row.GetProperty("id").GetString()!))
+        {
+            var cases = relationCases.Where(row => row.GetProperty("relationKind").GetString() == kind).ToArray();
+            Assert.Equal(new[] { "ambiguous", "available", "unavailable" }, cases.Select(row => row.GetProperty("endpoint").GetString()).Order(StringComparer.Ordinal));
+            Assert.Contains(cases, row => row.GetProperty("evidenceType").GetString() == "compiled");
+            Assert.Contains(cases, row => row.GetProperty("evidenceType").GetString() == "synthetic-classification");
+        }
 
         var failures = root.GetProperty("failureCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
         Assert.Equal("origin.unknown", failures["failure.generated-provenance"].GetProperty("origin").GetString());
@@ -126,6 +151,47 @@ public sealed class M1TargetObservationDecisionTests
         Assert.Equal("historical-valid", lifecycle["lifecycle.m0-pinned"].GetProperty("disposition").GetString());
         Assert.Equal("invalid-no-default-no-migration", lifecycle["lifecycle.m1-no-profile"].GetProperty("disposition").GetString());
         Assert.Equal("reject", lifecycle["lifecycle.mismatched-baseline"].GetProperty("disposition").GetString());
+        var profileCases = root.GetProperty("profileCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
+        Assert.Equal("invalid", profileCases["profile.mismatch"].GetProperty("disposition").GetString());
+        Assert.Equal("run-level-policy-error", profileCases["profile.missing"].GetProperty("disposition").GetString());
+        Assert.Equal("run-level-policy-error", profileCases["profile.unknown"].GetProperty("disposition").GetString());
+    }
+
+    [Fact]
+    public void GeneratedIdentityGoldens_AreByteExactCanonicalAndPlatformIndependent()
+    {
+        using var vectors = LoadVectors();
+        var root = vectors.RootElement;
+        var cases = root.GetProperty("generatedIdentityCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
+        foreach (var row in cases.Values)
+        {
+            var fields = row.GetProperty("fields").EnumerateArray().Select(value => value.GetString()!).ToArray();
+            var (preimage, id) = DeriveIdentity(row.GetProperty("prefix").GetString()!, row.GetProperty("domain").GetString()!, fields);
+            Assert.Equal(row.GetProperty("preimageHex").GetString(), Convert.ToHexString(preimage).ToLowerInvariant());
+            Assert.Equal(row.GetProperty("expectedId").GetString(), id);
+        }
+
+        Assert.Equal(cases["identity.sgo.nfc"].GetProperty("expectedId").GetString(), cases["identity.sgo.nfd"].GetProperty("expectedId").GetString());
+        Assert.NotEqual(cases["identity.sgo.case-upper"].GetProperty("expectedId").GetString(), cases["identity.sgo.case-lower"].GetProperty("expectedId").GetString());
+
+        var hash = root.GetProperty("generatedHashCases").EnumerateArray().Single();
+        Assert.Equal(hash.GetProperty("fullSourceSha256").GetString(), Sha256(Encoding.UTF8.GetBytes(hash.GetProperty("fullText").GetString()!)));
+        Assert.Equal(hash.GetProperty("evidenceRegionSha256").GetString(), Sha256(Encoding.UTF8.GetBytes(hash.GetProperty("regionText").GetString()!)));
+        Assert.NotEqual(hash.GetProperty("fullSourceSha256").GetString(), hash.GetProperty("evidenceRegionSha256").GetString());
+
+        var locators = root.GetProperty("generatedLocatorCases").EnumerateArray().ToArray();
+        Assert.Equal(new[] { 1, 2, 3, 4 }, locators.Where(row => row.GetProperty("surface").GetString() == "candidate").Select(row => row.GetProperty("order").GetInt32()).Order());
+        foreach (var locator in locators)
+        {
+            using var canonical = JsonDocument.Parse(locator.GetProperty("canonicalJson").GetString()!);
+            Assert.Equal(JsonValueKind.Object, canonical.RootElement.ValueKind);
+        }
+
+        var invalid = root.GetProperty("generatedInvalidIdentityCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
+        Assert.Equal("accept-opaque", invalid["identity.source.windows-like"].GetProperty("outcome").GetString());
+        Assert.Equal("accept-opaque", invalid["identity.source.unix-like"].GetProperty("outcome").GetString());
+        Assert.Equal("accept-opaque", invalid["identity.source.secret-like"].GetProperty("outcome").GetString());
+        Assert.All(invalid.Values.Where(row => row.GetProperty("category").GetString() == "tool"), row => Assert.Equal("reject", row.GetProperty("outcome").GetString()));
     }
 
     [Fact]
@@ -139,6 +205,12 @@ public sealed class M1TargetObservationDecisionTests
         AssertInvalidMutation(original, node => node["profiles"]![0]!["representation"]!["mode"] = "existing-v1");
         AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "component.malformed-readable")!["outcome"] = "documentation.present");
         AssertInvalidMutation(original, node => node["failureCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "failure.documentation-id-known-origin")!["origin"] = "origin.unknown");
+        AssertInvalidMutation(original, node => node["primaryKinds"]!.AsArray().First(item => item!["id"]!.GetValue<string>() == "symbol.member.constructor")!["support"] = "support.not-applicable");
+        AssertInvalidMutation(original, node => node["primaryKinds"]!.AsArray().First(item => item!["id"]!.GetValue<string>() == "symbol.member.method")!["skip"] = "skip.unsupported.symbol-kind");
+        AssertInvalidMutation(original, node => node["relationKinds"]![0]!["targetEffect"] = "creates-target");
+        AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.missing")!["outcome"] = "documentation.present");
+        AssertInvalidMutation(original, node => node["generatedCases"]![0]!["representation"]!["surfaces"]![0] = "unknown.surface");
+        AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.whitespace")!["outcome"] = "documentation.maybe");
     }
 
     [Fact]
@@ -149,10 +221,13 @@ public sealed class M1TargetObservationDecisionTests
             using System;
             namespace DecisionVectors;
             public interface I { void M(); }
+            public interface IBase { void Inherited(); }
+            public interface IDerived : IBase { }
             public delegate int D<T>(T value);
             public enum E { A }
             public struct S { public int Field; }
-            public class C : I
+            public class Base { public virtual void V() { } }
+            public class C : Base, I
             {
                 public C() { }
                 ~C() { }
@@ -161,6 +236,8 @@ public sealed class M1TargetObservationDecisionTests
                 public int Property { get; set; }
                 public int this[int index] => index;
                 public void M() => Changed?.Invoke();
+                void I.M() { }
+                public override void V() { }
                 public static C operator +(C left, C right) => left;
                 public static implicit operator int(C value) => value.Field;
             }
@@ -170,16 +247,44 @@ public sealed class M1TargetObservationDecisionTests
                 /// <param name="implementingName">Value.</param>
                 partial void P(string implementingName) { }
             }
+            public record R(int Value);
+            public readonly record struct RS(int Value);
+            public class Outer
+            {
+                internal class InternalNested { }
+                private class PrivateNested { }
+                public class PublicNested { }
+                protected class ProtectedNested { }
+                private protected class PrivateProtectedNested { }
+                protected internal class ProtectedInternalNested { }
+            }
+            file class FileLocal { }
+            #if INCLUDED
+            public class ConditionalIncluded { }
+            #endif
             """;
 
+        var parseOptions = new CSharpParseOptions(LanguageVersion.Preview, DocumentationMode.Diagnose, preprocessorSymbols: ["INCLUDED"]);
         var compilation = CSharpCompilation.Create(
             "Adr0003Vectors",
-            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview, DocumentationMode.Diagnose))],
+            [CSharpSyntaxTree.ParseText(source, parseOptions)],
             PlatformReferences(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
 
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var ns = compilation.GlobalNamespace.GetNamespaceMembers().Single(member => member.Name == "DecisionVectors");
+        Assert.NotNull(ns.GetTypeMembers("ConditionalIncluded").SingleOrDefault());
+        Assert.True(ns.GetTypeMembers("R").Single().IsRecord);
+        Assert.True(ns.GetTypeMembers("RS").Single().IsRecord);
+        Assert.Contains(ns.GetTypeMembers("C").Single().GetMembers().OfType<IMethodSymbol>(), method => method.ExplicitInterfaceImplementations.Length == 1);
+        Assert.Contains(ns.GetTypeMembers("C").Single().GetMembers().OfType<IMethodSymbol>(), method => method.IsOverride);
+
+        var withoutConditional = CSharpCompilation.Create(
+            "Adr0003WithoutConditional",
+            [CSharpSyntaxTree.ParseText(source, parseOptions.WithPreprocessorSymbols(Array.Empty<string>()))],
+            PlatformReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        Assert.Null(withoutConditional.GetTypeByMetadataName("DecisionVectors.ConditionalIncluded"));
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var type in ns.GetTypeMembers())
         {
@@ -257,12 +362,12 @@ public sealed class M1TargetObservationDecisionTests
 
     private static void ValidateMutation(JsonObject root)
     {
-        using var registry = JsonDocument.Parse(File.ReadAllText(TaxonomyRegistryPath));
+        using var taxonomy = JsonDocument.Parse(File.ReadAllText(TaxonomyRegistryPath));
         using var document = JsonDocument.Parse(root.ToJsonString());
         var vectors = document.RootElement;
         foreach (var section in new[] { "primaryKinds", "componentKinds", "relationKinds" })
         {
-            var expected = RegistryIds(registry.RootElement, section);
+            var expected = RegistryIds(taxonomy.RootElement, section);
             var actualRows = vectors.GetProperty(section).EnumerateArray().ToArray();
             var actual = actualRows.Select(row => row.GetProperty("id").GetString()!).ToArray();
             if (!expected.Order(StringComparer.Ordinal).SequenceEqual(actual.Order(StringComparer.Ordinal)) || actual.Length != actual.Distinct(StringComparer.Ordinal).Count())
@@ -270,55 +375,236 @@ public sealed class M1TargetObservationDecisionTests
                 throw new InvalidOperationException(section);
             }
 
-            foreach (var row in actualRows)
-            {
-                if (!row.TryGetProperty("representation", out var representation) || !representation.TryGetProperty("mode", out var mode))
-                {
-                    throw new InvalidOperationException("representation");
-                }
+        }
+        ValidateAll(vectors);
+    }
 
-                if (mode.GetString() == "existing-v1" && !representation.TryGetProperty("ids", out _))
-                {
-                    throw new InvalidOperationException("existing-v1");
-                }
-                if (mode.GetString() == "coordinated-amendment" && (!representation.TryGetProperty("issue", out var issue) || issue.GetInt32() != 35 || !representation.TryGetProperty("surfaces", out _)))
-                {
-                    throw new InvalidOperationException("amendment");
-                }
+    private static void ValidateAll(JsonElement root)
+    {
+        using var taxonomy = JsonDocument.Parse(File.ReadAllText(TaxonomyRegistryPath));
+        using var audit = JsonDocument.Parse(File.ReadAllText(AuditRegistryPath));
+        var registryIds = AllRegistryIds(taxonomy.RootElement).Concat(AllRegistryIds(audit.RootElement)).ToHashSet(StringComparer.Ordinal);
+        var existingConcepts = Strings(root, "existingConceptIds").ToHashSet(StringComparer.Ordinal);
+        var surfaceArray = Strings(root, "amendmentSurfaces");
+        var surfaces = surfaceArray.ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(surfaceArray.Order(StringComparer.Ordinal), surfaceArray);
+
+        string[] representedArrays =
+        [
+            "accessibilityCases", "componentKinds", "failureCases", "generatedCases",
+            "generatedHashCases", "generatedIdentityCases", "generatedInvalidIdentityCases",
+            "generatedLocatorCases", "lifecycleCases", "observationCases", "primaryKinds",
+            "profileCases", "profiles", "relationCases", "relationKinds"
+        ];
+        foreach (var arrayName in representedArrays)
+        {
+            foreach (var row in root.GetProperty(arrayName).EnumerateArray())
+            {
+                ValidateRepresentation(row.GetProperty("representation"), registryIds, existingConcepts, surfaces);
             }
         }
 
-        foreach (var row in vectors.GetProperty("relationKinds").EnumerateArray())
+        ValidateClassificationRows(root.GetProperty("primaryKinds"), taxonomy.RootElement, "primaryKinds", "TargetClassification");
+        ValidateClassificationRows(root.GetProperty("componentKinds"), taxonomy.RootElement, "componentKinds", "ComponentClassification");
+        foreach (var row in root.GetProperty("primaryKinds").EnumerateArray())
         {
-            if (row.GetProperty("evidenceSubject").GetString() != "none")
+            Require(row.GetProperty("externalApi").GetString(), ["derive-selected-enum", "if-otherwise-selected", "profile-predicate"], "primary externalApi");
+            Require(row.GetProperty("assemblyVisible").GetString(), ["derive-selected-enum", "if-otherwise-selected", "profile-predicate"], "primary assemblyVisible");
+            Require(row.GetProperty("selected").GetString(), ["skipped-result", "target-result"], "primary selected");
+            Require(row.GetProperty("excluded").GetString(), ["no-record"], "primary excluded");
+        }
+        foreach (var row in root.GetProperty("componentKinds").EnumerateArray())
+        {
+            Require(row.GetProperty("result").GetString(), ["component-result", "component-result-nonvoid-only", "not-applicable", "skipped-result"], "component result");
+            Require(row.GetProperty("origin").GetString(), ["origin.compiler-synthesized", "parent"], "component origin");
+            Require(row.GetProperty("observationSubject").GetString(), ["matching-param-on-parent-block", "matching-returns-on-parent-block", "matching-typeparam-on-parent-block", "matching-value-on-parent-block", "none"], "component observationSubject");
+            Require(row.GetProperty("evidenceSubject").GetString(), ["none", "parent-symbol-ref-plus-component-identity"], "component evidenceSubject");
+        }
+
+        var relationTargetEffects = new[] { "no-duplicate-inherited-target", "no-promotion", "relation-only-source-not-target" };
+        foreach (var row in root.GetProperty("relationKinds").EnumerateArray())
+        {
+            Require(row.GetProperty("targetEffect").GetString(), relationTargetEffects, "relation targetEffect");
+            if (row.GetProperty("resultEffect").GetString() != "none" ||
+                row.GetProperty("evidenceSubject").GetString() != "none" ||
+                row.GetProperty("supportSkipEffect").GetString() != "none" ||
+                row.GetProperty("ordinaryEvidenceEffect").GetString() != "none" ||
+                row.GetProperty("authority").GetString() != "semantic-compilation")
             {
-                throw new InvalidOperationException("relation evidence");
+                throw new InvalidOperationException("relation invariant");
             }
         }
-        foreach (var row in vectors.GetProperty("componentKinds").EnumerateArray())
+
+        var expectedOutcomes = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            _ = row.GetProperty("evidenceSubject");
+            ["component.complete-absence"] = "documentation.absent",
+            ["component.inheritdoc-only"] = "documentation.absent",
+            ["component.malformed-readable"] = "documentation.unavailable",
+            ["component.match-plus-other-malformed"] = "documentation.present",
+            ["component.no-block-partial"] = "documentation.absent",
+            ["component.wrong-name"] = "documentation.absent",
+            ["conditional.active"] = "documentation.present",
+            ["conditional.removed"] = "no-target",
+            ["generated.source.absent"] = "documentation.absent",
+            ["generated.source.present"] = "documentation.present",
+            ["generated.source.unavailable"] = "documentation.unavailable",
+            ["generated.tool.absent"] = "documentation.absent",
+            ["generated.tool.present"] = "documentation.present",
+            ["generated.tool.unavailable"] = "documentation.unavailable",
+            ["inheritance.interface-direct-only"] = "documentation.absent",
+            ["inheritance.override-direct-only"] = "documentation.absent",
+            ["parent.inheritdoc"] = "documentation.present",
+            ["parent.malformed"] = "documentation.present",
+            ["parent.missing"] = "documentation.absent",
+            ["parent.positive-plus-unreadable"] = "documentation.present",
+            ["parent.unreadable"] = "documentation.unavailable",
+            ["parent.whitespace"] = "documentation.absent",
+            ["partial.ambiguity"] = "classification-skipped",
+            ["partial.ambiguity-plus-mixed"] = "classification-skipped",
+            ["partial.defining-fallback"] = "documentation.present",
+            ["partial.implementing-authority"] = "documentation.present"
+        };
+        var observationRows = root.GetProperty("observationCases").EnumerateArray().ToArray();
+        if (!expectedOutcomes.Keys.Order(StringComparer.Ordinal).SequenceEqual(observationRows.Select(row => row.GetProperty("caseId").GetString()!).Order(StringComparer.Ordinal)))
+        {
+            throw new InvalidOperationException("observation case set");
         }
-        foreach (var row in vectors.GetProperty("profiles").EnumerateArray())
+        foreach (var row in observationRows)
         {
-            if (row.GetProperty("representation").GetProperty("mode").GetString() != "coordinated-amendment")
+            var id = row.GetProperty("caseId").GetString()!;
+            if (row.GetProperty("outcome").GetString() != expectedOutcomes[id])
             {
-                throw new InvalidOperationException("profile representation");
+                throw new InvalidOperationException($"observation outcome {id}");
+            }
+            Require(row.GetProperty("evidenceType").GetString(), ["compiled", "synthetic-classification", "synthetic-generated", "synthetic-observation"], "evidenceType");
+            Require(row.GetProperty("completeness").GetString(), ["absent-from-compilation", "active-compilation-only", "all-active-declarations-leading-trivia", "all-declarations-leading-trivia-and-blocks", "all-leading-trivia-including-no-block", "authoritative-local-name-map", "classification-stage", "complete", "complete-generated-source", "complete-readable-malformed-block", "complete-well-formed-block", "defining-local-name", "existential-positive", "implementation-direct-trivia", "implementing-local-name", "incomplete", "override-direct-trivia"], "observation completeness");
+            Require(row.GetProperty("evidence").GetString(), ["complete-malformed-item-in-evidenceIds", "complete-parent-block", "complete-untruncated-parent-subject", "declaration-leading-trivia", "defining-block", "generatedOutput-full-source-and-region", "implementation-leading-trivia", "implementing-block", "none", "one-declaration-item-per-part", "override-leading-trivia", "positive-block-only", "unavailable-bundle-source-unavailable", "untruncated-direct-block", "untruncated-matching-block"], "observation evidence");
+            Require(row.GetProperty("failClosed").GetString(), ["audit.reason.documentation-unavailable.malformed-xml", "evidence-incomplete-if-truncated", "evidence-incomplete-if-unpublishable", "no-inheritance", "no-ordinary-judgment", "no-record", "partial-precedence", "skip.ambiguous.partial-declaration", "stale-defining-name-does-not-match", "stale-implementing-name-does-not-match", "unavailable-if-any-missing", "unavailable-if-incomplete", "unavailable-if-malformed"], "observation failClosed");
+        }
+
+        foreach (var row in root.GetProperty("accessibilityCases").EnumerateArray())
+        {
+            Require(row.GetProperty("declared").GetString(), ["file", "internal", "private", "private-protected", "protected", "protected-internal", "public"], "accessibility declared");
+            Require(row.GetProperty("externalApi").GetString(), ["excluded", "selected", "selected-if-derivable"], "accessibility externalApi");
+            Require(row.GetProperty("assemblyVisible").GetString(), ["excluded", "selected", "selected-if-derivable"], "accessibility assemblyVisible");
+            Require(row.GetProperty("evidenceType").GetString(), ["compiled"], "accessibility evidenceType");
+        }
+
+        foreach (var row in root.GetProperty("relationCases").EnumerateArray())
+        {
+            Require(row.GetProperty("endpoint").GetString(), ["ambiguous", "available", "unavailable"], "relation endpoint");
+            Require(row.GetProperty("relationEmission").GetString(), ["omitted", "one"], "relation emission");
+            Require(row.GetProperty("sourceResult").GetString(), ["derived-interface-unchanged", "direct-source-unchanged", "none-explicit-source"], "relation sourceResult");
+            Require(row.GetProperty("evidenceType").GetString(), ["compiled", "synthetic-classification"], "relation evidenceType");
+            var endpoint = row.GetProperty("endpoint").GetString();
+            var emission = row.GetProperty("relationEmission").GetString();
+            if ((endpoint == "available") != (emission == "one"))
+            {
+                throw new InvalidOperationException("relation endpoint/emission");
             }
         }
-        foreach (var row in vectors.GetProperty("observationCases").EnumerateArray())
+
+        foreach (var row in root.GetProperty("generatedCases").EnumerateArray())
         {
-            if (row.GetProperty("caseId").GetString() == "component.malformed-readable" && row.GetProperty("outcome").GetString() != "documentation.unavailable")
+            Require(row.GetProperty("category").GetString(), ["source-generator", "tool-generated"], "generated category");
+            Require(row.GetProperty("policy").GetString(), ["applies", "inapplicable", "ordinary-repository-selectors", "project-global-default-only"], "generated policy");
+            if (row.TryGetProperty("selector", out var selector))
             {
-                throw new InvalidOperationException("malformed XML");
+                Require(selector.GetString(), ["global", "project-only", "sourcePaths-exclude-only", "sourcePaths-include"], "generated selector");
+                Require(row.GetProperty("contribution").GetString(), ["none-from-rule", "tagged-generated"], "generated contribution");
             }
         }
-        foreach (var row in vectors.GetProperty("failureCases").EnumerateArray())
+
+        foreach (var row in root.GetProperty("failureCases").EnumerateArray())
         {
             if (row.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.String && origin.GetString() == "origin.unknown" && row.GetProperty("skipOrError").GetString() == "skip.unavailable.documentation-comment-id")
             {
                 throw new InvalidOperationException("illegal origin/skip");
             }
+            Require(row.GetProperty("stage").GetString(), ["classification", "policy"], "failure stage");
+            Require(row.GetProperty("record").GetString(), ["TargetClassification", "UnresolvedClassification", "none"], "failure record");
+        }
+    }
+
+    private static void ValidateRepresentation(JsonElement representation, HashSet<string> registryIds, HashSet<string> concepts, HashSet<string> surfaces)
+    {
+        var mode = representation.GetProperty("mode").GetString();
+        if (mode == "existing-v1")
+        {
+            var ids = Strings(representation, "ids");
+            if (ids.Length == 0 || ids.Any(id => !registryIds.Contains(id) && !concepts.Contains(id)))
+            {
+                throw new InvalidOperationException("unknown existing-v1 representation");
+            }
+            if (representation.TryGetProperty("surfaces", out _))
+            {
+                throw new InvalidOperationException("mixed representation mode");
+            }
+        }
+        else if (mode == "coordinated-amendment")
+        {
+            if (representation.GetProperty("issue").GetInt32() != 35)
+            {
+                throw new InvalidOperationException("amendment owner");
+            }
+            var named = Strings(representation, "surfaces");
+            if (named.Length == 0 || named.Any(surface => !surfaces.Contains(surface)))
+            {
+                throw new InvalidOperationException("unknown amendment surface");
+            }
+            if (representation.TryGetProperty("ids", out _))
+            {
+                throw new InvalidOperationException("mixed representation mode");
+            }
+        }
+        else
+        {
+            throw new InvalidOperationException("representation mode");
+        }
+    }
+
+    private static void ValidateClassificationRows(JsonElement rows, JsonElement registry, string section, string recordType)
+    {
+        var registryRows = registry.GetProperty("sections").GetProperty(section).EnumerateArray().ToDictionary(row => row.GetProperty("id").GetString()!, StringComparer.Ordinal);
+        var skips = registry.GetProperty("sections").GetProperty("skipReasons").EnumerateArray().ToDictionary(row => row.GetProperty("id").GetString()!, StringComparer.Ordinal);
+        foreach (var row in rows.EnumerateArray())
+        {
+            var definition = registryRows[row.GetProperty("id").GetString()!];
+            var support = row.GetProperty("support").GetString()!;
+            if (!Strings(definition, "allowedSupportStatuses").Contains(support, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException("illegal support");
+            }
+
+            var skip = row.GetProperty("skip");
+            if (definition.TryGetProperty("requiredSkip", out var requiredSkip) && (skip.ValueKind != JsonValueKind.String || skip.GetString() != requiredSkip.GetString()))
+            {
+                throw new InvalidOperationException("required skip");
+            }
+            if (skip.ValueKind == JsonValueKind.String)
+            {
+                if (!skips.TryGetValue(skip.GetString()!, out var skipDefinition) ||
+                    !Strings(skipDefinition, "recordTypes").Contains(recordType, StringComparer.Ordinal) ||
+                    !Strings(skipDefinition, "allowedSupportStatuses").Contains(support, StringComparer.Ordinal))
+                {
+                    throw new InvalidOperationException("illegal support/skip");
+                }
+            }
+            else if (support != "support.supported")
+            {
+                throw new InvalidOperationException("missing skip");
+            }
+        }
+    }
+
+    private static HashSet<string> AllRegistryIds(JsonElement registry)
+        => registry.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).Where(row => row.ValueKind == JsonValueKind.Object && row.TryGetProperty("id", out _)).Select(row => row.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal);
+
+    private static void Require(string? value, string[] allowed, string field)
+    {
+        if (value is null || !allowed.Contains(value, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException($"Unknown {field}: {value}");
         }
     }
 
@@ -376,6 +662,29 @@ public sealed class M1TargetObservationDecisionTests
     private static JsonDocument LoadVectors() => JsonDocument.Parse(File.ReadAllText(VectorPath));
 
     private static string Sha256(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static string Sha256(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static string[] Strings(JsonElement element, string property)
+        => element.GetProperty(property).EnumerateArray().Select(value => value.GetString()!).ToArray();
+
+    private static (byte[] Preimage, string Id) DeriveIdentity(string prefix, string domain, string[] fields)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Encoding.ASCII.GetBytes(domain));
+        stream.WriteByte(0);
+        var strictUtf8 = new UTF8Encoding(false, true);
+        foreach (var field in fields)
+        {
+            var bytes = strictUtf8.GetBytes(field.Normalize(NormalizationForm.FormC));
+            var length = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)bytes.Length));
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+        var preimage = stream.ToArray();
+        return (preimage, $"{prefix}.{Sha256(preimage)}");
+    }
 
     private static string FindRepositoryRoot()
     {

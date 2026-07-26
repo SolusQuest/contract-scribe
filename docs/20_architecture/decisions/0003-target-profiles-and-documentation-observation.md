@@ -118,7 +118,7 @@ The owning project identity is normalized repository-relative `projectPath`. A g
 
 Source-generator unresolved candidates retain the existing `generatedSource` locator. #35 adds a tool-only `toolGenerated` candidate variant (`producerId`, `outputId`, optional span) ordered repository, generatedSource, toolGenerated, synthetic. #35 separately adds a shared `generatedOutput` EvidenceItem locator (`producerKind`, `producerId`, `outputId`, `sourceSha256`, optional span) ordered after metadata and before synthetic. Candidate and evidence locators are never interchangeable. Spans are zero-based UTF-16, end-exclusive coordinates in the full generated text. `sourceSha256` binds the complete `SourceText` character stream encoded as UTF-8 without BOM; EvidenceItem `sha256` separately binds its original evidence-region text.
 
-Canonical producer/output IDs use strict byte framing. For each identity, hash: the ASCII domain; `00`; then for each field, a four-byte unsigned big-endian UTF-8 byte length and the field bytes. Fields are independently NFC-normalized, strict UTF-8 without BOM, non-empty, valid Unicode, and at most 4096 bytes.
+Canonical producer/output IDs use strict byte framing. For each identity, hash: the ASCII domain; `00`; then for each field, a four-byte unsigned big-endian UTF-8 byte length and the field bytes. Fields are independently NFC-normalized and encoded as strict UTF-8 without BOM. Source-generator fields are opaque authoritative Roslyn strings: any non-empty valid Unicode value up to 4096 UTF-8 bytes is accepted, hashed, and never published raw; no path, URI, username, or secret-like interpretation is applied. Tool-adapter namespace, producer name, and output name use the closed ASCII grammar `^[A-Za-z][A-Za-z0-9._-]{0,127}$`; slash, backslash, colon, whitespace, control characters, empty values, and non-ASCII values are rejected identically on every platform.
 
 | ID | Domain | Fields |
 | --- | --- | --- |
@@ -127,7 +127,7 @@ Canonical producer/output IDs use strict byte framing. For each identity, hash: 
 | `tgp.<hex>` | `contract-scribe/tgp/v1` | trusted in-process adapter producer namespace; producer name |
 | `tgo.<hex>` | `contract-scribe/tgo/v1` | trusted in-process adapter output name |
 
-The tool adapter facts are a non-serialized #36 internal seam, not a new machine contract. #36 constructs and validates authoritative facts, collision handling, generated text, project/context association, and public safety; later stages consume the same facts. Case differences remain distinct; NFC-equivalent spellings share identity. A hash collision between distinct normalized payloads, conflicting authority for one key, missing identity, path-derived identity, or sensitive raw identity fails closed before publication.
+The tool adapter facts are a non-serialized #36 internal seam, not a new machine contract. #36 constructs and validates authoritative facts, collision handling, generated text, project/context association, and public safety; later stages consume the same facts. Case differences remain distinct; NFC-equivalent source-generator spellings share identity. A hash collision between distinct normalized payloads, conflicting authority for one key, missing identity, or tool field outside the closed grammar fails closed before publication.
 
 ## Compatibility
 
@@ -146,6 +146,23 @@ All affected contracts remain unreleased pre-release version `1` drafts. #35 est
 | #24 | Host terminal mapping, cancellation, artifact invalidation/publication |
 | #25 / #30 | CLI contract and implementation, terminology, diagnostics, exit behavior |
 | #26 | End-to-end validation, cross-platform determinism, failure and public-safety vectors |
+
+The executable vectors use this closed amendment-surface vocabulary for #35:
+
+- `audit-result.component-evidence`
+- `audit-result.generated-contribution`
+- `audit-result.generated-evidence-locator`
+- `audit-result.malformed-xml`
+- `audit-result.profile`
+- `audit-result.target-evidence`
+- `policy.generated-contribution`
+- `policy.input-error`
+- `policy.target-profile`
+- `taxonomy.failure-contract`
+- `taxonomy.generated-candidate-locator`
+- `taxonomy.generated-evidence-locator`
+- `taxonomy.profile-membership`
+- `taxonomy.profile-vocabulary`
 
 This PR changes none of those surfaces.
 
