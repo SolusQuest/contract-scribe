@@ -26,28 +26,28 @@
       ],
       "policyExpectation": "required",
       "policyResolution": "single",
-      "documentationObservation": "documentation.absent",
-      "auditOutcome": "audit.outcome.violation",
-      "reasonCode": "audit.reason.required-absent",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.required-present",
       "evidenceIds": [
-        "evidence.declaration"
+        "evidence.xml-doc"
       ],
       "evidenceBundle": {
         "evidenceBundleVersion": 1,
         "availabilityStatus": "evidence.bundle.complete",
         "items": [
           {
-            "evidenceId": "evidence.declaration",
+            "evidenceId": "evidence.xml-doc",
             "subject": {
               "compilationContextRef": "synthetic.v1",
               "documentationCommentId": "T:AuditFixtures.Widget"
             },
-            "kind": "evidence.source.declaration",
-            "relation": "evidence.declares",
-            "excerpt": "public sealed class Widget {}",
-            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
-            "originalUtf8ByteCount": 29,
-            "includedUtf8ByteCount": 29,
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <summary>Widget docs.</summary>",
+            "sha256": "7245070ca7cb1427ad4e7c502148e744d7f50f07ba86091b570795d5c1f7537f",
+            "originalUtf8ByteCount": 35,
+            "includedUtf8ByteCount": 35,
             "omittedUtf8ByteCount": 0,
             "isTruncated": false,
             "locator": {
@@ -58,25 +58,25 @@
           }
         ],
         "observationSubject": {
-          "observationSubjectRef": "obs.610e76d8d452395c19e456fedeae19511336151a8a5ce9358680a00fd233ff95",
+          "observationSubjectRef": "obs.1e0d88077bd38696e161fd9082f3377bca2aff1c9c2455a10318d58580d68065",
           "compilationContextRef": "synthetic.v1",
           "subject": {
             "compilationContextRef": "synthetic.v1",
             "documentationCommentId": "T:AuditFixtures.Widget"
           },
-          "authoritativeDeclarationSetDigest": "a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
+          "authoritativeDeclarationSetDigest": "e90380e22e7b6300563653c83dfae26d84e8d799eb7c2327d4ee166e1b47c961",
           "authoritativeDeclarationCount": 1
         }
       },
       "evidenceAuthority": {
-        "declarationSetId": "dset.a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
-        "completeness": "complete",
+        "declarationSetId": "dset.e90380e22e7b6300563653c83dfae26d84e8d799eb7c2327d4ee166e1b47c961",
+        "completeness": "positive-only",
         "declarations": [
           {
-            "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
+            "declarationId": "decl.4541d3a25f66ffaa85045c1a282d920787acabab63d6380a1262fbc037e78f5a",
             "authorityRole": "ordinary",
             "blockState": "no-block",
-            "evidenceId": "evidence.declaration"
+            "evidenceId": "evidence.xml-doc"
           }
         ]
       }

@@ -300,9 +300,11 @@ public sealed class M1ContractBaselineTests
             if (authorityRoles.Contains("ordinary") && declarations.Count != 1) return false;
 
             var observationValue = value["documentationObservation"]!.GetValue<string>();
+            if (AuditResultCanonicalizer.DeriveDocumentationObservation(Element(subject), Element(authority)) != observationValue) return false;
             if (observationValue != "documentation.present" && authority["completeness"]!.GetValue<string>() != "complete") return false;
-            if (value["reasonCode"]!.GetValue<string>() == "audit.reason.documentation-unavailable.malformed-xml"
-                && !declarations.OfType<JsonObject>().Any(row => row["blockState"]!.GetValue<string>() == "malformed"))
+            var hasMalformed = declarations.OfType<JsonObject>().Any(row => row["blockState"]!.GetValue<string>() == "malformed");
+            if ((value["reasonCode"]!.GetValue<string>() == "audit.reason.documentation-unavailable.malformed-xml")
+                != (observationValue == "documentation.unavailable" && hasMalformed))
             {
                 return false;
             }

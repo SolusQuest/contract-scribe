@@ -89,6 +89,50 @@ public static class AuditResultCanonicalizer
         return "obs." + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
+    public static string DeriveDocumentationObservation(JsonElement subject, JsonElement authority)
+    {
+        var declarations = authority.GetProperty("declarations").EnumerateArray().ToArray();
+        if (!HasValidAuthorityMode(declarations))
+        {
+            throw new FormatException("Authority declarations do not form one closed selection mode.");
+        }
+
+        var isComponent = subject.TryGetProperty("parentSymbolRef", out _);
+        if (!isComponent)
+        {
+            if (declarations.Any(declaration => declaration.GetProperty("blockState").GetString() is "well-formed" or "malformed"))
+            {
+                return "documentation.present";
+            }
+            if (authority.GetProperty("completeness").GetString() == "complete"
+                && declarations.All(declaration => declaration.GetProperty("blockState").GetString() is "no-block" or "whitespace-only"))
+            {
+                return "documentation.absent";
+            }
+            return "documentation.unavailable";
+        }
+
+        if (declarations.Any(declaration =>
+            declaration.GetProperty("blockState").GetString() == "well-formed"
+            && declaration.TryGetProperty("componentMatch", out var match)
+            && match.GetString() == "present"))
+        {
+            return "documentation.present";
+        }
+        if (declarations.Any(declaration => declaration.GetProperty("blockState").GetString() == "malformed"))
+        {
+            return "documentation.unavailable";
+        }
+        if (authority.GetProperty("completeness").GetString() == "complete"
+            && declarations.All(declaration =>
+                declaration.GetProperty("blockState").GetString() is "no-block" or "whitespace-only"
+                || declaration.TryGetProperty("componentMatch", out var match) && match.GetString() == "absent"))
+        {
+            return "documentation.absent";
+        }
+        return "documentation.unavailable";
+    }
+
     public static void ValidateReplayDocument(JsonElement document)
     {
         Require(document.GetProperty("auditResultVersion").GetInt32() == 1, "Audit Result version must be 1.");
@@ -145,11 +189,18 @@ public static class AuditResultCanonicalizer
 
         var declarationIds = new HashSet<string>(StringComparer.Ordinal);
         var declarationEvidenceIds = new HashSet<string>(StringComparer.Ordinal);
+        var malformedEvidenceIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var declaration in declarations.EnumerateArray())
         {
             Require(declarationIds.Add(declaration.GetProperty("declarationId").GetString()!), "Duplicate declaration ID.");
-            Require(declarationEvidenceIds.Add(declaration.GetProperty("evidenceId").GetString()!), "Duplicate declaration evidence ID.");
+            var evidenceId = declaration.GetProperty("evidenceId").GetString()!;
+            Require(declarationEvidenceIds.Add(evidenceId), "Duplicate declaration evidence ID.");
+            if (declaration.GetProperty("blockState").GetString() == "malformed")
+            {
+                malformedEvidenceIds.Add(evidenceId);
+            }
         }
+        Require(HasValidAuthorityMode(declarations.EnumerateArray().ToArray()), "Authority declarations do not form one closed selection mode.");
 
         var evidenceItems = bundle.GetProperty("items").EnumerateArray()
             .ToDictionary(item => item.GetProperty("evidenceId").GetString()!, StringComparer.Ordinal);
@@ -158,9 +209,22 @@ public static class AuditResultCanonicalizer
             Require(evidenceItems.TryGetValue(evidenceId, out var evidence), "Authority references missing evidence.");
             Require(JsonElement.DeepEquals(evidence.GetProperty("subject"), expectedSubject), "Authority evidence subject does not match classification.");
         }
+        foreach (var evidenceId in malformedEvidenceIds)
+        {
+            var evidence = evidenceItems[evidenceId];
+            Require(evidence.GetProperty("kind").GetString() == "evidence.source.xml-documentation", "Malformed authority requires XML-documentation evidence.");
+            Require(evidence.GetProperty("relation").GetString() == "evidence.documents", "Malformed authority requires documents relation.");
+            Require(!evidence.GetProperty("isTruncated").GetBoolean(), "Malformed authority evidence must be untruncated.");
+        }
 
         var referenced = result.GetProperty("evidenceIds").EnumerateArray().Select(value => value.GetString()!).ToHashSet(StringComparer.Ordinal);
         Require(referenced.SetEquals(declarationEvidenceIds), "Result evidence IDs do not cover the authority declaration set.");
+        Require(malformedEvidenceIds.IsSubsetOf(referenced), "Malformed authority evidence must be referenced by the result.");
+
+        var derivedObservation = DeriveDocumentationObservation(expectedSubject, authority);
+        Require(result.GetProperty("documentationObservation").GetString() == derivedObservation, "Claimed documentation observation contradicts authority.");
+        var malformedReason = result.GetProperty("reasonCode").GetString() == "audit.reason.documentation-unavailable.malformed-xml";
+        Require(malformedReason == (derivedObservation == "documentation.unavailable" && malformedEvidenceIds.Count > 0), "Malformed reason does not match derived authority observation.");
     }
 
     private static JsonElement CreateComponentSubject(JsonElement classification)
@@ -340,11 +404,18 @@ public static class AuditResultCanonicalizer
         var project = contribution.GetProperty("projectPath").GetString();
         if (contribution.TryGetProperty("sourcePath", out var source))
         {
-            return $"{project}\0A\0{source.GetString()}";
+            return $"A\0{project}\0{source.GetString()}";
         }
 
         var generated = contribution.GetProperty("generatedOutput");
-        return $"{project}\0B\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
+        return $"B\0{project}\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
+    }
+
+    private static bool HasValidAuthorityMode(IReadOnlyCollection<JsonElement> declarations)
+    {
+        var roles = declarations.Select(declaration => declaration.GetProperty("authorityRole").GetString()).ToArray();
+        return roles.Length == 1 && roles[0] is "ordinary" or "partial-member-implementing" or "partial-member-defining-fallback"
+            || roles.Length > 0 && roles.All(role => role == "partial-type-part");
     }
 
     private static string NormalizeRepositoryPath(string value) =>

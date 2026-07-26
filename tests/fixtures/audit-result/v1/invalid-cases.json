@@ -75,6 +75,61 @@
       "caseId": "mixed-candidate-locator",
       "payloadFile": "invalid/mixed-candidate-locator.json",
       "canonical": false
+    },
+    {
+      "caseId": "component-present-match-as-absent",
+      "payloadFile": "invalid/component-present-match-as-absent.json",
+      "canonical": false
+    },
+    {
+      "caseId": "component-malformed-as-absent",
+      "payloadFile": "invalid/component-malformed-as-absent.json",
+      "canonical": false
+    },
+    {
+      "caseId": "component-all-absent-as-present",
+      "payloadFile": "invalid/component-all-absent-as-present.json",
+      "canonical": false
+    },
+    {
+      "caseId": "target-no-block-as-present",
+      "payloadFile": "invalid/target-no-block-as-present.json",
+      "canonical": false
+    },
+    {
+      "caseId": "target-well-formed-as-absent",
+      "payloadFile": "invalid/target-well-formed-as-absent.json",
+      "canonical": false
+    },
+    {
+      "caseId": "component-positive-plus-malformed-as-unavailable",
+      "payloadFile": "invalid/component-positive-plus-malformed-as-unavailable.json",
+      "canonical": false
+    },
+    {
+      "caseId": "illegal-authority-role-mixing",
+      "payloadFile": "invalid/illegal-authority-role-mixing.json",
+      "canonical": false
+    },
+    {
+      "caseId": "malformed-authority-wrong-kind",
+      "payloadFile": "invalid/malformed-authority-wrong-kind.json",
+      "canonical": false
+    },
+    {
+      "caseId": "malformed-authority-wrong-relation",
+      "payloadFile": "invalid/malformed-authority-wrong-relation.json",
+      "canonical": false
+    },
+    {
+      "caseId": "malformed-authority-truncated",
+      "payloadFile": "invalid/malformed-authority-truncated.json",
+      "canonical": false
+    },
+    {
+      "caseId": "malformed-authority-references-different-item",
+      "payloadFile": "invalid/malformed-authority-references-different-item.json",
+      "canonical": false
     }
   ]
 }

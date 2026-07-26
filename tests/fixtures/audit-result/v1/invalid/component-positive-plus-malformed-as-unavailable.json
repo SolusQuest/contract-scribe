@@ -1,0 +1,125 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
+  "results": [
+    {
+      "classification": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "fixture.context",
+          "documentationCommentId": "P:Fixture.Api.Value"
+        },
+        "componentKind": "component.value",
+        "identity": "value",
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Fixture.csproj",
+          "sourcePath": "src/Api.cs",
+          "policyExpectation": "required",
+          "matchedRuleId": "required-docs"
+        }
+      ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.unavailable",
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.documentation-unavailable.malformed-xml",
+      "evidenceIds": [
+        "evidence.component.malformed",
+        "evidence.component.present"
+      ],
+      "evidenceAuthority": {
+        "declarationSetId": "dset.49c8c2c4261e5935eeab9260b5db42a344edf4106bbd2849ec0bf5ab078f6f28",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.4444444444444444444444444444444444444444444444444444444444444444",
+            "authorityRole": "partial-type-part",
+            "blockState": "malformed",
+            "evidenceId": "evidence.component.malformed"
+          },
+          {
+            "declarationId": "decl.5555555555555555555555555555555555555555555555555555555555555555",
+            "authorityRole": "partial-type-part",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.component.present",
+            "componentMatch": "present"
+          }
+        ]
+      },
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.component.malformed",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "fixture.context",
+                "documentationCommentId": "P:Fixture.Api.Value"
+              },
+              "componentKind": "component.value",
+              "identity": "value"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <value><broken></value>",
+            "sha256": "29d7b1b668561e74956a8a051429e1a626425d5de7c210a476c1f15d6b98cf7d",
+            "originalUtf8ByteCount": 27,
+            "includedUtf8ByteCount": 27,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Api.cs"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.component.present",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "fixture.context",
+                "documentationCommentId": "P:Fixture.Api.Value"
+              },
+              "componentKind": "component.value",
+              "identity": "value"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <value>present</value>",
+            "sha256": "73d0c64d9302a09673f095d9d129ddb603ac0110cf6ec5e2d39bd2972f982f55",
+            "originalUtf8ByteCount": 26,
+            "includedUtf8ByteCount": 26,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Api.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.3fbabf3aed9e3a594118a4e8790ca782bea36c24671cf31d86ec5bbb12c21a5c",
+          "compilationContextRef": "fixture.context",
+          "subject": {
+            "parentSymbolRef": {
+              "compilationContextRef": "fixture.context",
+              "documentationCommentId": "P:Fixture.Api.Value"
+            },
+            "componentKind": "component.value",
+            "identity": "value"
+          },
+          "authoritativeDeclarationSetDigest": "49c8c2c4261e5935eeab9260b5db42a344edf4106bbd2849ec0bf5ab078f6f28",
+          "authoritativeDeclarationCount": 2
+        }
+      }
+    }
+  ]
+}

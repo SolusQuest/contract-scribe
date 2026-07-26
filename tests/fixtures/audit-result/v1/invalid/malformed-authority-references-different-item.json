@@ -1,0 +1,117 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
+  "results": [
+    {
+      "classification": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "fixture.context",
+          "documentationCommentId": "P:Fixture.Api.Value"
+        },
+        "componentKind": "component.value",
+        "identity": "value",
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Fixture.csproj",
+          "sourcePath": "src/Api.cs",
+          "policyExpectation": "required",
+          "matchedRuleId": "required-docs"
+        }
+      ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.unavailable",
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.documentation-unavailable.malformed-xml",
+      "evidenceIds": [
+        "evidence.component.declaration"
+      ],
+      "evidenceAuthority": {
+        "declarationSetId": "dset.8710ad580ed6df3a815a54af934c888c556c20dd9890dee56dcfb75b55ca57a3",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.4444444444444444444444444444444444444444444444444444444444444444",
+            "authorityRole": "ordinary",
+            "blockState": "malformed",
+            "evidenceId": "evidence.component.declaration"
+          }
+        ]
+      },
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.component.declaration",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "fixture.context",
+                "documentationCommentId": "P:Fixture.Api.Value"
+              },
+              "componentKind": "component.value",
+              "identity": "value"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "/// <value><broken></value>",
+            "sha256": "29d7b1b668561e74956a8a051429e1a626425d5de7c210a476c1f15d6b98cf7d",
+            "originalUtf8ByteCount": 27,
+            "includedUtf8ByteCount": 27,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Api.cs"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.component.malformed",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "fixture.context",
+                "documentationCommentId": "P:Fixture.Api.Value"
+              },
+              "componentKind": "component.value",
+              "identity": "value"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <value><broken></value>",
+            "sha256": "29d7b1b668561e74956a8a051429e1a626425d5de7c210a476c1f15d6b98cf7d",
+            "originalUtf8ByteCount": 27,
+            "includedUtf8ByteCount": 27,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Api.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.7166465b89b11846a5d1175c80df744c51ceec109143e62df0d3fd4205463545",
+          "compilationContextRef": "fixture.context",
+          "subject": {
+            "parentSymbolRef": {
+              "compilationContextRef": "fixture.context",
+              "documentationCommentId": "P:Fixture.Api.Value"
+            },
+            "componentKind": "component.value",
+            "identity": "value"
+          },
+          "authoritativeDeclarationSetDigest": "8710ad580ed6df3a815a54af934c888c556c20dd9890dee56dcfb75b55ca57a3",
+          "authoritativeDeclarationCount": 1
+        }
+      }
+    }
+  ]
+}

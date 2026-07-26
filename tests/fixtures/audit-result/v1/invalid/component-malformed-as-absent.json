@@ -6,29 +6,29 @@
   "results": [
     {
       "classification": {
-        "recordType": "TargetClassification",
-        "symbolRef": {
-          "compilationContextRef": "synthetic.forbidden",
-          "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:AuditFixtures.Widget"
         },
-        "primaryKind": "symbol.type.class",
-        "traits": [],
+        "componentKind": "component.return",
+        "identity": "return",
         "origin": "origin.source",
         "supportStatus": "support.supported"
       },
       "policyContributions": [
         {
           "projectPath": "src/Audit.csproj",
-          "sourcePath": "src/ForbiddenWidget.cs",
-          "policyExpectation": "forbidden",
-          "matchedRuleId": "forbidden-docs"
+          "sourcePath": "src/Widget.cs",
+          "policyExpectation": "optional",
+          "matchedRuleId": null
         }
       ],
-      "policyExpectation": "forbidden",
+      "policyExpectation": "optional",
       "policyResolution": "single",
       "documentationObservation": "documentation.absent",
       "auditOutcome": "audit.outcome.compliant",
-      "reasonCode": "audit.reason.forbidden-absent",
+      "reasonCode": "audit.reason.optional-absent",
       "evidenceIds": [
         "evidence.declaration"
       ],
@@ -39,11 +39,15 @@
           {
             "evidenceId": "evidence.declaration",
             "subject": {
-              "compilationContextRef": "synthetic.forbidden",
-              "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+              "parentSymbolRef": {
+                "compilationContextRef": "synthetic.v1",
+                "documentationCommentId": "T:AuditFixtures.Widget"
+              },
+              "componentKind": "component.return",
+              "identity": "return"
             },
-            "kind": "evidence.source.declaration",
-            "relation": "evidence.declares",
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
             "excerpt": "public sealed class Widget {}",
             "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
             "originalUtf8ByteCount": 29,
@@ -52,30 +56,34 @@
             "isTruncated": false,
             "locator": {
               "repository": {
-                "path": "src/ForbiddenWidget.cs"
+                "path": "src/Widget.cs"
               }
             }
           }
         ],
         "observationSubject": {
-          "observationSubjectRef": "obs.6410d845dac1966c2bfeb468d44e3be62032df93c44c9caf3648f217e331d918",
-          "compilationContextRef": "synthetic.forbidden",
+          "observationSubjectRef": "obs.16f235debdd91f1b946461a6bd8ab28d48141d14ab6330849864bb3d534b4a52",
+          "compilationContextRef": "synthetic.v1",
           "subject": {
-            "compilationContextRef": "synthetic.forbidden",
-            "documentationCommentId": "T:AuditFixtures.ForbiddenWidget"
+            "parentSymbolRef": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:AuditFixtures.Widget"
+            },
+            "componentKind": "component.return",
+            "identity": "return"
           },
-          "authoritativeDeclarationSetDigest": "a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
+          "authoritativeDeclarationSetDigest": "099e3fa95f68f77608007740aadc1b759cedef78ac5f0cfc9226b8058cb5f6c6",
           "authoritativeDeclarationCount": 1
         }
       },
       "evidenceAuthority": {
-        "declarationSetId": "dset.a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
+        "declarationSetId": "dset.099e3fa95f68f77608007740aadc1b759cedef78ac5f0cfc9226b8058cb5f6c6",
         "completeness": "complete",
         "declarations": [
           {
             "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
             "authorityRole": "ordinary",
-            "blockState": "no-block",
+            "blockState": "malformed",
             "evidenceId": "evidence.declaration"
           }
         ]

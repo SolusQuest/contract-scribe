@@ -69,9 +69,10 @@ public sealed class AuditResultContractTests
         var payload = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-present.json")))!.AsObject();
         var result = payload["results"]!.AsArray()[0]!.AsObject();
         var repository = result["policyContributions"]!.AsArray()[0]!.DeepClone();
+        repository!["projectPath"] = "z/Z.csproj";
         var generated = new JsonObject
         {
-            ["projectPath"] = "src/Audit.csproj",
+            ["projectPath"] = "a/A.csproj",
             ["generatedOutput"] = new JsonObject
             {
                 ["producerKind"] = "tool-generated",
@@ -760,13 +761,12 @@ public sealed class AuditResultContractTests
         var componentKind = isComponent ? classification.GetProperty("componentKind").GetString() : null;
         var declarationIds = new HashSet<string>(StringComparer.Ordinal);
         var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
-        var authorityRoles = new HashSet<string>(StringComparer.Ordinal);
+        var malformedEvidenceIds = new HashSet<string>(StringComparer.Ordinal);
         var evidenceItems = bundle.GetProperty("items").EnumerateArray().ToDictionary(item => item.GetProperty("evidenceId").GetString()!, StringComparer.Ordinal);
         foreach (var declaration in declarations.EnumerateArray())
         {
             var declarationId = declaration.GetProperty("declarationId").GetString()!;
             Assert.True(declarationIds.Add(declarationId));
-            authorityRoles.Add(declaration.GetProperty("authorityRole").GetString()!);
             var evidenceId = declaration.GetProperty("evidenceId").GetString()!;
             Assert.True(evidenceIds.Add(evidenceId));
             Assert.True(evidenceItems.TryGetValue(evidenceId, out var evidence));
@@ -774,6 +774,7 @@ public sealed class AuditResultContractTests
             var hasLocalName = declaration.TryGetProperty("componentLocalName", out _);
             var hasMatch = declaration.TryGetProperty("componentMatch", out var componentMatch);
             var isMalformed = declaration.GetProperty("blockState").GetString() == "malformed";
+            if (isMalformed) malformedEvidenceIds.Add(evidenceId);
             if (!isComponent)
             {
                 Assert.False(hasLocalName || hasMatch);
@@ -790,8 +791,18 @@ public sealed class AuditResultContractTests
             }
             if (isMalformed) Assert.False(hasMatch);
         }
-        Assert.False(authorityRoles.Contains("partial-member-implementing") && authorityRoles.Contains("partial-member-defining-fallback"));
-        if (authorityRoles.Contains("ordinary")) Assert.Single(declarations.EnumerateArray());
+        var derivedObservation = AuditResultCanonicalizer.DeriveDocumentationObservation(observation.GetProperty("subject"), authority);
+        Assert.Equal(result.GetProperty("documentationObservation").GetString(), derivedObservation);
+        var malformedReason = result.GetProperty("reasonCode").GetString() == "audit.reason.documentation-unavailable.malformed-xml";
+        Assert.Equal(malformedReason, derivedObservation == "documentation.unavailable" && malformedEvidenceIds.Count > 0);
+        foreach (var evidenceId in malformedEvidenceIds)
+        {
+            var evidence = evidenceItems[evidenceId];
+            Assert.Equal("evidence.source.xml-documentation", evidence.GetProperty("kind").GetString());
+            Assert.Equal("evidence.documents", evidence.GetProperty("relation").GetString());
+            Assert.False(evidence.GetProperty("isTruncated").GetBoolean());
+            Assert.Contains(evidenceId, result.GetProperty("evidenceIds").EnumerateArray().Select(value => value.GetString()));
+        }
 
         if (result.GetProperty("documentationObservation").GetString() != "documentation.present")
         {
@@ -1314,11 +1325,11 @@ public sealed class AuditResultContractTests
         var project = contribution.GetProperty("projectPath").GetString();
         if (contribution.TryGetProperty("sourcePath", out var source))
         {
-            return $"{project}\0A\0{source.GetString()}";
+            return $"A\0{project}\0{source.GetString()}";
         }
 
         var generated = contribution.GetProperty("generatedOutput");
-        return $"{project}\0B\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
+        return $"B\0{project}\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
     }
 
     private static string FixtureRoot() => FixturePath();

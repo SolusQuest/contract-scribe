@@ -669,13 +669,135 @@
         },
         "componentKind": {
           "type": "string",
-          "pattern": "^component\\."
+          "enum": [
+            "component.parameter",
+            "component.type-parameter",
+            "component.return",
+            "component.value",
+            "component.accessor.get",
+            "component.accessor.set",
+            "component.accessor.init",
+            "component.accessor.add",
+            "component.accessor.remove",
+            "component.backing-field",
+            "component.synthesized.record-positional-property",
+            "component.synthesized.implicit-constructor",
+            "component.synthesized.record-copy-constructor",
+            "component.synthesized.delegate-invoke",
+            "component.synthesized.delegate-begin-invoke",
+            "component.synthesized.delegate-end-invoke",
+            "component.unknown"
+          ]
         },
         "identity": {
           "type": "string",
           "minLength": 1
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "componentKind": { "const": "component.parameter" },
+            "identity": { "pattern": "^parameter/[0-9]+$" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.type-parameter" },
+            "identity": { "pattern": "^type-parameter/[0-9]+$" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.return" },
+            "identity": { "const": "return" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.value" },
+            "identity": { "const": "value" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.accessor.get" },
+            "identity": { "const": "accessor/get" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.accessor.set" },
+            "identity": { "const": "accessor/set" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.accessor.init" },
+            "identity": { "const": "accessor/init" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.accessor.add" },
+            "identity": { "const": "accessor/add" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.accessor.remove" },
+            "identity": { "const": "accessor/remove" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.backing-field" },
+            "identity": { "const": "backing-field" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.record-positional-property" },
+            "identity": { "pattern": "^synthesized/record-positional-property/[0-9]+$" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.implicit-constructor" },
+            "identity": { "const": "synthesized/implicit-constructor" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.record-copy-constructor" },
+            "identity": { "const": "synthesized/record-copy-constructor" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.delegate-invoke" },
+            "identity": { "const": "synthesized/delegate-invoke" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.delegate-begin-invoke" },
+            "identity": { "const": "synthesized/delegate-begin-invoke" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.synthesized.delegate-end-invoke" },
+            "identity": { "const": "synthesized/delegate-end-invoke" }
+          }
+        },
+        {
+          "properties": {
+            "componentKind": { "const": "component.unknown" },
+            "identity": { "pattern": "^unknown/[0-9]+$" }
+          }
+        }
+      ]
     },
     "observationSubject": {
       "type": "object",

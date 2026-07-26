@@ -20,13 +20,13 @@
           },
           "policyContributions": [
             {
-              "projectPath": "src/Audit.csproj",
+              "projectPath": "z/Z.csproj",
               "sourcePath": "src/MetadataWidget.cs",
               "policyExpectation": "required",
               "matchedRuleId": "required-docs"
             },
             {
-              "projectPath": "src/Audit.csproj",
+              "projectPath": "a/A.csproj",
               "generatedOutput": {
                 "producerKind": "tool-generated",
                 "producerId": "tgp.5555555555555555555555555555555555555555555555555555555555555555",
@@ -799,13 +799,13 @@
                 "producerId": "tgp.5555555555555555555555555555555555555555555555555555555555555555",
                 "producerKind": "tool-generated"
               },
-              "projectPath": "src/Audit.csproj"
+              "projectPath": "a/A.csproj"
             },
             {
               "matchedRuleId": "required-docs",
               "policyExpectation": "required",
               "sourcePath": "src/MetadataWidget.cs",
-              "projectPath": "src/Audit.csproj"
+              "projectPath": "z/Z.csproj"
             }
           ],
           "classification": {

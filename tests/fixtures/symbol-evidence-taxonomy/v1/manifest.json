@@ -2,6 +2,7 @@
   "conformanceManifestVersion": 1,
   "registryVersion": 1,
   "evidenceBundleVersion": 1,
+  "targetProfile": "profile.external-api",
   "compilationContextRef": "synthetic.v1",
   "compilationProfile": {
     "languageVersion": "Preview",

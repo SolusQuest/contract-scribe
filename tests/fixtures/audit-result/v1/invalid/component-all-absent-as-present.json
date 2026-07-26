@@ -6,13 +6,13 @@
   "results": [
     {
       "classification": {
-        "recordType": "TargetClassification",
-        "symbolRef": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
           "compilationContextRef": "synthetic.v1",
           "documentationCommentId": "T:AuditFixtures.Widget"
         },
-        "primaryKind": "symbol.type.class",
-        "traits": [],
+        "componentKind": "component.return",
+        "identity": "return",
         "origin": "origin.source",
         "supportStatus": "support.supported"
       },
@@ -20,15 +20,15 @@
         {
           "projectPath": "src/Audit.csproj",
           "sourcePath": "src/Widget.cs",
-          "policyExpectation": "required",
-          "matchedRuleId": "required-docs"
+          "policyExpectation": "optional",
+          "matchedRuleId": null
         }
       ],
-      "policyExpectation": "required",
+      "policyExpectation": "optional",
       "policyResolution": "single",
-      "documentationObservation": "documentation.absent",
-      "auditOutcome": "audit.outcome.violation",
-      "reasonCode": "audit.reason.required-absent",
+      "documentationObservation": "documentation.present",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.optional-present",
       "evidenceIds": [
         "evidence.declaration"
       ],
@@ -39,11 +39,15 @@
           {
             "evidenceId": "evidence.declaration",
             "subject": {
-              "compilationContextRef": "synthetic.v1",
-              "documentationCommentId": "T:AuditFixtures.Widget"
+              "parentSymbolRef": {
+                "compilationContextRef": "synthetic.v1",
+                "documentationCommentId": "T:AuditFixtures.Widget"
+              },
+              "componentKind": "component.return",
+              "identity": "return"
             },
-            "kind": "evidence.source.declaration",
-            "relation": "evidence.declares",
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
             "excerpt": "public sealed class Widget {}",
             "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
             "originalUtf8ByteCount": 29,
@@ -58,25 +62,30 @@
           }
         ],
         "observationSubject": {
-          "observationSubjectRef": "obs.610e76d8d452395c19e456fedeae19511336151a8a5ce9358680a00fd233ff95",
+          "observationSubjectRef": "obs.b5d073b3135c26dacac281226e7238dfee45ec66ebbcb99746de3ecdbaf56edd",
           "compilationContextRef": "synthetic.v1",
           "subject": {
-            "compilationContextRef": "synthetic.v1",
-            "documentationCommentId": "T:AuditFixtures.Widget"
+            "parentSymbolRef": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:AuditFixtures.Widget"
+            },
+            "componentKind": "component.return",
+            "identity": "return"
           },
-          "authoritativeDeclarationSetDigest": "a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
+          "authoritativeDeclarationSetDigest": "d4b3db6de5c8eb56abd223c9cda7db085dc36a17ac8d3118b6cbe7865ad6880e",
           "authoritativeDeclarationCount": 1
         }
       },
       "evidenceAuthority": {
-        "declarationSetId": "dset.a20338216c4f74b3f723e77efea823f65031e7c3554a4886c4eec5de92a566bf",
+        "declarationSetId": "dset.d4b3db6de5c8eb56abd223c9cda7db085dc36a17ac8d3118b6cbe7865ad6880e",
         "completeness": "complete",
         "declarations": [
           {
             "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
             "authorityRole": "ordinary",
-            "blockState": "no-block",
-            "evidenceId": "evidence.declaration"
+            "blockState": "well-formed",
+            "evidenceId": "evidence.declaration",
+            "componentMatch": "absent"
           }
         ]
       }
