@@ -302,6 +302,15 @@
       "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
+      "caseId": "stream.execution.timeout-sdk-discovery",
+      "variant": "execution",
+      "controlledClasses": ["execution:timeout:not-selected"],
+      "toolchainState": "not-selected",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"timeout\"}\n",
+      "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+    },
+    {
       "caseId": "stream.audit.violations",
       "variant": "audit",
       "controlledClasses": ["audit:violations"],

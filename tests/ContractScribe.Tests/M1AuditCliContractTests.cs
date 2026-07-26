@@ -115,7 +115,7 @@ public sealed class M1AuditCliContractTests
         ["audit-error"] = ["selected"],
         ["publication-failure"] = ["selected", "not-selected"],
         ["cancelled"] = ["selected", "not-selected"],
-        ["timeout"] = ["selected"]
+        ["timeout"] = ["selected", "not-selected"]
     };
 
     private static readonly string[][] StagePrecedenceOrders =
@@ -442,7 +442,7 @@ public sealed class M1AuditCliContractTests
         using var annex = LoadAnnex();
         var doc = File.ReadAllText(DocPath);
         var rows = annex.RootElement.GetProperty("streamCases").EnumerateArray().Where(row => row.GetProperty("variant").GetString() != "none").ToArray();
-        Assert.Equal(18, rows.Length);
+        Assert.Equal(19, rows.Length);
         var cliCodes = ExpectedCliCodes.Concat(["<verbatim-host-code>"]).ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows)
         {

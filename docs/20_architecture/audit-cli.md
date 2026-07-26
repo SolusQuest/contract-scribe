@@ -168,7 +168,7 @@ Execution stream forms are keyed by a closed `toolchainState` dimension (`select
 | `audit-error` | `selected` only |
 | `publication-failure` | `not-selected` (run-start invalidation failure) or `selected` (final publication failure) |
 | `cancelled` | `not-selected` (cancellation during invalidation) or `selected` (cancellation after selection) |
-| `timeout` | `selected` only |
+| `timeout` | `not-selected` (SDK-discovery timeout — SDK/global.json resolution precedes toolchain selection) or `selected` (load, total-audit, and applicable graceful-shutdown timeouts) |
 
 The envelope encoding is compact JSON, UTF-8 without BOM, exactly one trailing LF, fixed property order, fields omitted when not applicable (no explicit nulls), and no timestamps, durations, process IDs, or absolute paths.
 
@@ -193,7 +193,7 @@ The closed envelope model includes a CLI-owned adapter-failure representation fo
 
 ### Representative envelope templates
 
-The annex pins one exact expected stdout template per controlled stream form (every `exitCodeCases` row with a controlled return maps to exactly one envelope or stream form, with execution forms keyed by the closed `toolchainState` dimension — including the toolchain-omitted `invalid-input`, `environment-unavailable`, and invalidation-window `publication-failure`/`cancelled` forms — and empty-`diagnosticCodes` audit forms). The following representative templates (each followed by exactly one LF) are reproduced verbatim from the annex:
+The annex pins one exact expected stdout template per controlled stream form (every `exitCodeCases` row with a controlled return maps to exactly one envelope or stream form, with execution forms keyed by the closed `toolchainState` dimension — including the toolchain-omitted `invalid-input`, `environment-unavailable`, invalidation-window `publication-failure`/`cancelled`, and SDK-discovery `timeout` forms — and empty-`diagnosticCodes` audit forms). The following representative templates (each followed by exactly one LF) are reproduced verbatim from the annex:
 
 ```text
 {"envelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.usage.unknown-option"],"usageClass":"unknown-option"}
