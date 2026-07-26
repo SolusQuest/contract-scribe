@@ -17,6 +17,13 @@ public sealed class M1TargetObservationDecisionTests
     private static readonly string TaxonomyRegistryPath = Path.Join(Root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json");
     private static readonly string AuditRegistryPath = Path.Join(Root, "schemas", "audit-result", "v1.registry.json");
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly IReadOnlyDictionary<string, string[]> ExpectedCompiledDeclarationCases =
+        new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["decl.members"] = ["symbol.member.constructor", "symbol.member.conversion", "symbol.member.event", "symbol.member.field", "symbol.member.indexer", "symbol.member.method", "symbol.member.operator", "symbol.member.property"],
+            ["decl.partial"] = ["symbol.member.method"],
+            ["decl.types"] = ["symbol.member.enum-member", "symbol.type.class", "symbol.type.delegate", "symbol.type.enum", "symbol.type.interface", "symbol.type.struct"]
+        };
 
     [Fact]
     public void Annex_IsStrictPublicSafeAndPinnedToExactRegistries()
@@ -126,6 +133,7 @@ public sealed class M1TargetObservationDecisionTests
             "partial.ambiguity",
             "partial.ambiguity-plus-mixed",
             "partial.defining-fallback",
+            "partial.implementing-whitespace-authority",
             "partial.implementing-authority"
         ];
         Assert.Equal(requiredObservationCases.Order(StringComparer.Ordinal), observations.Keys.Order(StringComparer.Ordinal));
@@ -239,6 +247,9 @@ public sealed class M1TargetObservationDecisionTests
         AssertInvalidMutation(original, node => node["generatedLocatorCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "locator.evidence.generated-output")!["equalityKey"]!.AsArray().RemoveAt(3));
         AssertInvalidMutation(original, node => node["generatedInvalidIdentityCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "identity.invalid.oversized")!["outcome"] = "accept-opaque");
         AssertInvalidMutation(original, node => node["groundedExistingConcepts"]![0]!["id"] = "observation.direct-only");
+        AssertInvalidMutation(original, node => node["compiledDeclarationCases"]![0]!["caseId"] = "decl.renamed");
+        AssertInvalidMutation(original, node => node["compiledDeclarationCases"]![0]!["expectedKinds"]![0] = "symbol.type.class");
+        AssertInvalidMutation(original, node => node["primaryKinds"]!.AsArray().First(item => item!["id"]!.GetValue<string>() == "symbol.member.method")!["compiledCaseIds"]![0] = "decl.missing");
     }
 
     [Fact]
@@ -361,23 +372,16 @@ public sealed class M1TargetObservationDecisionTests
             }
         }
 
-        string[] expected =
-        [
-            "symbol.member.constructor",
-            "symbol.member.conversion",
-            "symbol.member.enum-member",
-            "symbol.member.event",
-            "symbol.member.field",
-            "symbol.member.indexer",
-            "symbol.member.method",
-            "symbol.member.operator",
-            "symbol.member.property",
-            "symbol.type.class",
-            "symbol.type.delegate",
-            "symbol.type.enum",
-            "symbol.type.interface",
-            "symbol.type.struct"
-        ];
+        var partialType = ns.GetTypeMembers("Partial").Single();
+        Assert.Contains(
+            partialType.GetMembers("P").OfType<IMethodSymbol>(),
+            method => method.PartialDefinitionPart is not null || method.PartialImplementationPart is not null);
+        foreach (var expectedKinds in ExpectedCompiledDeclarationCases.Values)
+        {
+            Assert.All(expectedKinds, kind => Assert.Contains(kind, found));
+        }
+
+        var expected = ExpectedCompiledDeclarationCases.Values.SelectMany(kinds => kinds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
         Assert.Equal(expected, found.Order(StringComparer.Ordinal));
     }
 
@@ -435,6 +439,7 @@ public sealed class M1TargetObservationDecisionTests
             ],
             surfaceArray);
         ValidateExactNormativeRows(root);
+        ValidateCompiledDeclarationCaseReferences(root);
 
         string[] representedArrays =
         [
@@ -509,6 +514,7 @@ public sealed class M1TargetObservationDecisionTests
             ["partial.ambiguity"] = "classification-skipped",
             ["partial.ambiguity-plus-mixed"] = "classification-skipped",
             ["partial.defining-fallback"] = "documentation.present",
+            ["partial.implementing-whitespace-authority"] = "documentation.absent",
             ["partial.implementing-authority"] = "documentation.present"
         };
         var observationRows = root.GetProperty("observationCases").EnumerateArray().ToArray();
@@ -524,9 +530,9 @@ public sealed class M1TargetObservationDecisionTests
                 throw new InvalidOperationException($"observation outcome {id}");
             }
             Require(row.GetProperty("evidenceType").GetString(), ["compiled", "synthetic-classification", "synthetic-generated", "synthetic-observation"], "evidenceType");
-            Require(row.GetProperty("completeness").GetString(), ["absent-from-compilation", "active-compilation-only", "all-active-declarations-leading-trivia", "all-declarations-leading-trivia-and-blocks", "all-leading-trivia-including-no-block", "authoritative-local-name-map", "classification-stage", "complete", "complete-generated-source", "complete-readable-malformed-block", "complete-well-formed-block", "defining-local-name", "existential-positive", "implementation-direct-trivia", "implementing-local-name", "incomplete", "override-direct-trivia"], "observation completeness");
+            Require(row.GetProperty("completeness").GetString(), ["absent-from-compilation", "active-compilation-only", "all-active-declarations-leading-trivia", "all-declarations-leading-trivia-and-blocks", "all-leading-trivia-including-no-block", "authoritative-local-name-map", "classification-stage", "complete", "complete-generated-source", "complete-readable-malformed-block", "complete-well-formed-block", "defining-local-name", "existential-positive", "implementation-direct-trivia", "implementing-authoritative-only", "implementing-local-name", "incomplete", "override-direct-trivia"], "observation completeness");
             Require(row.GetProperty("evidence").GetString(), ["complete-malformed-item-in-evidenceIds", "complete-parent-block", "complete-untruncated-parent-subject", "declaration-leading-trivia", "defining-block", "generatedOutput-full-source-and-region", "implementation-leading-trivia", "implementing-block", "none", "one-declaration-item-per-part", "override-leading-trivia", "positive-block-only", "unavailable-bundle-source-unavailable", "untruncated-direct-block", "untruncated-matching-block"], "observation evidence");
-            Require(row.GetProperty("failClosed").GetString(), ["audit.reason.documentation-unavailable.malformed-xml", "evidence-incomplete-if-truncated", "evidence-incomplete-if-unpublishable", "no-inheritance", "no-ordinary-judgment", "no-record", "partial-precedence", "skip.ambiguous.partial-declaration", "stale-defining-name-does-not-match", "stale-implementing-name-does-not-match", "unavailable-if-any-missing", "unavailable-if-incomplete", "unavailable-if-malformed"], "observation failClosed");
+            Require(row.GetProperty("failClosed").GetString(), ["audit.reason.documentation-unavailable.malformed-xml", "evidence-incomplete-if-truncated", "evidence-incomplete-if-unpublishable", "no-inheritance", "no-ordinary-judgment", "no-record", "non-authoritative-defining-payload-ignored", "partial-precedence", "skip.ambiguous.partial-declaration", "stale-defining-name-does-not-match", "stale-implementing-name-does-not-match", "unavailable-if-any-missing", "unavailable-if-incomplete", "unavailable-if-malformed"], "observation failClosed");
         }
 
         foreach (var row in root.GetProperty("accessibilityCases").EnumerateArray())
@@ -580,6 +586,7 @@ public sealed class M1TargetObservationDecisionTests
         var expected = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["accessibilityCases"] = "dfe22feb400fd5de304628a6ae237e81ad6daa86cd359813aa4aa5acc0c778c4",
+            ["compiledDeclarationCases"] = "133b57394c3e5b179b3343df28d4158ddffd9629c1ef5761b3efef9623ca1767",
             ["componentKinds"] = "2b7e5a2df4fd277c33fa7136d20f4ac9de0218152e6eb6087caec1d2c9713786",
             ["failureCases"] = "014f0545181e037b65f01bd8be70bb5c1b35a6cdef9344df0674813a2d599fd5",
             ["generatedCases"] = "922c1fed6bf1846f28494a6cffcdec13a028984b3ed4ceb9f50c1fbb6a050116",
@@ -588,7 +595,7 @@ public sealed class M1TargetObservationDecisionTests
             ["generatedInvalidIdentityCases"] = "18f3f330643dbe45604a926f4097f602df8e823023202e9ec32938aa6fdb7273",
             ["generatedLocatorCases"] = "e9eba02e4719f2a135bdd69b400c5ad7c40235508c523d57626f3373873aca64",
             ["lifecycleCases"] = "922800af659154d94e1bf4f73d0472282adddb0590ff6592a36716c3adddf274",
-            ["observationCases"] = "169b169bc2d3a85ea27afa9a76580008e10e51004deea9b5170338b356cde363",
+            ["observationCases"] = "18450f3727556438e70df7ef8b5df603d399e0e159242fb3ffd13ec0580bf6c1",
             ["primaryKinds"] = "d4a0d1b16012d3923ab82a427ac580d3ec7019dd34b01e1fd3225bceddbbcbbb",
             ["profileCases"] = "1b89af80a9f11c441413a4a1c767adbd72f3b4562b9da96d1a6017c52bb1848a",
             ["profiles"] = "e090168870df556dc7b37fb72f0724cea85e11c5f6e1350ed6292f13399dfd00",
@@ -602,6 +609,46 @@ public sealed class M1TargetObservationDecisionTests
             if (Sha256(Encoding.UTF8.GetBytes(canonical)) != digest)
             {
                 throw new InvalidOperationException($"exact normative rows: {section}");
+            }
+        }
+    }
+
+    private static void ValidateCompiledDeclarationCaseReferences(JsonElement root)
+    {
+        var cases = root.GetProperty("compiledDeclarationCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
+        if (!ExpectedCompiledDeclarationCases.Keys.SequenceEqual(cases.Keys, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException("compiled declaration case set");
+        }
+
+        foreach (var (caseId, expectedKinds) in ExpectedCompiledDeclarationCases)
+        {
+            if (!Strings(cases[caseId], "expectedKinds").SequenceEqual(expectedKinds, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException($"compiled declaration kinds: {caseId}");
+            }
+        }
+
+        foreach (var row in root.GetProperty("primaryKinds").EnumerateArray())
+        {
+            var kind = row.GetProperty("id").GetString()!;
+            if (kind == "symbol.unknown")
+            {
+                if (row.TryGetProperty("compiledCaseIds", out _))
+                {
+                    throw new InvalidOperationException("synthetic primary kind has compiled evidence");
+                }
+                continue;
+            }
+
+            var expectedReferences = ExpectedCompiledDeclarationCases
+                .Where(pair => pair.Value.Contains(kind, StringComparer.Ordinal))
+                .Select(pair => pair.Key)
+                .ToArray();
+            if (expectedReferences.Length == 0 ||
+                !Strings(row, "compiledCaseIds").SequenceEqual(expectedReferences, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException($"compiled declaration references: {kind}");
             }
         }
     }
