@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.CodeAnalysis;
@@ -15,6 +16,7 @@ public sealed class M1TargetObservationDecisionTests
     private static readonly string VectorPath = Path.Join(Root, "tests", "fixtures", "m1-target-observation", "adr-0003-vectors.json");
     private static readonly string TaxonomyRegistryPath = Path.Join(Root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json");
     private static readonly string AuditRegistryPath = Path.Join(Root, "schemas", "audit-result", "v1.registry.json");
+    private static readonly JsonSerializerOptions CanonicalJsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     [Fact]
     public void Annex_IsStrictPublicSafeAndPinnedToExactRegistries()
@@ -169,6 +171,7 @@ public sealed class M1TargetObservationDecisionTests
             var (preimage, id) = DeriveIdentity(row.GetProperty("prefix").GetString()!, row.GetProperty("domain").GetString()!, fields);
             Assert.Equal(row.GetProperty("preimageHex").GetString(), Convert.ToHexString(preimage).ToLowerInvariant());
             Assert.Equal(row.GetProperty("expectedId").GetString(), id);
+            Assert.Equal("accepted", row.GetProperty("outcome").GetString());
         }
 
         Assert.Equal(cases["identity.sgo.nfc"].GetProperty("expectedId").GetString(), cases["identity.sgo.nfd"].GetProperty("expectedId").GetString());
@@ -179,19 +182,24 @@ public sealed class M1TargetObservationDecisionTests
         Assert.Equal(hash.GetProperty("evidenceRegionSha256").GetString(), Sha256(Encoding.UTF8.GetBytes(hash.GetProperty("regionText").GetString()!)));
         Assert.NotEqual(hash.GetProperty("fullSourceSha256").GetString(), hash.GetProperty("evidenceRegionSha256").GetString());
 
-        var locators = root.GetProperty("generatedLocatorCases").EnumerateArray().ToArray();
-        Assert.Equal(new[] { 1, 2, 3, 4 }, locators.Where(row => row.GetProperty("surface").GetString() == "candidate").Select(row => row.GetProperty("order").GetInt32()).Order());
-        foreach (var locator in locators)
-        {
-            using var canonical = JsonDocument.Parse(locator.GetProperty("canonicalJson").GetString()!);
-            Assert.Equal(JsonValueKind.Object, canonical.RootElement.ValueKind);
-        }
+        var locators = root.GetProperty("generatedLocatorCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
+        AssertLocator(locators, "locator.candidate.repository", "candidate", "repository", ["path"], """{"repository":{"path":"src/A.cs"}}""", 1, """["src/A.cs",null]""");
+        AssertLocator(locators, "locator.candidate.generated-source", "candidate", "generatedSource", ["generatorId", "hintNameId"], """{"generatedSource":{"generatorId":"sgp.a","hintNameId":"sgo.a"}}""", 2, """["sgp.a","sgo.a",null]""");
+        AssertLocator(locators, "locator.candidate.tool-generated", "candidate", "toolGenerated", ["producerId", "outputId"], """{"toolGenerated":{"producerId":"tgp.a","outputId":"tgo.a"}}""", 3, """["tgp.a","tgo.a",null]""");
+        AssertLocator(locators, "locator.candidate.synthetic", "candidate", "synthetic", ["fixtureId"], """{"synthetic":{"fixtureId":"fixture.a"}}""", 4, """["fixture.a"]""");
+        AssertLocator(locators, "locator.evidence.generated-output", "evidence", "generatedOutput", ["producerKind", "producerId", "outputId", "sourceSha256"], """{"generatedOutput":{"producerKind":"source-generator","producerId":"sgp.a","outputId":"sgo.a","sourceSha256":"48f2a8fc6db9009662be60e5f3b4787ba54f159cac71278f47c905a4d86229ae"}}""", 3, """["source-generator","sgp.a","sgo.a","48f2a8fc6db9009662be60e5f3b4787ba54f159cac71278f47c905a4d86229ae",null]""");
+        Assert.DoesNotContain(
+            locators.Values.Where(row => row.GetProperty("surface").GetString() == "candidate"),
+            row => row.GetProperty("canonicalJson").GetString()!.StartsWith("""{"generatedOutput":""", StringComparison.Ordinal));
 
         var invalid = root.GetProperty("generatedInvalidIdentityCases").EnumerateArray().ToDictionary(row => row.GetProperty("caseId").GetString()!, StringComparer.Ordinal);
-        Assert.Equal("accept-opaque", invalid["identity.source.windows-like"].GetProperty("outcome").GetString());
-        Assert.Equal("accept-opaque", invalid["identity.source.unix-like"].GetProperty("outcome").GetString());
-        Assert.Equal("accept-opaque", invalid["identity.source.secret-like"].GetProperty("outcome").GetString());
-        Assert.All(invalid.Values.Where(row => row.GetProperty("category").GetString() == "tool"), row => Assert.Equal("reject", row.GetProperty("outcome").GetString()));
+        AssertInvalidIdentity(invalid, "identity.invalid.empty", "tool", "reject", "empty");
+        AssertInvalidIdentity(invalid, "identity.invalid.oversized", "source-generator", "reject", "oversized");
+        AssertInvalidIdentity(invalid, "identity.source.secret-like", "source-generator", "accept-opaque", "no-secret-heuristic");
+        AssertInvalidIdentity(invalid, "identity.source.unix-like", "source-generator", "accept-opaque", "no-path-heuristic");
+        AssertInvalidIdentity(invalid, "identity.source.windows-like", "source-generator", "accept-opaque", "no-path-heuristic");
+        AssertInvalidIdentity(invalid, "identity.tool.path-like", "tool", "reject", "closed-tool-grammar");
+        AssertInvalidIdentity(invalid, "identity.tool.unicode", "tool", "reject", "closed-tool-grammar");
     }
 
     [Fact]
@@ -211,6 +219,26 @@ public sealed class M1TargetObservationDecisionTests
         AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.missing")!["outcome"] = "documentation.present");
         AssertInvalidMutation(original, node => node["generatedCases"]![0]!["representation"]!["surfaces"]![0] = "unknown.surface");
         AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.whitespace")!["outcome"] = "documentation.maybe");
+        AssertInvalidMutation(original, node => node["relationKinds"]!.AsArray().First(item => item!["id"]!.GetValue<string>() == "relation.overrides")!["documentation"] = "inherits-base-documentation");
+        AssertInvalidMutation(original, node => node["relationKinds"]!.AsArray().First(item => item!["id"]!.GetValue<string>() == "relation.explicit-interface-implementation")!["profileInteraction"] = "all-implementations");
+        AssertInvalidMutation(original, node => node["failureCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "failure.semantic-context")!["skipOrError"] = "run.classification.unrepresentable");
+        AssertInvalidMutation(original, node => node["generatedCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "generated.project-rule")!["policy"] = "inapplicable");
+        AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.inheritdoc")!["subject"] = "component");
+        AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.inheritdoc")!["input"] = "all-parts-no-block");
+        AssertInvalidMutation(original, node => node["observationCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "parent.inheritdoc")!["representation"]!["surfaces"]![0] = "audit-result.component-evidence");
+        AssertInvalidMutation(original, node =>
+        {
+            var locators = node["generatedLocatorCases"]!.AsArray();
+            var repository = locators.First(item => item!["caseId"]!.GetValue<string>() == "locator.candidate.repository")!;
+            var tool = locators.First(item => item!["caseId"]!.GetValue<string>() == "locator.candidate.tool-generated")!;
+            (repository["order"], tool["order"]) = (tool["order"]!.DeepClone(), repository["order"]!.DeepClone());
+        });
+        AssertInvalidMutation(original, node => node["generatedLocatorCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "locator.candidate.repository")!["equalityKey"] = new JsonArray("unrelated", null));
+        AssertInvalidMutation(original, node => node["generatedLocatorCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "locator.candidate.repository")!["canonicalJson"] = """{"wrong":{}}""");
+        AssertInvalidMutation(original, node => node["generatedLocatorCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "locator.candidate.generated-source")!["canonicalJson"] = """{"generatedSource":{"hintNameId":"sgo.a"}}""");
+        AssertInvalidMutation(original, node => node["generatedLocatorCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "locator.evidence.generated-output")!["equalityKey"]!.AsArray().RemoveAt(3));
+        AssertInvalidMutation(original, node => node["generatedInvalidIdentityCases"]!.AsArray().First(item => item!["caseId"]!.GetValue<string>() == "identity.invalid.oversized")!["outcome"] = "accept-opaque");
+        AssertInvalidMutation(original, node => node["groundedExistingConcepts"]![0]!["id"] = "observation.direct-only");
     }
 
     [Fact]
@@ -384,10 +412,29 @@ public sealed class M1TargetObservationDecisionTests
         using var taxonomy = JsonDocument.Parse(File.ReadAllText(TaxonomyRegistryPath));
         using var audit = JsonDocument.Parse(File.ReadAllText(AuditRegistryPath));
         var registryIds = AllRegistryIds(taxonomy.RootElement).Concat(AllRegistryIds(audit.RootElement)).ToHashSet(StringComparer.Ordinal);
-        var existingConcepts = Strings(root, "existingConceptIds").ToHashSet(StringComparer.Ordinal);
+        var existingConcepts = ValidateGroundedExistingConcepts(root);
         var surfaceArray = Strings(root, "amendmentSurfaces");
         var surfaces = surfaceArray.ToHashSet(StringComparer.Ordinal);
-        Assert.Equal(surfaceArray.Order(StringComparer.Ordinal), surfaceArray);
+        Assert.Equal(
+            [
+                "audit-result.component-evidence",
+                "audit-result.documentation-observation",
+                "audit-result.generated-contribution",
+                "audit-result.generated-evidence-locator",
+                "audit-result.malformed-xml",
+                "audit-result.profile",
+                "audit-result.target-evidence",
+                "policy.generated-contribution",
+                "policy.input-error",
+                "policy.target-profile",
+                "taxonomy.failure-contract",
+                "taxonomy.generated-candidate-locator",
+                "taxonomy.generated-evidence-locator",
+                "taxonomy.profile-membership",
+                "taxonomy.profile-vocabulary"
+            ],
+            surfaceArray);
+        ValidateExactNormativeRows(root);
 
         string[] representedArrays =
         [
@@ -524,6 +571,128 @@ public sealed class M1TargetObservationDecisionTests
             Require(row.GetProperty("stage").GetString(), ["classification", "policy"], "failure stage");
             Require(row.GetProperty("record").GetString(), ["TargetClassification", "UnresolvedClassification", "none"], "failure record");
         }
+    }
+
+    private static void ValidateExactNormativeRows(JsonElement root)
+    {
+        // These independent full-row digests pin every field, row order, and representation
+        // combination. Broad vocabulary checks remain below for readable diagnostics.
+        var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["accessibilityCases"] = "dfe22feb400fd5de304628a6ae237e81ad6daa86cd359813aa4aa5acc0c778c4",
+            ["componentKinds"] = "2b7e5a2df4fd277c33fa7136d20f4ac9de0218152e6eb6087caec1d2c9713786",
+            ["failureCases"] = "014f0545181e037b65f01bd8be70bb5c1b35a6cdef9344df0674813a2d599fd5",
+            ["generatedCases"] = "922c1fed6bf1846f28494a6cffcdec13a028984b3ed4ceb9f50c1fbb6a050116",
+            ["generatedHashCases"] = "8cae086fd633939d6e0bc5196c46c46c84034d842cb5e04c3b5970af432dd61c",
+            ["generatedIdentityCases"] = "41e6bd4d8d074d1f6f0c0380738026363d5df28eb212ed3abdb463cbcd3ff398",
+            ["generatedInvalidIdentityCases"] = "18f3f330643dbe45604a926f4097f602df8e823023202e9ec32938aa6fdb7273",
+            ["generatedLocatorCases"] = "e9eba02e4719f2a135bdd69b400c5ad7c40235508c523d57626f3373873aca64",
+            ["lifecycleCases"] = "922800af659154d94e1bf4f73d0472282adddb0590ff6592a36716c3adddf274",
+            ["observationCases"] = "169b169bc2d3a85ea27afa9a76580008e10e51004deea9b5170338b356cde363",
+            ["primaryKinds"] = "d4a0d1b16012d3923ab82a427ac580d3ec7019dd34b01e1fd3225bceddbbcbbb",
+            ["profileCases"] = "1b89af80a9f11c441413a4a1c767adbd72f3b4562b9da96d1a6017c52bb1848a",
+            ["profiles"] = "e090168870df556dc7b37fb72f0724cea85e11c5f6e1350ed6292f13399dfd00",
+            ["relationCases"] = "b91c8188615ec0eca9d92c106e92bc36382ef4ddb1036cf70ed5c95d42abd329",
+            ["relationKinds"] = "063fbf9baa566eef46742b098aecb2b681a14ef7e193210ae3ee3f1fbfeae4d4"
+        };
+
+        foreach (var (section, digest) in expected)
+        {
+            var canonical = JsonSerializer.Serialize(root.GetProperty(section), CanonicalJsonOptions);
+            if (Sha256(Encoding.UTF8.GetBytes(canonical)) != digest)
+            {
+                throw new InvalidOperationException($"exact normative rows: {section}");
+            }
+        }
+    }
+
+    private static HashSet<string> ValidateGroundedExistingConcepts(JsonElement root)
+    {
+        var expected = new Dictionary<string, (string Contract, string Digest, string[] RequiredTexts)>(StringComparer.Ordinal)
+        {
+            ["candidate.locator.generated-source"] = (
+                "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+                "d1983390d90515f88ccfdaeb9027690817e5eccf48b19d3e7fe26d466383163c",
+                ["Candidate locators are repository, generated-source, or synthetic; their order is repository, generated-source, synthetic."]),
+            ["contract-lifecycle.pre-release-v1"] = (
+                "docs/00_project/contract-lifecycle.md",
+                "35fea95726468bd52997c3efb375f227f69120e96d9be22ad81c5f81ccb44420",
+                [
+                    "The repository revision is authoritative for pre-release draft semantics. A version number alone never identifies an un-released draft precisely.",
+                    "The prior baseline remains valid historical evidence for its exact commit.",
+                    "reject a missing or mismatched identity"
+                ]),
+            ["policy.repository-contribution"] = (
+                "docs/20_architecture/contracts/policy-configuration-v1.md",
+                "82e352397d6b2e9996333f6819cb4e8f95662ebf60c6c4cadfb63508c8568ef5",
+                [
+                    "The caller supplies `projectPath` and `sourcePath`, both required non-empty lexical paths.",
+                    "A rule applies only when every declared selector accepts. The applicable rule with the greatest priority wins; otherwise `defaultDecision` applies."
+                ])
+        };
+
+        var rows = root.GetProperty("groundedExistingConcepts").EnumerateArray().ToDictionary(row => row.GetProperty("id").GetString()!, StringComparer.Ordinal);
+        if (!expected.Keys.Order(StringComparer.Ordinal).SequenceEqual(rows.Keys.Order(StringComparer.Ordinal)))
+        {
+            throw new InvalidOperationException("grounded concept set");
+        }
+
+        foreach (var (id, grounding) in expected)
+        {
+            var row = rows[id];
+            if (row.GetProperty("contract").GetString() != grounding.Contract ||
+                row.GetProperty("contractSha256").GetString() != grounding.Digest ||
+                !Strings(row, "requiredTexts").SequenceEqual(grounding.RequiredTexts, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException($"grounded concept metadata: {id}");
+            }
+
+            var path = Path.GetFullPath(Path.Join(Root, grounding.Contract.Replace('/', Path.DirectorySeparatorChar)));
+            var text = File.ReadAllText(path);
+            if (!path.StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                Sha256(path) != grounding.Digest ||
+                grounding.RequiredTexts.Any(requiredText => !text.Contains(requiredText, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException($"grounded concept source: {id}");
+            }
+        }
+
+        return expected.Keys.ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static void AssertLocator(
+        IReadOnlyDictionary<string, JsonElement> locators,
+        string caseId,
+        string surface,
+        string discriminator,
+        string[] propertyOrder,
+        string canonicalJson,
+        int order,
+        string equalityKeyJson)
+    {
+        var row = locators[caseId];
+        Assert.Equal(surface, row.GetProperty("surface").GetString());
+        Assert.Equal(canonicalJson, row.GetProperty("canonicalJson").GetString());
+        Assert.Equal(order, row.GetProperty("order").GetInt32());
+        Assert.Equal(equalityKeyJson, JsonSerializer.Serialize(row.GetProperty("equalityKey"), CanonicalJsonOptions));
+
+        using var canonical = JsonDocument.Parse(canonicalJson);
+        var variant = canonical.RootElement.EnumerateObject().Single();
+        Assert.Equal(discriminator, variant.Name);
+        Assert.Equal(propertyOrder, variant.Value.EnumerateObject().Select(property => property.Name));
+    }
+
+    private static void AssertInvalidIdentity(
+        IReadOnlyDictionary<string, JsonElement> rows,
+        string caseId,
+        string category,
+        string outcome,
+        string reason)
+    {
+        var row = rows[caseId];
+        Assert.Equal(category, row.GetProperty("category").GetString());
+        Assert.Equal(outcome, row.GetProperty("outcome").GetString());
+        Assert.Equal(reason, row.GetProperty("reason").GetString());
     }
 
     private static void ValidateRepresentation(JsonElement representation, HashSet<string> registryIds, HashSet<string> concepts, HashSet<string> surfaces)

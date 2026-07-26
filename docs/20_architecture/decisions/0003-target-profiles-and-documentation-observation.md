@@ -150,6 +150,7 @@ All affected contracts remain unreleased pre-release version `1` drafts. #35 est
 The executable vectors use this closed amendment-surface vocabulary for #35:
 
 - `audit-result.component-evidence`
+- `audit-result.documentation-observation`
 - `audit-result.generated-contribution`
 - `audit-result.generated-evidence-locator`
 - `audit-result.malformed-xml`
