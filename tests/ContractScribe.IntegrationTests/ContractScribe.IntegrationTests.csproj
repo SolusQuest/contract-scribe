@@ -5,6 +5,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageDownload Include="Microsoft.AspNetCore.App.Ref" Version="[9.0.0]" />
+    <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[9.0.0]" />
+    <PackageDownload Include="Microsoft.WindowsDesktop.App.Ref" Version="[9.0.0]" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" />

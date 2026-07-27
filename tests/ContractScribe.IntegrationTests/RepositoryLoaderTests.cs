@@ -316,8 +316,14 @@ internal sealed class LoaderFixture : IAsyncDisposable
             Path.Combine(root, "NuGet.Config"),
             """
             <?xml version="1.0" encoding="utf-8"?>
-            <configuration><packageSources><clear /></packageSources></configuration>
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="fixture" value="packages" />
+              </packageSources>
+            </configuration>
             """);
+        PrepareLocalPackageSource(root);
         await File.WriteAllTextAsync(
             Path.Combine(root, "global.json"),
             """{"sdk":{"version":"10.0.102","rollForward":"latestFeature"}}""");
@@ -420,6 +426,36 @@ internal sealed class LoaderFixture : IAsyncDisposable
     {
         await RunDotnetAsync(root, ["restore", "Fixture.slnx", "--configfile", "NuGet.Config"]);
         await RunDotnetAsync(root, ["build", "Fixture.slnx", "--no-restore"]);
+    }
+
+    private static void PrepareLocalPackageSource(string root)
+    {
+        var packageRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        if (string.IsNullOrWhiteSpace(packageRoot))
+        {
+            packageRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget",
+                "packages");
+        }
+
+        var destination = Path.Combine(root, "packages");
+        Directory.CreateDirectory(destination);
+        foreach (var packageId in new[]
+                 {
+                     "microsoft.aspnetcore.app.ref",
+                     "microsoft.netcore.app.ref",
+                     "microsoft.windowsdesktop.app.ref",
+                 })
+        {
+            var package = Path.Combine(packageRoot, packageId, "9.0.0", $"{packageId}.9.0.0.nupkg");
+            if (!File.Exists(package))
+            {
+                throw new InvalidOperationException($"Declared fixture package is unavailable: {packageId}.");
+            }
+
+            File.Copy(package, Path.Combine(destination, Path.GetFileName(package)));
+        }
     }
 
     private static async Task RunDotnetAsync(string root, IReadOnlyList<string> arguments)
