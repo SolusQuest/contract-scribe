@@ -39,6 +39,50 @@ public sealed class PolicyConfigurationConformanceTests
     }
 
     [Fact]
+    public void ErrorCodes_AreClosedAcrossContractFixturesAndOracle()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var fixtureRoot = Path.Combine(repositoryRoot, "tests", "fixtures", "policy-configuration", "v1");
+        var manifest = JsonSerializer.Deserialize<ConformanceManifest>(
+            File.ReadAllText(Path.Combine(fixtureRoot, "cases.json")),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = false })
+            ?? throw new InvalidOperationException("The conformance fixture manifest must deserialize.");
+        var fixtureCodes = manifest.Cases
+            .Select(conformanceCase => conformanceCase.Expected.Error?.Code)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        var source = File.ReadAllText(Path.Combine(repositoryRoot, "tests", "ContractScribe.Tests", "PolicyConfigurationConformanceTests.cs"));
+        var oracleMarker = source.IndexOf("internal static class PolicyConfigurationV1Conformance", StringComparison.Ordinal);
+        Assert.True(oracleMarker >= 0);
+        var oracleCodes = Regex.Matches(source[oracleMarker..], "\"((?:policy|run)\\.[a-z0-9.-]+)\"")
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(oracleCodes.Order(StringComparer.Ordinal), fixtureCodes.Order(StringComparer.Ordinal));
+
+        var contract = File.ReadAllText(Path.Combine(repositoryRoot, "docs", "20_architecture", "contracts", "policy-configuration-v1.md"));
+        var documentedPolicyCodes = Regex.Matches(contract, "`(policy\\.[a-z0-9.-]+)`")
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var emittedPolicyCodes = oracleCodes
+            .Where(code => code.StartsWith("policy.", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(emittedPolicyCodes.Order(StringComparer.Ordinal), documentedPolicyCodes.Order(StringComparer.Ordinal));
+
+        using var registry = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(repositoryRoot, "schemas", "symbol-evidence-taxonomy", "v1.registry.json")));
+        var registeredRunFailures = registry.RootElement
+            .GetProperty("sections")
+            .GetProperty("runFailures")
+            .EnumerateArray()
+            .Select(entry => entry.GetProperty("id").GetString()!)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.All(
+            oracleCodes.Where(code => code.StartsWith("run.", StringComparison.Ordinal)),
+            code => Assert.Contains(code, registeredRunFailures));
+    }
+
+    [Fact]
     public void RawByteFailures_PrecedeLexicalParsing()
     {
         var schema = JsonSchema.FromText("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\"}");

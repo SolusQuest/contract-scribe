@@ -6,7 +6,8 @@ namespace ContractScribe.Tests;
 
 public sealed class M1AuditCliContractTests
 {
-    private const string BaselineCommit = "0806a98609b0eb97014496dcc4f4c8083ec57533";
+    private const string DecisionInputCommit = "0806a98609b0eb97014496dcc4f4c8083ec57533";
+    private const string ProtectedInputDisposition = "current-coordinated-candidate";
     private static readonly string Root = FindRepositoryRoot();
     private static readonly string AnnexPath = Path.Join(Root, "tests", "fixtures", "m1-audit-cli", "cli-contract-v1.json");
     private static readonly string DocPath = Path.Join(Root, "docs", "20_architecture", "audit-cli.md");
@@ -30,7 +31,14 @@ public sealed class M1AuditCliContractTests
         "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json",
         "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json",
         "tests/fixtures/audit-result/v1/payloads/policy-conflict.json",
-        "tests/ContractScribe.Tests/AuditResultConformance.cs"
+        "tests/ContractScribe.Tests/AuditResultConformance.cs",
+        "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs"
+    ];
+
+    private static readonly string[] RequiredOracleProtectedInputs =
+    [
+        "tests/ContractScribe.Tests/AuditResultConformance.cs",
+        "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs"
     ];
 
     private static readonly string[] ExpectedTerminalLayers = ["usage", "preflight", "execution", "audit", "host-contract-error"];
@@ -156,7 +164,9 @@ public sealed class M1AuditCliContractTests
 
         Assert.Equal("contract-scribe.audit-cli/v1", root.GetProperty("contractId").GetString());
         var meta = root.GetProperty("meta");
-        Assert.Equal(BaselineCommit, meta.GetProperty("baselineCommit").GetString());
+        Assert.False(meta.TryGetProperty("baselineCommit", out _));
+        Assert.Equal(DecisionInputCommit, meta.GetProperty("decisionInputCommit").GetString());
+        Assert.Equal(ProtectedInputDisposition, meta.GetProperty("protectedInputDisposition").GetString());
         Assert.Equal(1, meta.GetProperty("envelopeVersion").GetInt32());
 
         var text = Encoding.UTF8.GetString(bytes);
@@ -177,10 +187,10 @@ public sealed class M1AuditCliContractTests
             }
         }
 
-        var binding = meta.GetProperty("oracleBindings").EnumerateArray().Single();
-        Assert.Equal("tests/ContractScribe.Tests/AuditResultConformance.cs", binding.GetProperty("path").GetString());
-        Assert.Equal("shared-usage", binding.GetProperty("binding").GetString());
-        Assert.True(File.Exists(Path.Join(Root, "tests", "ContractScribe.Tests", "AuditResultConformance.cs")));
+        var bindings = meta.GetProperty("oracleBindings").EnumerateArray().ToArray();
+        Assert.Equal(RequiredOracleProtectedInputs.Order(StringComparer.Ordinal), bindings.Select(binding => binding.GetProperty("path").GetString()!).Order(StringComparer.Ordinal));
+        Assert.All(bindings, binding => Assert.Equal("shared-usage", binding.GetProperty("binding").GetString()));
+        Assert.All(RequiredOracleProtectedInputs, path => Assert.True(File.Exists(Path.Join(Root, path.Replace('/', Path.DirectorySeparatorChar)))));
         Assert.Contains("#35", meta.GetProperty("reconciliationGate").GetString(), StringComparison.Ordinal);
     }
 
@@ -190,12 +200,28 @@ public sealed class M1AuditCliContractTests
         using var annex = LoadAnnex();
         var pins = annex.RootElement.GetProperty("meta").GetProperty("protectedInputs");
         var paths = pins.EnumerateObject().Select(property => property.Name).ToArray();
-        Assert.Equal(ExpectedProtectedInputs.Order(StringComparer.Ordinal), paths.Order(StringComparer.Ordinal));
+        ValidateProtectedInputClosure(paths);
         foreach (var property in pins.EnumerateObject())
         {
             var path = Path.Join(Root, property.Name.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(path), $"Missing protected input: {property.Name}");
             Assert.Equal(property.Value.GetString(), Sha256(path));
+        }
+    }
+
+    [Fact]
+    public void ProtectedInputClosure_RejectsEitherMissingOracleSourcePin()
+    {
+        using var annex = LoadAnnex();
+        var paths = annex.RootElement.GetProperty("meta").GetProperty("protectedInputs")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+
+        foreach (var requiredPath in RequiredOracleProtectedInputs)
+        {
+            var mutant = paths.Where(path => path != requiredPath).ToArray();
+            Assert.Throws<InvalidOperationException>(() => ValidateProtectedInputClosure(mutant));
         }
     }
 
@@ -810,6 +836,17 @@ public sealed class M1AuditCliContractTests
             }
         }
         return (compliant, violation, skipped);
+    }
+
+    private static void ValidateProtectedInputClosure(IEnumerable<string> paths)
+    {
+        var expected = ExpectedProtectedInputs.Order(StringComparer.Ordinal).ToArray();
+        var actual = paths.Order(StringComparer.Ordinal).ToArray();
+        if (!expected.SequenceEqual(actual, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Protected-input closure mismatch. Expected [{string.Join(", ", expected)}], actual [{string.Join(", ", actual)}].");
+        }
     }
 
     private static void AssertUniqueCaseIds(JsonElement root)

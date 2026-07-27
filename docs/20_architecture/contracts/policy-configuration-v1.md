@@ -71,13 +71,15 @@ The test-only conformance oracle returns one structured outcome and stops at the
 5. Target-profile gate: `policy.target-profile.required` or `policy.target-profile.invalid`, both at `/targetProfile`.
 6. JSON Schema shape validation: `policy.schema.invalid-document`.
 7. Semantic validation: `policy.semantic.duplicate-rule-id`, `policy.semantic.duplicate-priority`, or `policy.semantic.invalid-pattern`.
-8. Evaluation input validation: `policy.input.invalid-path`, or a run-level generated-fact failure owned by the taxonomy registry.
+8. Evaluation input validation: `policy.input.invalid-path`, `policy.input.invalid-contribution`, or a run-level generated-fact failure owned by the taxonomy registry.
 9. Rule resolution: an effective decision and matched rule ID, or a null matched rule ID for default fallback.
 
 Error outcomes contain `code`, an RFC 6901 `pointer` when an instance location exists, and `schemaKeyword` only for stage 6. Human-readable messages are non-normative.
 
 Any duplicate property, including `schemaVersion` or `targetProfile`, fails at stage 3. Stage 4 applies only to an object with exactly one integer `schemaVersion` other than `1`. Stage 5 applies only to an object whose unique integer `schemaVersion` is `1`; it distinguishes a missing profile from any present non-enumerated value. Missing, null, string, Boolean, non-integral, and non-object schema-version cases fail at stage 6.
 
-Within a failing stage, the oracle selects a canonical outcome: a leading BOM wins over later encoding defects; lexical parsing uses the earliest byte-offset violation; duplicate-property errors identify the current duplicate member with an RFC 6901 pointer; schema leaf failures sort by ordinal instance pointer and then schema keyword; semantic checks use the scan order above; and input validation checks `projectPath` before `sourcePath`, with pointer `/projectPath` or `/sourcePath`. `schemaKeyword` appears only for stage-6 errors.
+`policy.input.invalid-contribution` is the Policy-owned evaluation-input shape error. It is returned when neither contribution variant is supplied, at `/sourcePath`; when both `sourcePath` and `generatedOutput` are supplied, at `/generatedOutput`; or when `generatedOutput.producerKind` is not `source-generator` or `tool-generated`, at `/generatedOutput/producerKind`. It is distinct from `run.generated.missing-identity`, which owns an absent producer or output identity, and `run.generated.authority-conflict`, which owns a present identity whose prefix disagrees with the selected producer kind.
+
+Within a failing stage, the oracle selects a canonical outcome: a leading BOM wins over later encoding defects; lexical parsing uses the earliest byte-offset violation; duplicate-property errors identify the current duplicate member with an RFC 6901 pointer; schema leaf failures sort by ordinal instance pointer and then schema keyword; and semantic checks use the scan order above. Evaluation input validation checks `projectPath` first. It then rejects a missing or doubled contribution variant, validates a repository `sourcePath`, or validates generated input in this order: `producerKind`, missing `producerId`, producer-prefix authority, missing `outputId`, output-prefix authority. The pointers are the exact members described above or the failing `/projectPath`, `/sourcePath`, `/generatedOutput/producerId`, or `/generatedOutput/outputId`. `schemaKeyword` appears only for stage-6 errors.
 
 Policy errors are not M0.2 audit-result reasons and do not produce ordinary symbol audit results.
