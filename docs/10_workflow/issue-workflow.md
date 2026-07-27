@@ -1,6 +1,13 @@
 # Issue workflow
 
-Use native GitHub issue types. An executable work issue includes decision, design, documentation, contract, experiment, validation, and implementation work.
+Use the native GitHub issue type as the authoritative type metadata:
+
+- `Bug` for an unexpected problem, regression, or behavior that violates the current contract;
+- `Feature` for a new user- or consumer-visible capability;
+- `Enhancement` for an improvement to existing functionality, behavior, or workflow;
+- `Task` for bounded decision, design, documentation, contract, experiment, validation, implementation, or coordination work that is not primarily one of the preceding types.
+
+Choose the type from the issue's primary outcome. Do not repeat a native type as a title prefix such as `Task:`, `Bug:`, `Feature:`, or `Enhancement:`. Titles describe the concrete outcome. A work-mode qualifier such as `Design:` or `Experiment:` may be used only when it materially disambiguates the outcome; it does not replace the native `Task` type.
 
 Every executable work issue must state:
 
@@ -38,6 +45,7 @@ Each synchronization entry records:
 - the existing target or proposed issue or milestone;
 - operation: `create`, `update`, `close`, `move`, or `no change`;
 - reviewed title and body draft, or title and description draft for a milestone;
+- native issue type for every issue entry;
 - expected state;
 - owning parent;
 - milestone or non-product track;
@@ -47,7 +55,7 @@ Each synchronization entry records:
 
 Repository-file links in issues and milestones identify immutable semantics and must use a full commit SHA whose commit is reachable from `main`. Live issue, pull-request, and milestone URLs are mutable tracker references and are recorded separately. A per-body digest is not required; the reviewed synchronization manifest is the comparison source.
 
-After applying the writes, read back the rendered remote state and compare the title, body, state, milestone, parent/sub-issue relationships, dependencies, contractual labels, and pinned links with the reviewed manifest.
+After applying the writes, read back the rendered remote state and compare the title, body, native issue type, state, milestone, parent/sub-issue relationships, dependencies, contractual labels, and pinned links with the reviewed manifest. A title prefix or body field is not evidence that the native type was set.
 
 A milestone parent issue owns:
 
