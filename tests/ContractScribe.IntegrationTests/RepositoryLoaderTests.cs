@@ -35,6 +35,7 @@ public sealed class RepositoryLoaderTests
             $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}; secondary={string.Join(',', outcome.SecondaryFacts.Select(fact => fact.Code))}");
         Assert.NotNull(outcome.Session);
         await using var session = outcome.Session;
+        Assert.Equal("X64", session.Toolchain.Architecture);
         Assert.Collection(
             session.Projects.OrderBy(project => project.ProjectIdentity, StringComparer.Ordinal),
             app =>
@@ -111,6 +112,51 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task RejectsMultiTargetingInTheDependencyClosure()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "Library", "Library.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFrameworks>net10.0;net9.0</TargetFrameworks></PropertyGroup>
+            </Project>
+            """);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.target-framework-not-single", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task CanonicalRootOrderingMakesFailureIndependentOfSolutionOrder()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "App", "App.csproj"),
+            """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net10.0;net9.0</TargetFrameworks></PropertyGroup></Project>""");
+        File.Delete(Path.Combine(fixture.Root, "Library", "obj", "project.assets.json"));
+        var first = Path.Combine(fixture.Root, "First.slnx");
+        var second = Path.Combine(fixture.Root, "Second.slnx");
+        await File.WriteAllTextAsync(
+            first,
+            """<Solution><Project Path="App/App.csproj" /><Project Path="Library/Library.csproj" /></Solution>""");
+        await File.WriteAllTextAsync(
+            second,
+            """<Solution><Project Path="Library/Library.csproj" /><Project Path="App/App.csproj" /></Solution>""");
+
+        var loader = new RepositoryLoader();
+        var left = await loader.LoadAsync(new RepositoryLoadRequest(fixture.Root, first));
+        var right = await loader.LoadAsync(new RepositoryLoadRequest(fixture.Root, second));
+
+        Assert.Equal(left.PrimaryFailure, right.PrimaryFailure);
+        Assert.Equal("graph.target-framework-not-single", left.PrimaryFailure?.Code);
+    }
+
+    [Fact]
     public async Task RejectsLexicalEscapeBeforeLoading()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -119,6 +165,48 @@ public sealed class RepositoryLoaderTests
 
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("input.path-outside-root", outcome.PrimaryFailure?.Code);
+    }
+
+    [Fact]
+    public async Task RejectsDirectorySlnfAndDirectNonCSharpInputs()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var filter = Path.Combine(fixture.Root, "Fixture.slnf");
+        var visualBasic = Path.Combine(fixture.Root, "Other.vbproj");
+        await File.WriteAllTextAsync(filter, "{}");
+        await File.WriteAllTextAsync(
+            visualBasic,
+            """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
+        var loader = new RepositoryLoader();
+
+        var directory = await loader.LoadAsync(new RepositoryLoadRequest(fixture.Root, fixture.Root));
+        var slnf = await loader.LoadAsync(new RepositoryLoadRequest(fixture.Root, filter));
+        var nonCSharp = await loader.LoadAsync(new RepositoryLoadRequest(fixture.Root, visualBasic));
+
+        Assert.All(
+            new[] { directory, slnf, nonCSharp },
+            outcome =>
+            {
+                Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+                Assert.Equal("input.path-not-supported", outcome.PrimaryFailure?.Code);
+            });
+    }
+
+    [Fact]
+    public async Task InvalidGlobalJsonReturnsABoundedToolchainFailure()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "global.json"),
+            """{""");
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("toolchain.sdk-probe-failed", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Toolchain);
+        Assert.Empty(outcome.Diagnostics);
     }
 
     [Fact]
@@ -183,6 +271,27 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(
             "10de880f5c5bc026c951342dd026e0ccdac302edfcbe89e9b02d0efff7de6b3a",
             identities.Hash("contract-scribe/sgo/v1", "Cafe\u0301.g.cs"));
+    }
+
+    [Fact]
+    public void LoaderDiagnosticsAreDeduplicatedOrderedAndBounded()
+    {
+        var state = new LoaderExecutionState();
+        foreach (var index in Enumerable.Range(0, 40).Reverse())
+        {
+            var diagnostic = new LoaderDiagnostic(
+                "workspace",
+                $"workspace.diagnostic-{index:D2}",
+                "warning");
+            state.AddDiagnostic(diagnostic);
+            state.AddDiagnostic(diagnostic);
+        }
+
+        Assert.Equal(32, state.Diagnostics.Count);
+        Assert.Equal(
+            state.Diagnostics.OrderBy(diagnostic => diagnostic.Code, StringComparer.Ordinal),
+            state.Diagnostics);
+        Assert.Equal(32, state.Diagnostics.Distinct().Count());
     }
 
     [Fact]
@@ -302,6 +411,70 @@ public sealed class RepositoryLoaderTests
         Assert.Equal("run.generated.authority-conflict", outcome.PrimaryFailure?.Code);
         Assert.Contains(outcome.SecondaryFacts, fact => fact.Code == "repository.protected-drift");
         Assert.Null(outcome.Session);
+    }
+
+    [Theory]
+    [InlineData("creation")]
+    [InlineData("deletion")]
+    public async Task ProtectedCreationOrDeletionSuppressesSuccess(string mode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var path = mode == "creation"
+            ? Path.Combine(fixture.Root, "Created.cs")
+            : Path.Combine(fixture.Root, "App", "App.cs");
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage != LoaderStage.WorkspaceLoad)
+            {
+                return;
+            }
+
+            if (mode == "creation")
+            {
+                File.WriteAllText(path, "public class Created { }");
+            }
+            else
+            {
+                File.Delete(path);
+            }
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+        Assert.Equal(mode == "creation", File.Exists(path));
+    }
+
+    [Fact]
+    public async Task AllowedDesignTimeOutputDoesNotMasqueradeAsProtectedDriftOnFailure()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var output = Path.Combine(fixture.Root, "App", "obj", "loader-observation.tmp");
+        var before = RepositoryInventory.Capture(fixture.Root, CancellationToken.None);
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.Compilation)
+            {
+                File.WriteAllText(output, "allowed");
+            }
+        });
+        var outcome = await loader.LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj",
+            [
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "Broken", "public class {"),
+            ]));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("run.generated.authority-conflict", outcome.PrimaryFailure?.Code);
+        var after = RepositoryInventory.Capture(fixture.Root, CancellationToken.None);
+        var changes = RepositoryInventory.ChangedPaths(before, after);
+        Assert.True(
+            outcome.SecondaryFacts.All(fact => fact.Code != "repository.protected-drift"),
+            $"Allowed output was classified as protected: {string.Join(',', changes)}");
+        Assert.True(File.Exists(output));
     }
 
     [Fact]
@@ -553,6 +726,60 @@ public sealed class RepositoryLoaderTests
             $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
         await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
         Assert.Single(session.Projects);
+    }
+
+    [Fact]
+    public async Task RejectsDuplicatePhysicalProjectAliases()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var alias = Path.Combine(fixture.Root, "Alias");
+        CreateDirectoryLink(alias, Path.Combine(fixture.Root, "Library"));
+        var input = Path.Combine(fixture.Root, "Aliases.sln");
+        await File.WriteAllTextAsync(
+            input,
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            # Visual Studio Version 17
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library", "Library\Library.csproj", "{33333333-3333-3333-3333-333333333333}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alias", "Alias\Library.csproj", "{44444444-4444-4444-4444-444444444444}"
+            EndProject
+            Global
+            EndGlobal
+            """);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, input));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.duplicate-project", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsReferenceThatEscapesAndThenReentersTheRepository()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await using var outside = await LoaderFixture.CreateAsync();
+        var escape = Path.Combine(fixture.Root, "Escape");
+        var reentry = Path.Combine(outside.Root, "Reentry");
+        CreateDirectoryLink(escape, outside.Root);
+        CreateDirectoryLink(reentry, Path.Combine(fixture.Root, "Library"));
+        var appProject = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(appProject);
+        await File.WriteAllTextAsync(
+            appProject,
+            text.Replace(
+                "../Library/Library.csproj",
+                "../Escape/Reentry/Library.csproj",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("input.path-outside-root", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
     }
 
     [Fact]

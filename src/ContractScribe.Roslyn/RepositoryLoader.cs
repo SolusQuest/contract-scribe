@@ -496,13 +496,20 @@ internal static class PostRegistrationLoader
         RepositoryPathResolver resolver)
     {
         var directory = Path.GetDirectoryName(project.FullPath)!;
-        return new[] { "BaseIntermediateOutputPath", "IntermediateOutputPath", "BaseOutputPath", "OutputPath" }
+        return new[]
+            {
+                "MSBuildProjectExtensionsPath",
+                "BaseIntermediateOutputPath",
+                "IntermediateOutputPath",
+                "BaseOutputPath",
+                "OutputPath",
+            }
             .Select(name => project.GetPropertyValue(name))
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => Path.GetFullPath(Path.IsPathFullyQualified(value) ? value : Path.Combine(directory, value)))
             .Where(path => IsContained(root, path))
-            .Select(path => resolver.RelativeIdentity(root, path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => resolver.RelativeIdentity(root, path).TrimEnd('/'))
+            .Distinct(PathComparer())
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
