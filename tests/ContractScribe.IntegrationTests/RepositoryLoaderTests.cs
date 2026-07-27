@@ -132,6 +132,7 @@ public sealed class RepositoryLoaderTests
 
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("graph.restore-assets-missing", outcome.PrimaryFailure?.Code);
+        Assert.NotNull(outcome.Toolchain);
         Assert.False(File.Exists(Path.Combine(fixture.Root, "App", "obj", "project.assets.json")));
     }
 
@@ -158,13 +159,224 @@ public sealed class RepositoryLoaderTests
             $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
         await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
         Assert.Contains(session.GeneratedSources, fact =>
-            fact.ProducerId.StartsWith("sgp-", StringComparison.Ordinal)
-            && fact.OutputId.StartsWith("sgo-", StringComparison.Ordinal)
+            fact.ProducerId.StartsWith("sgp.", StringComparison.Ordinal)
+            && fact.OutputId.StartsWith("sgo.", StringComparison.Ordinal)
             && fact.SourceText.Contains("FixtureGenerated", StringComparison.Ordinal));
         Assert.Contains(session.GeneratedSources, fact =>
-            fact.ProducerId.StartsWith("tgp-", StringComparison.Ordinal)
-            && fact.OutputId.StartsWith("tgo-", StringComparison.Ordinal)
+            fact.ProducerId.StartsWith("tgp.", StringComparison.Ordinal)
+            && fact.OutputId.StartsWith("tgo.", StringComparison.Ordinal)
             && fact.SourceText.Contains("ToolGenerated", StringComparison.Ordinal));
+        var app = Assert.Single(session.Projects, project => project.ProjectIdentity == "App/App.csproj");
+        Assert.NotNull(app.Compilation.GetTypeByMetadataName("FixtureGenerated"));
+        Assert.NotNull(app.Compilation.GetTypeByMetadataName("ToolGenerated"));
+    }
+
+    [Fact]
+    public void GeneratedIdentityFramingMatchesTheFrozenAdrVector()
+    {
+        var identities = new GeneratedIdentityHasher(bytes =>
+            System.Security.Cryptography.SHA256.HashData(bytes.Span));
+
+        Assert.Equal(
+            "54235a1180ce62bdca90001c8eedf3da4b4cdee29922080cd36237a065c1f08b",
+            identities.Hash("contract-scribe/sgo/v1", "widget.g.cs"));
+        Assert.Equal(
+            "10de880f5c5bc026c951342dd026e0ccdac302edfcbe89e9b02d0efff7de6b3a",
+            identities.Hash("contract-scribe/sgo/v1", "Cafe\u0301.g.cs"));
+    }
+
+    [Fact]
+    public async Task RejectsDistinctGeneratedIdentityPreimagesWhenTheDigestCollides()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var loader = new RepositoryLoader(
+            observer: null,
+            digest: _ => new byte[32]);
+        var outcome = await loader.LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj",
+            [
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "First", "public class FirstGenerated { }"),
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "Second", "public class SecondGenerated { }"),
+            ]));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("run.generated.identity-collision", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Theory]
+    [InlineData(nameof(LoaderStage.WorkspaceLoad))]
+    [InlineData(nameof(LoaderStage.Compilation))]
+    [InlineData(nameof(LoaderStage.GeneratedFacts))]
+    [InlineData(nameof(LoaderStage.TerminalValidation))]
+    public async Task CancellationAtLateObservedStagesNeverCommitsSuccess(string targetName)
+    {
+        var target = Enum.Parse<LoaderStage>(targetName);
+        await using var fixture = await LoaderFixture.CreateAsync(withGenerator: true);
+        using var cancellation = new CancellationTokenSource();
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == target)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"),
+            cancellation.Token);
+
+        Assert.Equal(RepositoryLoadStatus.Cancelled, outcome.Status);
+        Assert.NotNull(outcome.Toolchain);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task ProtectedDriftSuppressesSuccessWithoutRepairingTheFile()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = Path.Combine(fixture.Root, "App", "App.cs");
+        var marker = $"{Environment.NewLine}// repository-controlled drift";
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                File.AppendAllText(source, marker);
+            }
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+        Assert.EndsWith(marker, await File.ReadAllTextAsync(source), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CancellationRemainsPrimaryAndProtectedDriftIsSecondary()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = Path.Combine(fixture.Root, "App", "App.cs");
+        using var cancellation = new CancellationTokenSource();
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                File.AppendAllText(source, $"{Environment.NewLine}// cancellation drift");
+                cancellation.Cancel();
+            }
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"),
+            cancellation.Token);
+
+        Assert.Equal(RepositoryLoadStatus.Cancelled, outcome.Status);
+        Assert.Equal("loader.cancelled", outcome.PrimaryFailure?.Code);
+        Assert.Contains(outcome.SecondaryFacts, fact => fact.Code == "repository.protected-drift");
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task GeneratedFailureRemainsPrimaryAndProtectedDriftIsSecondary()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = Path.Combine(fixture.Root, "App", "App.cs");
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.Compilation)
+            {
+                File.AppendAllText(source, $"{Environment.NewLine}// failure drift");
+            }
+        });
+        var outcome = await loader.LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj",
+            [
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "Broken", "public class {"),
+            ]));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("run.generated.authority-conflict", outcome.PrimaryFailure?.Code);
+        Assert.Contains(outcome.SecondaryFacts, fact => fact.Code == "repository.protected-drift");
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task BuildHostProcessEndsAfterTheSuccessfulSessionIsDisposed()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var before = CurrentDotnetProcessIds();
+        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+        using var monitoring = new CancellationTokenSource();
+        var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
+        var loader = new RepositoryLoader();
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        monitoring.Cancel();
+        await monitor;
+        var spawned = observed.Keys.Except(before).ToArray();
+        var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        Assert.NotEmpty(spawned);
+        await session.DisposeAsync();
+
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => spawned.All(ProcessHasExited),
+                TimeSpan.FromSeconds(10)),
+            $"BuildHost process remained after disposal: {string.Join(',', spawned)}");
+    }
+
+    [Theory]
+    [InlineData("failure")]
+    [InlineData("cancellation")]
+    public async Task BuildHostProcessEndsAfterFailureOrCancellation(string mode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var before = CurrentDotnetProcessIds();
+        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+        using var monitoring = new CancellationTokenSource();
+        var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
+        using var cancellation = new CancellationTokenSource();
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (mode == "cancellation" && stage == LoaderStage.Compilation)
+            {
+                cancellation.Cancel();
+            }
+        });
+        var generated = mode == "failure"
+            ? new[]
+            {
+                new ToolGeneratedSourceInput(
+                    "App/App.csproj",
+                    "ContractScribe",
+                    "FixtureTool",
+                    "Broken",
+                    "public class {"),
+            }
+            : null;
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj", generated),
+            cancellation.Token);
+        monitoring.Cancel();
+        await monitor;
+        var spawned = observed.Keys.Except(before).ToArray();
+
+        Assert.Equal(
+            mode == "failure" ? RepositoryLoadStatus.Failure : RepositoryLoadStatus.Cancelled,
+            outcome.Status);
+        Assert.NotEmpty(spawned);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => spawned.All(ProcessHasExited)
+                    && !CurrentDotnetProcessIds().Except(before).Any(),
+                TimeSpan.FromSeconds(10)),
+            $"BuildHost process remained after {mode}: {string.Join(',', spawned)}");
     }
 
     [Fact]
@@ -204,6 +416,106 @@ public sealed class RepositoryLoaderTests
 
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("graph.solution-not-all-csharp", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsSolutionWithNoCSharpProject()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var input = Path.Combine(fixture.Root, "NoCSharp.slnx");
+        await File.WriteAllTextAsync(
+            input,
+            """<Solution><Project Path="Other/Other.vbproj" /></Solution>""");
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, input));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.solution-not-all-csharp", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsMissingTransitiveProjectWithoutMetadataFallback()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var appProject = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(appProject);
+        await File.WriteAllTextAsync(
+            appProject,
+            text.Replace("../Library/Library.csproj", "../Missing/Missing.csproj", StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.project-not-found", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsNonCSharpTransitiveProject()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Other"));
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "Other", "Other.vbproj"),
+            """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
+        var appProject = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(appProject);
+        await File.WriteAllTextAsync(
+            appProject,
+            text.Replace("../Library/Library.csproj", "../Other/Other.vbproj", StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.project-not-csharp", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsOutsideRootTransitiveProject()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await using var outside = await LoaderFixture.CreateAsync();
+        var appProject = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(appProject);
+        await File.WriteAllTextAsync(
+            appProject,
+            text.Replace(
+                "../Library/Library.csproj",
+                Path.Combine(outside.Root, "Library", "Library.csproj"),
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.project-outside-root", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsUnloadableSolutionProjectWithAStableGraphFact()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Broken"));
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "Broken", "Broken.csproj"),
+            """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>""");
+        var input = Path.Combine(fixture.Root, "Broken.slnx");
+        await File.WriteAllTextAsync(
+            input,
+            """<Solution><Project Path="Broken/Broken.csproj" /></Solution>""");
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, input));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.project-unloadable", outcome.PrimaryFailure?.Code);
         Assert.Null(outcome.Session);
     }
 
@@ -285,6 +597,53 @@ public sealed class RepositoryLoaderTests
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException("Mandatory Windows junction setup failed.");
+        }
+    }
+
+    private static int[] CurrentDotnetProcessIds() =>
+        Process.GetProcessesByName("dotnet")
+            .Select(process =>
+            {
+                using (process)
+                {
+                    return process.Id;
+                }
+            })
+            .Order()
+            .ToArray();
+
+    private static bool ProcessHasExited(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
+    private static async Task MonitorDotnetProcessesAsync(
+        System.Collections.Concurrent.ConcurrentDictionary<int, byte> observed,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var processId in CurrentDotnetProcessIds())
+                {
+                    observed.TryAdd(processId, 0);
+                }
+
+                await Task.Delay(10, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 }

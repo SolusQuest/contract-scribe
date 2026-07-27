@@ -44,7 +44,7 @@ internal sealed class RepositoryPathResolver
         }
 
         var physicalRoot = ResolveExistingPath(lexicalRoot);
-        var physicalInput = ResolveExistingPath(lexicalInput);
+        var physicalInput = ResolveExistingPath(lexicalInput, physicalRoot);
         RequireContained(physicalRoot, physicalInput, "input.path-outside-root");
         return new ResolvedRepositoryPaths(lexicalRoot, physicalRoot, lexicalInput, physicalInput);
     }
@@ -53,12 +53,17 @@ internal sealed class RepositoryPathResolver
     {
         var lexicalProject = Path.GetFullPath(projectPath);
         RequireContained(lexicalRoot, lexicalProject, "graph.project-outside-root");
+        if (!lexicalProject.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            throw LoaderException.Graph("graph.project-not-csharp");
+        }
+
         if (!File.Exists(lexicalProject))
         {
             throw LoaderException.Graph("graph.project-not-found");
         }
 
-        var physicalProject = ResolveExistingPath(lexicalProject);
+        var physicalProject = ResolveExistingPath(lexicalProject, physicalRoot);
         RequireContained(physicalRoot, physicalProject, "graph.project-outside-root");
         return physicalProject;
     }
@@ -66,7 +71,10 @@ internal sealed class RepositoryPathResolver
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
         Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/').Normalize();
 
-    private string ResolveExistingPath(string path)
+    public string ResolveSemantic(string physicalRoot, string path) =>
+        ResolveExistingPath(Path.GetFullPath(path), physicalRoot);
+
+    private string ResolveExistingPath(string path, string? containmentRoot = null)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full) ?? throw LoaderException.Input("input.path-invalid");
@@ -101,6 +109,10 @@ internal sealed class RepositoryPathResolver
             var target = info.ResolveLinkTarget(returnFinalTarget: true)
                 ?? throw LoaderException.Input("input.path-link-invalid");
             current = Path.GetFullPath(target.FullName);
+            if (containmentRoot is not null)
+            {
+                RequireContained(containmentRoot, current, "input.path-outside-root");
+            }
             if (!visited.Add(current))
             {
                 throw LoaderException.Input("input.path-link-loop");

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Build.Construction;
 using Microsoft.Build.Evaluation;
+using Microsoft.Build.Exceptions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -15,6 +16,21 @@ namespace ContractScribe.Roslyn;
 public sealed class RepositoryLoader
 {
     private readonly RepositoryPathResolver pathResolver = new();
+    private readonly Action<LoaderStage>? observer;
+    private readonly Func<ReadOnlyMemory<byte>, byte[]> digest;
+
+    public RepositoryLoader()
+        : this(null, null)
+    {
+    }
+
+    internal RepositoryLoader(
+        Action<LoaderStage>? observer,
+        Func<ReadOnlyMemory<byte>, byte[]>? digest = null)
+    {
+        this.observer = observer;
+        this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
+    }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
         RepositoryLoadRequest request,
@@ -23,40 +39,55 @@ public sealed class RepositoryLoader
         ResolvedRepositoryPaths? paths = null;
         IReadOnlyDictionary<string, InventoryEntry>? before = null;
         PostRegistrationResult? loaded = null;
+        RegisteredToolchain? selectedToolchain = null;
+        LoaderExecutionState? state = null;
         RepositoryLoadOutcome outcome;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            Observe(LoaderStage.RequestValidation, cancellationToken);
             paths = pathResolver.Resolve(request.RepositoryRoot, request.InputPath);
-            cancellationToken.ThrowIfCancellationRequested();
+            state = new LoaderExecutionState();
+            state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
+            Observe(LoaderStage.PathResolution, cancellationToken);
             before = RepositoryInventory.Capture(paths.PhysicalRoot, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            var toolchain = await MsBuildBootstrap.EnsureRegisteredAsync(
+            Observe(LoaderStage.BaselineCapture, cancellationToken);
+            selectedToolchain = await MsBuildBootstrap.EnsureRegisteredAsync(
                 Path.GetDirectoryName(paths.PhysicalInput)!,
                 cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            Observe(LoaderStage.ToolchainRegistration, cancellationToken);
             loaded = await PostRegistrationLoader.LoadAsync(
                 paths,
-                toolchain,
+                selectedToolchain,
                 pathResolver,
                 request.ToolGeneratedSources ?? [],
+                state,
+                observer,
+                digest,
                 cancellationToken);
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
         }
         catch (OperationCanceledException)
         {
             loaded?.Session.Dispose();
-            outcome = RepositoryLoadOutcome.Cancelled();
+            outcome = RepositoryLoadOutcome.Cancelled(
+                selectedToolchain?.Identity,
+                state?.Diagnostics);
         }
         catch (LoaderException exception)
         {
             loaded?.Session.Dispose();
-            outcome = RepositoryLoadOutcome.Failure(new LoaderFact(exception.Stage, exception.Code));
+            outcome = RepositoryLoadOutcome.Failure(
+                new LoaderFact(exception.Stage, exception.Code),
+                selectedToolchain?.Identity,
+                state?.Diagnostics);
         }
         catch (Exception)
         {
             loaded?.Session.Dispose();
-            outcome = RepositoryLoadOutcome.Failure(new LoaderFact("internal", "loader.internal-error"));
+            outcome = RepositoryLoadOutcome.Failure(
+                new LoaderFact("internal", "loader.internal-error"),
+                selectedToolchain?.Identity,
+                state?.Diagnostics);
         }
 
         if (paths is null || before is null)
@@ -68,8 +99,20 @@ public sealed class RepositoryLoader
         {
             var after = RepositoryInventory.Capture(paths.PhysicalRoot, CancellationToken.None);
             var drift = RepositoryInventory.ChangedPaths(before, after)
-                .Where(path => IsProtectedDrift(path, loaded))
+                .Where(path => IsProtectedDrift(path, state))
                 .ToArray();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                outcome.Session?.Dispose();
+                var secondary = drift.Length == 0
+                    ? Array.Empty<LoaderFact>()
+                    : [new LoaderFact("repository", "repository.protected-drift")];
+                return RepositoryLoadOutcome.Cancelled(
+                    outcome.Toolchain,
+                    outcome.Diagnostics,
+                    secondary);
+            }
+
             if (drift.Length == 0)
             {
                 return outcome;
@@ -79,15 +122,16 @@ public sealed class RepositoryLoader
             if (outcome.Status == RepositoryLoadStatus.Success)
             {
                 outcome.Session?.Dispose();
-                return RepositoryLoadOutcome.Failure(fact);
+                return RepositoryLoadOutcome.Failure(fact, outcome.Toolchain);
             }
 
             return outcome.Status == RepositoryLoadStatus.Cancelled
-                ? RepositoryLoadOutcome.Cancelled([fact])
+                ? RepositoryLoadOutcome.Cancelled(outcome.Toolchain, outcome.Diagnostics, [fact])
                 : RepositoryLoadOutcome.Failure(
                     outcome.PrimaryFailure ?? new LoaderFact("internal", "loader.internal-error"),
-                    outcome.Diagnostics,
-                    outcome.SecondaryFacts.Concat([fact]).ToArray());
+                    outcome.Toolchain,
+                    diagnostics: outcome.Diagnostics,
+                    secondaryFacts: outcome.SecondaryFacts.Concat([fact]).ToArray());
         }
         catch (Exception)
         {
@@ -95,26 +139,34 @@ public sealed class RepositoryLoader
             if (outcome.Status == RepositoryLoadStatus.Success)
             {
                 outcome.Session?.Dispose();
-                return RepositoryLoadOutcome.Failure(fact);
+                return RepositoryLoadOutcome.Failure(fact, outcome.Toolchain);
             }
 
             return outcome.Status == RepositoryLoadStatus.Cancelled
-                ? RepositoryLoadOutcome.Cancelled([fact])
+                ? RepositoryLoadOutcome.Cancelled(outcome.Toolchain, outcome.Diagnostics, [fact])
                 : RepositoryLoadOutcome.Failure(
                     outcome.PrimaryFailure ?? new LoaderFact("internal", "loader.internal-error"),
-                    outcome.Diagnostics,
-                    outcome.SecondaryFacts.Concat([fact]).ToArray());
+                    outcome.Toolchain,
+                    diagnostics: outcome.Diagnostics,
+                    secondaryFacts: outcome.SecondaryFacts.Concat([fact]).ToArray());
         }
     }
 
-    private static bool IsProtectedDrift(string path, PostRegistrationResult? loaded)
+    private void Observe(LoaderStage stage, CancellationToken cancellationToken)
     {
-        if (loaded is null)
+        cancellationToken.ThrowIfCancellationRequested();
+        observer?.Invoke(stage);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static bool IsProtectedDrift(string path, LoaderExecutionState? state)
+    {
+        if (state is null)
         {
             return true;
         }
 
-        if (loaded.ProtectedPaths.Contains(path))
+        if (state.ProtectedPaths.Contains(path))
         {
             return true;
         }
@@ -122,7 +174,7 @@ public sealed class RepositoryLoader
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        return !loaded.AllowedOutputRoots.Any(root =>
+        return !state.AllowedOutputRoots.Any(root =>
             path.Equals(root, comparison)
             || path.StartsWith(root + "/", comparison));
     }
@@ -135,14 +187,17 @@ internal static class PostRegistrationLoader
         RegisteredToolchain toolchain,
         RepositoryPathResolver pathResolver,
         IReadOnlyList<ToolGeneratedSourceInput> toolGeneratedSources,
+        LoaderExecutionState state,
+        Action<LoaderStage>? observer,
+        Func<ReadOnlyMemory<byte>, byte[]> digest,
         CancellationToken cancellationToken)
     {
+        var identities = new GeneratedIdentityHasher(digest);
         VerifyExecutingMsbuild(toolchain);
         var roots = ResolveRoots(paths, pathResolver);
-        cancellationToken.ThrowIfCancellationRequested();
-        var graph = EvaluateGraph(paths, roots, pathResolver, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var diagnostics = new List<LoaderDiagnostic>();
+        Observe(observer, LoaderStage.InputParsing, cancellationToken);
+        var graph = EvaluateGraph(paths, roots, pathResolver, state, cancellationToken);
+        Observe(observer, LoaderStage.GraphEvaluation, cancellationToken);
         var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["BuildingInsideVisualStudio"] = "true",
@@ -151,7 +206,7 @@ internal static class PostRegistrationLoader
         workspace.SkipUnrecognizedProjects = false;
         workspace.WorkspaceFailed += (_, args) =>
         {
-            diagnostics.Add(new LoaderDiagnostic(
+            state.AddDiagnostic(new LoaderDiagnostic(
                 "workspace",
                 args.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure
                     ? "workspace.diagnostic-failure"
@@ -172,7 +227,7 @@ internal static class PostRegistrationLoader
                 solution = await workspace.OpenSolutionAsync(paths.PhysicalInput, cancellationToken: cancellationToken);
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            Observe(observer, LoaderStage.WorkspaceLoad, cancellationToken);
             var workspaceProjects = solution.Projects.ToArray();
             if (workspaceProjects.Any(project => project.Language != LanguageNames.CSharp))
             {
@@ -221,8 +276,25 @@ internal static class PostRegistrationLoader
                     throw LoaderException.Compilation("compilation.errors");
                 }
 
-                var contextRef = ContextRef(node.Identity, node.TargetFramework);
-                generatedFacts.AddRange(RunGenerators(project, compilation, node.Identity, contextRef, cancellationToken));
+                Observe(observer, LoaderStage.Compilation, cancellationToken);
+                var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
+                generatedFacts.AddRange(RunGenerators(
+                    project,
+                    compilation,
+                    node.Identity,
+                    contextRef,
+                    identities,
+                    cancellationToken));
+                var toolFacts = CreateToolGeneratedFacts(
+                    toolGeneratedSources.Where(input => input.ProjectIdentity == node.Identity).ToArray(),
+                    node.Identity,
+                    contextRef,
+                    project.ParseOptions as CSharpParseOptions,
+                    ref compilation,
+                    identities,
+                    cancellationToken);
+                generatedFacts.AddRange(toolFacts);
+                Observe(observer, LoaderStage.GeneratedFacts, cancellationToken);
                 loadedProjects.Add(new LoadedProject(
                     node.Identity,
                     node.TargetFramework,
@@ -233,12 +305,17 @@ internal static class PostRegistrationLoader
                     compilation));
             }
 
-            if (diagnostics.Any(diagnostic => diagnostic.Severity == "error"))
+            if (state.Diagnostics.Any(diagnostic => diagnostic.Severity == "error"))
             {
                 throw LoaderException.Workspace("workspace.load-failed");
             }
 
-            generatedFacts.AddRange(CreateToolGeneratedFacts(toolGeneratedSources, loadedProjects));
+            if (toolGeneratedSources.Count != generatedFacts.Count(fact => fact.ProducerId.StartsWith("tgp.", StringComparison.Ordinal)))
+            {
+                throw LoaderException.Generated("run.generated.missing-identity");
+            }
+
+            Observe(observer, LoaderStage.TerminalValidation, cancellationToken);
             var session = new LoadedRepositorySession(
                 ".",
                 pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput),
@@ -248,15 +325,23 @@ internal static class PostRegistrationLoader
                 workspace);
             return new PostRegistrationResult(
                 session,
-                BoundDiagnostics(diagnostics),
-                graph.Values.SelectMany(node => node.ProtectedPaths).ToHashSet(PathComparer()),
-                graph.Values.SelectMany(node => node.AllowedOutputRoots).ToHashSet(PathComparer()));
+                state.Diagnostics);
         }
         catch
         {
             workspace.Dispose();
             throw;
         }
+    }
+
+    private static void Observe(
+        Action<LoaderStage>? observer,
+        LoaderStage stage,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        observer?.Invoke(stage);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static IReadOnlyList<string> ResolveRoots(
@@ -287,13 +372,16 @@ internal static class PostRegistrationLoader
             throw LoaderException.Graph("graph.duplicate-project");
         }
 
-        return resolved;
+        return resolved
+            .OrderBy(path => pathResolver.RelativeIdentity(paths.PhysicalRoot, path), StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static Dictionary<string, EvaluatedProject> EvaluateGraph(
         ResolvedRepositoryPaths paths,
         IReadOnlyList<string> roots,
         RepositoryPathResolver pathResolver,
+        LoaderExecutionState state,
         CancellationToken cancellationToken)
     {
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -310,7 +398,15 @@ internal static class PostRegistrationLoader
                 continue;
             }
 
-            var discovery = collection.LoadProject(projectPath);
+            MsBuildProject discovery;
+            try
+            {
+                discovery = collection.LoadProject(projectPath);
+            }
+            catch (InvalidProjectFileException)
+            {
+                throw LoaderException.Graph("graph.project-unloadable");
+            }
             var targetFramework = discovery.GetPropertyValue("TargetFramework").Trim();
             var targetFrameworks = discovery.GetPropertyValue("TargetFrameworks").Trim();
             if (string.IsNullOrWhiteSpace(targetFramework)
@@ -322,14 +418,22 @@ internal static class PostRegistrationLoader
             }
 
             collection.UnloadProject(discovery);
-            var project = collection.LoadProject(
-                projectPath,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["TargetFramework"] = targetFramework,
-                    ["BuildingInsideVisualStudio"] = "true",
-                },
-                toolsVersion: null);
+            MsBuildProject project;
+            try
+            {
+                project = collection.LoadProject(
+                    projectPath,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["TargetFramework"] = targetFramework,
+                        ["BuildingInsideVisualStudio"] = "true",
+                    },
+                    toolsVersion: null);
+            }
+            catch (InvalidProjectFileException)
+            {
+                throw LoaderException.Graph("graph.project-unloadable");
+            }
             var references = project.GetItems("ProjectReference")
                 .Select(item => item.GetMetadataValue("FullPath"))
                 .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -343,8 +447,9 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Graph("graph.restore-assets-missing");
             }
 
-            var protectedPaths = ProtectedPaths(paths.PhysicalRoot, projectPath, project, pathResolver);
+            var protectedPaths = ProtectedPaths(paths, projectPath, project, pathResolver);
             var allowedRoots = AllowedOutputRoots(paths.PhysicalRoot, project, pathResolver);
+            state.AddPolicy(protectedPaths, allowedRoots);
             var identity = pathResolver.RelativeIdentity(paths.PhysicalRoot, projectPath);
             graph[projectPath] = new EvaluatedProject(
                 projectPath,
@@ -365,23 +470,24 @@ internal static class PostRegistrationLoader
     }
 
     private static IReadOnlyList<string> ProtectedPaths(
-        string root,
+        ResolvedRepositoryPaths paths,
         string projectPath,
         MsBuildProject project,
         RepositoryPathResolver resolver)
     {
-        var paths = new[] { projectPath }
+        var semanticPaths = new[] { projectPath, paths.PhysicalInput }
             .Concat(project.Imports.Select(import => import.ImportedProject.FullPath))
             .Concat(new[] { "Compile", "AdditionalFiles", "Analyzer", "AnalyzerConfigFiles", "EditorConfigFiles" }
                 .SelectMany(itemType => project.GetItems(itemType).Select(item => item.GetMetadataValue("FullPath"))))
             .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
             .Select(path => Path.GetFullPath(path))
-            .Where(path => IsContained(root, path))
-            .Select(path => resolver.RelativeIdentity(root, path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => IsContained(paths.PhysicalRoot, path))
+            .Select(path => resolver.ResolveSemantic(paths.PhysicalRoot, path))
+            .Select(path => resolver.RelativeIdentity(paths.PhysicalRoot, path))
+            .Distinct(PathComparer())
             .Order(StringComparer.Ordinal)
             .ToArray();
-        return paths;
+        return semanticPaths;
     }
 
     private static IReadOnlyList<string> AllowedOutputRoots(
@@ -428,6 +534,7 @@ internal static class PostRegistrationLoader
         Compilation compilation,
         string projectIdentity,
         string contextRef,
+        GeneratedIdentityHasher identities,
         CancellationToken cancellationToken)
     {
         var generators = project.AnalyzerReferences
@@ -454,7 +561,7 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Generated("run.generated.authority-conflict");
             }
 
-            var type = result.Generator.GetType();
+            var type = result.Generator.GetGeneratorType();
             var producerType = type.FullName;
             var assemblyName = type.Assembly.GetName();
             if (string.IsNullOrWhiteSpace(producerType) || string.IsNullOrWhiteSpace(assemblyName.Name))
@@ -469,16 +576,22 @@ internal static class PostRegistrationLoader
                 assemblyName.GetPublicKeyToken().ToImmutableArray(),
                 hasPublicKey: false)
                 .GetDisplayName(fullKey: false);
-            var producerId = "sgp-" + HashFramed("contract-scribe/sgp/v1", producerType, producerAssembly);
+            var producerId = "sgp." + identities.Hash("contract-scribe/sgp/v1", producerType, producerAssembly);
             foreach (var source in result.GeneratedSources)
             {
                 var text = source.SourceText.ToString();
+                var sourceBytes = StrictUtf8(text);
+                if (!compilation.SyntaxTrees.Any(tree => tree.GetText(cancellationToken).ContentEquals(source.SourceText)))
+                {
+                    throw LoaderException.Generated("run.generated.authority-conflict");
+                }
+
                 facts.Add(new GeneratedSourceFact(
                     projectIdentity,
                     contextRef,
                     producerId,
-                    "sgo-" + HashFramed("contract-scribe/sgo/v1", source.HintName),
-                    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
+                    "sgo." + identities.Hash("contract-scribe/sgo/v1", source.HintName),
+                    Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
                     text));
             }
         }
@@ -488,21 +601,31 @@ internal static class PostRegistrationLoader
 
     private static IReadOnlyList<GeneratedSourceFact> CreateToolGeneratedFacts(
         IReadOnlyList<ToolGeneratedSourceInput> inputs,
-        IReadOnlyList<LoadedProject> projects)
+        string projectIdentity,
+        string contextRef,
+        CSharpParseOptions? parseOptions,
+        ref Compilation compilation,
+        GeneratedIdentityHasher identities,
+        CancellationToken cancellationToken)
     {
         if (inputs.Count == 0)
         {
             return [];
         }
 
-        var byIdentity = projects.ToDictionary(project => project.ProjectIdentity, StringComparer.Ordinal);
+        if (parseOptions is null)
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
         var grammar = new System.Text.RegularExpressions.Regex(
             @"\A[A-Za-z][A-Za-z0-9._-]{0,127}\z",
             System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         var facts = new List<GeneratedSourceFact>(inputs.Count);
         foreach (var input in inputs)
         {
-            if (!byIdentity.TryGetValue(input.ProjectIdentity, out var project)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (input.ProjectIdentity != projectIdentity
                 || !grammar.IsMatch(input.ProducerNamespace)
                 || !grammar.IsMatch(input.ProducerName)
                 || !grammar.IsMatch(input.OutputName))
@@ -510,20 +633,47 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Generated("run.generated.missing-identity");
             }
 
-            var sourceBytes = Encoding.UTF8.GetBytes(input.SourceText);
+            var sourceBytes = StrictUtf8(input.SourceText);
+            var outputId = "tgo." + identities.Hash("contract-scribe/tgo/v1", input.OutputName);
+            var tree = CSharpSyntaxTree.ParseText(
+                input.SourceText,
+                parseOptions,
+                path: $"tool-generated://{outputId}",
+                cancellationToken: cancellationToken);
+            compilation = compilation.AddSyntaxTrees(tree);
+            if (tree.GetDiagnostics(cancellationToken)
+                    .Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                || compilation.GetDiagnostics(cancellationToken)
+                    .Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            {
+                throw LoaderException.Generated("run.generated.authority-conflict");
+            }
+
             facts.Add(new GeneratedSourceFact(
-                project.ProjectIdentity,
-                project.CompilationContextRef,
-                "tgp-" + HashFramed(
+                projectIdentity,
+                contextRef,
+                "tgp." + identities.Hash(
                     "contract-scribe/tgp/v1",
                     input.ProducerNamespace,
                     input.ProducerName),
-                "tgo-" + HashFramed("contract-scribe/tgo/v1", input.OutputName),
+                outputId,
                 Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
                 input.SourceText));
         }
 
         return facts;
+    }
+
+    private static byte[] StrictUtf8(string value)
+    {
+        try
+        {
+            return new UTF8Encoding(false, true).GetBytes(value);
+        }
+        catch (EncoderFallbackException)
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
     }
 
     private static IReadOnlyList<GeneratedSourceFact> ValidateGeneratedFacts(
@@ -546,48 +696,11 @@ internal static class PostRegistrationLoader
             .ToArray();
     }
 
-    private static string ContextRef(string projectIdentity, string targetFramework) =>
-        "ctx-" + HashFramed("contract-scribe/compilation-context/v1", projectIdentity, targetFramework);
-
-    private static string HashFramed(string domain, params string[] fields)
-    {
-        using var stream = new MemoryStream();
-        stream.Write(Encoding.ASCII.GetBytes(domain));
-        stream.WriteByte(0);
-        Span<byte> length = stackalloc byte[4];
-        foreach (var raw in fields)
-        {
-            byte[] bytes;
-            try
-            {
-                bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
-                    .GetBytes(raw.Normalize());
-            }
-            catch (EncoderFallbackException)
-            {
-                throw LoaderException.Generated("run.generated.missing-identity");
-            }
-
-            if (bytes.Length == 0 || bytes.Length > 4096)
-            {
-                throw LoaderException.Generated("run.generated.missing-identity");
-            }
-
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(length, (uint)bytes.Length);
-            stream.Write(length);
-            stream.Write(bytes);
-        }
-
-        return Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
-    }
-
-    private static IReadOnlyList<LoaderDiagnostic> BoundDiagnostics(IEnumerable<LoaderDiagnostic> diagnostics) =>
-        diagnostics
-            .Distinct()
-            .OrderBy(diagnostic => diagnostic.Stage, StringComparer.Ordinal)
-            .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)
-            .Take(32)
-            .ToArray();
+    private static string ContextRef(
+        string projectIdentity,
+        string targetFramework,
+        GeneratedIdentityHasher identities) =>
+        "ctx-" + identities.Hash("contract-scribe/compilation-context/v1", projectIdentity, targetFramework);
 
     private static void VerifyExecutingMsbuild(RegisteredToolchain toolchain)
     {
@@ -624,6 +737,152 @@ internal sealed record EvaluatedProject(
 
 internal sealed record PostRegistrationResult(
     LoadedRepositorySession Session,
-    IReadOnlyList<LoaderDiagnostic> Diagnostics,
-    IReadOnlySet<string> ProtectedPaths,
-    IReadOnlySet<string> AllowedOutputRoots);
+    IReadOnlyList<LoaderDiagnostic> Diagnostics);
+
+internal sealed class LoaderExecutionState
+{
+    private readonly object gate = new();
+    private readonly List<LoaderDiagnostic> diagnostics = [];
+    private readonly HashSet<string> protectedPaths = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly HashSet<string> allowedOutputRoots = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    public IReadOnlyList<LoaderDiagnostic> Diagnostics
+    {
+        get
+        {
+            lock (gate)
+            {
+                return diagnostics
+                    .Distinct()
+                    .OrderBy(diagnostic => diagnostic.Stage, StringComparer.Ordinal)
+                    .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)
+                    .Take(32)
+                    .ToArray();
+            }
+        }
+    }
+
+    public IReadOnlySet<string> ProtectedPaths
+    {
+        get
+        {
+            lock (gate)
+            {
+                return protectedPaths.ToHashSet(protectedPaths.Comparer);
+            }
+        }
+    }
+
+    public IReadOnlySet<string> AllowedOutputRoots
+    {
+        get
+        {
+            lock (gate)
+            {
+                return allowedOutputRoots.ToHashSet(allowedOutputRoots.Comparer);
+            }
+        }
+    }
+
+    public void AddDiagnostic(LoaderDiagnostic diagnostic)
+    {
+        lock (gate)
+        {
+            diagnostics.Add(diagnostic);
+        }
+    }
+
+    public void AddProtected(string path)
+    {
+        lock (gate)
+        {
+            protectedPaths.Add(path);
+        }
+    }
+
+    public void AddPolicy(
+        IEnumerable<string> protectedMembers,
+        IEnumerable<string> allowedRoots)
+    {
+        lock (gate)
+        {
+            protectedPaths.UnionWith(protectedMembers);
+            allowedOutputRoots.UnionWith(allowedRoots);
+        }
+    }
+}
+
+internal enum LoaderStage
+{
+    RequestValidation,
+    PathResolution,
+    BaselineCapture,
+    ToolchainRegistration,
+    InputParsing,
+    GraphEvaluation,
+    WorkspaceLoad,
+    Compilation,
+    GeneratedFacts,
+    TerminalValidation,
+}
+
+internal sealed class GeneratedIdentityHasher
+{
+    private readonly Func<ReadOnlyMemory<byte>, byte[]> digest;
+    private readonly Dictionary<(string Domain, string Digest), byte[]> registrations = new();
+
+    public GeneratedIdentityHasher(Func<ReadOnlyMemory<byte>, byte[]> digest)
+    {
+        this.digest = digest;
+    }
+
+    public string Hash(string domain, params string[] fields)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Encoding.ASCII.GetBytes(domain));
+        stream.WriteByte(0);
+        Span<byte> length = stackalloc byte[4];
+        foreach (var raw in fields)
+        {
+            byte[] bytes;
+            try
+            {
+                bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                    .GetBytes(raw.Normalize());
+            }
+            catch (EncoderFallbackException)
+            {
+                throw LoaderException.Generated("run.generated.missing-identity");
+            }
+
+            if (bytes.Length == 0 || bytes.Length > 4096)
+            {
+                throw LoaderException.Generated("run.generated.missing-identity");
+            }
+
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(length, (uint)bytes.Length);
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+
+        var preimage = stream.ToArray();
+        var hash = digest(preimage);
+        if (hash.Length != 32)
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
+        var hex = Convert.ToHexString(hash).ToLowerInvariant();
+        var key = (domain, hex);
+        if (registrations.TryGetValue(key, out var registered)
+            && !registered.AsSpan().SequenceEqual(preimage))
+        {
+            throw LoaderException.Generated("run.generated.identity-collision");
+        }
+
+        registrations[key] = preimage;
+        return hex;
+    }
+}

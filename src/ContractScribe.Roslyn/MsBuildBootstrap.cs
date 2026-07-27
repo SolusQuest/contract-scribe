@@ -17,7 +17,8 @@ internal static class MsBuildBootstrap
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var sdkVersion = await ProbeSdkVersionAsync(workingDirectory, cancellationToken);
+        var dotnetHost = ResolveDotnetHost();
+        var sdkVersion = await ProbeSdkVersionAsync(dotnetHost, workingDirectory, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         lock (Gate)
@@ -40,12 +41,25 @@ internal static class MsBuildBootstrap
                 }
 
                 MSBuildLocator.AllowQueryAllDotnetLocations = true;
-                var instance = MSBuildLocator.QueryVisualStudioInstances()
+                var dotnetRoot = Path.GetDirectoryName(dotnetHost)!;
+                var versionCandidates = MSBuildLocator.QueryVisualStudioInstances()
                     .Where(candidate => candidate.DiscoveryType == DiscoveryType.DotNetSdk)
                     .Where(candidate => string.Equals(SdkVersion(candidate), sdkVersion, StringComparison.Ordinal))
-                    .OrderByDescending(candidate => candidate.Version)
-                    .FirstOrDefault()
-                    ?? throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                    .DistinctBy(
+                        candidate => Path.GetFullPath(candidate.MSBuildPath),
+                        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                    .ToArray();
+                var rootMatches = versionCandidates
+                    .Where(candidate => string.Equals(
+                        DotnetRoot(candidate),
+                        dotnetRoot,
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    .ToArray();
+                var instance = rootMatches.Length == 1
+                    ? rootMatches[0]
+                    : versionCandidates.Length == 1
+                        ? versionCandidates[0]
+                    : throw LoaderException.Toolchain("toolchain.sdk-unavailable");
                 MSBuildLocator.RegisterInstance(instance);
 
                 var assemblyPath = Path.Combine(instance.MSBuildPath, "Microsoft.Build.dll");
@@ -70,6 +84,7 @@ internal static class MsBuildBootstrap
     }
 
     private static async Task<string> ProbeSdkVersionAsync(
+        string dotnetHost,
         string workingDirectory,
         CancellationToken cancellationToken)
     {
@@ -78,7 +93,7 @@ internal static class MsBuildBootstrap
         var probeToken = timeout.Token;
         var startInfo = new ProcessStartInfo
         {
-            FileName = "dotnet",
+            FileName = dotnetHost,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -119,6 +134,28 @@ internal static class MsBuildBootstrap
 
             throw LoaderException.Toolchain("toolchain.sdk-probe-failed");
         }
+    }
+
+    private static string ResolveDotnetHost()
+    {
+        var executable = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(directory, executable);
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+        }
+
+        throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+    }
+
+    private static string? DotnetRoot(VisualStudioInstance instance)
+    {
+        var sdkDirectory = Directory.GetParent(instance.MSBuildPath);
+        return sdkDirectory?.Parent?.FullName;
     }
 
     private static async Task<string> ReadBoundedAsync(

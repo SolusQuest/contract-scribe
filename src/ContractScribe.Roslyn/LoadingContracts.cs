@@ -36,12 +36,14 @@ public sealed class RepositoryLoadOutcome
     private RepositoryLoadOutcome(
         RepositoryLoadStatus status,
         LoadedRepositorySession? session,
+        ToolchainIdentity? toolchain,
         LoaderFact? primaryFailure,
         IReadOnlyList<LoaderFact> secondaryFacts,
         IReadOnlyList<LoaderDiagnostic> diagnostics)
     {
         Status = status;
         Session = session;
+        Toolchain = toolchain;
         PrimaryFailure = primaryFailure;
         SecondaryFacts = secondaryFacts;
         Diagnostics = diagnostics;
@@ -50,6 +52,7 @@ public sealed class RepositoryLoadOutcome
     public RepositoryLoadStatus Status { get; }
 
     public LoadedRepositorySession? Session { get; }
+    public ToolchainIdentity? Toolchain { get; }
 
     public LoaderFact? PrimaryFailure { get; }
 
@@ -60,21 +63,26 @@ public sealed class RepositoryLoadOutcome
     internal static RepositoryLoadOutcome Success(
         LoadedRepositorySession session,
         IReadOnlyList<LoaderDiagnostic> diagnostics) =>
-        new(RepositoryLoadStatus.Success, session, null, [], diagnostics);
+        new(RepositoryLoadStatus.Success, session, session.Toolchain, null, [], diagnostics);
 
     internal static RepositoryLoadOutcome Failure(
         LoaderFact failure,
+        ToolchainIdentity? toolchain = null,
         IReadOnlyList<LoaderDiagnostic>? diagnostics = null,
         IReadOnlyList<LoaderFact>? secondaryFacts = null) =>
-        new(RepositoryLoadStatus.Failure, null, failure, secondaryFacts ?? [], diagnostics ?? []);
+        new(RepositoryLoadStatus.Failure, null, toolchain, failure, secondaryFacts ?? [], diagnostics ?? []);
 
-    internal static RepositoryLoadOutcome Cancelled(IReadOnlyList<LoaderFact>? secondaryFacts = null) =>
+    internal static RepositoryLoadOutcome Cancelled(
+        ToolchainIdentity? toolchain = null,
+        IReadOnlyList<LoaderDiagnostic>? diagnostics = null,
+        IReadOnlyList<LoaderFact>? secondaryFacts = null) =>
         new(
             RepositoryLoadStatus.Cancelled,
             null,
+            toolchain,
             new LoaderFact("cancellation", "loader.cancelled"),
             secondaryFacts ?? [],
-            []);
+            diagnostics ?? []);
 }
 
 public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
