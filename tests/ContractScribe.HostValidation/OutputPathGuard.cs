@@ -48,9 +48,10 @@ public static class OutputPathGuard
 
             RejectLinkAlias(output);
             var parent = Directory.GetParent(output);
-            while (parent is not null && IsWithin(parent.FullName, repositoryRoot, comparison))
+            while (parent is not null)
             {
-                if (parent.LinkTarget is not null)
+                if (parent.LinkTarget is not null
+                    || (parent.Attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     throw new ProtocolException("HV205_OUTPUT_LINK_ALIAS");
                 }

@@ -8,6 +8,7 @@
     "baseline",
     "artifactInventory",
     "requiredCells",
+    "subjectSourceContract",
     "taxonomies",
     "executionContract",
     "publicSafety",
@@ -66,6 +67,51 @@
         }
       ],
       "items": false
+    },
+    "subjectSourceContract": {
+      "type": "object",
+      "required": [
+        "sourceRoots",
+        "failureRegistry",
+        "calibratedBounds",
+        "buildRecipe",
+        "commandContract",
+        "contractBaseline",
+        "environmentPolicy",
+        "workflow"
+      ],
+      "properties": {
+        "sourceRoots": {
+          "const": [
+            "Directory.Build.props",
+            "Directory.Packages.props",
+            "global.json",
+            "src"
+          ]
+        },
+        "failureRegistry": {
+          "const": "docs/20_architecture/decisions/0002-process-topology.md"
+        },
+        "calibratedBounds": {
+          "const": "docs/20_architecture/validation/m1-host-validation-protocol.md"
+        },
+        "buildRecipe": {
+          "const": "Directory.Build.props"
+        },
+        "commandContract": {
+          "const": "schemas/validation/m1-host-validation-subject-v1.schema.json"
+        },
+        "contractBaseline": {
+          "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
+        },
+        "environmentPolicy": {
+          "const": "docs/20_architecture/security-boundary.md"
+        },
+        "workflow": {
+          "const": ".github/workflows/ci.yml"
+        }
+      },
+      "additionalProperties": false
     },
     "taxonomies": {
       "type": "object",
@@ -237,7 +283,8 @@
           "const": [
             "cell-evidence.json",
             "aggregate-evidence.json",
-            "incomplete-evidence.json"
+            "incomplete-evidence.json",
+            "publication-record.json"
           ]
         },
         "stableDiagnosticCodes": {

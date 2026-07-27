@@ -3,127 +3,177 @@
   "cases": [
     {
       "caseId": "cell.subject-vector-mismatch",
-      "target": "cell",
+      "seed": "matched-managed-run",
+      "target": "validate-cell",
+      "operation": "replace-subject-vector-id",
       "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
     },
     {
       "caseId": "cell.subject-run-mismatch",
-      "target": "cell",
+      "seed": "matched-managed-run",
+      "target": "validate-cell",
+      "operation": "replace-subject-run-id",
       "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
     },
     {
       "caseId": "cell.subject-process-start-conflict",
-      "target": "cell",
+      "seed": "matched-managed-run",
+      "target": "validate-cell",
+      "operation": "replace-subject-process-start",
       "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
     },
     {
       "caseId": "cell.subject-process-termination-conflict",
-      "target": "cell",
+      "seed": "matched-managed-run",
+      "target": "validate-cell",
+      "operation": "replace-subject-process-termination",
       "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
     },
     {
       "caseId": "cell.result-commitment-conflict",
-      "target": "cell",
+      "seed": "matched-result-run",
+      "target": "validate-cell",
+      "operation": "replace-subject-result-digest",
       "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
     },
     {
       "caseId": "cell.failure-registry-mismatch",
-      "target": "cell",
+      "seed": "matched-failure-run",
+      "target": "validate-cell",
+      "operation": "replace-failure-registry-digest",
       "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
     },
     {
       "caseId": "cell.false-run-verdict",
-      "target": "cell",
+      "seed": "blocked-cell",
+      "target": "validate-cell",
+      "operation": "replace-blocked-verdict-with-matched",
       "expectedCode": "HV156_FALSE_MATCH"
     },
     {
       "caseId": "cell.false-cell-outcome",
-      "target": "cell",
+      "seed": "blocked-cell",
+      "target": "validate-cell",
+      "operation": "replace-cell-outcome-with-passed",
       "expectedCode": "HV213_FALSE_CELL_OUTCOME"
     },
     {
       "caseId": "cell.missing-run",
-      "target": "cell",
+      "seed": "blocked-cell",
+      "target": "validate-cell",
+      "operation": "remove-required-run",
       "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
     },
     {
       "caseId": "cell.duplicate-run",
-      "target": "cell",
+      "seed": "blocked-cell",
+      "target": "validate-cell",
+      "operation": "duplicate-required-run",
       "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
     },
     {
       "caseId": "cell.unknown-run",
-      "target": "cell",
+      "seed": "blocked-cell",
+      "target": "validate-cell",
+      "operation": "replace-run-vector-with-unknown",
       "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
     },
     {
       "caseId": "cell.within-cell-nondeterminism",
-      "target": "cell",
+      "seed": "matched-two-run-cell",
+      "target": "validate-cell",
+      "operation": "replace-second-result-digest",
       "expectedCode": "HV217_DETERMINISM_MISMATCH"
     },
     {
       "caseId": "cell.fresh-process-not-proven",
-      "target": "cell",
+      "seed": "matched-two-run-cell",
+      "target": "validate-cell",
+      "operation": "reuse-subject-process-id",
       "expectedCode": "HV216_FRESH_PROCESS_NOT_PROVEN"
     },
     {
       "caseId": "cell.protected-write-on-ordinary-vector",
-      "target": "cell",
+      "seed": "matched-managed-run",
+      "target": "validate-cell",
+      "operation": "add-protected-write",
       "expectedCode": "HV156_FALSE_MATCH"
     },
     {
       "caseId": "aggregate.tampered-cell-hash",
-      "target": "aggregate",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-cell-evidence-digest",
       "expectedCode": "HV214_AGGREGATE_DERIVATION_MISMATCH"
     },
     {
       "caseId": "aggregate.forged-pass",
-      "target": "aggregate",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-aggregate-outcome-with-passed",
       "expectedCode": "HV214_AGGREGATE_DERIVATION_MISMATCH"
     },
     {
       "caseId": "aggregate.mixed-attempt",
-      "target": "aggregate",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-second-cell-attempt",
       "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
     },
     {
       "caseId": "aggregate.cross-cell-nondeterminism",
-      "target": "aggregate",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-second-cell-result-digest",
       "expectedCode": "HV217_DETERMINISM_MISMATCH"
     },
     {
       "caseId": "incomplete.review-mismatch",
-      "target": "incomplete",
+      "seed": "incomplete-record",
+      "target": "validate-incomplete",
+      "operation": "replace-review-id",
       "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
     },
     {
       "caseId": "incomplete.classification-mismatch",
-      "target": "incomplete",
+      "seed": "incomplete-record",
+      "target": "validate-incomplete",
+      "operation": "replace-classification",
       "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
     },
     {
       "caseId": "public.absolute-windows-path",
-      "target": "public",
+      "seed": "public-text",
+      "target": "prepare-public",
+      "operation": "insert-windows-rooted-path",
       "expectedCode": "HV118_PUBLIC_MACHINE_PATH"
     },
     {
       "caseId": "public.absolute-unix-path",
-      "target": "public",
+      "seed": "public-text",
+      "target": "prepare-public",
+      "operation": "insert-unix-rooted-path",
       "expectedCode": "HV118_PUBLIC_MACHINE_PATH"
     },
     {
       "caseId": "public.bearer-credential",
-      "target": "public",
+      "seed": "public-text",
+      "target": "prepare-public",
+      "operation": "insert-bearer-credential",
       "expectedCode": "HV119_PUBLIC_CREDENTIAL_MARKER"
     },
     {
       "caseId": "output.subject-manifest-collision",
-      "target": "output",
+      "seed": "output-paths",
+      "target": "output-guard",
+      "operation": "reuse-input-as-output",
       "expectedCode": "HV194_OUTPUT_PATH_COLLISION"
     },
     {
       "caseId": "output.protected-repository-path",
-      "target": "output",
+      "seed": "output-paths",
+      "target": "output-guard",
+      "operation": "select-protected-source-output",
       "expectedCode": "HV204_OUTPUT_PROTECTED"
     }
   ]

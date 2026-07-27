@@ -17,6 +17,7 @@
     "schemas/validation/m1-host-validation-aggregate-evidence-v1.schema.json",
     "schemas/validation/m1-host-validation-cell-evidence-v1.schema.json",
     "schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json",
+    "schemas/validation/m1-host-validation-publication-record-v1.schema.json",
     "schemas/validation/m1-host-validation-protocol-v1.schema.json",
     "schemas/validation/m1-host-validation-review-v1.schema.json",
     "schemas/validation/m1-host-validation-subject-v1.schema.json",
@@ -68,6 +69,21 @@
       "runnerImagePolicy": "github-hosted-windows-latest-record-concrete-image"
     }
   ],
+  "subjectSourceContract": {
+    "sourceRoots": [
+      "Directory.Build.props",
+      "Directory.Packages.props",
+      "global.json",
+      "src"
+    ],
+    "failureRegistry": "docs/20_architecture/decisions/0002-process-topology.md",
+    "calibratedBounds": "docs/20_architecture/validation/m1-host-validation-protocol.md",
+    "buildRecipe": "Directory.Build.props",
+    "commandContract": "schemas/validation/m1-host-validation-subject-v1.schema.json",
+    "contractBaseline": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+    "environmentPolicy": "docs/20_architecture/security-boundary.md",
+    "workflow": ".github/workflows/ci.yml"
+  },
   "taxonomies": {
     "processStart": [
       "started",
@@ -156,7 +172,8 @@
     "publicArtifactAllowlist": [
       "cell-evidence.json",
       "aggregate-evidence.json",
-      "incomplete-evidence.json"
+      "incomplete-evidence.json",
+      "publication-record.json"
     ],
     "stableDiagnosticCodes": [
       "HV101_ARTIFACT_UNREADABLE",

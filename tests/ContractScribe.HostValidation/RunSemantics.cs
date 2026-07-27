@@ -47,6 +47,16 @@ public static class RunSemantics
         {
             diagnostics.Add("HV207_PROCESS_OBSERVATION_INCOMPLETE");
         }
+        if (RequiresControl(vector.VectorId) && !run.Process.ControlCompleted)
+        {
+            diagnostics.Add("HV224_CONTROL_GATE_INCOMPLETE");
+        }
+        if (vector.ExecutorKind == "production-host"
+            && vector.ObserverRequirements.Contains("canonical-bytes", StringComparer.Ordinal)
+            && (run.ObservedCanonicalResult is null || run.ObservedAuditResult is null))
+        {
+            diagnostics.Add("HV223_AUDIT_RESULT_INVALID");
+        }
         if (run.Subject is not null)
         {
             ValidateSubjectResponse(vector, run, source);
@@ -82,6 +92,16 @@ public static class RunSemantics
             or "toolchain.no-automatic-restore"
             or "network.no-contractscribe-initiated-operation"
             or "toolchain.owned-subprocesses";
+
+    public static bool RequiresControl(string vectorId) =>
+        vectorId is
+            "cancellation.before-commit"
+            or "cancellation.after-commit"
+            or "cancellation.late-completion"
+            or "cancellation.terminal-precedence"
+            or "publication.kill-before-commit"
+            or "publication.kill-after-commit"
+            || RequiresSynchronizedTree(vectorId);
 
     public static string DeriveCellOutcome(IEnumerable<RunEvidence> runs)
     {
@@ -136,6 +156,14 @@ public static class RunSemantics
         {
             throw new ProtocolException("HV210_SUBJECT_OUTCOME_ILLEGAL");
         }
+        if (run.ObservedAuditResult is not null
+            && subject.AuditOutcome is not null
+            && !run.ObservedAuditResult.AuditOutcomes.Contains(
+                $"audit.outcome.{subject.AuditOutcome}",
+                StringComparer.Ordinal))
+        {
+            throw new ProtocolException("HV209_SUBJECT_OBSERVER_CONTRADICTION");
+        }
     }
 
     private static string DeriveObservation(
@@ -158,23 +186,37 @@ public static class RunSemantics
             return "repository.unexpected-output-observed";
         }
         if (vector.VectorId == "toolchain.no-automatic-restore"
-            && delta.AllowedDesignTimeCreated.Concat(delta.AllowedDesignTimeChanged)
-                .Any(path => path.EndsWith("project.assets.json", StringComparison.Ordinal)))
+            && (delta.AllowedDesignTimeCreated.Concat(delta.AllowedDesignTimeChanged)
+                    .Any(path => path.EndsWith("project.assets.json", StringComparison.Ordinal))
+                || run.ObservedProcesses.Any(process => process.Role != "subject-runtime")))
         {
             return "toolchain.restore-or-runtime-download-marker-observed";
         }
         if (vector.VectorId == "toolchain.process-topology")
         {
             if (run.ObservedProcesses.Count(process => process.Role == "subject-runtime") != 1
-                || run.ObservedProcesses.Any(process => process.Role == "contractscribe-worker"))
+                || run.ObservedProcesses.Any(process =>
+                    process.Role is "contractscribe-worker" or "unknown-descendant"))
             {
                 return "process.contractscribe-worker-observed";
             }
         }
+        if (vector.VectorId == "network.no-contractscribe-initiated-operation"
+            && run.ObservedProcesses.Any(process =>
+                process.Role is "contractscribe-worker" or "unknown-descendant"))
+        {
+            return "network.contractscribe-initiated-operation-observed";
+        }
+        if (vector.VectorId == "toolchain.owned-subprocesses"
+            && run.ObservedProcesses.Any(process =>
+                process.Role is "contractscribe-worker" or "unknown-descendant"))
+        {
+            return "process.unowned-subprocess-observed";
+        }
 
         if (vector.ExecutorKind == "production-host")
         {
-            return run.Subject?.ObservationCode ?? "process.no-valid-subject-response";
+            return DeriveProductionObservation(vector, run);
         }
 
         var resultExists = run.ObservedCanonicalResult is not null;
@@ -198,6 +240,45 @@ public static class RunSemantics
             "publication.kill-before-commit" => "publication.kill-left-valid-result",
             "publication.kill-after-commit" when resultExists => "publication.committed-result-remains-valid",
             "publication.kill-after-commit" => "publication.committed-result-missing",
+            _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
+        };
+    }
+
+    private static string DeriveProductionObservation(VectorDefinition vector, RunEvidence run)
+    {
+        var result = run.ObservedAuditResult;
+        return vector.VectorId switch
+        {
+            "contracts.policy-conformance" when result?.PolicyConfigurationVersion == 1 =>
+                "contracts.policy.amended-v1",
+            "contracts.taxonomy-conformance" when result?.TaxonomyRegistryVersion == 1 =>
+                "contracts.taxonomy.amended-v1",
+            "contracts.audit-conformance" when result?.AuditResultVersion == 1 =>
+                "contracts.audit.amended-v1",
+            "contracts.profile-external-api" when result?.TargetProfile == "profile.external-api" =>
+                "audit.profile.external-api",
+            "contracts.profile-assembly-visible" when result?.TargetProfile == "profile.assembly-visible" =>
+                "audit.profile.assembly-visible",
+            "contracts.outcome-compliant" when result?.AuditOutcomes.Count > 0
+                && result.AuditOutcomes.All(outcome => outcome == "audit.outcome.compliant") =>
+                "audit.outcome.compliant",
+            "contracts.outcome-violation" when result?.AuditOutcomes.Contains(
+                    "audit.outcome.violation",
+                    StringComparer.Ordinal) == true
+                && run.Subject?.ExecutionOutcome == "succeeded" =>
+                "audit.outcome.violation-success",
+            "contracts.outcome-skipped" when result?.AuditOutcomes.Contains(
+                    "audit.outcome.skipped",
+                    StringComparer.Ordinal) == true =>
+                "audit.outcome.skipped",
+            "determinism.fresh-process-canonical" when result is not null =>
+                "determinism.byte-identical",
+            "path.working-directory-independent" when result is not null =>
+                "path.working-directory-independent",
+            "support.generator" when result is not null =>
+                "support.generator-generated-facts",
+            "support.multi-targeting" when result is not null =>
+                "support.multi-targeting-owned-disposition",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
     }

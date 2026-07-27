@@ -177,6 +177,42 @@ public static class BundleValidator
         return $"review.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(identity))}";
     }
 
+    public static void ValidateCommitBoundArtifacts(
+        string root,
+        string revision,
+        IEnumerable<ArtifactIdentity> identities)
+    {
+        root = RepositoryPaths.NormalizeRoot(root);
+        if (revision.Length != 40
+            || !revision.All(Uri.IsHexDigit)
+            || RunGit(root, ["cat-file", "-e", $"{revision}^{{commit}}"], captureOutput: false).ExitCode != 0)
+        {
+            throw new ProtocolException("HV225_SOURCE_REVISION_INVALID");
+        }
+        foreach (var identity in identities)
+        {
+            var result = RunGit(root, ["show", $"{revision}:{identity.Path}"], captureOutput: true);
+            if (result.ExitCode != 0 || CanonicalJson.Sha256(result.Output) != identity.Sha256)
+            {
+                throw new ProtocolException("HV226_SOURCE_REVISION_MISMATCH");
+            }
+        }
+    }
+
+    public static void ValidateCommitAncestry(string root, string ancestor, string descendant)
+    {
+        root = RepositoryPaths.NormalizeRoot(root);
+        if (ancestor.Length != 40
+            || descendant.Length != 40
+            || !ancestor.All(Uri.IsHexDigit)
+            || !descendant.All(Uri.IsHexDigit)
+            || RunGit(root, ["cat-file", "-e", $"{descendant}^{{commit}}"], captureOutput: false).ExitCode != 0
+            || RunGit(root, ["merge-base", "--is-ancestor", ancestor, descendant], captureOutput: false).ExitCode != 0)
+        {
+            throw new ProtocolException("HV225_SOURCE_REVISION_INVALID");
+        }
+    }
+
     public static string ComputeBundleId(IEnumerable<ArtifactIdentity> entries)
     {
         using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);

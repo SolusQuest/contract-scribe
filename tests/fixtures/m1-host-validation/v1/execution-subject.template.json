@@ -8,6 +8,9 @@
     "sourceConfigurationId": "source.0000000000000000000000000000000000000000000000000000000000000000",
     "hostRevision": "0000000000000000000000000000000000000000",
     "sourceRoots": [
+      "Directory.Build.props",
+      "Directory.Packages.props",
+      "global.json",
       "src"
     ],
     "sourceAndBuildInputs": [

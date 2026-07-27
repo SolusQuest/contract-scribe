@@ -8,6 +8,7 @@ public sealed record ProtocolManifest(
     BaselineIdentity Baseline,
     IReadOnlyList<string> ArtifactInventory,
     IReadOnlyList<CellDefinition> RequiredCells,
+    SubjectSourceContract SubjectSourceContract,
     TaxonomyDefinition Taxonomies,
     ExecutionContract ExecutionContract,
     PublicSafetyPolicy PublicSafety,
@@ -25,6 +26,16 @@ public sealed record CellDefinition(
     string Architecture,
     string Rid,
     string RunnerImagePolicy);
+
+public sealed record SubjectSourceContract(
+    IReadOnlyList<string> SourceRoots,
+    string FailureRegistry,
+    string CalibratedBounds,
+    string BuildRecipe,
+    string CommandContract,
+    string ContractBaseline,
+    string EnvironmentPolicy,
+    string Workflow);
 
 public sealed record TaxonomyDefinition(
     IReadOnlyList<string> ProcessStart,
@@ -136,6 +147,13 @@ public sealed record CanonicalResultCommitment(
     string Encoding,
     bool Canonical);
 
+public sealed record ObservedAuditResultFacts(
+    int AuditResultVersion,
+    int PolicyConfigurationVersion,
+    int TaxonomyRegistryVersion,
+    string TargetProfile,
+    IReadOnlyList<string> AuditOutcomes);
+
 public sealed record ProcessExecutionResult(
     int? ExitCode,
     string ProcessStart,
@@ -246,7 +264,7 @@ public sealed record ValidationAttemptIdentity(
 
 public sealed record AggregateFinalizationIdentity(
     string MatrixResult,
-    string EvidencePublicationRevision);
+    string EvidencePublicationBaseRevision);
 
 public sealed record CellMaterialization(
     string CellId,
@@ -271,6 +289,7 @@ public sealed record RunEvidence(
     SubjectResponse? Subject,
     ProcessObservation Process,
     CanonicalResultCommitment? ObservedCanonicalResult,
+    ObservedAuditResultFacts? ObservedAuditResult,
     RepositoryDelta RepositoryDelta,
     IReadOnlyList<ObservedProcess> ObservedProcesses,
     IReadOnlyList<string> DiagnosticCodes);
@@ -293,6 +312,15 @@ public sealed record AggregateEvidence(
     IReadOnlyList<CellAggregate> Cells,
     string Outcome,
     IReadOnlyList<string> Supersedes);
+
+public sealed record EvidencePublicationRecord(
+    string FormatVersion,
+    string BundleId,
+    string ReviewId,
+    string SourceConfigurationId,
+    ValidationAttemptIdentity ValidationAttempt,
+    string EvidenceRecordRevision,
+    IReadOnlyList<ArtifactIdentity> PublishedEvidence);
 
 public sealed record CellAggregate(
     string CellId,

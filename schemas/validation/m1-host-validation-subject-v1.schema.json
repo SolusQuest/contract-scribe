@@ -434,7 +434,8 @@
             {
               "type": "string",
               "minLength": 1,
-              "maxLength": 512
+              "maxLength": 512,
+              "pattern": "^(?:missing-executable|dotnet|repository:(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+)$"
             },
             {
               "type": "null"
@@ -447,7 +448,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 512
+            "maxLength": 512,
+            "pattern": "^(?:\\{request\\}|\\{response\\}|\\{repository\\}|\\{control\\}|repository:(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+|[A-Za-z0-9._=+-]+)$"
           }
         },
         "executableSha256": {
@@ -506,6 +508,58 @@
           ]
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capabilityAvailable": {
+                "const": true
+              },
+              "executorKind": {
+                "enum": [
+                  "external-process",
+                  "platform-fixture"
+                ]
+              }
+            },
+            "required": [
+              "capabilityAvailable",
+              "executorKind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executable": {
+                "type": "string"
+              },
+              "arrangementInputs": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executable": {
+                "type": "string",
+                "pattern": "^repository:"
+              }
+            },
+            "required": [
+              "executable"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executableSha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "artifactIdentity": {

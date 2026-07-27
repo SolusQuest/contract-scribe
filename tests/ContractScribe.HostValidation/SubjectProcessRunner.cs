@@ -67,7 +67,7 @@ public static class SubjectProcessRunner
         var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, standardErrorLimit, cancellationToken);
         var controlTask = control is null
             ? Task.FromResult(true)
-            : ApplyControlAsync(process, control, cancellationToken);
+            : ApplyControlAsync(process, processObserver, control, cancellationToken);
         var timedOut = false;
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
@@ -132,6 +132,7 @@ public static class SubjectProcessRunner
 
     private static async Task<bool> ApplyControlAsync(
         Process process,
+        ProcessTreeObserver processObserver,
         SubjectControl control,
         CancellationToken cancellationToken)
     {
@@ -161,6 +162,14 @@ public static class SubjectProcessRunner
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
                 return true;
             case "observe":
+                var sampleGeneration = processObserver.CompletedSampleGeneration;
+                if (!await processObserver.WaitForSampleAfterAsync(
+                        sampleGeneration,
+                        control.GateTimeout,
+                        cancellationToken).ConfigureAwait(false))
+                {
+                    return false;
+                }
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
                 return true;
             default:

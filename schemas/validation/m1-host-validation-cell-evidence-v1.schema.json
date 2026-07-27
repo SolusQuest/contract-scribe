@@ -169,6 +169,7 @@
         "subject",
         "process",
         "observedCanonicalResult",
+        "observedAuditResult",
         "repositoryDelta",
         "observedProcesses",
         "diagnosticCodes"
@@ -243,6 +244,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAuditResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/observedAuditResult"
             },
             {
               "type": "null"
@@ -555,6 +566,45 @@
         },
         "canonical": {
           "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "observedAuditResult": {
+      "type": "object",
+      "required": [
+        "auditResultVersion",
+        "policyConfigurationVersion",
+        "taxonomyRegistryVersion",
+        "targetProfile",
+        "auditOutcomes"
+      ],
+      "properties": {
+        "auditResultVersion": {
+          "const": 1
+        },
+        "policyConfigurationVersion": {
+          "const": 1
+        },
+        "taxonomyRegistryVersion": {
+          "const": 1
+        },
+        "targetProfile": {
+          "enum": [
+            "profile.external-api",
+            "profile.assembly-visible"
+          ]
+        },
+        "auditOutcomes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "enum": [
+              "audit.outcome.compliant",
+              "audit.outcome.violation",
+              "audit.outcome.skipped"
+            ]
+          }
         }
       },
       "additionalProperties": false

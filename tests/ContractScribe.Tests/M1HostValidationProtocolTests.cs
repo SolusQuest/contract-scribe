@@ -226,6 +226,18 @@ public sealed class M1HostValidationProtocolTests
             PublicSafetyScanner.EnsureNoUnsupportedClaims(
                 "The harness guarantees network isolation for this run."));
         Assert.Equal("HV199_PUBLIC_UNSUPPORTED_CLAIM", unsupportedClaim.Code);
+        foreach (var claim in new[]
+        {
+            "Network isolation is enforced.",
+            "The execution ran in an egress sandbox.",
+            "Repository-controlled MSBuild cannot access secrets."
+        })
+        {
+            Assert.Equal(
+                "HV199_PUBLIC_UNSUPPORTED_CLAIM",
+                Assert.Throws<ProtocolException>(() =>
+                    PublicSafetyScanner.EnsureNoUnsupportedClaims(claim)).Code);
+        }
     }
 
     [Fact]
@@ -240,81 +252,16 @@ public sealed class M1HostValidationProtocolTests
         Assert.Equal(25, cases.Length);
         Assert.Equal(cases.Length, cases.Select(item => item.GetProperty("caseId").GetString())
             .Distinct(StringComparer.Ordinal).Count());
-
-        var context = BundleValidator.Validate(Root);
-        var vector = context.Vectors.Vectors.First(candidate =>
-            candidate.ExecutorKind == "production-host"
-            && candidate.VectorId != "repository-write.protected-files");
-        var sha = new string('1', 64);
-        var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
-        var source = new SubjectSourceConfiguration(
-            $"source.{sha}",
-            new string('1', 40),
-            ["src/ContractScribe.Core"],
-            [artifact],
-            artifact,
-            artifact,
-            artifact,
-            artifact,
-            artifact,
-            artifact,
-            artifact);
-        var fixture = new FixtureRealization(
-            vector.VectorId,
-            vector.ExecutorKind,
-            "tests/fixtures",
-            sha,
-            true,
-            null,
-            null,
-            [],
-            null,
-            [],
-            [],
-            "bounded-polling",
-            null,
-            null);
-        var subject = new SubjectResponse(
-            "contractscribe-m1-host-validation-subject-response-v1",
-            vector.VectorId,
-            "run-1",
-            "started",
-            "normal",
-            "compliant",
-            "succeeded",
-            null,
-            null,
-            null,
-            "committed",
-            "published",
-            vector.ExpectedEnforcementClass,
-            vector.ExpectedObservation,
-            null);
-        var run = new RunEvidence(
-            vector.VectorId,
-            "run-1",
-            "matched",
-            vector.ExpectedObservation,
-            vector.ExpectedObservation,
-            vector.ExpectedEnforcementClass,
-            vector.ExpectedEnforcementClass,
-            subject,
-            new ProcessObservation(0, "started", "normal", false, true, true),
-            null,
-            new RepositoryDelta([], [], ["Sample.cs"], [], [], [], [], [], []),
-            [new ObservedProcess(100, 1, "subject-runtime", "dotnet")],
-            []);
-        var derived = RunSemantics.Derive(context, vector, run, fixture, source);
-        Assert.Equal("repository.protected-mutation-unexpected", derived.Observation);
-        Assert.Equal("subject-nonconformance", derived.Verdict);
-
-        var contradiction = run with
+        Assert.All(cases, item =>
         {
-            Process = run.Process with { ProcessTermination = "crash" }
-        };
-        var failure = Assert.Throws<ProtocolException>(() =>
-            RunSemantics.Derive(context, vector, contradiction, fixture, source));
-        Assert.Equal("HV209_SUBJECT_OBSERVER_CONTRADICTION", failure.Code);
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("seed").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("target").GetString()));
+            var operation = item.GetProperty("operation").GetString()
+                ?? throw new InvalidOperationException("Mutation operation is required.");
+            var expected = item.GetProperty("expectedCode").GetString();
+            var failure = Assert.Throws<ProtocolException>(() => ExecuteMutationCase(operation));
+            Assert.Equal(expected, failure.Code);
+        });
     }
 
     [Fact]
@@ -330,6 +277,183 @@ public sealed class M1HostValidationProtocolTests
         var protectedFailure = Assert.Throws<ProtocolException>(() =>
             OutputPathGuard.Validate(context, [], protectedOutput));
         Assert.Equal("HV204_OUTPUT_PROTECTED", protectedFailure.Code);
+    }
+
+    [Fact]
+    public void HostValidation_ExternalExecutorCommandsBindEveryPathBearingInput()
+    {
+        var context = BundleValidator.Validate(Root);
+        var protocolPath = "tests/fixtures/m1-host-validation/v1/protocol.json";
+        var protocolIdentity = new ArtifactIdentity(
+            protocolPath,
+            CanonicalJson.Sha256File(Path.Join(Root, protocolPath.Replace('/', Path.DirectorySeparatorChar))));
+        var cell = new ExecutionCell(
+            new CellMaterialization(
+                "ubuntu-x64",
+                "1",
+                "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+                "synthetic",
+                "linux-x64",
+                "X64",
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                [protocolIdentity, protocolIdentity]),
+            "dotnet-dll",
+            protocolPath,
+            [],
+            []);
+        var fixture = new FixtureRealization(
+            "failure.runtime-load-before-entry",
+            "external-process",
+            "tests/fixtures",
+            new string('1', 64),
+            true,
+            null,
+            "dotnet",
+            [string.Concat("/", "tmp/unreviewed-helper.dll")],
+            null,
+            [protocolIdentity],
+            [],
+            "bounded-polling",
+            null,
+            null);
+
+        Assert.Equal(
+            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
+            Assert.Throws<ProtocolException>(() =>
+                CellExecutor.ValidateExecutorArrangement(
+                    Root,
+                    Path.Join(Root, "tests", "fixtures"),
+                    cell,
+                    fixture,
+                    allowMaterializationDrift: false)).Code);
+
+        var unbound = fixture with
+        {
+            Arguments = ["repository:m1-host-validation/v1/vectors.json"]
+        };
+        Assert.Equal(
+            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
+            Assert.Throws<ProtocolException>(() =>
+                CellExecutor.ValidateExecutorArrangement(
+                    Root,
+                    Path.Join(Root, "tests", "fixtures"),
+                    cell,
+                    unbound,
+                    allowMaterializationDrift: false)).Code);
+
+        var missingHash = fixture with
+        {
+            Executable = "repository:m1-host-validation/v1/protocol.json",
+            Arguments = ["synthetic"],
+            ExecutableSha256 = null
+        };
+        Assert.Equal(
+            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
+            Assert.Throws<ProtocolException>(() =>
+                CellExecutor.ValidateExecutorArrangement(
+                    Root,
+                    Path.Join(Root, "tests", "fixtures"),
+                    cell,
+                    missingHash,
+                    allowMaterializationDrift: false)).Code);
+    }
+
+    [Fact]
+    public void HostValidation_PreEntryFailuresDoNotRequireANonexistentManagedPid()
+    {
+        var context = BundleValidator.Validate(Root);
+        var sha = new string('1', 64);
+        var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
+        var source = new SubjectSourceConfiguration(
+            $"source.{sha}",
+            new string('1', 40),
+            ["src"],
+            [artifact],
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact);
+        var cases = new[]
+        {
+            ("failure.launch-before-entry", "launch-failure"),
+            ("failure.runtime-load-before-entry", "runtime-load-failure"),
+            ("failure.permission-before-entry", "permission-failure")
+        };
+        foreach (var (vectorId, processStart) in cases)
+        {
+            var vector = context.Vectors.Vectors.Single(candidate => candidate.VectorId == vectorId);
+            Assert.False(vector.FreshProcessPerInvocation);
+            var fixture = new FixtureRealization(
+                vectorId,
+                vector.ExecutorKind,
+                "tests/fixtures",
+                sha,
+                true,
+                null,
+                vectorId == "failure.launch-before-entry" ? "missing-executable" : "dotnet",
+                [],
+                null,
+                [artifact],
+                [],
+                "bounded-polling",
+                null,
+                null);
+            var run = new RunEvidence(
+                vectorId,
+                "run-1",
+                "matched",
+                vector.ExpectedObservation,
+                vector.ExpectedObservation,
+                vector.ExpectedEnforcementClass,
+                vector.ExpectedEnforcementClass,
+                null,
+                new ProcessObservation(null, processStart, "not-started", false, true, true),
+                null,
+                null,
+                new RepositoryDelta([], [], [], [], [], [], [], [], []),
+                [],
+                []);
+            var derived = RunSemantics.Derive(context, vector, run, fixture, source);
+            Assert.Equal("matched", derived.Verdict);
+            Assert.Equal(vector.ExpectedObservation, derived.Observation);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_OutputGuardRejectsExternalSymlinkIntoRepository()
+    {
+        var context = BundleValidator.Validate(Root);
+        var temp = Path.Join(Path.GetTempPath(), $"contractscribe-output-alias-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var alias = Path.Join(temp, "repository-alias");
+        try
+        {
+            Directory.CreateSymbolicLink(alias, Path.Join(Root, "src"));
+            var output = Path.Join(alias, "ContractScribe.Core", "forbidden.json");
+            Assert.Equal(
+                "HV205_OUTPUT_LINK_ALIAS",
+                Assert.Throws<ProtocolException>(() =>
+                    OutputPathGuard.Validate(context, [], output)).Code);
+        }
+        catch (Exception exception) when (
+            OperatingSystem.IsWindows()
+            && exception is UnauthorizedAccessException or IOException)
+        {
+            return;
+        }
+        finally
+        {
+            if (Directory.Exists(alias))
+            {
+                Directory.Delete(alias);
+            }
+            Directory.Delete(temp, recursive: true);
+        }
     }
 
     [Fact]
@@ -397,6 +521,404 @@ public sealed class M1HostValidationProtocolTests
         Assert.Equal("HV000_SELF_TEST", stdout.Trim());
         Assert.Equal(string.Empty, stderr);
     }
+
+    private static void ExecuteMutationCase(string operation)
+    {
+        var context = BundleValidator.Validate(Root);
+        var (subject, ubuntu) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var (_, windows) = CreateSyntheticIncompleteCell(context, "windows-x64");
+        var ordinary = CreateMatchedRun(context, subject, "failure.invalid-input", "run-1", 101, '2');
+        var firstBlocked = ubuntu.Runs.First(run => run.Verdict == "vector-environment-blocked");
+
+        switch (operation)
+        {
+            case "replace-subject-vector-id":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with { Subject = ordinary.Subject! with { VectorId = "failure.load-failure" } });
+                return;
+            case "replace-subject-run-id":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with { Subject = ordinary.Subject! with { RunId = "run-2" } });
+                return;
+            case "replace-subject-process-start":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with { Subject = ordinary.Subject! with { ProcessStart = "launch-failure" } });
+                return;
+            case "replace-subject-process-termination":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with { Subject = ordinary.Subject! with { ProcessTermination = "crash" } });
+                return;
+            case "replace-subject-result-digest":
+                {
+                    var resultRun = CreateMatchedRun(
+                        context,
+                        subject,
+                        "determinism.fresh-process-canonical",
+                        "run-1",
+                        102,
+                        '3');
+                    var different = resultRun.ObservedCanonicalResult! with { Sha256 = new string('4', 64) };
+                    ValidateWithReplacement(
+                        context,
+                        subject,
+                        ubuntu,
+                        resultRun with { Subject = resultRun.Subject! with { CanonicalResult = different } });
+                    return;
+                }
+            case "replace-failure-registry-digest":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with
+                    {
+                        Subject = ordinary.Subject! with { FailureRegistryIdentity = new string('9', 64) }
+                    });
+                return;
+            case "replace-blocked-verdict-with-matched":
+                EvidenceValidator.ValidateCellSemantics(
+                    context,
+                    subject,
+                    ubuntu with
+                    {
+                        Runs = ubuntu.Runs.Select(run => run == firstBlocked
+                            ? run with { Verdict = "matched" }
+                            : run).ToArray()
+                    });
+                return;
+            case "replace-cell-outcome-with-passed":
+                EvidenceValidator.ValidateCellSemantics(context, subject, ubuntu with { Outcome = "passed" });
+                return;
+            case "remove-required-run":
+                EvidenceValidator.ValidateCellSemantics(
+                    context,
+                    subject,
+                    ubuntu with { Runs = ubuntu.Runs.Skip(1).ToArray() });
+                return;
+            case "duplicate-required-run":
+                EvidenceValidator.ValidateCellSemantics(
+                    context,
+                    subject,
+                    ubuntu with { Runs = ubuntu.Runs.Append(ubuntu.Runs[0]).ToArray() });
+                return;
+            case "replace-run-vector-with-unknown":
+                EvidenceValidator.ValidateCellSemantics(
+                    context,
+                    subject,
+                    ubuntu with
+                    {
+                        Runs = ubuntu.Runs.Select((run, index) =>
+                            index == 0 ? run with { VectorId = "unknown.vector" } : run).ToArray()
+                    });
+                return;
+            case "replace-second-result-digest":
+                {
+                    var run1 = CreateMatchedRun(
+                        context,
+                        subject,
+                        "determinism.fresh-process-canonical",
+                        "run-1",
+                        110,
+                        '5');
+                    var run2 = CreateMatchedRun(
+                        context,
+                        subject,
+                        "determinism.fresh-process-canonical",
+                        "run-2",
+                        111,
+                        '6');
+                    EvidenceValidator.ValidateCellSemantics(
+                        context,
+                        EnableFixture(subject, ubuntu.Cell.CellId, run1.VectorId),
+                        ReplaceRuns(ubuntu, run1, run2));
+                    return;
+                }
+            case "reuse-subject-process-id":
+                {
+                    var run1 = CreateMatchedRun(
+                        context,
+                        subject,
+                        "determinism.fresh-process-canonical",
+                        "run-1",
+                        120,
+                        '7');
+                    var run2 = CreateMatchedRun(
+                        context,
+                        subject,
+                        "determinism.fresh-process-canonical",
+                        "run-2",
+                        120,
+                        '7');
+                    EvidenceValidator.ValidateCellSemantics(
+                        context,
+                        EnableFixture(subject, ubuntu.Cell.CellId, run1.VectorId),
+                        ReplaceRuns(ubuntu, run1, run2));
+                    return;
+                }
+            case "add-protected-write":
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    ubuntu,
+                    ordinary with
+                    {
+                        RepositoryDelta = ordinary.RepositoryDelta with
+                        {
+                            ProtectedChanged = ["src/ContractScribe.Core/ContractScribe.Core.csproj"]
+                        }
+                    });
+                return;
+            case "replace-cell-evidence-digest":
+            case "replace-aggregate-outcome-with-passed":
+                {
+                    var expectedCells = new[]
+                    {
+                        new CellAggregate("ubuntu-x64", new string('a', 64), ubuntu.Outcome),
+                        new CellAggregate("windows-x64", new string('b', 64), windows.Outcome)
+                    };
+                    var aggregate = CreateSyntheticAggregate(ubuntu, expectedCells);
+                    if (operation == "replace-cell-evidence-digest")
+                    {
+                        aggregate = aggregate with
+                        {
+                            Cells =
+                            [
+                                expectedCells[0] with { EvidenceSha256 = new string('c', 64) },
+                                expectedCells[1]
+                            ]
+                        };
+                    }
+                    else
+                    {
+                        aggregate = aggregate with { Outcome = "passed" };
+                    }
+                    EvidenceValidator.ValidateAggregateDerivation(
+                        aggregate,
+                        ubuntu,
+                        expectedCells,
+                        [],
+                        "environment-or-infrastructure-incomplete");
+                    return;
+                }
+            case "replace-second-cell-attempt":
+                EvidenceValidator.ValidateAggregateCellSemantics(
+                    context,
+                    [
+                        ubuntu,
+                        windows with
+                        {
+                            ValidationAttempt = windows.ValidationAttempt with { RunAttempt = 2 }
+                        }
+                    ]);
+                return;
+            case "replace-second-cell-result-digest":
+                {
+                    var ubuntuDeterminism = ReplaceRuns(
+                        ubuntu,
+                        CreateMatchedRun(context, subject, "determinism.fresh-process-canonical", "run-1", 130, 'd'),
+                        CreateMatchedRun(context, subject, "determinism.fresh-process-canonical", "run-2", 131, 'd'));
+                    var windowsDeterminism = ReplaceRuns(
+                        windows,
+                        CreateMatchedRun(context, subject, "determinism.fresh-process-canonical", "run-1", 140, 'e'),
+                        CreateMatchedRun(context, subject, "determinism.fresh-process-canonical", "run-2", 141, 'e'));
+                    EvidenceValidator.ValidateAggregateCellSemantics(
+                        context,
+                        [ubuntuDeterminism, windowsDeterminism]);
+                    return;
+                }
+            case "replace-review-id":
+            case "replace-classification":
+                {
+                    var sha = new string('1', 64);
+                    var review = new ReviewRecord(
+                        "contractscribe-m1-host-validation-review-v1",
+                        $"review.{sha}",
+                        context.Lock.BundleId,
+                        new string('1', 40),
+                        "independent-relay",
+                        "11111111-1111-1111-1111-111111111111",
+                        "22222222-2222-2222-2222-222222222222",
+                        "accepted",
+                        [],
+                        "2026-01-01T00:00:00Z");
+                    var incomplete = new IncompleteEvidence(
+                        "contractscribe-m1-host-validation-incomplete-evidence-v1",
+                        context.Lock.BundleId,
+                        review.ReviewId,
+                        subject.SourceConfiguration.SourceConfigurationId,
+                        subject.ValidationAttempt,
+                        "ubuntu-x64",
+                        "protocol-failure",
+                        ["HV999_INTERNAL_ERROR"],
+                        true);
+                    incomplete = operation == "replace-review-id"
+                        ? incomplete with { ReviewId = $"review.{new string('2', 64)}" }
+                        : incomplete with { Classification = "protected-input-invalidated" };
+                    EvidenceValidator.ValidateIncompleteSemantics(context, review, subject, incomplete);
+                    return;
+                }
+            case "insert-windows-rooted-path":
+                PublicSafetyScanner.EnsureSafeText(string.Concat("C:", @"\agent\_work\result.json"));
+                return;
+            case "insert-unix-rooted-path":
+                PublicSafetyScanner.EnsureSafeText(string.Concat("/", "srv/build/result.json"));
+                return;
+            case "insert-bearer-credential":
+                PublicSafetyScanner.EnsureSafeText(
+                    string.Concat("Authorization:", " Bearer synthetic-value"));
+                return;
+            case "reuse-input-as-output":
+                {
+                    var path = Path.Join(Root, "TestResults", "m1-host-validation", "subject.json");
+                    OutputPathGuard.Validate(context, [path], path);
+                    return;
+                }
+            case "select-protected-source-output":
+                OutputPathGuard.Validate(
+                    context,
+                    [],
+                    Path.Join(Root, "src", "ContractScribe.Core", "forbidden.json"));
+                return;
+            default:
+                throw new InvalidOperationException($"Unknown mutation operation: {operation}");
+        }
+    }
+
+    private static void ValidateWithReplacement(
+        BundleContext context,
+        ExecutionSubjectManifest subject,
+        CellEvidence evidence,
+        RunEvidence replacement) =>
+        EvidenceValidator.ValidateCellSemantics(
+            context,
+            EnableFixture(subject, evidence.Cell.CellId, replacement.VectorId),
+            ReplaceRuns(evidence, replacement));
+
+    private static ExecutionSubjectManifest EnableFixture(
+        ExecutionSubjectManifest subject,
+        string cellId,
+        string vectorId) =>
+        subject with
+        {
+            Cells = subject.Cells.Select(cell => cell.Materialization.CellId != cellId
+                ? cell
+                : cell with
+                {
+                    Fixtures = cell.Fixtures.Select(fixture => fixture.VectorId != vectorId
+                        ? fixture
+                        : fixture with
+                        {
+                            CapabilityAvailable = true,
+                            BlockedReasonCode = null
+                        }).ToArray()
+                }).ToArray()
+        };
+
+    private static CellEvidence ReplaceRuns(CellEvidence evidence, params RunEvidence[] replacements)
+    {
+        var byKey = replacements.ToDictionary(
+            run => $"{run.VectorId}\0{run.RunId}",
+            StringComparer.Ordinal);
+        return evidence with
+        {
+            Runs = evidence.Runs.Select(run =>
+                byKey.TryGetValue($"{run.VectorId}\0{run.RunId}", out var replacement)
+                    ? replacement
+                    : run).ToArray()
+        };
+    }
+
+    private static RunEvidence CreateMatchedRun(
+        BundleContext context,
+        ExecutionSubjectManifest subjectManifest,
+        string vectorId,
+        string runId,
+        int processId,
+        char digestCharacter)
+    {
+        var vector = context.Vectors.Vectors.Single(candidate => candidate.VectorId == vectorId);
+        var fixture = subjectManifest.Cells[0].Fixtures.Single(candidate => candidate.VectorId == vectorId) with
+        {
+            CapabilityAvailable = true,
+            BlockedReasonCode = null
+        };
+        var hasResult = vectorId == "determinism.fresh-process-canonical";
+        var commitment = hasResult
+            ? new CanonicalResultCommitment(
+                new string(digestCharacter, 64),
+                100,
+                "canonical-json-utf8-no-bom-single-lf",
+                true)
+            : null;
+        var facts = hasResult
+            ? new ObservedAuditResultFacts(
+                1,
+                1,
+                1,
+                "profile.external-api",
+                ["audit.outcome.compliant"])
+            : null;
+        var isFailure = vectorId == "failure.invalid-input";
+        var subject = new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            vectorId,
+            runId,
+            "started",
+            "normal",
+            isFailure ? null : "compliant",
+            isFailure ? "invalid-input" : "succeeded",
+            isFailure ? subjectManifest.SourceConfiguration.FailureRegistry.Sha256 : null,
+            isFailure ? "host.invalid-input" : null,
+            isFailure ? "input" : null,
+            "committed",
+            isFailure ? "absent" : "published",
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedObservation,
+            commitment);
+        return new RunEvidence(
+            vectorId,
+            runId,
+            "matched",
+            vector.ExpectedObservation,
+            vector.ExpectedObservation,
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedEnforcementClass,
+            subject,
+            new ProcessObservation(0, "started", "normal", false, true, true),
+            commitment,
+            facts,
+            new RepositoryDelta([], [], [], [], [], [], [], [], []),
+            [new ObservedProcess(processId, 1, "subject-runtime", "dotnet")],
+            []);
+    }
+
+    private static AggregateEvidence CreateSyntheticAggregate(
+        CellEvidence baseline,
+        IReadOnlyList<CellAggregate> cells) =>
+        new(
+            "contractscribe-m1-host-validation-aggregate-evidence-v1",
+            baseline.BundleId,
+            baseline.ReviewId,
+            baseline.SourceConfigurationId,
+            baseline.ValidationAttempt,
+            new AggregateFinalizationIdentity(
+                "incomplete",
+                baseline.ValidationAttempt.ValidationExecutionSha),
+            cells,
+            "environment-or-infrastructure-incomplete",
+            []);
 
     private static string FindRepositoryRoot()
     {
@@ -505,6 +1027,7 @@ public sealed class M1HostValidationProtocolTests
                         null,
                         new ProcessObservation(null, "not-started", "not-started", false, true, true),
                         null,
+                        null,
                         new RepositoryDelta([], [], [], [], [], [], [], [], []),
                         [],
                         []));
@@ -521,6 +1044,7 @@ public sealed class M1HostValidationProtocolTests
                     vector.ExpectedEnforcementClass,
                     null,
                     new ProcessObservation(null, "not-started", "not-started", false, true, true),
+                    null,
                     null,
                     new RepositoryDelta([], [], [], [], [], [], [], [], []),
                     [],

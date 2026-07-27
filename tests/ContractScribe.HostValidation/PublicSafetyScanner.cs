@@ -59,13 +59,22 @@ public static partial class PublicSafetyScanner
             string.Concat("/", "tmp/contractscribe"),
             string.Concat("/", "var/lib/runner"),
             string.Concat("/", "opt/hostedtoolcache"),
-            string.Concat("/", "home/runner/work")
+            string.Concat("/", "home/runner/work"),
+            string.Concat("/", "root"),
+            string.Concat("/", "root/private.cs"),
+            string.Concat("/", "srv"),
+            string.Concat("/", "srv/build/output.log"),
+            string.Concat("/", "data"),
+            string.Concat("/", "data/agent/repository"),
+            string.Concat("/", "github"),
+            string.Concat("/", "github/workspace/source.cs")
         };
         foreach (var path in unsafePaths)
         {
             Expect("HV118_PUBLIC_MACHINE_PATH", () => EnsureSafeText(path));
         }
         EnsureSafeText("https://github.com/SolusQuest/contract-scribe");
+        EnsureSafeText("https://json-schema.org/draft/2020-12/schema");
         EnsureSafeText("tests/fixtures/m1-host-validation/v1/protocol.json");
     }
 
@@ -98,7 +107,7 @@ public static partial class PublicSafetyScanner
         throw new ProtocolException("HV200_PUBLIC_SCANNER_SELF_TEST");
     }
 
-    [GeneratedRegex(@"(?i)(?<![a-z0-9:/])(?:[a-z]:[\\/](?![\\/])|\\\\[^\\\s]+\\[^\\\s]+|/(?:tmp|var|opt|home|users|mnt|private|run|etc|usr|workspace|__w)(?:/|\b))")]
+    [GeneratedRegex(@"(?i)(?<![a-z0-9:/])(?:[a-z]:[\\/](?![\\/])|\\\\[^\\\s]+\\[^\\\s]+|/(?!/)(?:[a-z0-9._-]+/)*(?:[a-z0-9._-]+))")]
     private static partial Regex MachinePath();
 
     [GeneratedRegex(@"(?i)(?:authorization\s*:\s*bearer\s+\S+|(?:password|access[_-]?token|api[_-]?key|client[_-]?secret)\s*[=:]\s*\S+|(?:ghp|github_pat|sk)-[a-z0-9_-]{12,})")]
@@ -107,6 +116,6 @@ public static partial class PublicSafetyScanner
     [GeneratedRegex(@"(?i)-----begin [a-z ]+private key-----")]
     private static partial Regex PrivateKeyMarker();
 
-    [GeneratedRegex(@"(?im)^\s*(?:this|the\s+(?:harness|protocol|ci|runner))\s+(?:provides|enforces|guarantees)\s+(?:network[- ]isolation|an?\s+offline\s+sandbox|untrusted[- ]msbuild\s+sandboxing|transient[- ]write\s+prevention)\b")]
+    [GeneratedRegex(@"(?im)^\s*(?:(?:this|the\s+(?:harness|protocol|ci|runner|execution))\s+(?:provides|enforces|guarantees)\s+(?:network[- ]isolation|an?\s+offline\s+sandbox|an?\s+egress\s+sandbox|secret[- ]isolation|credential[- ]isolation|untrusted[- ]msbuild\s+sandboxing|transient[- ]write\s+prevention)|(?:network[- ]isolation|egress[- ]sandbox|secret[- ]isolation|credential[- ]isolation|untrusted[- ]msbuild\s+sandboxing|transient[- ]write\s+prevention)\s+is\s+(?:provided|enforced|guaranteed)|the\s+execution\s+(?:ran|runs)\s+in\s+an?\s+(?:offline\s+|egress\s+)?sandbox|repository[- ]controlled\s+msbuild\s+cannot\s+access\s+secrets)\b")]
     private static partial Regex UnsupportedPositiveClaim();
 }

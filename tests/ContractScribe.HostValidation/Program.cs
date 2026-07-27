@@ -182,7 +182,7 @@ public static class Program
                         subjectManifest,
                         new AggregateFinalizationIdentity(
                             Required(options, "--matrix-result"),
-                            Required(options, "--publication-revision")),
+                            Required(options, "--publication-base-revision")),
                         supersedes);
                     Console.WriteLine($"HV000_AGGREGATE {aggregate.Outcome}");
                     return 0;
@@ -203,6 +203,23 @@ public static class Program
                     Console.WriteLine($"HV000_AGGREGATE_VALID {aggregate.Outcome}");
                     return 0;
                 }
+            case "validate-publication-record":
+                {
+                    var cellEvidence = Required(options, "--cell-evidence")
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries);
+                    var supersedes = Optional(options, "--supersedes")?
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var record = EvidenceValidator.ValidatePublicationRecord(
+                        Required(options, "--root"),
+                        Required(options, "--record"),
+                        Required(options, "--aggregate-evidence"),
+                        cellEvidence,
+                        Optional(options, "--review"),
+                        Required(options, "--subject-manifest"),
+                        supersedes);
+                    Console.WriteLine($"HV000_PUBLICATION_RECORD_VALID {record.EvidenceRecordRevision}");
+                    return 0;
+                }
             case "prepare-public":
                 {
                     var root = Required(options, "--root");
@@ -214,11 +231,13 @@ public static class Program
                         .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     var supersedes = Optional(options, "--supersedes")?
                         .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var aggregateEvidence = Optional(options, "--aggregate-evidence");
                     var context = BundleValidator.Validate(root, requireReview: true, review);
                     var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
                     OutputPathGuard.Validate(
                         context,
                         cells.Concat(supersedes).Append(source).Append(review).Append(subjectManifest)
+                            .Concat(aggregateEvidence is null ? [] : [aggregateEvidence])
                             .Concat(SubjectInputPaths(context.Root, subject)),
                         output);
                     CanonicalJson.InvalidateOutput(output);
@@ -230,7 +249,8 @@ public static class Program
                         review,
                         subjectManifest,
                         cells,
-                        supersedes);
+                        supersedes,
+                        aggregateEvidence);
                     Console.WriteLine("HV000_PUBLIC_PREPARED");
                     return 0;
                 }
@@ -243,7 +263,7 @@ public static class Program
             case "fake-subject":
                 return await RunFakeSubjectAsync(options).ConfigureAwait(false);
             case "fake-child":
-                await Task.Delay(500).ConfigureAwait(false);
+                await Task.Delay(1_000).ConfigureAwait(false);
                 return 0;
             default:
                 throw new ProtocolException("HV003_COMMAND_UNKNOWN");
