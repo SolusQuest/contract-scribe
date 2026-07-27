@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-aggregate-evidence-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "bundleId",
+    "reviewId",
+    "validationExecution",
+    "cells",
+    "outcome",
+    "supersedes"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-aggregate-evidence-v1"
+    },
+    "bundleId": {
+      "type": "string",
+      "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+    },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^review\\.[0-9a-f]{64}$"
+    },
+    "validationExecution": {
+      "$ref": "#/$defs/validationExecution"
+    },
+    "cells": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/cell"
+      }
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome"
+    },
+    "supersedes": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^evidence\\.[0-9a-f]{64}$"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "validationExecution": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision",
+        "matrixResult",
+        "evidencePublicationRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\\\)[A-Za-z0-9._/-]+$",
+          "maxLength": 256
+        },
+        "workflowRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "hostRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "matrixResult": {
+          "enum": [
+            "success",
+            "failure",
+            "cancelled"
+          ]
+        },
+        "evidencePublicationRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cell": {
+      "type": "object",
+      "required": [
+        "cellId",
+        "evidenceSha256",
+        "outcome"
+      ],
+      "properties": {
+        "cellId": {
+          "enum": [
+            "ubuntu-x64",
+            "windows-x64"
+          ]
+        },
+        "evidenceSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outcome": {
+      "enum": [
+        "protected-input-invalidated",
+        "protocol-failure",
+        "subject-nonconformance",
+        "environment-or-infrastructure-incomplete",
+        "harness-or-ci-cancelled",
+        "harness-or-ci-timed-out",
+        "passed"
+      ]
+    }
+  }
+}

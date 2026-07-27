@@ -1,0 +1,27 @@
+{
+  "formatVersion": "contractscribe-m1-host-validation-subject-descriptor-v1",
+  "subjectKind": "production-host",
+  "adapterVersion": "contractscribe-m1-host-validation-subject-v1",
+  "entryPoint": "prebuilt-in-process-test-entrypoint",
+  "implementationOwner": "issue-24",
+  "allowedForProductionEvidence": true,
+  "requestSchema": "contractscribe-m1-host-validation-subject-request-v1",
+  "responseSchema": "contractscribe-m1-host-validation-subject-response-v1",
+  "controlContract": {
+    "namedSynchronizationGates": true,
+    "controlActions": [
+      "continue",
+      "cancel",
+      "external-kill",
+      "release-late-completion"
+    ],
+    "shellAllowed": false
+  },
+  "processContract": {
+    "requestArgument": "--request",
+    "responseArgument": "--response",
+    "workingDirectory": "repository-root",
+    "stdoutOwnership": "harness-redirected-bounded-never-echoed",
+    "stderrOwnership": "harness-redirected-bounded-never-echoed"
+  }
+}

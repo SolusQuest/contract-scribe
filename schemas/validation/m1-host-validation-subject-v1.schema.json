@@ -1,0 +1,773 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-subject-v1.schema.json",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/productionSubject"
+    },
+    {
+      "$ref": "#/$defs/selfTestSubject"
+    },
+    {
+      "$ref": "#/$defs/executionSubject"
+    }
+  ],
+  "$defs": {
+    "baseSubject": {
+      "type": "object",
+      "required": [
+        "formatVersion",
+        "subjectKind",
+        "adapterVersion",
+        "entryPoint",
+        "implementationOwner",
+        "allowedForProductionEvidence",
+        "requestSchema",
+        "responseSchema",
+        "controlContract",
+        "processContract"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": "contractscribe-m1-host-validation-subject-descriptor-v1"
+        },
+        "subjectKind": {
+          "enum": [
+            "production-host",
+            "self-test"
+          ]
+        },
+        "adapterVersion": {
+          "const": "contractscribe-m1-host-validation-subject-v1"
+        },
+        "entryPoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "implementationOwner": {
+          "enum": [
+            "issue-24",
+            "issue-26"
+          ]
+        },
+        "allowedForProductionEvidence": {
+          "type": "boolean"
+        },
+        "requestSchema": {
+          "const": "contractscribe-m1-host-validation-subject-request-v1"
+        },
+        "responseSchema": {
+          "const": "contractscribe-m1-host-validation-subject-response-v1"
+        },
+        "controlContract": {
+          "type": "object",
+          "required": [
+            "namedSynchronizationGates",
+            "controlActions",
+            "shellAllowed"
+          ],
+          "properties": {
+            "namedSynchronizationGates": {
+              "const": true
+            },
+            "controlActions": {
+              "const": [
+                "continue",
+                "cancel",
+                "external-kill",
+                "release-late-completion"
+              ]
+            },
+            "shellAllowed": {
+              "const": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "processContract": {
+          "type": "object",
+          "required": [
+            "requestArgument",
+            "responseArgument",
+            "workingDirectory",
+            "stdoutOwnership",
+            "stderrOwnership"
+          ],
+          "properties": {
+            "requestArgument": {
+              "const": "--request"
+            },
+            "responseArgument": {
+              "const": "--response"
+            },
+            "workingDirectory": {
+              "const": "repository-root"
+            },
+            "stdoutOwnership": {
+              "const": "harness-redirected-bounded-never-echoed"
+            },
+            "stderrOwnership": {
+              "const": "harness-redirected-bounded-never-echoed"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "productionSubject": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseSubject"
+        },
+        {
+          "properties": {
+            "subjectKind": {
+              "const": "production-host"
+            },
+            "entryPoint": {
+              "const": "prebuilt-in-process-test-entrypoint"
+            },
+            "implementationOwner": {
+              "const": "issue-24"
+            },
+            "allowedForProductionEvidence": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "selfTestSubject": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseSubject"
+        },
+        {
+          "properties": {
+            "subjectKind": {
+              "const": "self-test"
+            },
+            "entryPoint": {
+              "const": "tests/ContractScribe.HostValidation/fake-subject"
+            },
+            "implementationOwner": {
+              "const": "issue-26"
+            },
+            "allowedForProductionEvidence": {
+              "const": false
+            }
+          }
+        }
+      ]
+    },
+    "executionSubject": {
+      "type": "object",
+      "required": [
+        "formatVersion",
+        "bundleId",
+        "subjectKind",
+        "implementationOwner",
+        "entryPointContract",
+        "sourceConfiguration",
+        "validationExecution",
+        "cells"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": "contractscribe-m1-host-validation-execution-subject-v1"
+        },
+        "bundleId": {
+          "type": "string",
+          "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+        },
+        "subjectKind": {
+          "const": "production-host"
+        },
+        "implementationOwner": {
+          "const": "issue-24"
+        },
+        "entryPointContract": {
+          "const": "prebuilt-in-process-test-entrypoint"
+        },
+        "sourceConfiguration": {
+          "$ref": "#/$defs/sourceConfiguration"
+        },
+        "validationExecution": {
+          "$ref": "#/$defs/validationExecution"
+        },
+        "cells": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/executionCell"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceConfiguration": {
+      "type": "object",
+      "required": [
+        "hostRevision",
+        "sourceAndBuildInputs",
+        "failureRegistry",
+        "calibratedBounds",
+        "buildRecipeSha256",
+        "commandContractSha256",
+        "contractBaselineSha256",
+        "environmentPolicySha256",
+        "workflowSha256"
+      ],
+      "properties": {
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        },
+        "sourceAndBuildInputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/artifactIdentity"
+          }
+        },
+        "failureRegistry": {
+          "$ref": "#/$defs/artifactIdentity"
+        },
+        "calibratedBounds": {
+          "$ref": "#/$defs/artifactIdentity"
+        },
+        "buildRecipeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "commandContractSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contractBaselineSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "environmentPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "validationExecution": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision",
+        "matrixResult",
+        "evidencePublicationRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "$ref": "#/$defs/commit"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        },
+        "matrixResult": {
+          "enum": [
+            "success",
+            "failure",
+            "cancelled"
+          ]
+        },
+        "evidencePublicationRevision": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "executionCell": {
+      "type": "object",
+      "required": [
+        "materialization",
+        "launchKind",
+        "entryPoint",
+        "argumentPrefix",
+        "fixtures"
+      ],
+      "properties": {
+        "materialization": {
+          "$ref": "#/$defs/materialization"
+        },
+        "launchKind": {
+          "enum": [
+            "apphost",
+            "dotnet-dll"
+          ]
+        },
+        "entryPoint": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "argumentPrefix": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "fixtures": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/fixtureRealization"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "materialization": {
+      "type": "object",
+      "required": [
+        "cellId",
+        "jobId",
+        "jobUrl",
+        "runnerImage",
+        "rid",
+        "architecture",
+        "selectedSdk",
+        "selectedRuntime",
+        "selectedMsbuild",
+        "builtArtifacts"
+      ],
+      "properties": {
+        "cellId": {
+          "enum": [
+            "ubuntu-x64",
+            "windows-x64"
+          ]
+        },
+        "jobId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "jobUrl": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "runnerImage": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "rid": {
+          "enum": [
+            "linux-x64",
+            "win-x64"
+          ]
+        },
+        "architecture": {
+          "const": "X64"
+        },
+        "selectedSdk": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedRuntime": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedMsbuild": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "builtArtifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/artifactIdentity"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "fixtureRealization": {
+      "type": "object",
+      "required": [
+        "vectorId",
+        "repositoryRoot",
+        "repositoryIdentitySha256",
+        "capabilityAvailable",
+        "blockedReasonCode",
+        "resultPath",
+        "externalCause"
+      ],
+      "properties": {
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "repositoryRoot": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "repositoryIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "capabilityAvailable": {
+          "type": "boolean"
+        },
+        "blockedReasonCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$"
+        },
+        "resultPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
+        },
+        "externalCause": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "out-of-memory",
+            "stack-overflow",
+            "abort",
+            "fatal-runtime-termination",
+            null
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactIdentity": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
+    },
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._:/-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "subjectRequest": {
+      "type": "object",
+      "required": [
+        "formatVersion",
+        "subjectKind",
+        "vectorId",
+        "runId",
+        "repositoryRoot",
+        "responsePath",
+        "controlRoot",
+        "synchronizationGates",
+        "controlAction"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": "contractscribe-m1-host-validation-subject-request-v1"
+        },
+        "subjectKind": {
+          "enum": [
+            "production-host",
+            "self-test"
+          ]
+        },
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "runId": {
+          "enum": [
+            "run-1",
+            "run-2"
+          ]
+        },
+        "repositoryRoot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "responsePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "controlRoot": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "synchronizationGates": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {
+            "enum": [
+              "before-commit",
+              "after-commit",
+              "late-completion",
+              "publication-before-commit",
+              "publication-after-commit"
+            ]
+          }
+        },
+        "controlAction": {
+          "enum": [
+            "continue",
+            "cancel",
+            "external-kill",
+            "release-late-completion"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "subjectResponse": {
+      "type": "object",
+      "required": [
+        "formatVersion",
+        "vectorId",
+        "runId",
+        "processStart",
+        "processTermination",
+        "auditOutcome",
+        "executionOutcome",
+        "failureRegistryIdentity",
+        "failureCode",
+        "failureStage",
+        "terminalState",
+        "artifactState",
+        "enforcementClass",
+        "observationCode"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": "contractscribe-m1-host-validation-subject-response-v1"
+        },
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "runId": {
+          "enum": [
+            "run-1",
+            "run-2"
+          ]
+        },
+        "processStart": {
+          "enum": [
+            "started",
+            "launch-failure",
+            "runtime-load-failure",
+            "permission-failure",
+            "startup-timeout"
+          ]
+        },
+        "processTermination": {
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started"
+          ]
+        },
+        "auditOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "compliant",
+            "violation",
+            "skipped",
+            null
+          ]
+        },
+        "executionOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "invalid-input",
+            "environment-unavailable",
+            "load-failure",
+            "audit-error",
+            "cancelled",
+            "timeout",
+            "succeeded",
+            null
+          ]
+        },
+        "failureRegistryIdentity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "failureStage": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "terminalState": {
+          "enum": [
+            "not-entered",
+            "pending",
+            "committed",
+            "rejected-late"
+          ]
+        },
+        "artifactState": {
+          "enum": [
+            "absent",
+            "invalidated",
+            "staged",
+            "published"
+          ]
+        },
+        "enforcementClass": {
+          "enum": [
+            "internally-enforceable",
+            "caller-or-os-enforced",
+            "observable-only",
+            "not-enforceable-selected-topology"
+          ]
+        },
+        "observationCode": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 128
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "invalid-input",
+                  "environment-unavailable",
+                  "load-failure",
+                  "audit-error",
+                  "cancelled",
+                  "timeout"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "failureRegistryIdentity": {
+                "type": "string"
+              },
+              "failureCode": {
+                "type": "string"
+              },
+              "failureStage": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "succeeded",
+                  null
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "failureRegistryIdentity": {
+                "type": "null"
+              },
+              "failureCode": {
+                "type": "null"
+              },
+              "failureStage": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

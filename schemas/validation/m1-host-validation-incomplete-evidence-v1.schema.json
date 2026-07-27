@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "bundleId",
+    "reviewId",
+    "validationExecution",
+    "cellId",
+    "classification",
+    "diagnosticCodes",
+    "immutable"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-incomplete-evidence-v1"
+    },
+    "bundleId": {
+      "type": "string",
+      "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+    },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^review\\.[0-9a-f]{64}$"
+    },
+    "validationExecution": {
+      "$ref": "#/$defs/validationExecution"
+    },
+    "cellId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "ubuntu-x64",
+        "windows-x64",
+        null
+      ]
+    },
+    "classification": {
+      "enum": [
+        "protected-input-invalidated",
+        "protocol-failure",
+        "vector-environment-blocked",
+        "vector-infrastructure-incomplete",
+        "harness-or-ci-cancelled",
+        "harness-or-ci-timed-out",
+        "observer-incomplete",
+        "upstream-matrix-failure"
+      ]
+    },
+    "diagnosticCodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$",
+        "maxLength": 64
+      }
+    },
+    "immutable": {
+      "const": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "validationExecution": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision",
+        "matrixResult",
+        "evidencePublicationRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\\\)[A-Za-z0-9._/-]+$",
+          "maxLength": 256
+        },
+        "workflowRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "hostRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "matrixResult": {
+          "enum": [
+            "success",
+            "failure",
+            "cancelled"
+          ]
+        },
+        "evidencePublicationRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

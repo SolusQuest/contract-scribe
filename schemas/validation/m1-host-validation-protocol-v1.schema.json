@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-protocol-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "protocolId",
+    "baseline",
+    "artifactInventory",
+    "requiredCells",
+    "taxonomies",
+    "executionContract",
+    "publicSafety",
+    "requiredValidators"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-protocol-v1"
+    },
+    "protocolId": {
+      "const": "m1-host-validation-v1"
+    },
+    "baseline": {
+      "type": "object",
+      "required": [
+        "coordinatingIssue",
+        "mergeCommit",
+        "contractManifest",
+        "contractManifestSha256"
+      ],
+      "properties": {
+        "coordinatingIssue": {
+          "const": "https://github.com/SolusQuest/contract-scribe/issues/35"
+        },
+        "mergeCommit": {
+          "const": "bb4654edc180e2953dda6b89a29211b18778b78e"
+        },
+        "contractManifest": {
+          "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
+        },
+        "contractManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactInventory": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/repositoryPath"
+      }
+    },
+    "requiredCells": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/ubuntuCell"
+        },
+        {
+          "$ref": "#/$defs/windowsCell"
+        }
+      ],
+      "items": false
+    },
+    "taxonomies": {
+      "type": "object",
+      "required": [
+        "processStart",
+        "processTermination",
+        "auditOutcome",
+        "executionOutcome",
+        "vectorVerdict",
+        "validationOutcome",
+        "validationPrecedence",
+        "enforcementClass"
+      ],
+      "properties": {
+        "processStart": {
+          "const": [
+            "started",
+            "launch-failure",
+            "runtime-load-failure",
+            "permission-failure",
+            "startup-timeout"
+          ]
+        },
+        "processTermination": {
+          "const": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started"
+          ]
+        },
+        "auditOutcome": {
+          "const": [
+            "compliant",
+            "violation",
+            "skipped"
+          ]
+        },
+        "executionOutcome": {
+          "const": [
+            "invalid-input",
+            "environment-unavailable",
+            "load-failure",
+            "audit-error",
+            "cancelled",
+            "timeout",
+            "succeeded"
+          ]
+        },
+        "vectorVerdict": {
+          "const": [
+            "matched",
+            "subject-nonconformance",
+            "vector-environment-blocked",
+            "vector-infrastructure-incomplete",
+            "protocol-invalid-observation"
+          ]
+        },
+        "validationOutcome": {
+          "const": [
+            "protected-input-invalidated",
+            "protocol-failure",
+            "subject-nonconformance",
+            "environment-or-infrastructure-incomplete",
+            "harness-or-ci-cancelled",
+            "harness-or-ci-timed-out",
+            "passed"
+          ]
+        },
+        "validationPrecedence": {
+          "const": [
+            "protected-input-invalidated",
+            "protocol-failure",
+            "subject-nonconformance",
+            "environment-or-infrastructure-incomplete",
+            "harness-or-ci-cancelled",
+            "harness-or-ci-timed-out",
+            "passed"
+          ]
+        },
+        "enforcementClass": {
+          "const": [
+            "internally-enforceable",
+            "caller-or-os-enforced",
+            "observable-only",
+            "not-enforceable-selected-topology"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "executionContract": {
+      "type": "object",
+      "required": [
+        "adapterVersion",
+        "requestEncoding",
+        "responseEncoding",
+        "standardOutputByteLimit",
+        "standardErrorByteLimit",
+        "responseByteLimit",
+        "evidenceByteLimit",
+        "subjectTimeoutSeconds",
+        "retryPolicy",
+        "repositoryObserverClaim",
+        "processObserverClaim"
+      ],
+      "properties": {
+        "adapterVersion": {
+          "const": "contractscribe-m1-host-validation-subject-v1"
+        },
+        "requestEncoding": {
+          "const": "canonical-json-utf8-no-bom-single-lf"
+        },
+        "responseEncoding": {
+          "const": "canonical-json-utf8-no-bom-single-lf"
+        },
+        "standardOutputByteLimit": {
+          "const": 65536
+        },
+        "standardErrorByteLimit": {
+          "const": 65536
+        },
+        "responseByteLimit": {
+          "const": 262144
+        },
+        "evidenceByteLimit": {
+          "const": 4194304
+        },
+        "subjectTimeoutSeconds": {
+          "const": 30
+        },
+        "retryPolicy": {
+          "const": "unrecorded-retries-forbidden-new-attempt-required"
+        },
+        "repositoryObserverClaim": {
+          "const": "detection-only-no-prevention-rollback-transient-capture-or-sandbox"
+        },
+        "processObserverClaim": {
+          "const": "bounded-descendant-detection-only-no-process-isolation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "publicSafety": {
+      "type": "object",
+      "required": [
+        "networkClaim",
+        "prohibitedClaims",
+        "publicArtifactAllowlist",
+        "stableDiagnosticCodes"
+      ],
+      "properties": {
+        "networkClaim": {
+          "const": "no-declared-network-dependency-and-no-contractscribe-initiated-network-operation"
+        },
+        "prohibitedClaims": {
+          "const": [
+            "network-isolation-enforced",
+            "offline-sandbox",
+            "untrusted-msbuild-sandboxed",
+            "transient-writes-prevented"
+          ]
+        },
+        "publicArtifactAllowlist": {
+          "const": [
+            "cell-evidence.json",
+            "aggregate-evidence.json",
+            "incomplete-evidence.json"
+          ]
+        },
+        "stableDiagnosticCodes": {
+          "type": "array",
+          "minItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$",
+            "maxLength": 64
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "requiredValidators": {
+      "const": [
+        "bundle.identity",
+        "bundle.inventory",
+        "bundle.schema",
+        "crosswalk.bidirectional",
+        "evidence.canonical",
+        "evidence.execution-set",
+        "evidence.public-safety",
+        "evidence.review-binding",
+        "evidence.incomplete-retention",
+        "execution.stream-boundary",
+        "execution.vector-runner",
+        "observer.process-tree",
+        "observer.repository-delta",
+        "project.boundary",
+        "subject.materialization",
+        "validation.attempt-identity"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
+    },
+    "ubuntuCell": {
+      "type": "object",
+      "required": [
+        "cellId",
+        "runnerOs",
+        "architecture",
+        "rid",
+        "runnerImagePolicy"
+      ],
+      "properties": {
+        "cellId": {
+          "const": "ubuntu-x64"
+        },
+        "runnerOs": {
+          "const": "ubuntu"
+        },
+        "architecture": {
+          "const": "X64"
+        },
+        "rid": {
+          "const": "linux-x64"
+        },
+        "runnerImagePolicy": {
+          "const": "github-hosted-ubuntu-latest-record-concrete-image"
+        }
+      },
+      "additionalProperties": false
+    },
+    "windowsCell": {
+      "type": "object",
+      "required": [
+        "cellId",
+        "runnerOs",
+        "architecture",
+        "rid",
+        "runnerImagePolicy"
+      ],
+      "properties": {
+        "cellId": {
+          "const": "windows-x64"
+        },
+        "runnerOs": {
+          "const": "windows"
+        },
+        "architecture": {
+          "const": "X64"
+        },
+        "rid": {
+          "const": "win-x64"
+        },
+        "runnerImagePolicy": {
+          "const": "github-hosted-windows-latest-record-concrete-image"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
