@@ -200,6 +200,9 @@
     { "caseId": "skipped-reason.evidence-incomplete", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json", "sha256": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.evidence-incomplete"] },
     { "caseId": "skipped-reason.policy-conflict", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-conflict.json", "sha256": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-conflict"] }
   ],
+  "resultDigestCases": [
+    { "caseId": "result-digest.committed-canonical-bytes", "inputBytes": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9" }, "algorithm": "sha256", "expectedResultDigest": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9", "note": "The digest input is the exact committed canonical byte stream. This fixture is canonical-byte exact per the shared Audit Result oracle (compact canonical serialization, one trailing LF), so the SHA-256 of its exact bytes is the expected resultDigest. The m1-audit-cli synthetic payloads are pretty-printed for readability and are not canonical-byte exact; they are not digest inputs." }
+  ],
   "streamCases": [
     {
       "caseId": "stream.usage-envelope",

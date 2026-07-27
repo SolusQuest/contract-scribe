@@ -399,6 +399,25 @@ public sealed class M1AuditCliContractTests
     }
 
     [Fact]
+    public void ResultDigestCases_RecomputeSha256OverExactCanonicalBytes()
+    {
+        using var annex = LoadAnnex();
+        var doc = File.ReadAllText(DocPath);
+        var row = Assert.Single(annex.RootElement.GetProperty("resultDigestCases").EnumerateArray());
+        Assert.Equal("result-digest.committed-canonical-bytes", row.GetProperty("caseId").GetString());
+        Assert.Equal("sha256", row.GetProperty("algorithm").GetString());
+        var expectedDigest = row.GetProperty("expectedResultDigest").GetString()!;
+        Assert.Matches("^[0-9a-f]{64}$", expectedDigest);
+        var input = row.GetProperty("inputBytes");
+        var relative = input.GetProperty("path").GetString()!;
+        var bytes = File.ReadAllBytes(Path.Join(Root, relative.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Equal(input.GetProperty("sha256").GetString(), Sha256(bytes));
+        Assert.True(AuditResultConformance.IsCanonicalBytes(bytes), relative);
+        Assert.Equal(expectedDigest, Sha256(bytes));
+        Assert.Contains("SHA-256 of the exact committed canonical Audit Result bytes", doc, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExitCodes_MapEveryControlledClassWithNoUndeclaredSharing()
     {
         using var annex = LoadAnnex();
