@@ -4,11 +4,22 @@
   "title": "ContractScribe Policy/Configuration v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "defaultDecision"],
+  "required": [
+    "schemaVersion",
+    "targetProfile",
+    "defaultDecision"
+  ],
   "properties": {
     "schemaVersion": {
       "type": "integer",
       "const": 1
+    },
+    "targetProfile": {
+      "type": "string",
+      "enum": [
+        "profile.external-api",
+        "profile.assembly-visible"
+      ]
     },
     "defaultDecision": {
       "$ref": "#/$defs/decision"
@@ -23,7 +34,11 @@
   "$defs": {
     "decision": {
       "type": "string",
-      "enum": ["required", "optional", "forbidden"]
+      "enum": [
+        "required",
+        "optional",
+        "forbidden"
+      ]
     },
     "patternList": {
       "type": "array",
@@ -49,7 +64,11 @@
     "rule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "priority", "decision"],
+      "required": [
+        "id",
+        "priority",
+        "decision"
+      ],
       "properties": {
         "id": {
           "type": "string",

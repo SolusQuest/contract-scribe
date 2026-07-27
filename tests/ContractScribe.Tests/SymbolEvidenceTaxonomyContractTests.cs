@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Security.Cryptography;
+using ContractScribe.ContractBaselineProbe;
 using Json.Schema;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -10,6 +12,16 @@ namespace ContractScribe.Tests;
 public sealed class SymbolEvidenceTaxonomyContractTests
 {
     private static readonly Lazy<JsonSchema> EvidenceSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json"))));
+    private static readonly Lazy<JsonSchema> CandidateLocatorSchema = new(() =>
+    {
+        var schema = JsonNode.Parse(File.ReadAllText(Path.Join(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json")))!.AsObject();
+        return JsonSchema.FromText(new JsonObject
+        {
+            ["$schema"] = "https://json-schema.org/draft/2020-12/schema",
+            ["$ref"] = "#/$defs/candidateLocator",
+            ["$defs"] = schema["$defs"]!.DeepClone()
+        }.ToJsonString());
+    });
     private static readonly Lazy<JsonSchema> ManifestSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.manifest.schema.json"))));
     private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
     private static readonly Lazy<Dictionary<string, JsonElement>> RegistryEntries = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToDictionary(entry => entry.GetProperty("id").GetString()!, entry => entry.Clone(), StringComparer.Ordinal));
@@ -23,14 +35,41 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var identifiers = entries.Select(entry => entry.GetProperty("id").GetString()!).ToArray();
         Assert.Equal(identifiers.Length, identifiers.Distinct(StringComparer.Ordinal).Count());
         Assert.All(identifiers, id => Assert.Matches("^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", id));
-        Assert.All(entries, entry =>
+        var entryTypes = registry.RootElement.GetProperty("sectionEntryTypes");
+        Assert.Equal(
+            registry.RootElement.GetProperty("sections").EnumerateObject().Select(section => section.Name).Order(StringComparer.Ordinal),
+            entryTypes.EnumerateObject().Select(section => section.Name).Order(StringComparer.Ordinal));
+        foreach (var section in registry.RootElement.GetProperty("sections").EnumerateObject())
         {
-            Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
-            Assert.Equal(JsonValueKind.Array, entry.GetProperty("applicability").ValueKind);
-            Assert.Equal(JsonValueKind.Array, entry.GetProperty("recordTypes").ValueKind);
-            Assert.NotEmpty(entry.GetProperty("recordTypes").EnumerateArray());
-            Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
-            Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
+            var entryType = entryTypes.GetProperty(section.Name).GetString();
+            Assert.Contains(entryType, new[] { "record-vocabulary", "profile-vocabulary", "run-failure" });
+            Assert.All(section.Value.EnumerateArray(), entry =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("definition").GetString()));
+                Assert.Equal(JsonValueKind.Null, entry.GetProperty("deprecated").ValueKind);
+                Assert.Equal(JsonValueKind.Null, entry.GetProperty("replacementId").ValueKind);
+                if (entryType == "record-vocabulary")
+                {
+                    Assert.Equal(JsonValueKind.Array, entry.GetProperty("applicability").ValueKind);
+                    Assert.Equal(JsonValueKind.Array, entry.GetProperty("recordTypes").ValueKind);
+                    Assert.NotEmpty(entry.GetProperty("recordTypes").EnumerateArray());
+                }
+                else
+                {
+                    Assert.False(entry.TryGetProperty("applicability", out _));
+                    Assert.False(entry.TryGetProperty("recordTypes", out _));
+                }
+            });
+        }
+
+        Assert.Equal(
+            new[] { "profile.assembly-visible", "profile.external-api" },
+            RegistryIds.Value["targetProfiles"].Order(StringComparer.Ordinal));
+        Assert.All(registry.RootElement.GetProperty("sections").GetProperty("runFailures").EnumerateArray(), entry =>
+        {
+            Assert.False(entry.GetProperty("serialized").GetBoolean());
+            Assert.Contains(entry.GetProperty("producingStage").GetString(), new[] { "classification-normalization", "generated-fact-validation" });
+            Assert.Contains(entry.GetProperty("downstreamIssue").GetInt32(), new[] { 36, 37 });
         });
         var synthesized = registry.RootElement.GetProperty("sections").GetProperty("componentKinds").EnumerateArray().Where(entry => entry.GetProperty("id").GetString()!.StartsWith("component.synthesized.", StringComparison.Ordinal));
         Assert.All(synthesized, entry =>
@@ -87,11 +126,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         using var unknownOrigin = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.v1\",\"origin\":\"origin.unknown\",\"supportStatus\":\"support.unavailable-context\",\"skipReason\":\"skip.unavailable.documentation-comment-id\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"x\"}}}");
         using var unknownTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Unknown\"},\"primaryKind\":\"symbol.unknown\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.unsupported\",\"skipReason\":\"skip.unsupported.symbol-kind\"}");
         using var partialTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:Partial\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.source\",\"supportStatus\":\"support.ambiguous\",\"skipReason\":\"skip.ambiguous.partial-declaration\"}");
+        using var partialMixedTarget = JsonDocument.Parse("{\"recordType\":\"TargetClassification\",\"symbolRef\":{\"compilationContextRef\":\"synthetic.v1\",\"documentationCommentId\":\"T:PartialMixed\"},\"primaryKind\":\"symbol.type.class\",\"traits\":[],\"origin\":\"origin.mixed\",\"supportStatus\":\"support.ambiguous\",\"skipReason\":\"skip.ambiguous.partial-declaration\"}");
         Assert.False(IsValidClassificationRecord(knownUnsupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownSupported.RootElement));
         Assert.False(IsValidClassificationRecord(unknownOrigin.RootElement));
         Assert.True(IsValidClassificationRecord(unknownTarget.RootElement));
         Assert.True(IsValidClassificationRecord(partialTarget.RootElement));
+        Assert.True(IsValidClassificationRecord(partialMixedTarget.RootElement));
     }
 
     [Fact]
@@ -137,6 +178,108 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             var id = vector.GetProperty("symbolRef").GetProperty("documentationCommentId").GetString()!;
             Assert.DoesNotContain(id, targetIds);
         }
+    }
+
+    [Fact]
+    public void ProfileMembership_ExecutesEveryAdrAccessibilityCaseAgainstCompiledSymbols()
+    {
+        var root = FindRepositoryRoot();
+        using var annex = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "m1-target-observation", "adr-0003-vectors.json")));
+        var compilation = CreateProfileMembershipCompilation();
+        Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var symbols = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
+            .Where(symbol => !symbol.IsImplicitlyDeclared)
+            .ToDictionary(symbol => symbol.Name, StringComparer.Ordinal);
+        var symbolNames = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["access.file"] = "FileCase",
+            ["access.internal"] = "InternalCase",
+            ["access.nested-private-container"] = "NestedPrivateContainerCase",
+            ["access.private"] = "PrivateCase",
+            ["access.private-protected"] = "PrivateProtectedCase",
+            ["access.protected"] = "ProtectedCase",
+            ["access.protected-internal"] = "ProtectedInternalCase",
+            ["access.public"] = "PublicCase",
+            ["access.sealed-protected"] = "SealedProtectedCase"
+        };
+
+        var cases = annex.RootElement.GetProperty("accessibilityCases").EnumerateArray().ToArray();
+        Assert.Equal(symbolNames.Keys.Order(StringComparer.Ordinal), cases.Select(@case => @case.GetProperty("caseId").GetString()!).Order(StringComparer.Ordinal));
+        foreach (var @case in cases)
+        {
+            var caseId = @case.GetProperty("caseId").GetString()!;
+            var symbol = symbols[symbolNames[caseId]];
+            Assert.Equal(ExpectedMembership(@case.GetProperty("externalApi").GetString()!), IsDocumentationTarget(symbol, "profile.external-api"));
+            Assert.Equal(ExpectedMembership(@case.GetProperty("assemblyVisible").GetString()!), IsDocumentationTarget(symbol, "profile.assembly-visible"));
+        }
+
+        Assert.False(IsDocumentationTarget(symbols["ImplicitInternalCase"], "profile.external-api"));
+        Assert.True(IsDocumentationTarget(symbols["ImplicitInternalCase"], "profile.assembly-visible"));
+        Assert.False(IsDocumentationTarget(symbols["ImplicitPrivateCase"], "profile.external-api"));
+        Assert.False(IsDocumentationTarget(symbols["ImplicitPrivateCase"], "profile.assembly-visible"));
+    }
+
+    [Fact]
+    public void RelationEmission_AppliesEachAdrSourceRuleForBothProfiles()
+    {
+        var compilation = CreateProfileCompilation("profile-relations.cs");
+        Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+
+        INamedTypeSymbol Type(string name) => compilation.GetTypeByMetadataName($"RelationProfiles.{name}")!;
+        IMethodSymbol Method(string type, string name) => Type(type).GetMembers(name).OfType<IMethodSymbol>().Single();
+        IMethodSymbol ExplicitMethod(string type) => Type(type).GetMembers().OfType<IMethodSymbol>().Single(method => method.ExplicitInterfaceImplementations.Length == 1);
+        string Id(ISymbol symbol) => symbol.GetDocumentationCommentId()!;
+        string RelationKey(string kind, ISymbol source, ISymbol target) => $"{kind}|{Id(source)}|{Id(target.OriginalDefinition)}";
+        string ActualRelationKey(Dictionary<string, object> relation)
+        {
+            var source = (Dictionary<string, object>)relation["sourceSymbolRef"];
+            var target = (Dictionary<string, object>)relation["targetSymbolRef"];
+            return $"{relation["relationKind"]}|{source["documentationCommentId"]}|{target["documentationCommentId"]}";
+        }
+
+        var publicRelations = new[]
+        {
+            RelationKey("relation.overrides", Method("PublicOverride", "Override"), Method("PublicBase", "Override")),
+            RelationKey("relation.implicit-interface-implementation", Method("PublicImplementation", "Implicit"), Method("IRelationContract", "Implicit")),
+            RelationKey("relation.explicit-interface-implementation", ExplicitMethod("PublicImplementation"), Method("IRelationContract", "Explicit")),
+            RelationKey("relation.inherited-interface-member", Type("IPublicDerivedContract"), Method("IInheritedContract", "Inherited"))
+        };
+        var internalRelations = new[]
+        {
+            RelationKey("relation.overrides", Method("InternalOverride", "Override"), Method("PublicBase", "Override")),
+            RelationKey("relation.implicit-interface-implementation", Method("InternalImplementation", "Implicit"), Method("IRelationContract", "Implicit")),
+            RelationKey("relation.explicit-interface-implementation", ExplicitMethod("InternalImplementation"), Method("IRelationContract", "Explicit")),
+            RelationKey("relation.inherited-interface-member", Type("IInternalDerivedContract"), Method("IInheritedContract", "Inherited"))
+        };
+
+        foreach (var (profile, expected) in new[]
+        {
+            ("profile.external-api", publicRelations),
+            ("profile.assembly-visible", publicRelations.Concat(internalRelations).ToArray())
+        })
+        {
+            var manifest = CreateProfileManifest(profile, "profile-relations.cs");
+            var targetsBefore = ClassifyTargets(compilation, manifest).ToArray();
+            var componentsBefore = ClassifyComponents(compilation, manifest).ToArray();
+            var actual = ClassifyRelationRecords(compilation, "profile.relations", profile).Select(ActualRelationKey).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            Assert.Equal(expected.Order(StringComparer.Ordinal), actual);
+            Assert.Equal(targetsBefore, ClassifyTargets(compilation, manifest).ToArray());
+            Assert.Equal(componentsBefore, ClassifyComponents(compilation, manifest).ToArray());
+        }
+    }
+
+    [Fact]
+    public void PartialAmbiguity_PrecedesMixedOriginAcrossProseRegistryAndOracle()
+    {
+        var root = FindRepositoryRoot();
+        var prose = File.ReadAllText(Path.Join(root, "docs", "20_architecture", "contracts", "symbol-evidence-taxonomy-v1.md"));
+        Assert.Contains("`skip.ambiguous.partial-declaration` wins while origin remains `origin.mixed`", prose, StringComparison.Ordinal);
+        Assert.True(RegistryEntries.Value["skip.ambiguous.partial-declaration"].GetProperty("precedence").GetInt32()
+            < RegistryEntries.Value["skip.ambiguous.mixed-origin"].GetProperty("precedence").GetInt32());
+        using var record = JsonDocument.Parse("""
+            {"recordType":"TargetClassification","symbolRef":{"compilationContextRef":"synthetic.v1","documentationCommentId":"T:MixedPartial"},"primaryKind":"symbol.type.class","traits":["trait.partial"],"origin":"origin.mixed","supportStatus":"support.ambiguous","skipReason":"skip.ambiguous.partial-declaration"}
+            """);
+        Assert.True(IsValidClassificationRecord(record.RootElement));
     }
 
     [Fact]
@@ -225,6 +368,19 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             Assert.Equal(precedenceCase.GetProperty("expected").GetString(), SelectOmissionReason(precedenceCase.GetProperty("hasTruncatedItem").GetBoolean(), precedenceCase.GetProperty("encountered").EnumerateArray().Select(condition => condition.GetString()!)));
         }
+        foreach (var candidateCase in cases.RootElement.GetProperty("candidateLocatorCases").EnumerateArray())
+        {
+            var locator = candidateCase.GetProperty("locator");
+            var valid = CandidateLocatorSchema.Value.Evaluate(locator).IsValid && IsValidCandidateLocator(locator);
+            Assert.Equal(candidateCase.GetProperty("valid").GetBoolean(), valid);
+        }
+        var orderedCandidateKinds = cases.RootElement.GetProperty("candidateLocatorCases").EnumerateArray()
+            .Where(@case => @case.GetProperty("valid").GetBoolean())
+            .Select(@case => @case.GetProperty("locator"))
+            .Order(CandidateLocatorComparer.Instance)
+            .Select(locator => locator.EnumerateObject().Single().Name)
+            .ToArray();
+        Assert.Equal(new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }, orderedCandidateKinds);
         var evidenceItems = cases.RootElement.GetProperty("cases").EnumerateArray().Where(@case => @case.GetProperty("valid").GetBoolean()).SelectMany(@case => @case.GetProperty("bundle").GetProperty("items").EnumerateArray()).ToArray();
         Assert.Equal(RegistryIds.Value["evidenceKinds"].OrderBy(id => id, StringComparer.Ordinal), evidenceItems.Select(item => item.GetProperty("kind").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
         Assert.Equal(RegistryIds.Value["evidenceRelations"].OrderBy(id => id, StringComparer.Ordinal), evidenceItems.Select(item => item.GetProperty("relation").GetString()!).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal));
@@ -307,6 +463,35 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         return CSharpCompilation.Create("taxonomy-fixture", trees, references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, warningLevel: profile.GetProperty("warningLevel").GetInt32()));
     }
 
+    private static CSharpCompilation CreateProfileMembershipCompilation()
+        => CreateProfileCompilation("profile-membership.cs");
+
+    private static CSharpCompilation CreateProfileCompilation(string fixtureFile)
+    {
+        var baseline = CreateFixtureCompilation();
+        var root = FindRepositoryRoot();
+        var path = Path.Join(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", fixtureFile);
+        var parseOptions = (CSharpParseOptions)baseline.SyntaxTrees.First().Options;
+        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: fixtureFile, encoding: System.Text.Encoding.UTF8);
+        return CSharpCompilation.Create(Path.GetFileNameWithoutExtension(fixtureFile), [tree], baseline.References, baseline.Options);
+    }
+
+    private static JsonElement CreateProfileManifest(string profile, string fixtureFile)
+    {
+        var root = FindRepositoryRoot();
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")))!.AsObject();
+        manifest["targetProfile"] = profile;
+        manifest["sourceProvenance"]!.AsObject()[fixtureFile] = "origin.source";
+        return JsonSerializer.SerializeToElement(manifest);
+    }
+
+    private static bool ExpectedMembership(string expectation) => expectation switch
+    {
+        "selected" or "selected-if-derivable" => true,
+        "excluded" => false,
+        _ => throw new InvalidOperationException($"Unknown profile-membership expectation '{expectation}'.")
+    };
+
     private static string FindPinnedReferenceDirectory(string referencePackVersion, string targetFramework)
     {
         var runtimeRoot = Directory.GetParent(typeof(object).Assembly.Location)?.Parent?.Parent?.Parent?.FullName;
@@ -385,11 +570,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static IEnumerable<TargetRecord> ClassifyTargets(CSharpCompilation compilation, JsonElement manifest)
     {
         var sourceProvenance = manifest.GetProperty("sourceProvenance").EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
+        var targetProfile = manifest.GetProperty("targetProfile").GetString()!;
         return EnumerateSymbols(compilation.Assembly.GlobalNamespace)
             .Where(symbol => symbol.Locations.Any(location => location.IsInSource))
             .Where(symbol => !symbol.IsImplicitlyDeclared)
             .Where(symbol => symbol is not IPropertySymbol property || !IsRecordPositionalProperty(property))
-            .Where(IsDocumentationTarget)
+            .Where(symbol => IsDocumentationTarget(symbol, targetProfile))
             .Select(symbol => CreateTargetRecord(symbol, sourceProvenance))
             .OrderBy(record => record.SymbolId, StringComparer.Ordinal);
     }
@@ -411,6 +597,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static IEnumerable<ComponentRecord> ClassifyComponents(CSharpCompilation compilation, JsonElement manifest)
     {
         var sourceProvenance = manifest.GetProperty("sourceProvenance").EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
+        var targetProfile = manifest.GetProperty("targetProfile").GetString()!;
         ComponentRecord SourceComponent(string kind, ISymbol parent, string identity, string supportStatus = "support.supported", string? skipReason = null)
         {
             var origin = ClassifySourceOrigin(parent, sourceProvenance);
@@ -418,20 +605,20 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 ? new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, "support.ambiguous", "skip.ambiguous.mixed-origin")
                 : new ComponentRecord(kind, parent.GetDocumentationCommentId()!, identity, origin, supportStatus, skipReason);
         }
-        foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method)))
+        foreach (var method in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IMethodSymbol>().Where(method => !method.IsImplicitlyDeclared && IsDocumentationTarget(method, targetProfile)))
         {
             foreach (var parameter in method.Parameters) yield return SourceComponent("component.parameter", method, $"parameter/{parameter.Ordinal}");
             foreach (var typeParameter in method.TypeParameters) yield return SourceComponent("component.type-parameter", method, $"type-parameter/{typeParameter.Ordinal}");
             if (method.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion) yield return SourceComponent("component.return", method, "return");
         }
-        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property)))
+        foreach (var property in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IPropertySymbol>().Where(property => !property.IsImplicitlyDeclared && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property, targetProfile)))
         {
             foreach (var parameter in property.Parameters) yield return SourceComponent("component.parameter", property, $"parameter/{parameter.Ordinal}");
             yield return SourceComponent("component.value", property, "value");
             if (property.GetMethod is not null) yield return SourceComponent("component.accessor.get", property, "accessor/get", "support.not-applicable", "skip.not-applicable.non-documentation-component");
             if (property.SetMethod is not null) yield return SourceComponent(property.SetMethod.IsInitOnly ? "component.accessor.init" : "component.accessor.set", property, property.SetMethod.IsInitOnly ? "accessor/init" : "accessor/set", "support.not-applicable", "skip.not-applicable.non-documentation-component");
         }
-        foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => !@event.IsImplicitlyDeclared && IsDocumentationTarget(@event)))
+        foreach (var @event in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IEventSymbol>().Where(@event => !@event.IsImplicitlyDeclared && IsDocumentationTarget(@event, targetProfile)))
         {
             yield return SourceComponent("component.accessor.add", @event, "accessor/add", "support.not-applicable", "skip.not-applicable.non-documentation-component");
             yield return SourceComponent("component.accessor.remove", @event, "accessor/remove", "support.not-applicable", "skip.not-applicable.non-documentation-component");
@@ -439,12 +626,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         foreach (var field in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<IFieldSymbol>())
         {
             var parent = field.AssociatedSymbol;
-            if (parent is IPropertySymbol property && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property))
+            if (parent is IPropertySymbol property && !IsRecordPositionalProperty(property) && IsDocumentationTarget(property, targetProfile))
                 yield return SourceComponent("component.backing-field", property, "backing-field", "support.not-applicable", "skip.not-applicable.non-documentation-component");
-            if (parent is IEventSymbol @event && IsDocumentationTarget(@event))
+            if (parent is IEventSymbol @event && IsDocumentationTarget(@event, targetProfile))
                 yield return SourceComponent("component.backing-field", @event, "backing-field", "support.not-applicable", "skip.not-applicable.non-documentation-component");
         }
-        foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().Where(type => !type.IsImplicitlyDeclared && IsDocumentationTarget(type)))
+        foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>().Where(type => !type.IsImplicitlyDeclared && IsDocumentationTarget(type, targetProfile)))
         {
             var parentId = type.GetDocumentationCommentId()!;
             foreach (var typeParameter in type.TypeParameters) yield return SourceComponent("component.type-parameter", type, $"type-parameter/{typeParameter.Ordinal}");
@@ -570,7 +757,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
                 });
             }
         }
-        foreach (var relation in ClassifyRelationRecords(compilation, context).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
+        var targetProfile = manifest.GetProperty("targetProfile").GetString()!;
+        foreach (var relation in ClassifyRelationRecords(compilation, context, targetProfile).GroupBy(relation => JsonSerializer.Serialize(relation), StringComparer.Ordinal).Select(group => group.First())) records.Add(relation);
         foreach (var scenario in manifest.GetProperty("unresolvedScenarios").EnumerateArray().OrderBy(scenario => scenario.GetProperty("candidateLocator"), CandidateLocatorComparer.Instance))
         {
             var skipReason = !scenario.GetProperty("documentationCommentIdAvailable").GetBoolean() ? "skip.unavailable.documentation-comment-id"
@@ -590,22 +778,22 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         return records.OrderBy(record => record["recordType"].ToString(), StringComparer.Ordinal).ThenBy(record => JsonSerializer.Serialize(record), StringComparer.Ordinal).ToArray();
     }
 
-    private static IEnumerable<Dictionary<string, object>> ClassifyRelationRecords(CSharpCompilation compilation, string context)
+    private static IEnumerable<Dictionary<string, object>> ClassifyRelationRecords(CSharpCompilation compilation, string context, string targetProfile)
     {
         foreach (var type in EnumerateSymbols(compilation.Assembly.GlobalNamespace).OfType<INamedTypeSymbol>())
         {
             foreach (var member in type.GetMembers().Where(IsRelationMember))
             {
-                if (GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
-                foreach (var implemented in GetExplicitInterfaceMembers(member))
-                    if (ContainingTypesReachable(member.ContainingType) && IsDocumentationTarget(implemented) && member.GetDocumentationCommentId() is { } explicitSource && implemented.OriginalDefinition.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
+                if (IsDocumentationTarget(member, targetProfile) && GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
+                foreach (var implemented in GetExplicitInterfaceMembers(member).Where(implemented => ContainingTypesReachable(member.ContainingType, targetProfile) && IsDocumentationTarget(implemented, targetProfile)))
+                    if (member.GetDocumentationCommentId() is { } explicitSource && implemented.OriginalDefinition.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
             }
-            if (type.TypeKind == TypeKind.Interface)
-                foreach (var inherited in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(IsDocumentationTarget))
+            if (type.TypeKind == TypeKind.Interface && IsDocumentationTarget(type, targetProfile))
+                foreach (var inherited in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(symbol => IsDocumentationTarget(symbol, targetProfile)))
                     if (type.GetDocumentationCommentId() is { } source && inherited.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
             if (type.TypeKind != TypeKind.Interface)
-                foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
-                    if (IsDocumentationTarget(interfaceMember) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && implementation.Locations.Any(location => location.IsInSource) && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+                foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(interfaceMember => IsDocumentationTarget(interfaceMember, targetProfile)))
+                    if (type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && implementation.Locations.Any(location => location.IsInSource) && IsDocumentationTarget(implementation, targetProfile) && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
 
@@ -655,11 +843,12 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             {
                 0 => CompareRepositoryLocators(left.GetProperty("repository"), right.GetProperty("repository")),
                 1 => CompareGeneratedLocators(left.GetProperty("generatedSource"), right.GetProperty("generatedSource")),
+                2 => CompareToolGeneratedLocators(left.GetProperty("toolGenerated"), right.GetProperty("toolGenerated")),
                 _ => string.CompareOrdinal(left.GetProperty("synthetic").GetProperty("fixtureId").GetString(), right.GetProperty("synthetic").GetProperty("fixtureId").GetString())
             };
         }
 
-        private static int CandidateLocatorKind(JsonElement locator) => locator.TryGetProperty("repository", out _) ? 0 : locator.TryGetProperty("generatedSource", out _) ? 1 : 2;
+        private static int CandidateLocatorKind(JsonElement locator) => locator.TryGetProperty("repository", out _) ? 0 : locator.TryGetProperty("generatedSource", out _) ? 1 : locator.TryGetProperty("toolGenerated", out _) ? 2 : 3;
 
         private static int CompareRepositoryLocators(JsonElement left, JsonElement right)
         {
@@ -673,6 +862,14 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (generatorComparison != 0) return generatorComparison;
             var hintComparison = string.CompareOrdinal(left.GetProperty("hintNameId").GetString(), right.GetProperty("hintNameId").GetString());
             return hintComparison != 0 ? hintComparison : CompareSpans(left, right);
+        }
+
+        private static int CompareToolGeneratedLocators(JsonElement left, JsonElement right)
+        {
+            var producerComparison = string.CompareOrdinal(left.GetProperty("producerId").GetString(), right.GetProperty("producerId").GetString());
+            if (producerComparison != 0) return producerComparison;
+            var outputComparison = string.CompareOrdinal(left.GetProperty("outputId").GetString(), right.GetProperty("outputId").GetString());
+            return outputComparison != 0 ? outputComparison : CompareSpans(left, right);
         }
 
         private static int CompareSpans(JsonElement left, JsonElement right)
@@ -690,31 +887,38 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static string SerializeCanonicalRecords(IReadOnlyList<Dictionary<string, object>> records) => JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = false });
 
-    private static bool IsDocumentationTarget(ISymbol symbol)
+    private static bool IsDocumentationTarget(ISymbol symbol, string targetProfile)
     {
+        if (targetProfile is not ("profile.external-api" or "profile.assembly-visible")) return false;
         if (symbol.GetDocumentationCommentId() is null || ClassifyPrimaryKind(symbol) is null || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }) return false;
         if (symbol is IMethodSymbol { ExplicitInterfaceImplementations.Length: > 0 }) return false;
-        if (symbol is INamedTypeSymbol type) return IsReachableType(type);
+        if (symbol is INamedTypeSymbol type) return IsReachableType(type, targetProfile);
         var containing = symbol.ContainingType;
-        if (containing is null || !ContainingTypesReachable(containing)) return false;
-        return symbol.DeclaredAccessibility == Accessibility.Public
-            || symbol.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && IsExternallyDerivableContainer(containing);
+        if (containing is null || !ContainingTypesReachable(containing, targetProfile)) return false;
+        return IsSelectedAccessibility(symbol.DeclaredAccessibility, containing, targetProfile);
     }
 
-    private static bool IsExternallyDerivableContainer(INamedTypeSymbol type) => type.TypeKind == TypeKind.Interface || type.TypeKind == TypeKind.Class && !type.IsSealed;
+    private static bool IsDerivableContainer(INamedTypeSymbol type) => type.TypeKind == TypeKind.Interface || type.TypeKind == TypeKind.Class && !type.IsSealed;
 
-    private static bool ContainingTypesReachable(INamedTypeSymbol type)
+    private static bool ContainingTypesReachable(INamedTypeSymbol type, string targetProfile) => IsReachableType(type, targetProfile);
+
+    private static bool IsReachableType(INamedTypeSymbol type, string targetProfile)
     {
-        return IsReachableType(type);
+        if (type.IsFileLocal) return false;
+        if (type.ContainingType is null)
+            return type.DeclaredAccessibility == Accessibility.Public
+                || targetProfile == "profile.assembly-visible" && type.DeclaredAccessibility == Accessibility.Internal;
+        return IsReachableType(type.ContainingType, targetProfile)
+            && IsSelectedAccessibility(type.DeclaredAccessibility, type.ContainingType, targetProfile);
     }
 
-    private static bool IsReachableType(INamedTypeSymbol type)
-    {
-        if (type.ContainingType is null) return type.DeclaredAccessibility == Accessibility.Public;
-        if (!IsReachableType(type.ContainingType)) return false;
-        return type.DeclaredAccessibility == Accessibility.Public
-            || type.DeclaredAccessibility is Accessibility.Protected or Accessibility.ProtectedOrInternal && type.ContainingType.TypeKind == TypeKind.Class && !type.ContainingType.IsSealed;
-    }
+    private static bool IsSelectedAccessibility(Accessibility accessibility, INamedTypeSymbol containingType, string targetProfile) =>
+        accessibility == Accessibility.Public
+        || (accessibility == Accessibility.Protected || accessibility == Accessibility.ProtectedOrInternal) && IsDerivableContainer(containingType)
+        || targetProfile == "profile.assembly-visible"
+            && (accessibility == Accessibility.Internal
+                || accessibility == Accessibility.ProtectedOrInternal
+                || accessibility == Accessibility.ProtectedAndInternal && IsDerivableContainer(containingType));
 
     private static IEnumerable<ISymbol> EnumerateSymbols(INamedTypeSymbol type)
     {
@@ -771,6 +975,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (!ids.Add(id) || previousId is not null && string.CompareOrdinal(previousId, id) >= 0) return false;
             previousId = id;
             if (!Known("evidenceKinds", item.GetProperty("kind").GetString()) || !Known("evidenceRelations", item.GetProperty("relation").GetString())) return false;
+            if (!IsValidEvidenceSubject(item.GetProperty("subject"))) return false;
             if (!IsValidLocator(item.GetProperty("locator"), originalEvidenceTexts)) return false;
             var excerpt = item.GetProperty("excerpt").GetString()!;
             var included = System.Text.Encoding.UTF8.GetByteCount(excerpt);
@@ -784,6 +989,18 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             if (!string.Equals(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(originalText))).ToLowerInvariant(), item.GetProperty("sha256").GetString(), StringComparison.Ordinal)) return false;
             if (System.Text.Encoding.UTF8.GetByteCount(originalText) != original) return false;
             total += included;
+        }
+        if (bundle.TryGetProperty("observationSubject", out var observation))
+        {
+            if (items.Length == 0 || !IsValidEvidenceSubject(observation.GetProperty("subject"))) return false;
+            if (items.Any(item => !JsonElement.DeepEquals(item.GetProperty("subject"), observation.GetProperty("subject")))) return false;
+            var subject = observation.GetProperty("subject");
+            var context = subject.TryGetProperty("parentSymbolRef", out var parent)
+                ? parent.GetProperty("compilationContextRef").GetString()
+                : subject.GetProperty("compilationContextRef").GetString();
+            if (observation.GetProperty("compilationContextRef").GetString() != context
+                || observation.GetProperty("observationSubjectRef").GetString() != AuditResultCanonicalizer.ComputeObservationSubjectRef(observation))
+                return false;
         }
         return total <= 32768;
     }
@@ -855,7 +1072,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
         if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
         if (origin == "origin.unknown" && (status != "support.unavailable-context" || skip.GetString() is not ("skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
-        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() == "skip.ambiguous.mixed-origin") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
+        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
         if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
         return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
     }
@@ -887,19 +1104,30 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     };
 
     private static bool IsSymbolRef(JsonElement symbolRef) => symbolRef.ValueKind == JsonValueKind.Object
+        && HasOnlyProperties(symbolRef, "compilationContextRef", "documentationCommentId")
         && symbolRef.TryGetProperty("compilationContextRef", out var context) && System.Text.RegularExpressions.Regex.IsMatch(context.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$")
         && symbolRef.TryGetProperty("documentationCommentId", out var id) && !string.IsNullOrEmpty(id.GetString());
 
+    private static bool IsValidEvidenceSubject(JsonElement subject) =>
+        IsSymbolRef(subject)
+        || HasOnlyProperties(subject, "parentSymbolRef", "componentKind", "identity")
+            && subject.TryGetProperty("parentSymbolRef", out var parent) && IsSymbolRef(parent)
+            && subject.TryGetProperty("componentKind", out var kind) && Known("componentKinds", kind.GetString())
+            && subject.TryGetProperty("identity", out var identity) && IsValidComponentIdentity(kind.GetString()!, identity.GetString());
+
     private static bool IsValidCandidateLocator(JsonElement locator)
     {
-        var kinds = new[] { "repository", "generatedSource", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
+        var kinds = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         return kinds.Length == 1 && kinds[0] switch
         {
             "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString())
                 && (!locator.GetProperty("repository").TryGetProperty("span", out var repositorySpan) || repositorySpan.GetProperty("start").GetInt32() <= repositorySpan.GetProperty("end").GetInt32()),
             "generatedSource" => locator.GetProperty("generatedSource").TryGetProperty("generatorId", out var generator) && locator.GetProperty("generatedSource").TryGetProperty("hintNameId", out var hint)
-                && System.Text.RegularExpressions.Regex.IsMatch(generator.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$") && System.Text.RegularExpressions.Regex.IsMatch(hint.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$")
+                && IsGeneratedId(generator.GetString(), "sgp.") && IsGeneratedId(hint.GetString(), "sgo.")
                 && (!locator.GetProperty("generatedSource").TryGetProperty("span", out var span) || span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32()),
+            "toolGenerated" => locator.GetProperty("toolGenerated").TryGetProperty("producerId", out var producer) && locator.GetProperty("toolGenerated").TryGetProperty("outputId", out var output)
+                && IsGeneratedId(producer.GetString(), "tgp.") && IsGeneratedId(output.GetString(), "tgo.")
+                && (!locator.GetProperty("toolGenerated").TryGetProperty("span", out var toolSpan) || toolSpan.GetProperty("start").GetInt32() <= toolSpan.GetProperty("end").GetInt32()),
             "synthetic" => locator.GetProperty("synthetic").TryGetProperty("fixtureId", out var fixture) && System.Text.RegularExpressions.Regex.IsMatch(fixture.GetString() ?? string.Empty, "^[a-z0-9][a-z0-9._-]{0,127}$"),
             _ => false
         };
@@ -907,16 +1135,37 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static bool IsValidLocator(JsonElement locator, IReadOnlyDictionary<string, string>? originalEvidenceTexts = null)
     {
-        var kinds = new[] { "repository", "metadata", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
+        var kinds = new[] { "repository", "metadata", "generatedOutput", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         if (kinds.Length != 1) return false;
         return kinds[0] switch
         {
             "repository" => IsValidRepositoryLocator(locator.GetProperty("repository"), originalEvidenceTexts),
             "metadata" => locator.GetProperty("metadata").GetProperty("assemblyIdentity").GetString() is { } assembly && System.Text.RegularExpressions.Regex.IsMatch(assembly, "^[a-z0-9][a-z0-9._-]{0,127}$"),
+            "generatedOutput" => IsValidGeneratedOutput(locator.GetProperty("generatedOutput")),
             "synthetic" => locator.GetProperty("synthetic").GetProperty("fixtureId").GetString() is { } fixture && System.Text.RegularExpressions.Regex.IsMatch(fixture, "^[a-z0-9][a-z0-9._-]{0,127}$"),
             _ => false
         };
     }
+
+    private static bool IsValidGeneratedOutput(JsonElement generated)
+    {
+        var kind = generated.GetProperty("producerKind").GetString();
+        var validIdentity = kind switch
+        {
+            "source-generator" => IsGeneratedId(generated.GetProperty("producerId").GetString(), "sgp.") && IsGeneratedId(generated.GetProperty("outputId").GetString(), "sgo."),
+            "tool-generated" => IsGeneratedId(generated.GetProperty("producerId").GetString(), "tgp.") && IsGeneratedId(generated.GetProperty("outputId").GetString(), "tgo."),
+            _ => false
+        };
+        return validIdentity
+            && System.Text.RegularExpressions.Regex.IsMatch(generated.GetProperty("sourceSha256").GetString() ?? string.Empty, "^[0-9a-f]{64}$")
+            && (!generated.TryGetProperty("span", out var span) || span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32());
+    }
+
+    private static bool IsGeneratedId(string? value, string prefix) =>
+        value is not null
+        && value.Length == prefix.Length + 64
+        && value.StartsWith(prefix, StringComparison.Ordinal)
+        && value[prefix.Length..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static bool IsLexicalRepositoryPath(string? path)
     {

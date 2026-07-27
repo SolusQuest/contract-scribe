@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "contractRevision": "issue-35-pre-release-v1",
+  "inventory": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+  "profiles": [
+    "profile.external-api",
+    "profile.assembly-visible"
+  ],
+  "registries": {
+    "auditResultSha256": "961b342e314dae5f59bd9aac9d86634787f08b2fc2540227f13c2e4ac480634e",
+    "symbolEvidenceTaxonomySha256": "561314420371c991f70b35a0e8daede99d796d843785efc49f68f68c591f3513"
+  },
+  "fixtures": {
+    "policy": "tests/fixtures/policy-configuration/v1/cases.json",
+    "profiles": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+    "generatedIdentity": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+    "auditAuthority": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+    "rowCrosswalk": "tests/fixtures/m1-contract-baseline/v1/row-crosswalk.json"
+  },
+  "downstreamImplementationIssues": [
+    36,
+    37,
+    38,
+    39,
+    40
+  ]
+}

@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "targetProfile": "profile.external-api",
   "defaultDecision": "optional",
   "rules": [
     { "id": "a-tail", "priority": 0, "decision": "required", "sourcePaths": { "include": ["a/**"] } }

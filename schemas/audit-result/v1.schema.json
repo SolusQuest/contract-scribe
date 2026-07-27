@@ -4,59 +4,500 @@
   "title": "ContractScribe Audit Result V1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["auditResultVersion", "policyConfigurationVersion", "taxonomyRegistryVersion", "results"],
+  "required": [
+    "auditResultVersion",
+    "policyConfigurationVersion",
+    "taxonomyRegistryVersion",
+    "targetProfile",
+    "results"
+  ],
   "properties": {
-    "auditResultVersion": { "const": 1 },
-    "policyConfigurationVersion": { "const": 1 },
-    "taxonomyRegistryVersion": { "const": 1 },
+    "auditResultVersion": {
+      "const": 1
+    },
+    "policyConfigurationVersion": {
+      "const": 1
+    },
+    "taxonomyRegistryVersion": {
+      "const": 1
+    },
+    "targetProfile": {
+      "enum": [
+        "profile.external-api",
+        "profile.assembly-visible"
+      ]
+    },
     "results": {
       "type": "array",
-      "items": { "$ref": "#/$defs/result" }
+      "items": {
+        "$ref": "#/$defs/result"
+      }
     }
   },
   "$defs": {
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["classification", "policyContributions", "policyExpectation", "policyResolution", "documentationObservation", "auditOutcome", "reasonCode", "evidenceIds", "evidenceBundle"],
+      "required": [
+        "classification",
+        "policyContributions",
+        "policyExpectation",
+        "policyResolution",
+        "documentationObservation",
+        "auditOutcome",
+        "reasonCode",
+        "evidenceIds",
+        "evidenceBundle"
+      ],
       "properties": {
         "classification": {
           "type": "object",
-          "required": ["recordType"],
+          "required": [
+            "recordType"
+          ],
           "properties": {
-            "recordType": { "enum": ["TargetClassification", "ComponentClassification", "UnresolvedClassification"] }
+            "recordType": {
+              "enum": [
+                "TargetClassification",
+                "ComponentClassification",
+                "UnresolvedClassification"
+              ]
+            }
           }
         },
-        "policyContributions": { "type": "array", "items": { "$ref": "#/$defs/policyContribution" } },
-        "policyExpectation": { "type": ["string", "null"], "enum": ["required", "optional", "forbidden", null] },
-        "policyResolution": { "enum": ["single", "all-declarations-agree", "conflict", "unavailable"] },
-        "documentationObservation": { "type": ["string", "null"], "enum": ["documentation.present", "documentation.absent", "documentation.unavailable", null] },
-        "auditOutcome": { "enum": ["audit.outcome.compliant", "audit.outcome.violation", "audit.outcome.skipped"] },
-        "reasonCode": { "enum": ["audit.reason.required-present", "audit.reason.required-absent", "audit.reason.optional-present", "audit.reason.optional-absent", "audit.reason.forbidden-present", "audit.reason.forbidden-absent", "audit.reason.classification-skipped", "audit.reason.policy-conflict", "audit.reason.policy-unavailable", "audit.reason.documentation-unavailable", "audit.reason.evidence-incomplete"] },
-        "evidenceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$", "maxLength": 128 } },
-        "evidenceBundle": { "$ref": "#/$defs/evidenceBundle" }
-      }
+        "policyContributions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/policyContribution"
+          }
+        },
+        "policyExpectation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "required",
+            "optional",
+            "forbidden",
+            null
+          ]
+        },
+        "policyResolution": {
+          "enum": [
+            "single",
+            "all-declarations-agree",
+            "conflict",
+            "unavailable"
+          ]
+        },
+        "documentationObservation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "documentation.present",
+            "documentation.absent",
+            "documentation.unavailable",
+            null
+          ]
+        },
+        "auditOutcome": {
+          "enum": [
+            "audit.outcome.compliant",
+            "audit.outcome.violation",
+            "audit.outcome.skipped"
+          ]
+        },
+        "reasonCode": {
+          "enum": [
+            "audit.reason.required-present",
+            "audit.reason.required-absent",
+            "audit.reason.optional-present",
+            "audit.reason.optional-absent",
+            "audit.reason.forbidden-present",
+            "audit.reason.forbidden-absent",
+            "audit.reason.classification-skipped",
+            "audit.reason.policy-conflict",
+            "audit.reason.policy-unavailable",
+            "audit.reason.documentation-unavailable",
+            "audit.reason.documentation-unavailable.malformed-xml",
+            "audit.reason.evidence-incomplete"
+          ]
+        },
+        "evidenceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+            "maxLength": 128
+          }
+        },
+        "evidenceBundle": {
+          "$ref": "#/$defs/evidenceBundle"
+        },
+        "evidenceAuthority": {
+          "$ref": "#/$defs/evidenceAuthority"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "documentationObservation": {
+                    "enum": [
+                      "documentation.present",
+                      "documentation.absent"
+                    ]
+                  }
+                },
+                "required": [
+                  "documentationObservation"
+                ]
+              },
+              {
+                "properties": {
+                  "reasonCode": {
+                    "const": "audit.reason.documentation-unavailable.malformed-xml"
+                  }
+                },
+                "required": [
+                  "reasonCode"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "evidenceAuthority"
+            ],
+            "properties": {
+              "evidenceBundle": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidenceBundle"
+                  },
+                  {
+                    "required": [
+                      "observationSubject"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "evidenceAuthority"
+              ]
+            },
+            "properties": {
+              "evidenceBundle": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidenceBundle"
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "observationSubject"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "policyContribution": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["projectPath", "sourcePath", "policyExpectation", "matchedRuleId"],
-      "properties": {
-        "projectPath": { "type": "string", "minLength": 1 },
-        "sourcePath": { "type": "string", "minLength": 1 },
-        "policyExpectation": { "enum": ["required", "optional", "forbidden"] },
-        "matchedRuleId": { "type": ["string", "null"], "minLength": 1 }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "projectPath",
+            "sourcePath",
+            "policyExpectation",
+            "matchedRuleId"
+          ],
+          "properties": {
+            "projectPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourcePath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "policyExpectation": {
+              "enum": [
+                "required",
+                "optional",
+                "forbidden"
+              ]
+            },
+            "matchedRuleId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "projectPath",
+            "generatedOutput",
+            "policyExpectation",
+            "matchedRuleId"
+          ],
+          "properties": {
+            "projectPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "generatedOutput": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "producerKind",
+                "producerId",
+                "outputId"
+              ],
+              "properties": {
+                "producerKind": {
+                  "enum": [
+                    "source-generator",
+                    "tool-generated"
+                  ]
+                },
+                "producerId": {
+                  "type": "string",
+                  "pattern": "^(sgp|tgp)\\.[0-9a-f]{64}$"
+                },
+                "outputId": {
+                  "type": "string",
+                  "pattern": "^(sgo|tgo)\\.[0-9a-f]{64}$"
+                }
+              }
+            },
+            "policyExpectation": {
+              "enum": [
+                "required",
+                "optional",
+                "forbidden"
+              ]
+            },
+            "matchedRuleId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          }
+        }
+      ]
     },
     "evidenceBundle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidenceBundleVersion", "availabilityStatus", "items"],
+      "required": [
+        "evidenceBundleVersion",
+        "availabilityStatus",
+        "items"
+      ],
       "properties": {
-        "evidenceBundleVersion": { "const": 1 },
-        "availabilityStatus": { "enum": ["evidence.bundle.complete", "evidence.bundle.partial", "evidence.bundle.unavailable"] },
-        "omissionReason": { "enum": ["evidence.omission.access-not-permitted", "evidence.omission.source-unavailable", "evidence.omission.binary-content", "evidence.omission.budget-exhausted", "evidence.omission.not-provided"] },
-        "items": { "type": "array", "maxItems": 32, "items": { "type": "object" } }
+        "evidenceBundleVersion": {
+          "const": 1
+        },
+        "availabilityStatus": {
+          "enum": [
+            "evidence.bundle.complete",
+            "evidence.bundle.partial",
+            "evidence.bundle.unavailable"
+          ]
+        },
+        "omissionReason": {
+          "enum": [
+            "evidence.omission.access-not-permitted",
+            "evidence.omission.source-unavailable",
+            "evidence.omission.binary-content",
+            "evidence.omission.budget-exhausted",
+            "evidence.omission.not-provided"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object"
+          }
+        },
+        "observationSubject": {
+          "$ref": "#/$defs/observationSubject"
+        }
+      }
+    },
+    "symbolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilationContextRef",
+        "documentationCommentId"
+      ],
+      "properties": {
+        "compilationContextRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "documentationCommentId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "componentSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parentSymbolRef",
+        "componentKind",
+        "identity"
+      ],
+      "properties": {
+        "parentSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "componentKind": {
+          "type": "string",
+          "pattern": "^component\\."
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "observationSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationSubjectRef",
+        "compilationContextRef",
+        "subject",
+        "authoritativeDeclarationSetDigest",
+        "authoritativeDeclarationCount"
+      ],
+      "properties": {
+        "observationSubjectRef": {
+          "type": "string",
+          "pattern": "^obs\\.[0-9a-f]{64}$"
+        },
+        "compilationContextRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/symbolRef"
+            },
+            {
+              "$ref": "#/$defs/componentSubject"
+            }
+          ]
+        },
+        "authoritativeDeclarationSetDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authoritativeDeclarationCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "evidenceAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "declarationSetId",
+        "completeness",
+        "declarations"
+      ],
+      "properties": {
+        "declarationSetId": {
+          "type": "string",
+          "pattern": "^dset\\.[0-9a-f]{64}$"
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "positive-only"
+          ]
+        },
+        "declarations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "declarationId",
+              "authorityRole",
+              "blockState",
+              "evidenceId"
+            ],
+            "properties": {
+              "declarationId": {
+                "type": "string",
+                "pattern": "^decl\\.[0-9a-f]{64}$"
+              },
+              "authorityRole": {
+                "enum": [
+                  "ordinary",
+                  "partial-type-part",
+                  "partial-member-implementing",
+                  "partial-member-defining-fallback"
+                ]
+              },
+              "blockState": {
+                "enum": [
+                  "no-block",
+                  "well-formed",
+                  "whitespace-only",
+                  "malformed"
+                ]
+              },
+              "evidenceId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+                "maxLength": 128
+              },
+              "componentLocalName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "componentMatch": {
+                "enum": [
+                  "present",
+                  "absent"
+                ]
+              }
+            }
+          }
+        }
       }
     }
   }

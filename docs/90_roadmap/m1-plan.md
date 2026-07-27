@@ -22,13 +22,13 @@ ADR 0001 fixes the framework-dependent execution baseline. ADR 0002 fixes one in
 
 ### Target profiles
 
-The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. The current M0 contract baseline cannot fully express that requirement:
+The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. ADR 0003 accepted the exact semantics, and Issue #35 coordinates their pre-release v1 machine-contract baseline. The prior M0 baseline could not fully express the requirement because:
 
 - Policy v1 selects by project and source path only.
 - Taxonomy v1 enumerates an externally reachable target surface.
 - Audit Result v1 composes those exact inputs.
 
-M1 must complete the coordinated pre-release v1 contract set before production implementation fixes target behavior.
+The coordinated Issue #35 contract set must merge before downstream production implementation fixes target behavior. The durable affected-artifact and downstream disposition record is the [pre-release v1 baseline inventory](../20_architecture/contracts/pre-release-v1-baseline.md).
 
 The decision must define:
 
@@ -43,8 +43,8 @@ The decision must define:
 
 The minimum accepted profiles are:
 
-- `external-api`;
-- `assembly-visible`.
+- `profile.external-api`;
+- `profile.assembly-visible`.
 
 The decision must not assume that C# accessibility is a simple numeric order. Profiles or explicit sets are preferred.
 

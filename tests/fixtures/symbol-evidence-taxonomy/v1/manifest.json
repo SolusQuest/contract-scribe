@@ -2,6 +2,7 @@
   "conformanceManifestVersion": 1,
   "registryVersion": 1,
   "evidenceBundleVersion": 1,
+  "targetProfile": "profile.external-api",
   "compilationContextRef": "synthetic.v1",
   "compilationProfile": {
     "languageVersion": "Preview",
@@ -1705,18 +1706,6 @@
       "relationKind": "relation.overrides",
       "sourceSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Derived.ProtectedMember"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
       },
       "targetSymbolRef": {
@@ -3182,8 +3171,8 @@
       "parentDocumentationCommentId": "T:TaxonomyFixtures.SampleStruct",
       "candidateLocator": {
         "generatedSource": {
-          "generatorId": "fixture.generator",
-          "hintNameId": "unknown-struct.g.cs"
+          "generatorId": "sgp.1111111111111111111111111111111111111111111111111111111111111111",
+          "hintNameId": "sgo.2222222222222222222222222222222222222222222222222222222222222222"
         }
       }
     }

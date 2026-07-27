@@ -1,0 +1,93 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
+  "results": [
+    {
+      "classification": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "fixture.context",
+          "documentationCommentId": "P:Fixture.Api.Value"
+        },
+        "componentKind": "component.value",
+        "identity": "value",
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Fixture.csproj",
+          "sourcePath": "src/Api.cs",
+          "policyExpectation": "required",
+          "matchedRuleId": "required-docs"
+        }
+      ],
+      "policyExpectation": "required",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.unavailable",
+      "auditOutcome": "audit.outcome.skipped",
+      "reasonCode": "audit.reason.documentation-unavailable.malformed-xml",
+      "evidenceIds": [
+        "evidence.component.malformed"
+      ],
+      "evidenceAuthority": {
+        "declarationSetId": "dset.68a20b8ac88d551d51d6ee7f9545c71c6fddc8da299bee307b3dc1e989e2da76",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.4444444444444444444444444444444444444444444444444444444444444444",
+            "authorityRole": "ordinary",
+            "blockState": "malformed",
+            "evidenceId": "evidence.component.malformed"
+          }
+        ]
+      },
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.component.malformed",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "fixture.context",
+                "documentationCommentId": "P:Fixture.Api.Value"
+              },
+              "componentKind": "component.value",
+              "identity": "value"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "/// <value><broken></value>",
+            "sha256": "29d7b1b668561e74956a8a051429e1a626425d5de7c210a476c1f15d6b98cf7d",
+            "originalUtf8ByteCount": 27,
+            "includedUtf8ByteCount": 27,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Api.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.908223f5cec7670730e0770523f4046e31d76667537b247f29b0dcc6e9c00ba9",
+          "compilationContextRef": "fixture.context",
+          "subject": {
+            "parentSymbolRef": {
+              "compilationContextRef": "fixture.context",
+              "documentationCommentId": "P:Fixture.Api.Value"
+            },
+            "componentKind": "component.value",
+            "identity": "value"
+          },
+          "authoritativeDeclarationSetDigest": "68a20b8ac88d551d51d6ee7f9545c71c6fddc8da299bee307b3dc1e989e2da76",
+          "authoritativeDeclarationCount": 1
+        }
+      }
+    }
+  ]
+}

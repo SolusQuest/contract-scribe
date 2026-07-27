@@ -1,6 +1,8 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.ContractBaselineProbe;
 
 namespace ContractScribe.Tests;
 
@@ -33,7 +35,7 @@ public sealed class AuditResultContractTests
             }
         }
 
-        Assert.Equal(18, caseIds.Count);
+        Assert.Equal(20, caseIds.Count);
         Assert.Equal(referencedPayloads.Order(StringComparer.OrdinalIgnoreCase), Directory.EnumerateFiles(Path.Join(root, "payloads"), "*.json", SearchOption.TopDirectoryOnly).Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')).Order(StringComparer.OrdinalIgnoreCase));
     }
 
@@ -44,7 +46,7 @@ public sealed class AuditResultContractTests
         var original = File.ReadAllBytes(Path.Join(root, "required-present.json"));
         using var document = ParseStrict(original);
         var first = Canonicalize(document.RootElement);
-        var shuffled = $"{{\"results\":{document.RootElement.GetProperty("results").GetRawText()},\"taxonomyRegistryVersion\":1,\"auditResultVersion\":1,\"policyConfigurationVersion\":1}}";
+        var shuffled = $"{{\"results\":{document.RootElement.GetProperty("results").GetRawText()},\"targetProfile\":\"profile.external-api\",\"taxonomyRegistryVersion\":1,\"auditResultVersion\":1,\"policyConfigurationVersion\":1}}";
         using var shuffledDocument = ParseStrict(Encoding.UTF8.GetBytes(shuffled));
         var second = Canonicalize(document.RootElement);
         Assert.Equal(first, second);
@@ -53,6 +55,37 @@ public sealed class AuditResultContractTests
         Assert.Equal((byte)'\n', first[^1]);
         Assert.NotEqual((byte)0xEF, first[0]);
         Assert.DoesNotContain((byte)'\r', first);
+    }
+
+    [Fact]
+    public void CanonicalSerialization_OrdersRepositoryBeforeGeneratedPolicyContributions()
+    {
+        var payload = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-present.json")))!.AsObject();
+        var result = payload["results"]!.AsArray()[0]!.AsObject();
+        var repository = result["policyContributions"]!.AsArray()[0]!.DeepClone();
+        repository!["projectPath"] = "z/Z.csproj";
+        var generated = new JsonObject
+        {
+            ["projectPath"] = "a/A.csproj",
+            ["generatedOutput"] = new JsonObject
+            {
+                ["producerKind"] = "tool-generated",
+                ["producerId"] = "tgp." + new string('1', 64),
+                ["outputId"] = "tgo." + new string('2', 64)
+            },
+            ["policyExpectation"] = "required",
+            ["matchedRuleId"] = "generated-required"
+        };
+        result["policyContributions"] = new JsonArray(generated, repository);
+        result["policyResolution"] = "all-declarations-agree";
+
+        using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
+        var canonical = Canonicalize(document.RootElement);
+        using var canonicalDocument = ParseStrict(canonical);
+        var contributions = canonicalDocument.RootElement.GetProperty("results")[0].GetProperty("policyContributions").EnumerateArray().ToArray();
+        Assert.True(contributions[0].TryGetProperty("sourcePath", out _));
+        Assert.True(contributions[1].TryGetProperty("generatedOutput", out _));
+        Assert.True(IsCanonicalBytes(canonical));
     }
 
     [Fact]
@@ -86,21 +119,65 @@ public sealed class AuditResultContractTests
     }
 
     [Fact]
+    public void CanonicalSerialization_OrdersAllUnresolvedLocatorVariants()
+    {
+        var payload = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "locator-variants.json")))!.AsObject();
+        payload["results"]!.AsArray().Reverse();
+        using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
+        var canonical = Canonicalize(document.RootElement);
+        using var canonicalDocument = ParseStrict(canonical);
+        var variants = canonicalDocument.RootElement.GetProperty("results")
+            .EnumerateArray()
+            .Where(result => result.GetProperty("classification").GetProperty("recordType").GetString() == "UnresolvedClassification")
+            .Select(result => result.GetProperty("classification").GetProperty("candidateLocator").EnumerateObject().Single().Name)
+            .ToArray();
+
+        Assert.Equal(new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }, variants);
+    }
+
+    [Fact]
+    public void ReplayLogicalInputs_PassFullOracleAndCanonicalizeIdentically()
+    {
+        var path = Path.Join(FindRepositoryRoot(), "tests", "fixtures", "m1-contract-baseline", "v1", "process-replay-input.json");
+        using var replay = ParseStrict(File.ReadAllBytes(path));
+        var canonical = new List<byte[]>();
+        foreach (var logicalInput in replay.RootElement.GetProperty("logicalInputs").EnumerateArray())
+        {
+            Assert.True(AuditSchema.Value.Evaluate(logicalInput).IsValid);
+            ValidateDocument(logicalInput);
+            canonical.Add(Canonicalize(logicalInput));
+        }
+
+        Assert.True(canonical.Count >= 2);
+        Assert.All(canonical.Skip(1), candidate => Assert.Equal(canonical[0], candidate));
+    }
+
+    [Fact]
     public void InvalidVectors_FailClosed()
     {
-        var valid = File.ReadAllText(FixturePath("payloads", "required-present.json"));
-        var invalid = new[]
+        var valid = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-present.json")))!.AsObject();
+        var invalid = new List<JsonObject>();
+        JsonObject Mutate(Action<JsonObject> mutation)
         {
-            valid.Replace("\"taxonomyRegistryVersion\": 1", "\"taxonomyRegistryVersion\": 2", StringComparison.Ordinal),
-            valid.Replace("\"recordType\": \"TargetClassification\"", "\"recordType\": \"RelationObservation\"", StringComparison.Ordinal),
-            valid.Replace("\"auditOutcome\": \"audit.outcome.compliant\"", "\"auditOutcome\": \"audit.outcome.violation\"", StringComparison.Ordinal),
-            valid.Replace("\"evidenceIds\": [ \"evidence.xml-doc\" ]", "\"evidenceIds\": []", StringComparison.Ordinal),
-            valid.Replace("\"matchedRuleId\": \"required-docs\"", "\"matchedRuleId\": null", StringComparison.Ordinal).Replace("\"matchedRuleId\": null", "\"matchedRuleId\": null, \"unexpected\": true", StringComparison.Ordinal)
-        };
+            var value = (JsonObject)valid.DeepClone();
+            mutation(value);
+            invalid.Add(value);
+            return value;
+        }
+        Mutate(value => value["taxonomyRegistryVersion"] = 2);
+        Mutate(value => value["results"]![0]!["classification"]!["recordType"] = "RelationObservation");
+        Mutate(value => value["results"]![0]!["auditOutcome"] = "audit.outcome.violation");
+        Mutate(value => value["results"]![0]!["evidenceIds"]!.AsArray().Clear());
+        Mutate(value =>
+        {
+            var contribution = value["results"]![0]!["policyContributions"]![0]!.AsObject();
+            contribution["matchedRuleId"] = null;
+            contribution["unexpected"] = true;
+        });
 
         foreach (var (payload, index) in invalid.Select((payload, index) => (payload, index)))
         {
-            using var document = JsonDocument.Parse(payload);
+            using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
             Assert.False(AuditSchema.Value.Evaluate(document.RootElement).IsValid && IsSemanticallyValid(document.RootElement), $"Invalid vector {index} was accepted.");
         }
 
@@ -178,6 +255,8 @@ public sealed class AuditResultContractTests
         });
         var reasons = reasonEntries.Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal);
         var fixtureReasons = Directory.EnumerateFiles(Path.Join(root, "tests", "fixtures", "audit-result", "v1", "payloads"), "*.json").SelectMany(path => JsonDocument.Parse(File.ReadAllText(path)).RootElement.GetProperty("results").EnumerateArray()).Select(result => result.GetProperty("reasonCode").GetString()!).ToHashSet(StringComparer.Ordinal);
+        using var authorityFixtures = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "m1-contract-baseline", "v1", "audit-authority-cases.json")));
+        fixtureReasons.UnionWith(authorityFixtures.RootElement.GetProperty("valid").EnumerateArray().Select(result => result.GetProperty("reasonCode").GetString()!));
         Assert.True(reasons.IsSubsetOf(fixtureReasons), "Every audit reason needs a checked-in valid fixture.");
     }
 
@@ -213,15 +292,20 @@ public sealed class AuditResultContractTests
     [Fact]
     public void EvidenceBindingAndMetadata_FailClosedOnHashCountAndSubjectChanges()
     {
-        var payload = File.ReadAllText(FixturePath("payloads", "required-present.json"));
-        var mutations = new[]
+        var payload = JsonNode.Parse(File.ReadAllText(FixturePath("payloads", "required-present.json")))!.AsObject();
+        var mutations = new List<JsonObject>();
+        JsonObject Mutate(Action<JsonObject> mutation)
         {
-            payload.Replace("7245070ca7cb1427ad4e7c502148e744d7f50f07ba86091b570795d5c1f7537f", "0000000000000000000000000000000000000000000000000000000000000000", StringComparison.Ordinal),
-            payload.Replace("\"includedUtf8ByteCount\": 35", "\"includedUtf8ByteCount\": 34", StringComparison.Ordinal),
-            payload.Replace("\"documentationCommentId\": \"T:AuditFixtures.Widget\" }, \"kind\":", "\"documentationCommentId\": \"T:AuditFixtures.Other\" }, \"kind\":", StringComparison.Ordinal)
-        };
+            var value = (JsonObject)payload.DeepClone();
+            mutation(value);
+            mutations.Add(value);
+            return value;
+        }
+        Mutate(value => value["results"]![0]!["evidenceBundle"]!["items"]![0]!["sha256"] = new string('0', 64));
+        Mutate(value => value["results"]![0]!["evidenceBundle"]!["items"]![0]!["includedUtf8ByteCount"] = 34);
+        Mutate(value => value["results"]![0]!["evidenceBundle"]!["items"]![0]!["subject"]!["documentationCommentId"] = "T:AuditFixtures.Other");
 
-        foreach (var document in mutations.Select(mutation => JsonDocument.Parse(mutation)))
+        foreach (var document in mutations.Select(mutation => JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(mutation))))
         {
             using (document)
             {
@@ -232,8 +316,9 @@ public sealed class AuditResultContractTests
         var wrongM03 = File.ReadAllText(FixturePath("payloads", "classification-not-applicable.json")).Replace("skip.not-applicable.synthesized-non-target", "skip.not-applicable.non-documentation-component", StringComparison.Ordinal);
         using var wrongM03Document = JsonDocument.Parse(wrongM03);
         Assert.False(IsSemanticallyValid(wrongM03Document.RootElement));
-        var invalidLocator = File.ReadAllText(FixturePath("payloads", "required-present.json")).Replace("src/Widget.cs", "../outside.cs", StringComparison.Ordinal);
-        using var invalidLocatorDocument = JsonDocument.Parse(invalidLocator);
+        var invalidLocator = (JsonObject)payload.DeepClone();
+        invalidLocator["results"]![0]!["evidenceBundle"]!["items"]![0]!["locator"]!["repository"]!["path"] = "../outside.cs";
+        using var invalidLocatorDocument = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidLocator));
         Assert.False(IsSemanticallyValid(invalidLocatorDocument.RootElement));
 
         var nonCanonicalPolicy = File.ReadAllText(FixturePath("payloads", "required-present.json")).Replace("\"src/Audit.csproj\"", "\"./src//Audit.csproj\"", StringComparison.Ordinal);
@@ -406,6 +491,27 @@ public sealed class AuditResultContractTests
             items.Add(item);
             references.Add(id);
         }
+
+        var declarations = new JsonArray();
+        foreach (var item in items.OfType<JsonObject>())
+        {
+            var suffix = declarations.Count.ToString("x64", System.Globalization.CultureInfo.InvariantCulture);
+            declarations.Add(new JsonObject
+            {
+                ["declarationId"] = $"decl.{suffix}",
+                ["authorityRole"] = "partial-type-part",
+                ["blockState"] = "well-formed",
+                ["evidenceId"] = item["evidenceId"]!.GetValue<string>()
+            });
+        }
+        var authority = result["evidenceAuthority"]!.AsObject();
+        authority["declarations"] = declarations;
+        var declarationDigest = AuditResultCanonicalizer.ComputeDeclarationDigest(JsonSerializer.SerializeToElement(declarations));
+        authority["declarationSetId"] = $"dset.{declarationDigest}";
+        var observation = bundle["observationSubject"]!.AsObject();
+        observation["authoritativeDeclarationSetDigest"] = declarationDigest;
+        observation["authoritativeDeclarationCount"] = declarations.Count;
+        observation["observationSubjectRef"] = AuditResultCanonicalizer.ComputeObservationSubjectRef(JsonSerializer.SerializeToElement(observation));
 
         return JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(root));
     }

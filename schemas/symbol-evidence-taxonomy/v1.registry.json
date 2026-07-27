@@ -1400,6 +1400,20 @@
         ]
       },
       {
+        "definition": "Generated-output locator discriminator for source-generator or tool-generated evidence and unresolved candidates.",
+        "deprecated": null,
+        "replacementId": null,
+        "applicability": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ],
+        "id": "evidence.locator.generated-output",
+        "recordTypes": [
+          "EvidenceItem",
+          "UnresolvedClassification"
+        ]
+      },
+      {
         "definition": "Evidence locator discriminator evidence.locator.synthetic.",
         "deprecated": null,
         "replacementId": null,
@@ -1521,6 +1535,76 @@
         ],
         "precedence": 5
       }
+    ],
+    "targetProfiles": [
+      {
+        "id": "profile.external-api",
+        "definition": "Targets the externally reachable API surface defined by ADR 0003.",
+        "reachability": "external-api",
+        "deprecated": null,
+        "replacementId": null
+      },
+      {
+        "id": "profile.assembly-visible",
+        "definition": "Targets every declaration visible within the analyzed assembly, including internal surface.",
+        "reachability": "assembly-visible",
+        "deprecated": null,
+        "replacementId": null
+      }
+    ],
+    "runFailures": [
+      {
+        "id": "run.classification.unrepresentable",
+        "definition": "The complete classification set cannot be represented without violating the closed v1 taxonomy.",
+        "producingStage": "classification-normalization",
+        "downstreamIssue": 37,
+        "serialized": false,
+        "deprecated": null,
+        "replacementId": null
+      },
+      {
+        "id": "run.generated.identity-collision",
+        "definition": "Distinct normalized generated identity inputs produced the same opaque identifier.",
+        "producingStage": "generated-fact-validation",
+        "downstreamIssue": 36,
+        "serialized": false,
+        "deprecated": null,
+        "replacementId": null
+      },
+      {
+        "id": "run.generated.authority-conflict",
+        "definition": "Generated facts carrying the same identity disagree about producer, output, source, context, or authority.",
+        "producingStage": "generated-fact-validation",
+        "downstreamIssue": 36,
+        "serialized": false,
+        "deprecated": null,
+        "replacementId": null
+      },
+      {
+        "id": "run.generated.missing-identity",
+        "definition": "A generated candidate or evidence item lacks the required producer/output identity.",
+        "producingStage": "generated-fact-validation",
+        "downstreamIssue": 36,
+        "serialized": false,
+        "deprecated": null,
+        "replacementId": null
+      }
     ]
+  },
+  "sectionEntryTypes": {
+    "primaryKinds": "record-vocabulary",
+    "componentKinds": "record-vocabulary",
+    "traits": "record-vocabulary",
+    "relationKinds": "record-vocabulary",
+    "origins": "record-vocabulary",
+    "supportStatuses": "record-vocabulary",
+    "skipReasons": "record-vocabulary",
+    "evidenceKinds": "record-vocabulary",
+    "evidenceRelations": "record-vocabulary",
+    "locatorKinds": "record-vocabulary",
+    "bundleAvailabilityStatuses": "record-vocabulary",
+    "bundleOmissionReasons": "record-vocabulary",
+    "targetProfiles": "profile-vocabulary",
+    "runFailures": "run-failure"
   }
 }

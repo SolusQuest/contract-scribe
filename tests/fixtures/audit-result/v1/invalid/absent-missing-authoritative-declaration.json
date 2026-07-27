@@ -1,0 +1,119 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
+  "results": [
+    {
+      "classification": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.component",
+          "documentationCommentId": "T:AuditFixtures.Widget"
+        },
+        "componentKind": "component.return",
+        "identity": "return",
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Audit.csproj",
+          "sourcePath": "src/Widget.cs",
+          "policyExpectation": "optional",
+          "matchedRuleId": null
+        }
+      ],
+      "policyExpectation": "optional",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.absent",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.optional-absent",
+      "evidenceIds": [
+        "evidence.declaration",
+        "evidence.declaration-b"
+      ],
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.declaration",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "synthetic.component",
+                "documentationCommentId": "T:AuditFixtures.Widget"
+              },
+              "componentKind": "component.return",
+              "identity": "return"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "public sealed class Widget {}",
+            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
+            "originalUtf8ByteCount": 29,
+            "includedUtf8ByteCount": 29,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Widget.cs"
+              }
+            }
+          },
+          {
+            "evidenceId": "evidence.declaration-b",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "synthetic.component",
+                "documentationCommentId": "T:AuditFixtures.Widget"
+              },
+              "componentKind": "component.return",
+              "identity": "return"
+            },
+            "kind": "evidence.source.declaration",
+            "relation": "evidence.declares",
+            "excerpt": "public sealed class Widget {}",
+            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
+            "originalUtf8ByteCount": 29,
+            "includedUtf8ByteCount": 29,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Widget.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.fbab952fade84801d538544c13f8ba2d40d80fe51c5d2cfaaf4b456fb71cf08a",
+          "compilationContextRef": "synthetic.component",
+          "subject": {
+            "parentSymbolRef": {
+              "compilationContextRef": "synthetic.component",
+              "documentationCommentId": "T:AuditFixtures.Widget"
+            },
+            "componentKind": "component.return",
+            "identity": "return"
+          },
+          "authoritativeDeclarationSetDigest": "78bc8117323bf776df54ebcc84cde758eccface3dd0b5107b6a7055dde531d48",
+          "authoritativeDeclarationCount": 2
+        }
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.78bc8117323bf776df54ebcc84cde758eccface3dd0b5107b6a7055dde531d48",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.1111111111111111111111111111111111111111111111111111111111111111",
+            "authorityRole": "partial-type-part",
+            "blockState": "well-formed",
+            "evidenceId": "evidence.declaration-b",
+            "componentMatch": "absent"
+          }
+        ]
+      }
+    }
+  ]
+}

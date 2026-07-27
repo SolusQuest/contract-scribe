@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "targetProfile": "profile.assembly-visible",
+  "defaultDecision": "optional",
+  "rules": [
+    {
+      "id": "source-only",
+      "priority": 20,
+      "decision": "forbidden",
+      "sourcePaths": {
+        "exclude": [
+          "excluded/**"
+        ]
+      }
+    },
+    {
+      "id": "all-project-inputs",
+      "priority": 10,
+      "decision": "required",
+      "projectPaths": {
+        "include": [
+          "src/**"
+        ]
+      }
+    }
+  ]
+}

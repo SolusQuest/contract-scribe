@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "valid": [
+    {
+      "caseId": "profile.empty-external",
+      "policy": {
+        "schemaVersion": 1,
+        "targetProfile": "profile.external-api",
+        "defaultDecision": "optional"
+      },
+      "audit": {
+        "auditResultVersion": 1,
+        "policyConfigurationVersion": 1,
+        "taxonomyRegistryVersion": 1,
+        "targetProfile": "profile.external-api",
+        "results": []
+      }
+    },
+    {
+      "caseId": "profile.empty-assembly",
+      "policy": {
+        "schemaVersion": 1,
+        "targetProfile": "profile.assembly-visible",
+        "defaultDecision": "optional"
+      },
+      "audit": {
+        "auditResultVersion": 1,
+        "policyConfigurationVersion": 1,
+        "taxonomyRegistryVersion": 1,
+        "targetProfile": "profile.assembly-visible",
+        "results": []
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "caseId": "profile.mismatch",
+      "policyProfile": "profile.external-api",
+      "auditProfile": "profile.assembly-visible"
+    },
+    {
+      "caseId": "profile.missing",
+      "policyProfile": null,
+      "auditProfile": null
+    },
+    {
+      "caseId": "profile.unknown",
+      "policyProfile": "profile.unknown",
+      "auditProfile": null
+    }
+  ]
+}

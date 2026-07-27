@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using ContractScribe.ContractBaselineProbe;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -52,6 +55,7 @@ internal static class AuditResultConformance
         Assert.Equal(1, document.GetProperty("auditResultVersion").GetInt32());
         Assert.Equal(1, document.GetProperty("policyConfigurationVersion").GetInt32());
         Assert.Equal(1, document.GetProperty("taxonomyRegistryVersion").GetInt32());
+        Assert.Contains(document.GetProperty("targetProfile").GetString(), new[] { "profile.external-api", "profile.assembly-visible" });
         var subjects = new HashSet<string>(StringComparer.Ordinal);
         var resultIndex = 0;
         foreach (var result in document.GetProperty("results").EnumerateArray())
@@ -61,6 +65,7 @@ internal static class AuditResultConformance
             Assert.True(subjects.Add(subjectKey), $"Duplicate result subject: {subjectKey}");
             ValidatePolicy(result);
             ValidateEvidence(result, result.GetProperty("classification"), resultIndex, originalEvidenceTexts);
+            ValidateEvidenceAuthority(result);
             ValidateOutcome(result);
             resultIndex++;
         }
@@ -93,7 +98,7 @@ internal static class AuditResultConformance
 
     internal static void ValidateClassification(JsonElement classification)
     {
-        Assert.True(ClassificationSchema.Value.Evaluate(classification).IsValid);
+        Assert.True(ClassificationSchema.Value.Evaluate(classification).IsValid, classification.GetRawText());
         var recordType = classification.GetProperty("recordType").GetString();
         Assert.Contains(recordType, new[] { "TargetClassification", "ComponentClassification", "UnresolvedClassification" });
         Assert.False(classification.TryGetProperty("recordType", out var _) && recordType == "RelationObservation");
@@ -153,7 +158,7 @@ internal static class AuditResultConformance
         if (origin == "origin.mixed")
         {
             Assert.True(
-                supportStatus == "support.ambiguous" && skipReason == "skip.ambiguous.mixed-origin"
+                supportStatus == "support.ambiguous" && skipReason is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration"
                 || supportStatus == "support.unavailable-context" && skipReason is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context",
                 $"Invalid origin.mixed combination for {recordType}.");
         }
@@ -180,19 +185,26 @@ internal static class AuditResultConformance
     internal static void ValidatePolicy(JsonElement result)
     {
         var contributions = result.GetProperty("policyContributions").EnumerateArray().ToArray();
-        var keys = new HashSet<(string Project, string Source)>();
-        (string Project, string Source)? previousKey = null;
+        var keys = new HashSet<string>(StringComparer.Ordinal);
         var expectations = new HashSet<string>(StringComparer.Ordinal);
         foreach (var contribution in contributions)
         {
             var project = contribution.GetProperty("projectPath").GetString()!;
-            var source = contribution.GetProperty("sourcePath").GetString()!;
             Assert.True(IsCanonicalPolicyPath(project));
-            Assert.True(IsCanonicalPolicyPath(source));
-            var key = (Project: project, Source: source);
-            Assert.True(keys.Add(key), "Duplicate policy contribution pair.");
-            Assert.True(previousKey is null || ComparePolicyKeys(previousKey.Value, key) < 0, "Policy contributions are not sorted.");
-            previousKey = key;
+            var key = PolicyContributionKey(contribution);
+            if (contribution.TryGetProperty("sourcePath", out var source))
+            {
+                Assert.True(IsCanonicalPolicyPath(source.GetString()!));
+            }
+            else
+            {
+                var generated = contribution.GetProperty("generatedOutput");
+                var producerKind = generated.GetProperty("producerKind").GetString();
+                var expectedPrefixes = producerKind == "source-generator" ? ("sgp.", "sgo.") : ("tgp.", "tgo.");
+                Assert.StartsWith(expectedPrefixes.Item1, generated.GetProperty("producerId").GetString(), StringComparison.Ordinal);
+                Assert.StartsWith(expectedPrefixes.Item2, generated.GetProperty("outputId").GetString(), StringComparison.Ordinal);
+            }
+            Assert.True(keys.Add(key), "Duplicate policy contribution key.");
             expectations.Add(contribution.GetProperty("policyExpectation").GetString()!);
             if (contribution.GetProperty("matchedRuleId").ValueKind is not (JsonValueKind.Null or JsonValueKind.String)) throw new InvalidOperationException("Invalid matchedRuleId.");
             if (contribution.GetProperty("matchedRuleId").ValueKind == JsonValueKind.String) Assert.Matches("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", contribution.GetProperty("matchedRuleId").GetString()!);
@@ -217,10 +229,8 @@ internal static class AuditResultConformance
         var status = bundle.GetProperty("availabilityStatus").GetString();
         var items = bundle.GetProperty("items").EnumerateArray().ToArray();
         var ids = items.Select(item => item.GetProperty("evidenceId").GetString()!).ToArray();
-        Assert.Equal(ids.OrderBy(id => id, StringComparer.Ordinal), ids);
         Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
         var referenced = result.GetProperty("evidenceIds").EnumerateArray().Select(id => id.GetString()!).ToArray();
-        Assert.Equal(referenced.OrderBy(id => id, StringComparer.Ordinal), referenced);
         Assert.Equal(referenced.Length, referenced.Distinct(StringComparer.Ordinal).Count());
         Assert.All(referenced, id => Assert.Contains(items, item => item.GetProperty("evidenceId").GetString() == id && !item.GetProperty("isTruncated").GetBoolean()));
         Assert.True(items.Length <= 32);
@@ -269,29 +279,152 @@ internal static class AuditResultConformance
         if (result.GetProperty("auditOutcome").GetString() is "audit.outcome.compliant" or "audit.outcome.violation")
         {
             Assert.Equal("evidence.bundle.complete", status);
-            var expectedSubject = recordType == "ComponentClassification" ? classification.GetProperty("parentSymbolRef") : classification.GetProperty("symbolRef");
-            Assert.All(referenced, id => Assert.True(JsonEquals(items.Single(item => item.GetProperty("evidenceId").GetString() == id).GetProperty("subject"), expectedSubject), $"Evidence {id} is bound to a different subject."));
-            var relevant = items.Where(item => referenced.Contains(item.GetProperty("evidenceId").GetString()!, StringComparer.Ordinal) && JsonEquals(item.GetProperty("subject"), expectedSubject)).ToArray();
+            var expectedSubject = GetExpectedEvidenceSubject(classification);
+            Assert.All(referenced, id => Assert.True(JsonElement.DeepEquals(items.Single(item => item.GetProperty("evidenceId").GetString() == id).GetProperty("subject"), expectedSubject), $"Evidence {id} is bound to a different subject."));
+            var relevant = items.Where(item => referenced.Contains(item.GetProperty("evidenceId").GetString()!, StringComparer.Ordinal) && JsonElement.DeepEquals(item.GetProperty("subject"), expectedSubject)).ToArray();
             if (result.GetProperty("documentationObservation").GetString() == "documentation.present") Assert.Contains(relevant, item => item.GetProperty("kind").GetString() == "evidence.source.xml-documentation" && item.GetProperty("relation").GetString() == "evidence.documents");
             else
             {
                 Assert.Contains(relevant, item => item.GetProperty("kind").GetString() == "evidence.source.declaration" && item.GetProperty("relation").GetString() == "evidence.declares");
-                var sameSubject = items.Where(item => JsonEquals(item.GetProperty("subject"), expectedSubject)).ToArray();
+                var sameSubject = items.Where(item => JsonElement.DeepEquals(item.GetProperty("subject"), expectedSubject)).ToArray();
                 Assert.DoesNotContain(sameSubject, item => item.GetProperty("kind").GetString() == "evidence.source.xml-documentation");
             }
         }
     }
 
+    internal static void ValidateEvidenceAuthority(JsonElement result)
+    {
+        var hasAuthority = result.TryGetProperty("evidenceAuthority", out var authority);
+        var bundle = result.GetProperty("evidenceBundle");
+        var hasObservationSubject = bundle.TryGetProperty("observationSubject", out var observation);
+        var documentationObservation = result.GetProperty("documentationObservation");
+        var requiresAuthority =
+            documentationObservation.ValueKind == JsonValueKind.String
+            && documentationObservation.GetString() is "documentation.present" or "documentation.absent"
+            || result.GetProperty("reasonCode").GetString() == "audit.reason.documentation-unavailable.malformed-xml";
+        Assert.Equal(requiresAuthority, hasAuthority);
+        Assert.Equal(requiresAuthority, hasObservationSubject);
+        if (!requiresAuthority) return;
+
+        var declarations = authority.GetProperty("declarations");
+        var digest = AuditResultCanonicalizer.ComputeDeclarationDigest(declarations);
+        Assert.Equal($"dset.{digest}", authority.GetProperty("declarationSetId").GetString());
+        Assert.Equal(digest, observation.GetProperty("authoritativeDeclarationSetDigest").GetString());
+        Assert.Equal(declarations.GetArrayLength(), observation.GetProperty("authoritativeDeclarationCount").GetInt32());
+        Assert.Equal(GetClassificationContext(result.GetProperty("classification")), observation.GetProperty("compilationContextRef").GetString());
+        Assert.True(ObservationSubjectMatchesClassification(observation.GetProperty("subject"), result.GetProperty("classification")));
+
+        Assert.Equal(AuditResultCanonicalizer.ComputeObservationSubjectRef(observation), observation.GetProperty("observationSubjectRef").GetString());
+
+        var classification = result.GetProperty("classification");
+        var isComponent = classification.GetProperty("recordType").GetString() == "ComponentClassification";
+        var componentKind = isComponent ? classification.GetProperty("componentKind").GetString() : null;
+        var declarationIds = new HashSet<string>(StringComparer.Ordinal);
+        var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
+        var malformedEvidenceIds = new HashSet<string>(StringComparer.Ordinal);
+        var evidenceItems = bundle.GetProperty("items").EnumerateArray().ToDictionary(item => item.GetProperty("evidenceId").GetString()!, StringComparer.Ordinal);
+        foreach (var declaration in declarations.EnumerateArray())
+        {
+            var declarationId = declaration.GetProperty("declarationId").GetString()!;
+            Assert.True(declarationIds.Add(declarationId));
+            var evidenceId = declaration.GetProperty("evidenceId").GetString()!;
+            Assert.True(evidenceIds.Add(evidenceId));
+            Assert.True(evidenceItems.TryGetValue(evidenceId, out var evidence));
+            Assert.True(JsonElement.DeepEquals(evidence.GetProperty("subject"), observation.GetProperty("subject")));
+            var hasLocalName = declaration.TryGetProperty("componentLocalName", out _);
+            var hasMatch = declaration.TryGetProperty("componentMatch", out var componentMatch);
+            var isMalformed = declaration.GetProperty("blockState").GetString() == "malformed";
+            if (isMalformed) malformedEvidenceIds.Add(evidenceId);
+            if (!isComponent)
+            {
+                Assert.False(hasLocalName || hasMatch);
+            }
+            else if (componentKind is "component.parameter" or "component.type-parameter")
+            {
+                Assert.True(hasLocalName);
+                Assert.Equal(!isMalformed, hasMatch);
+            }
+            else
+            {
+                Assert.False(hasLocalName);
+                Assert.Equal(!isMalformed, hasMatch);
+            }
+            if (isMalformed) Assert.False(hasMatch);
+        }
+        var derivedObservation = AuditResultCanonicalizer.DeriveDocumentationObservation(observation.GetProperty("subject"), authority);
+        Assert.Equal(result.GetProperty("documentationObservation").GetString(), derivedObservation);
+        var malformedReason = result.GetProperty("reasonCode").GetString() == "audit.reason.documentation-unavailable.malformed-xml";
+        Assert.Equal(malformedReason, derivedObservation == "documentation.unavailable" && malformedEvidenceIds.Count > 0);
+        foreach (var evidenceId in malformedEvidenceIds)
+        {
+            var evidence = evidenceItems[evidenceId];
+            Assert.Equal("evidence.source.xml-documentation", evidence.GetProperty("kind").GetString());
+            Assert.Equal("evidence.documents", evidence.GetProperty("relation").GetString());
+            Assert.False(evidence.GetProperty("isTruncated").GetBoolean());
+            Assert.Contains(evidenceId, result.GetProperty("evidenceIds").EnumerateArray().Select(value => value.GetString()));
+        }
+
+        if (result.GetProperty("documentationObservation").GetString() != "documentation.present")
+        {
+            Assert.Equal("complete", authority.GetProperty("completeness").GetString());
+        }
+        Assert.Equal(
+            evidenceIds.Order(StringComparer.Ordinal),
+            result.GetProperty("evidenceIds").EnumerateArray().Select(value => value.GetString()!).Order(StringComparer.Ordinal));
+    }
+
+    internal static string GetClassificationContext(JsonElement classification) =>
+        classification.GetProperty("recordType").GetString() == "ComponentClassification"
+            ? classification.GetProperty("parentSymbolRef").GetProperty("compilationContextRef").GetString()!
+            : classification.GetProperty("symbolRef").GetProperty("compilationContextRef").GetString()!;
+
+    internal static bool ObservationSubjectMatchesClassification(JsonElement subject, JsonElement classification)
+    {
+        if (classification.GetProperty("recordType").GetString() == "TargetClassification")
+        {
+            return JsonElement.DeepEquals(subject, classification.GetProperty("symbolRef"));
+        }
+
+        return subject.GetProperty("componentKind").GetString() == classification.GetProperty("componentKind").GetString()
+            && subject.GetProperty("identity").GetString() == classification.GetProperty("identity").GetString()
+            && JsonElement.DeepEquals(subject.GetProperty("parentSymbolRef"), classification.GetProperty("parentSymbolRef"));
+    }
+
+    internal static JsonElement GetExpectedEvidenceSubject(JsonElement classification)
+    {
+        if (classification.GetProperty("recordType").GetString() != "ComponentClassification")
+        {
+            return classification.GetProperty("symbolRef");
+        }
+
+        return JsonSerializer.SerializeToElement(new JsonObject
+        {
+            ["parentSymbolRef"] = JsonNode.Parse(classification.GetProperty("parentSymbolRef").GetRawText()),
+            ["componentKind"] = classification.GetProperty("componentKind").GetString(),
+            ["identity"] = classification.GetProperty("identity").GetString()
+        });
+    }
+
     internal static void ValidateEvidenceLocator(JsonElement locator, string excerpt, string originalText, bool isTruncated)
     {
-        var variants = new[] { "repository", "metadata", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
+        var variants = new[] { "repository", "generatedOutput", "metadata", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         Assert.Single(variants);
-        ValidateTaxonomyEntry("locatorKinds", "evidence.locator." + variants[0], "EvidenceItem");
+        ValidateTaxonomyEntry("locatorKinds", "evidence.locator." + (variants[0] == "generatedOutput" ? "generated-output" : variants[0]), "EvidenceItem");
         if (variants[0] == "repository")
         {
             var repository = locator.GetProperty("repository");
             Assert.True(IsRepositoryRelativePath(repository.GetProperty("path").GetString()!));
             ValidateSpan(repository, excerpt, originalText, isTruncated);
+        }
+        else if (variants[0] == "generatedOutput")
+        {
+            var generated = locator.GetProperty("generatedOutput");
+            var producerKind = generated.GetProperty("producerKind").GetString();
+            var expectedPrefixes = producerKind == "source-generator" ? ("sgp.", "sgo.") : ("tgp.", "tgo.");
+            Assert.Matches($"^{Regex.Escape(expectedPrefixes.Item1)}[0-9a-f]{{64}}$", generated.GetProperty("producerId").GetString()!);
+            Assert.Matches($"^{Regex.Escape(expectedPrefixes.Item2)}[0-9a-f]{{64}}$", generated.GetProperty("outputId").GetString()!);
+            Assert.Matches("^[0-9a-f]{64}$", generated.GetProperty("sourceSha256").GetString()!);
+            ValidateSpan(generated);
         }
         else if (variants[0] == "metadata") Assert.Matches("^[a-z0-9][a-z0-9._-]{0,127}$", locator.GetProperty("metadata").GetProperty("assemblyIdentity").GetString()!);
         else Assert.Matches("^[a-z0-9][a-z0-9._-]{0,127}$", locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!);
@@ -299,9 +432,9 @@ internal static class AuditResultConformance
 
     internal static void ValidateCandidateLocator(JsonElement locator)
     {
-        var variants = new[] { "repository", "generatedSource", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
+        var variants = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         Assert.Single(variants);
-        ValidateTaxonomyEntry("locatorKinds", "evidence.locator." + (variants[0] == "generatedSource" ? "repository" : variants[0]), "UnresolvedClassification");
+        ValidateTaxonomyEntry("locatorKinds", "evidence.locator." + (variants[0] is "generatedSource" or "toolGenerated" ? "generated-output" : variants[0]), "UnresolvedClassification");
         if (variants[0] == "repository")
         {
             var repository = locator.GetProperty("repository");
@@ -311,8 +444,15 @@ internal static class AuditResultConformance
         else if (variants[0] == "generatedSource")
         {
             var generated = locator.GetProperty("generatedSource");
-            Assert.Matches("^[a-z0-9][a-z0-9._-]{0,127}$", generated.GetProperty("generatorId").GetString()!);
-            Assert.Matches("^[a-z0-9][a-z0-9._-]{0,127}$", generated.GetProperty("hintNameId").GetString()!);
+            Assert.Matches("^sgp\\.[0-9a-f]{64}$", generated.GetProperty("generatorId").GetString()!);
+            Assert.Matches("^sgo\\.[0-9a-f]{64}$", generated.GetProperty("hintNameId").GetString()!);
+            ValidateSpan(generated);
+        }
+        else if (variants[0] == "toolGenerated")
+        {
+            var generated = locator.GetProperty("toolGenerated");
+            Assert.Matches("^tgp\\.[0-9a-f]{64}$", generated.GetProperty("producerId").GetString()!);
+            Assert.Matches("^tgo\\.[0-9a-f]{64}$", generated.GetProperty("outputId").GetString()!);
             ValidateSpan(generated);
         }
         else Assert.Matches("^[a-z0-9][a-z0-9._-]{0,127}$", locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!);
@@ -377,6 +517,15 @@ internal static class AuditResultConformance
             AssertUnavailableBundle(result, "evidence.omission.source-unavailable");
             return;
         }
+        if (reason == "audit.reason.documentation-unavailable.malformed-xml")
+        {
+            Assert.Equal("audit.outcome.skipped", outcome);
+            Assert.Equal("documentation.unavailable", observation);
+            Assert.NotEmpty(result.GetProperty("evidenceIds").EnumerateArray());
+            Assert.Equal("evidence.bundle.complete", result.GetProperty("evidenceBundle").GetProperty("availabilityStatus").GetString());
+            Assert.Contains(result.GetProperty("evidenceAuthority").GetProperty("declarations").EnumerateArray(), declaration => declaration.GetProperty("blockState").GetString() == "malformed");
+            return;
+        }
         if (reason == "audit.reason.evidence-incomplete")
         {
             Assert.Equal("audit.outcome.skipped", outcome);
@@ -417,6 +566,12 @@ internal static class AuditResultConformance
         var observation = result.GetProperty("documentationObservation").GetString();
         var bundleStatus = result.GetProperty("evidenceBundle").GetProperty("availabilityStatus").GetString();
         if (observation == "documentation.unavailable" && bundleStatus == "evidence.bundle.partial") return "audit.reason.evidence-incomplete";
+        if (observation == "documentation.unavailable"
+            && result.TryGetProperty("evidenceAuthority", out var authority)
+            && authority.GetProperty("declarations").EnumerateArray().Any(declaration => declaration.GetProperty("blockState").GetString() == "malformed"))
+        {
+            return "audit.reason.documentation-unavailable.malformed-xml";
+        }
         if (observation == "documentation.unavailable") return "audit.reason.documentation-unavailable";
         if (bundleStatus == "evidence.bundle.partial") return "audit.reason.evidence-incomplete";
         return (expectations.Single(), observation) switch
@@ -454,6 +609,7 @@ internal static class AuditResultConformance
     {
         if (locator.TryGetProperty("repository", out var repository)) return "repository|" + NormalizeRepositoryPath(repository.GetProperty("path").GetString()!) + "|" + SpanKey(repository);
         if (locator.TryGetProperty("generatedSource", out var generated)) return "generatedSource|" + generated.GetProperty("generatorId").GetString() + "|" + generated.GetProperty("hintNameId").GetString() + "|" + SpanKey(generated);
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated)) return "toolGenerated|" + toolGenerated.GetProperty("producerId").GetString() + "|" + toolGenerated.GetProperty("outputId").GetString() + "|" + SpanKey(toolGenerated);
         return "synthetic|" + locator.GetProperty("synthetic").GetProperty("fixtureId").GetString();
     }
 
@@ -464,13 +620,7 @@ internal static class AuditResultConformance
 
     internal static byte[] Canonicalize(JsonElement root)
     {
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, Indented = false, SkipValidation = false }))
-        {
-            WriteValue(writer, root, null);
-        }
-        stream.WriteByte((byte)'\n');
-        return stream.ToArray();
+        return AuditResultCanonicalizer.Canonicalize(root);
     }
 
     internal static void WriteValue(Utf8JsonWriter writer, JsonElement value, string? propertyName)
@@ -480,7 +630,14 @@ internal static class AuditResultConformance
             case JsonValueKind.Object:
                 writer.WriteStartObject();
                 var properties = value.EnumerateObject().ToDictionary(property => property.Name, StringComparer.Ordinal);
-                var orderingParent = propertyName == "classification" && value.TryGetProperty("recordType", out var recordType) ? recordType.GetString() : propertyName;
+                var orderingParent = propertyName switch
+                {
+                    "classification" when value.TryGetProperty("recordType", out var recordType) => recordType.GetString(),
+                    "policyContributions" when value.TryGetProperty("generatedOutput", out _) => "generatedPolicyContribution",
+                    "policyContributions" => "repositoryPolicyContribution",
+                    "subject" when value.TryGetProperty("parentSymbolRef", out _) => "componentSubject",
+                    _ => propertyName
+                };
                 foreach (var name in OrderedProperties(properties.Keys, orderingParent))
                 {
                     writer.WritePropertyName(name);
@@ -520,20 +677,27 @@ internal static class AuditResultConformance
     {
         var order = parent switch
         {
-            null => new[] { "auditResultVersion", "policyConfigurationVersion", "taxonomyRegistryVersion", "results" },
-            "results" => new[] { "classification", "policyContributions", "policyExpectation", "policyResolution", "documentationObservation", "auditOutcome", "reasonCode", "evidenceIds", "evidenceBundle" },
+            null => new[] { "auditResultVersion", "policyConfigurationVersion", "taxonomyRegistryVersion", "targetProfile", "results" },
+            "results" => new[] { "classification", "policyContributions", "policyExpectation", "policyResolution", "documentationObservation", "auditOutcome", "reasonCode", "evidenceIds", "evidenceAuthority", "evidenceBundle" },
             "TargetClassification" => new[] { "recordType", "symbolRef", "primaryKind", "traits", "origin", "supportStatus", "skipReason" },
             "ComponentClassification" => new[] { "recordType", "parentSymbolRef", "componentKind", "identity", "origin", "supportStatus", "skipReason" },
             "UnresolvedClassification" => new[] { "recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator" },
             "symbolRef" or "parentSymbolRef" or "subject" => new[] { "compilationContextRef", "documentationCommentId" },
-            "candidateLocator" or "locator" => new[] { "repository", "generatedSource", "metadata", "synthetic" },
+            "componentSubject" => new[] { "parentSymbolRef", "componentKind", "identity" },
+            "candidateLocator" or "locator" => new[] { "repository", "generatedSource", "toolGenerated", "metadata", "generatedOutput", "synthetic" },
             "repository" => new[] { "path", "span" },
             "generatedSource" => new[] { "generatorId", "hintNameId", "span" },
+            "toolGenerated" => new[] { "producerId", "outputId", "span" },
+            "generatedOutput" => new[] { "producerKind", "producerId", "outputId", "sourceSha256" },
             "metadata" => new[] { "assemblyIdentity", "documentationCommentId" },
             "synthetic" => new[] { "fixtureId" },
             "span" => new[] { "start", "end" },
-            "policyContributions" => new[] { "projectPath", "sourcePath", "policyExpectation", "matchedRuleId" },
-            "evidenceBundle" => new[] { "evidenceBundleVersion", "availabilityStatus", "omissionReason", "items" },
+            "repositoryPolicyContribution" => new[] { "projectPath", "sourcePath", "policyExpectation", "matchedRuleId" },
+            "generatedPolicyContribution" => new[] { "projectPath", "generatedOutput", "policyExpectation", "matchedRuleId" },
+            "evidenceAuthority" => new[] { "declarationSetId", "completeness", "declarations" },
+            "declarations" => new[] { "declarationId", "authorityRole", "blockState", "evidenceId", "componentLocalName", "componentMatch" },
+            "evidenceBundle" => new[] { "evidenceBundleVersion", "availabilityStatus", "omissionReason", "items", "observationSubject" },
+            "observationSubject" => new[] { "observationSubjectRef", "compilationContextRef", "subject", "authoritativeDeclarationSetDigest", "authoritativeDeclarationCount" },
             "items" => new[] { "evidenceId", "subject", "kind", "relation", "excerpt", "sha256", "originalUtf8ByteCount", "includedUtf8ByteCount", "omittedUtf8ByteCount", "isTruncated", "locator" },
             _ => Array.Empty<string>()
         };
@@ -546,8 +710,9 @@ internal static class AuditResultConformance
         return propertyName switch
         {
             "results" => items.OrderBy(item => GetResultSortKey(item.GetProperty("classification"))),
-            "policyContributions" => items.OrderBy(item => item.GetProperty("projectPath").GetString(), StringComparer.Ordinal).ThenBy(item => item.GetProperty("sourcePath").GetString(), StringComparer.Ordinal),
+            "policyContributions" => items.OrderBy(PolicyContributionKey, StringComparer.Ordinal),
             "evidenceIds" => items.OrderBy(item => item.GetString(), StringComparer.Ordinal),
+            "declarations" => items.OrderBy(item => item.GetProperty("declarationId").GetString(), StringComparer.Ordinal),
             "items" => items.OrderBy(item => item.GetProperty("evidenceId").GetString(), StringComparer.Ordinal),
             "traits" => items.OrderBy(item => item.GetString(), StringComparer.Ordinal),
             _ => items
@@ -581,7 +746,8 @@ internal static class AuditResultConformance
         var locator = classification.GetProperty("candidateLocator");
         if (locator.TryGetProperty("repository", out var repository)) return CreateUnresolvedKey(classification, 0, NormalizeRepositoryPath(repository.GetProperty("path").GetString()!), string.Empty, repository);
         if (locator.TryGetProperty("generatedSource", out var generated)) return CreateUnresolvedKey(classification, 1, generated.GetProperty("generatorId").GetString()!, generated.GetProperty("hintNameId").GetString()!, generated);
-        return new ResultSortKey(2, classification.GetProperty("compilationContextRef").GetString()!, 2, locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!, string.Empty, false, 0, 0);
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated)) return CreateUnresolvedKey(classification, 2, toolGenerated.GetProperty("producerId").GetString()!, toolGenerated.GetProperty("outputId").GetString()!, toolGenerated);
+        return new ResultSortKey(2, classification.GetProperty("compilationContextRef").GetString()!, 3, locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!, string.Empty, false, 0, 0);
     }
 
     internal static ResultSortKey CreateUnresolvedKey(JsonElement classification, int rank, string field1, string field2, JsonElement locator)
@@ -681,13 +847,6 @@ internal static class AuditResultConformance
         }
     }
 
-    internal static bool JsonEquals(JsonElement left, JsonElement right)
-    {
-        return left.ValueKind == JsonValueKind.Object && right.ValueKind == JsonValueKind.Object
-            && left.GetProperty("compilationContextRef").GetString() == right.GetProperty("compilationContextRef").GetString()
-            && left.GetProperty("documentationCommentId").GetString() == right.GetProperty("documentationCommentId").GetString();
-    }
-
     internal static bool IsRepositoryRelativePath(string value)
     {
         if (string.IsNullOrEmpty(value) || value.Contains('\0') || value.StartsWith('/') || value.StartsWith('\\') || System.Text.RegularExpressions.Regex.IsMatch(value, "^[A-Za-z]:")) return false;
@@ -721,10 +880,16 @@ internal static class AuditResultConformance
         _ => false
     };
 
-    internal static int ComparePolicyKeys((string Project, string Source) left, (string Project, string Source) right)
+    internal static string PolicyContributionKey(JsonElement contribution)
     {
-        var projectComparison = string.CompareOrdinal(left.Project, right.Project);
-        return projectComparison != 0 ? projectComparison : string.CompareOrdinal(left.Source, right.Source);
+        var project = contribution.GetProperty("projectPath").GetString();
+        if (contribution.TryGetProperty("sourcePath", out var source))
+        {
+            return $"A\0{project}\0{source.GetString()}";
+        }
+
+        var generated = contribution.GetProperty("generatedOutput");
+        return $"B\0{project}\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
     }
 
     internal static void ValidateCanonicalInteger(string raw)

@@ -1,0 +1,93 @@
+{
+  "auditResultVersion": 1,
+  "policyConfigurationVersion": 1,
+  "taxonomyRegistryVersion": 1,
+  "targetProfile": "profile.external-api",
+  "results": [
+    {
+      "classification": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:AuditFixtures.Widget"
+        },
+        "componentKind": "component.return",
+        "identity": "return",
+        "origin": "origin.source",
+        "supportStatus": "support.supported"
+      },
+      "policyContributions": [
+        {
+          "projectPath": "src/Audit.csproj",
+          "sourcePath": "src/Widget.cs",
+          "policyExpectation": "optional",
+          "matchedRuleId": null
+        }
+      ],
+      "policyExpectation": "optional",
+      "policyResolution": "single",
+      "documentationObservation": "documentation.absent",
+      "auditOutcome": "audit.outcome.compliant",
+      "reasonCode": "audit.reason.optional-absent",
+      "evidenceIds": [
+        "evidence.declaration"
+      ],
+      "evidenceBundle": {
+        "evidenceBundleVersion": 1,
+        "availabilityStatus": "evidence.bundle.complete",
+        "items": [
+          {
+            "evidenceId": "evidence.declaration",
+            "subject": {
+              "parentSymbolRef": {
+                "compilationContextRef": "synthetic.v1",
+                "documentationCommentId": "T:AuditFixtures.Widget"
+              },
+              "componentKind": "component.return",
+              "identity": "return"
+            },
+            "kind": "evidence.source.xml-documentation",
+            "relation": "evidence.documents",
+            "excerpt": "public sealed class Widget {}",
+            "sha256": "c4a2507bbd33d04f2e6ba98b4c62e55b321137a389fe212401eefbf04cf3a2ad",
+            "originalUtf8ByteCount": 29,
+            "includedUtf8ByteCount": 29,
+            "omittedUtf8ByteCount": 0,
+            "isTruncated": false,
+            "locator": {
+              "repository": {
+                "path": "src/Widget.cs"
+              }
+            }
+          }
+        ],
+        "observationSubject": {
+          "observationSubjectRef": "obs.16f235debdd91f1b946461a6bd8ab28d48141d14ab6330849864bb3d534b4a52",
+          "compilationContextRef": "synthetic.v1",
+          "subject": {
+            "parentSymbolRef": {
+              "compilationContextRef": "synthetic.v1",
+              "documentationCommentId": "T:AuditFixtures.Widget"
+            },
+            "componentKind": "component.return",
+            "identity": "return"
+          },
+          "authoritativeDeclarationSetDigest": "099e3fa95f68f77608007740aadc1b759cedef78ac5f0cfc9226b8058cb5f6c6",
+          "authoritativeDeclarationCount": 1
+        }
+      },
+      "evidenceAuthority": {
+        "declarationSetId": "dset.099e3fa95f68f77608007740aadc1b759cedef78ac5f0cfc9226b8058cb5f6c6",
+        "completeness": "complete",
+        "declarations": [
+          {
+            "declarationId": "decl.d8a09d677396c4d638cfebdf1c42e46c0e0ff79a79b16ab60fc88e686a3f444f",
+            "authorityRole": "ordinary",
+            "blockState": "malformed",
+            "evidenceId": "evidence.declaration"
+          }
+        ]
+      }
+    }
+  ]
+}

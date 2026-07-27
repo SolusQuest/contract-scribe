@@ -1,33 +1,40 @@
 {
   "contractId": "contract-scribe.audit-cli/v1",
   "meta": {
-    "baselineCommit": "0806a98609b0eb97014496dcc4f4c8083ec57533",
+    "decisionInputCommit": "0806a98609b0eb97014496dcc4f4c8083ec57533",
+    "protectedInputDisposition": "current-coordinated-candidate",
     "envelopeVersion": 1,
     "protectedInputs": {
-      "docs/20_architecture/contracts/policy-configuration-v1.md": "82e352397d6b2e9996333f6819cb4e8f95662ebf60c6c4cadfb63508c8568ef5",
-      "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "d1983390d90515f88ccfdaeb9027690817e5eccf48b19d3e7fe26d466383163c",
-      "docs/20_architecture/contracts/audit-result-v1.md": "c6d051fd620679861aaf6b02616c3200a14b3bc6815c27f960a71dbf4a3d194a",
-      "schemas/policy-configuration/v1.schema.json": "0ff90bd80659540271d2a0772231e4a2ad1f408e26bc8fa8b5e4119b48f096a5",
-      "schemas/symbol-evidence-taxonomy/v1.schema.json": "e854727dc140c887e9868bc2f48b0140e23c0c21396f9abc3941728613012554",
-      "schemas/symbol-evidence-taxonomy/v1.registry.json": "26e751cf4f35804aeb65a187c3a78aeb11422e467f3269f319d99a17e07d5eee",
-      "schemas/symbol-evidence-taxonomy/v1.manifest.schema.json": "6fc4147d38eaa29e46d67574063f5caf1735a4ea9750fc8ab9e4f636a7b1574b",
-      "schemas/audit-result/v1.schema.json": "3cf20ea8102e25427f9f4c0e6d0bed6a9f51a45c09816e27d200422db6d81537",
-      "schemas/audit-result/v1.registry.json": "940d7434fa57bdacf361b95eaa2664dbf4c3139ecc8568103091834b28a03134",
-      "tests/fixtures/audit-result/v1/payloads/empty-results.json": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9",
-      "tests/fixtures/audit-result/v1/payloads/required-present.json": "9fc69410dfd287f245b2dd13154220844282823e7956ed6ac01aa288f0f2ee0a",
-      "tests/fixtures/audit-result/v1/payloads/required-absent.json": "757cf060eee294ab685cf6d247a32199aae980082a06829f16a2b28bae03ade4",
-      "tests/fixtures/audit-result/v1/payloads/classification-skipped.json": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08",
-      "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json": "6acd1722d53bcafb7bcc15aed031815fa44a8c3034b26513763c59609dec50ee",
-      "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "5e2977b7b98aa72f57eb11dbff894443bca6e1292b9cac5e723b41fcdfd6e065",
-      "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5",
-      "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5",
-      "tests/ContractScribe.Tests/AuditResultConformance.cs": "99937f383d848d9c7c75a952b7e860c2913d92e5279706222273847369c77828"
+      "docs/20_architecture/contracts/policy-configuration-v1.md": "9d283f2ad5e25adb748fb4121625999b220ebf0901fd928b0d422da951c977cf",
+      "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "3a58e086fd5fe7f55693901614c800a8b7e3859ccaebe39980a05000b35dc8aa",
+      "docs/20_architecture/contracts/audit-result-v1.md": "e324ea5cdf0c8778009842a01f2ebb8ca1cd3b0f434674b02c40edadf7ee223e",
+      "schemas/policy-configuration/v1.schema.json": "cc3a56809705d74d8201044ece38d770cefae6e5e21fd2b9b4b39d1e3b7c4bf4",
+      "schemas/symbol-evidence-taxonomy/v1.schema.json": "8468e294a45da32a0acbc2183cf3b0438ed31b47151f1abe5ade4597bf38e5f7",
+      "schemas/symbol-evidence-taxonomy/v1.registry.json": "561314420371c991f70b35a0e8daede99d796d843785efc49f68f68c591f3513",
+      "schemas/symbol-evidence-taxonomy/v1.manifest.schema.json": "12c871e9c48a81065e148dfa1ae79c66753e2d13f816afe45cc89e42872d615a",
+      "schemas/audit-result/v1.schema.json": "5d5fb5ca63dfd556fc46a4fe24e28dc774d07be558fd4d3edbda4ea8c53d4dd2",
+      "schemas/audit-result/v1.registry.json": "961b342e314dae5f59bd9aac9d86634787f08b2fc2540227f13c2e4ac480634e",
+      "tests/fixtures/audit-result/v1/payloads/empty-results.json": "c1d55676263562741a8fc8f4a24637550ae3f7b3d80066bf97d19408a1b5d4f9",
+      "tests/fixtures/audit-result/v1/payloads/required-present.json": "d143a6367b15426a6a3ff277dee69b43d1a1b820539dd5ef29c9fa5672a72317",
+      "tests/fixtures/audit-result/v1/payloads/required-absent.json": "bc4e2a970d00f07cd92886b7926e8b4fed2c378386391796ed04b2694919afd8",
+      "tests/fixtures/audit-result/v1/payloads/classification-skipped.json": "1fd14eb59348ac2fe1d421dd42a7fe7053b851d0c6df0e857c13ca43e86fa0a1",
+      "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json": "60ba36324de8ebbf235b8d1f3fe0316d9d7503b0c1de3ad5cd61eb2dab2d5786",
+      "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "400233855348335dbf4c64a87d68e0f2c84b8f9f6b85def5c9cf9414d8d446f6",
+      "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "d19f43581d07af0143fd82c00af1bde7ccdecd6cef64d9208d08614e8765460c",
+      "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "dd061be4adb1be35bd4b9691cc3c3b86e0cb5697bf7dc229ec04a21a693b7c1a",
+      "tests/ContractScribe.Tests/AuditResultConformance.cs": "4e333c7455e43a0199df5d38f1e535a4490db77f846a7996657369485499fc7a",
+      "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "921d2edbc07df2383f8f789c6eea64133363ab951ada07ab896d8272a1eec717"
     },
     "oracleBindings": [
       {
         "path": "tests/ContractScribe.Tests/AuditResultConformance.cs",
         "binding": "shared-usage",
         "role": "Test-only Audit Result conformance oracle (strict parse, schema evaluation, semantic ValidateDocument) consumed by the M1 audit CLI checker; pinned by SHA-256 in protectedInputs as the guard."
+      },
+      {
+        "path": "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
+        "binding": "shared-usage",
+        "role": "Canonical Audit Result byte implementation delegated to by the shared conformance oracle; pinned by SHA-256 in protectedInputs as part of the closed semantic input set."
       }
     ],
     "reconciliationGate": "Pins and canonical fixtures are regenerated when the accepted #35 baseline merges or when the shared oracle changes, in the same coordinated change or an immediately following reconciliation change; until then the checker enforces the pinned baseline. Run classification depends only on auditOutcome values."
@@ -184,24 +191,24 @@
     { "caseId": "result.unreadable", "mutation": "unreadable-bytes", "hostClass": "audit-error", "exitCode": 5 }
   ],
   "classificationCases": [
-    { "caseId": "classify.violation-only", "mixture": { "violation": true, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-absent.json", "sha256": "757cf060eee294ab685cf6d247a32199aae980082a06829f16a2b28bae03ade4" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 0 } },
-    { "caseId": "classify.violation-compliant", "mixture": { "violation": true, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant.json", "sha256": "ead01f10afb4f8965268414114ef1a8958497df353133b6d66144f43c5f0ac3b" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 0 } },
-    { "caseId": "classify.violation-skipped", "mixture": { "violation": true, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-skipped.json", "sha256": "aa1cbe765cc91137a7d9a8b1462ca7bd2aa1b2dab68e5a94421bcf4d5029571f" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 1 } },
-    { "caseId": "classify.violation-compliant-skipped", "mixture": { "violation": true, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant-skipped.json", "sha256": "09d10d3471d449585a7d0582324b7a96b408f7b56fc503c00e18e244dffcd936" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 1 } },
-    { "caseId": "classify.compliant-only", "mixture": { "violation": false, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-present.json", "sha256": "9fc69410dfd287f245b2dd13154220844282823e7956ed6ac01aa288f0f2ee0a" }, "disposition": "compliant", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 0 } },
-    { "caseId": "classify.compliant-skipped", "mixture": { "violation": false, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-compliant-skipped.json", "sha256": "4f0fc5cf010d78da97d42a74f80d494b58d195e8ec074ffa9d5ac66204b12913" }, "disposition": "compliant-with-skipped", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 1 } },
-    { "caseId": "classify.skipped-only", "mixture": { "violation": false, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08" }, "disposition": "skipped-only", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 1 } },
-    { "caseId": "classify.no-results", "mixture": { "violation": false, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9" }, "disposition": "no-results", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 0 } }
+    { "caseId": "classify.violation-only", "mixture": { "violation": true, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-absent.json", "sha256": "bc4e2a970d00f07cd92886b7926e8b4fed2c378386391796ed04b2694919afd8" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 0 } },
+    { "caseId": "classify.violation-compliant", "mixture": { "violation": true, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant.json", "sha256": "d5c8c5c8b2386d571d92c116388cc58d7f95daf0da60d19eaf4087b5971f79cf" }, "disposition": "violations", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 0 } },
+    { "caseId": "classify.violation-skipped", "mixture": { "violation": true, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-skipped.json", "sha256": "f1bc4f0e138aa437b26f5d4d7b3638f1ccd2b3ce74b12dfc0c6976b8778c663e" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 0, "violation": 1, "skipped": 1 } },
+    { "caseId": "classify.violation-compliant-skipped", "mixture": { "violation": true, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-violation-compliant-skipped.json", "sha256": "1b58bd2068bc87bb09dc1c58c6f78d7c6d4be89aaeb8398bb161c55a6b72f656" }, "disposition": "violations-with-skipped", "exitCode": 1, "counts": { "compliant": 1, "violation": 1, "skipped": 1 } },
+    { "caseId": "classify.compliant-only", "mixture": { "violation": false, "compliant": true, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/required-present.json", "sha256": "d143a6367b15426a6a3ff277dee69b43d1a1b820539dd5ef29c9fa5672a72317" }, "disposition": "compliant", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 0 } },
+    { "caseId": "classify.compliant-skipped", "mixture": { "violation": false, "compliant": true, "skipped": true }, "payload": { "path": "tests/fixtures/m1-audit-cli/payloads/mixed-compliant-skipped.json", "sha256": "a14641fe7a559897a4e925daa29d2f4484b28117bd620606b0663bf3f90dce0a" }, "disposition": "compliant-with-skipped", "exitCode": 0, "counts": { "compliant": 1, "violation": 0, "skipped": 1 } },
+    { "caseId": "classify.skipped-only", "mixture": { "violation": false, "compliant": false, "skipped": true }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "1fd14eb59348ac2fe1d421dd42a7fe7053b851d0c6df0e857c13ca43e86fa0a1" }, "disposition": "skipped-only", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 1 } },
+    { "caseId": "classify.no-results", "mixture": { "violation": false, "compliant": false, "skipped": false }, "payload": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "c1d55676263562741a8fc8f4a24637550ae3f7b3d80066bf97d19408a1b5d4f9" }, "disposition": "no-results", "exitCode": 3, "counts": { "compliant": 0, "violation": 0, "skipped": 0 } }
   ],
   "skippedReasonCases": [
-    { "caseId": "skipped-reason.classification-skipped", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "eb09fe76d48d2dae8266df989ff7858a3386138bc9d7653129afccf5003a7f08" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.classification-skipped"] },
-    { "caseId": "skipped-reason.policy-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json", "sha256": "6acd1722d53bcafb7bcc15aed031815fa44a8c3034b26513763c59609dec50ee" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-unavailable"] },
-    { "caseId": "skipped-reason.documentation-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json", "sha256": "5e2977b7b98aa72f57eb11dbff894443bca6e1292b9cac5e723b41fcdfd6e065" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.documentation-unavailable"] },
-    { "caseId": "skipped-reason.evidence-incomplete", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json", "sha256": "536fc4d1be09609725419eede34130120ed432e8603898e2340fb601e67055b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.evidence-incomplete"] },
-    { "caseId": "skipped-reason.policy-conflict", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-conflict.json", "sha256": "0d6556633bec7830ae93badf3c403101734405d70a462a28ce7282494b0f88b5" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-conflict"] }
+    { "caseId": "skipped-reason.classification-skipped", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/classification-skipped.json", "sha256": "1fd14eb59348ac2fe1d421dd42a7fe7053b851d0c6df0e857c13ca43e86fa0a1" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.classification-skipped"] },
+    { "caseId": "skipped-reason.policy-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json", "sha256": "60ba36324de8ebbf235b8d1f3fe0316d9d7503b0c1de3ad5cd61eb2dab2d5786" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-unavailable"] },
+    { "caseId": "skipped-reason.documentation-unavailable", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json", "sha256": "400233855348335dbf4c64a87d68e0f2c84b8f9f6b85def5c9cf9414d8d446f6" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.documentation-unavailable"] },
+    { "caseId": "skipped-reason.evidence-incomplete", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json", "sha256": "d19f43581d07af0143fd82c00af1bde7ccdecd6cef64d9208d08614e8765460c" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.evidence-incomplete"] },
+    { "caseId": "skipped-reason.policy-conflict", "payload": { "path": "tests/fixtures/audit-result/v1/payloads/policy-conflict.json", "sha256": "dd061be4adb1be35bd4b9691cc3c3b86e0cb5697bf7dc229ec04a21a693b7c1a" }, "disposition": "skipped-only", "exitCode": 3, "reasonCodes": ["audit.reason.policy-conflict"] }
   ],
   "resultDigestCases": [
-    { "caseId": "result-digest.committed-canonical-bytes", "inputBytes": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9" }, "algorithm": "sha256", "expectedResultDigest": "e2c2648d38e1db6f2b4139b0303a1a15334836ed5df921fe6e557db4e1d391f9", "note": "The digest input is the exact committed canonical byte stream. This fixture is canonical-byte exact per the shared Audit Result oracle (compact canonical serialization, one trailing LF), so the SHA-256 of its exact bytes is the expected resultDigest. The m1-audit-cli synthetic payloads are pretty-printed for readability and are not canonical-byte exact; they are not digest inputs." }
+    { "caseId": "result-digest.committed-canonical-bytes", "inputBytes": { "path": "tests/fixtures/audit-result/v1/payloads/empty-results.json", "sha256": "c1d55676263562741a8fc8f4a24637550ae3f7b3d80066bf97d19408a1b5d4f9" }, "algorithm": "sha256", "expectedResultDigest": "c1d55676263562741a8fc8f4a24637550ae3f7b3d80066bf97d19408a1b5d4f9", "note": "The digest input is the exact committed canonical byte stream. This fixture is canonical-byte exact per the shared Audit Result oracle (compact canonical serialization, one trailing LF), so the SHA-256 of its exact bytes is the expected resultDigest. The m1-audit-cli synthetic payloads are pretty-printed for readability and are not canonical-byte exact; they are not digest inputs." }
   ],
   "streamCases": [
     {

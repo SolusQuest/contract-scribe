@@ -1,0 +1,1336 @@
+{
+  "schemaVersion": 1,
+  "sourceDecision": "docs/20_architecture/decisions/0003-target-profiles-and-documentation-observation.md",
+  "rows": [
+    {
+      "rowKey": "accessibilityCases/access.file",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.internal",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.nested-private-container",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.private",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.private-protected",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.protected",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.protected-internal",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.public",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "accessibilityCases/access.sealed-protected",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "compiledDeclarationCases/decl.members",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "compiledDeclarationCases/decl.partial",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "compiledDeclarationCases/decl.types",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.accessor.add",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.accessor.get",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.accessor.init",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.accessor.remove",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.accessor.set",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.backing-field",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.parameter",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.return",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.delegate-begin-invoke",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.delegate-end-invoke",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.delegate-invoke",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.implicit-constructor",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.record-copy-constructor",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.synthesized.record-positional-property",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.type-parameter",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.unknown",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "componentKinds/component.value",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.documentation-id-known-origin",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.documentation-id-unknown-origin",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.generated-provenance",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.missing-profile",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.semantic-context",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "failureCases/failure.unrepresentable-generated",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.global-rule",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/policy-configuration-v1.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/policy-configuration/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/policy-configuration/v1/cases.json",
+      "oracle": "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.project-rule",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/policy-configuration-v1.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/policy-configuration/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/policy-configuration/v1/cases.json",
+      "oracle": "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.source-exclude-only",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/policy-configuration-v1.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/policy-configuration/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/policy-configuration/v1/cases.json",
+      "oracle": "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.source-include",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/policy-configuration-v1.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/policy-configuration/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/policy-configuration/v1/cases.json",
+      "oracle": "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.tool-pathless",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/policy-configuration-v1.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/policy-configuration/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/policy-configuration/v1/cases.json",
+      "oracle": "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedCases/generated.tool-repository",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedHashCases/hash.generated-source-and-region",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.sgo.case-lower",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.sgo.case-upper",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.sgo.nfc",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.sgo.nfd",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.sgp",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.tgo",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedIdentityCases/identity.tgp",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.invalid.empty",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.invalid.oversized",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.source.secret-like",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.source.unix-like",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.source.windows-like",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.tool.path-like",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedInvalidIdentityCases/identity.tool.unicode",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedLocatorCases/locator.candidate.generated-source",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedLocatorCases/locator.candidate.repository",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedLocatorCases/locator.candidate.synthetic",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedLocatorCases/locator.candidate.tool-generated",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "generatedLocatorCases/locator.evidence.generated-output",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "groundedExistingConcepts/candidate.locator.generated-source",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "groundedExistingConcepts/contract-lifecycle.pre-release-v1",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "groundedExistingConcepts/policy.repository-contribution",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "lifecycleCases/lifecycle.m0-pinned",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "lifecycleCases/lifecycle.m1-no-profile",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "lifecycleCases/lifecycle.mismatched-baseline",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.complete-absence",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.inheritdoc-only",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.malformed-readable",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.match-plus-other-malformed",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.no-block-partial",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/component.wrong-name",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/conditional.active",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/conditional.removed",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.source.absent",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.source.present",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.source.unavailable",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.tool.absent",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.tool.present",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/generated.tool.unavailable",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/audit-result/v1/cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/inheritance.interface-direct-only",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/inheritance.override-direct-only",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.inheritdoc",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.malformed",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.missing",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.positive-plus-unreadable",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.unreadable",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/parent.whitespace",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/partial.ambiguity",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/partial.ambiguity-plus-mixed",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/partial.defining-fallback",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/partial.implementing-authority",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "observationCases/partial.implementing-whitespace-authority",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/audit-result-v1.md",
+      "schemaOrRegistry": "schemas/audit-result/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
+      "oracle": "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.constructor",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.conversion",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.enum-member",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.event",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.field",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.indexer",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.method",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.operator",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.member.property",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.type.class",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.type.delegate",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.type.enum",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.type.interface",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.type.struct",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "primaryKinds/symbol.unknown",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.empty-assembly",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.empty-external",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.mismatch",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.missing",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.standalone-taxonomy-mismatch",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profileCases/profile.unknown",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profiles/profile.assembly-visible",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "profiles/profile.external-api",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+      "schemaOrRegistry": "schemas/policy-configuration/v1.schema.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/profile-cases.json",
+      "oracle": "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.explicit.ambiguous",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.explicit.emitted",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.explicit.unavailable",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.implicit.ambiguous",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.implicit.emitted",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.implicit.unavailable",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.inherited.ambiguous",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.inherited.emitted",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.inherited.unavailable",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.override.ambiguous",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.override.emitted",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationCases/relation.override.unavailable",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationKinds/relation.explicit-interface-implementation",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationKinds/relation.implicit-interface-implementation",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationKinds/relation.inherited-interface-member",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    },
+    {
+      "rowKey": "relationKinds/relation.overrides",
+      "disposition": "existing-v1",
+      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
+      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "downstreamIssue": null
+    }
+  ]
+}
