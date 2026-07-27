@@ -228,39 +228,46 @@ public sealed class M05NativeAotContractTests
             [Parameter(Mandatory = $true)]
             [string]$ScratchSummaryPath,
             [Parameter(Mandatory = $true)]
+            [string]$ScratchDirectory,
+            [Parameter(Mandatory = $true)]
             [string]$ReadyPath,
             [Parameter(Mandatory = $true)]
             [string]$ReleasePath
         )
         $ErrorActionPreference = "Stop"
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = "pwsh"
-        $startInfo.UseShellExecute = $false
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        [void]$startInfo.ArgumentList.Add("-NoProfile")
-        [void]$startInfo.ArgumentList.Add("-File")
-        [void]$startInfo.ArgumentList.Add($AggregatePath)
-        [void]$startInfo.ArgumentList.Add("-LinuxEvidencePath")
-        [void]$startInfo.ArgumentList.Add($LinuxEvidencePath)
-        [void]$startInfo.ArgumentList.Add("-WindowsEvidencePath")
-        [void]$startInfo.ArgumentList.Add($WindowsEvidencePath)
-        [void]$startInfo.ArgumentList.Add("-OutputPath")
-        [void]$startInfo.ArgumentList.Add($OutputPath)
-        $nested = [Diagnostics.Process]::Start($startInfo)
-        $nestedStdout = $nested.StandardOutput.ReadToEnd()
-        $nestedStderr = $nested.StandardError.ReadToEnd()
-        $nested.WaitForExit()
-        Write-Output "nested aggregate pid=$($nested.Id) exit=$($nested.ExitCode)"
-        Write-Output $nestedStdout
-        if ($nestedStderr) { Write-Output "nested stderr: $nestedStderr" }
-        if ($nested.ExitCode -ne 0) { exit 10 }
-        if (-not (Test-Path -LiteralPath $ScratchSummaryPath)) { exit 11 }
-        $summary = Get-Content -LiteralPath $ScratchSummaryPath -Raw | ConvertFrom-Json
-        if ($summary.outcome -ne "feasible-clean" -or $summary.exitCode -ne 0) { exit 12 }
-        [IO.File]::WriteAllText($ReadyPath, "ready`n", [Text.UTF8Encoding]::new($false))
-        while (-not (Test-Path -LiteralPath $ReleasePath)) { Start-Sleep -Milliseconds 200 }
-        exit 0
+        try {
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = "pwsh"
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            [void]$startInfo.ArgumentList.Add("-NoProfile")
+            [void]$startInfo.ArgumentList.Add("-File")
+            [void]$startInfo.ArgumentList.Add($AggregatePath)
+            [void]$startInfo.ArgumentList.Add("-LinuxEvidencePath")
+            [void]$startInfo.ArgumentList.Add($LinuxEvidencePath)
+            [void]$startInfo.ArgumentList.Add("-WindowsEvidencePath")
+            [void]$startInfo.ArgumentList.Add($WindowsEvidencePath)
+            [void]$startInfo.ArgumentList.Add("-OutputPath")
+            [void]$startInfo.ArgumentList.Add($OutputPath)
+            $nested = [Diagnostics.Process]::Start($startInfo)
+            $nestedStdout = $nested.StandardOutput.ReadToEnd()
+            $nestedStderr = $nested.StandardError.ReadToEnd()
+            $nested.WaitForExit()
+            Write-Output "nested aggregate pid=$($nested.Id) exit=$($nested.ExitCode)"
+            Write-Output $nestedStdout
+            if ($nestedStderr) { Write-Output "nested stderr: $nestedStderr" }
+            if ($nested.ExitCode -ne 0) { exit 10 }
+            if (-not (Test-Path -LiteralPath $ScratchSummaryPath)) { exit 11 }
+            $summary = Get-Content -LiteralPath $ScratchSummaryPath -Raw | ConvertFrom-Json
+            if ($summary.outcome -ne "feasible-clean" -or $summary.exitCode -ne 0) { exit 12 }
+            [IO.File]::WriteAllText($ReadyPath, "ready`n", [Text.UTF8Encoding]::new($false))
+            while (-not (Test-Path -LiteralPath $ReleasePath)) { Start-Sleep -Milliseconds 200 }
+            exit 0
+        }
+        finally {
+            if (Test-Path -LiteralPath $ScratchDirectory) { Remove-Item -LiteralPath $ScratchDirectory -Recurse -Force }
+        }
         """;
 
     [Fact]
@@ -309,6 +316,8 @@ public sealed class M05NativeAotContractTests
             startInfo.ArgumentList.Add(scratchOutputArgument);
             startInfo.ArgumentList.Add("-ScratchSummaryPath");
             startInfo.ArgumentList.Add(scratchSummaryPath);
+            startInfo.ArgumentList.Add("-ScratchDirectory");
+            startInfo.ArgumentList.Add(scratchDirectory);
             startInfo.ArgumentList.Add("-ReadyPath");
             startInfo.ArgumentList.Add(readyPath);
             startInfo.ArgumentList.Add("-ReleasePath");
