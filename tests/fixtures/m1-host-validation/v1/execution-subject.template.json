@@ -8,6 +8,7 @@
     "sourceConfigurationId": "source.0000000000000000000000000000000000000000000000000000000000000000",
     "hostRevision": "0000000000000000000000000000000000000000",
     "sourceRoots": [
+      "ContractScribe.slnx",
       "Directory.Build.props",
       "Directory.Packages.props",
       "global.json",
@@ -20,11 +21,11 @@
       }
     ],
     "failureRegistry": {
-      "path": "docs/20_architecture/decisions/0002-process-topology.md",
+      "path": "src/ContractScribe.Core/Hosting/host-failure-registry-v1.json",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "calibratedBounds": {
-      "path": "docs/20_architecture/validation/m1-host-validation-protocol.md",
+      "path": "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "buildRecipe": {

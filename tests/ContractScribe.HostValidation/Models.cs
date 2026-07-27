@@ -219,7 +219,12 @@ public sealed record FixtureRealization(
     IReadOnlyList<string> AllowedDesignTimeRoots,
     string ProcessObservationMode,
     string? ResultPath,
-    string? ExternalCause);
+    string? ExternalCause,
+    IReadOnlyList<ProcessIdentityRule>? ProcessIdentityRegistry = null);
+
+public sealed record ProcessIdentityRule(
+    string FingerprintSha256,
+    string Role);
 
 public sealed record ObservedProcess(
     int ProcessId,
@@ -300,7 +305,10 @@ public sealed record ProcessObservation(
     string ProcessTermination,
     bool TimedOut,
     bool ControlCompleted,
-    bool ObservationComplete);
+    bool ObservationComplete,
+    string? ObservedGateName = null,
+    string? ObservedControlAction = null,
+    bool PostGateSampleObserved = false);
 
 public sealed record AggregateEvidence(
     string FormatVersion,

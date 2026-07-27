@@ -1,20 +1,26 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace ContractScribe.HostValidation;
 
-internal sealed class ProcessTreeObserver : IAsyncDisposable
+public sealed class ProcessTreeObserver : IAsyncDisposable
 {
     private readonly int subjectProcessId;
+    private readonly IReadOnlyList<ProcessIdentityRule> identityRegistry;
     private readonly CancellationTokenSource cancellation = new();
     private readonly Dictionary<int, ObservedProcess> observed = new();
     private readonly Task sampler;
     private volatile bool complete = true;
     private long completedSampleGeneration;
 
-    public ProcessTreeObserver(Process subjectProcess)
+    public ProcessTreeObserver(
+        Process subjectProcess,
+        IReadOnlyList<ProcessIdentityRule> identityRegistry)
     {
         subjectProcessId = subjectProcess.Id;
+        this.identityRegistry = identityRegistry;
         try
         {
             observed[subjectProcessId] = new ObservedProcess(
@@ -102,12 +108,7 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
 
                 var role = candidate.Key == subjectProcessId
                     ? "subject-runtime"
-                    : candidate.Value.Name.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
-                        || candidate.Value.Name.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-                        ? "contractscribe-worker"
-                        : IsToolchainImage(candidate.Value.Name)
-                            ? "toolchain-owned"
-                            : "unknown-descendant";
+                    : ClassifyProcess(candidate.Key, candidate.Value.Name);
                 lock (observed)
                 {
                     observed[candidate.Key] = new ObservedProcess(
@@ -146,10 +147,174 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
         return false;
     }
 
-    private static bool IsToolchainImage(string imageName) =>
-        imageName.Equals("msbuild", StringComparison.OrdinalIgnoreCase)
-        || imageName.Equals("vbcscompiler", StringComparison.OrdinalIgnoreCase)
-        || imageName.Equals("VBCSCompiler", StringComparison.OrdinalIgnoreCase);
+    public static string ClassifyIdentity(
+        string imageName,
+        string? entryPointPath,
+        IReadOnlyList<string> commandArguments,
+        IReadOnlyList<ProcessIdentityRule> identityRegistry)
+    {
+        if (entryPointPath is not null && File.Exists(entryPointPath))
+        {
+            var fingerprint = ComputeIdentityFingerprint(
+                imageName,
+                entryPointPath,
+                commandArguments);
+            var matches = identityRegistry
+                .Where(rule => rule.FingerprintSha256 == fingerprint)
+                .Select(rule => rule.Role)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (matches.Length == 1)
+            {
+                return matches[0];
+            }
+        }
+
+        return imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
+            || imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? "contractscribe-worker"
+            : "unknown-descendant";
+    }
+
+    public static string ComputeIdentityFingerprint(
+        string imageName,
+        string entryPointPath,
+        IReadOnlyList<string> commandArguments)
+    {
+        var normalizedImage = SanitizeImageName(imageName).ToLowerInvariant();
+        var entryPointSha256 = CanonicalJson.Sha256File(entryPointPath);
+        using var preimage = new MemoryStream();
+        foreach (var value in new[] { normalizedImage, entryPointSha256 }.Concat(commandArguments))
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            preimage.Write(bytes);
+            preimage.WriteByte(0);
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(preimage.ToArray()));
+    }
+
+    private string ClassifyProcess(int processId, string imageName)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var commandLine = GetCommandLineArguments(process);
+            string? entryPoint;
+            IReadOnlyList<string> arguments;
+            if (imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            {
+                var entryPointIndex = commandLine
+                    .Select((argument, index) => (argument, index))
+                    .FirstOrDefault(candidate =>
+                        candidate.argument.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                        && Path.IsPathFullyQualified(candidate.argument))
+                    .index;
+                entryPoint = entryPointIndex > 0 ? commandLine[entryPointIndex] : null;
+                arguments = entryPoint is null ? [] : commandLine.Skip(entryPointIndex + 1).ToArray();
+            }
+            else
+            {
+                entryPoint = process.MainModule?.FileName;
+                arguments = commandLine.Skip(1).ToArray();
+            }
+            return ClassifyIdentity(
+                imageName,
+                entryPoint,
+                arguments,
+                identityRegistry);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException
+                or IOException
+                or UnauthorizedAccessException
+                or FormatException
+                or OverflowException)
+        {
+            return imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
+                || imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                ? "contractscribe-worker"
+                : "unknown-descendant";
+        }
+    }
+
+    private static IReadOnlyList<string> GetCommandLineArguments(Process process)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            var bytes = File.ReadAllBytes($"/proc/{process.Id}/cmdline");
+            return Encoding.UTF8.GetString(bytes)
+                .Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        const int processCommandLineInformation = 60;
+        _ = NtQueryInformationProcess(
+            process.Handle,
+            processCommandLineInformation,
+            IntPtr.Zero,
+            0,
+            out var requiredLength);
+        if (requiredLength <= Marshal.SizeOf<UnicodeString>())
+        {
+            return [];
+        }
+        var buffer = Marshal.AllocHGlobal(requiredLength);
+        try
+        {
+            var status = NtQueryInformationProcess(
+                process.Handle,
+                processCommandLineInformation,
+                buffer,
+                requiredLength,
+                out _);
+            if (status != 0)
+            {
+                return [];
+            }
+            var commandLine = Marshal.PtrToStructure<UnicodeString>(buffer);
+            var text = Marshal.PtrToStringUni(
+                commandLine.Buffer,
+                commandLine.Length / sizeof(char));
+            return SplitWindowsCommandLine(text);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static IReadOnlyList<string> SplitWindowsCommandLine(string? commandLine)
+    {
+        if (string.IsNullOrEmpty(commandLine))
+        {
+            return [];
+        }
+        var argv = CommandLineToArgvW(commandLine, out var count);
+        if (argv == IntPtr.Zero || count <= 0)
+        {
+            return [];
+        }
+        try
+        {
+            var arguments = new string[count];
+            for (var index = 0; index < count; index++)
+            {
+                arguments[index] = Marshal.PtrToStringUni(
+                    Marshal.ReadIntPtr(argv, index * IntPtr.Size)) ?? string.Empty;
+            }
+            return arguments;
+        }
+        finally
+        {
+            _ = LocalFree(argv);
+        }
+    }
 
     private Dictionary<int, (int ParentId, string Name)> CapturePortableProcesses()
     {
@@ -288,6 +453,14 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
         public IntPtr InheritedFromUniqueProcessId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ProcessEntry32
     {
@@ -313,6 +486,14 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
         int processInformationLength,
         out int returnLength);
 
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        IntPtr processInformation,
+        int processInformationLength,
+        out int returnLength);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
 
@@ -327,4 +508,10 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
 }

@@ -16,7 +16,8 @@ public static class SubjectProcessRunner
         int standardErrorLimit,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
-        SubjectControl? control = null)
+        SubjectControl? control = null,
+        IReadOnlyList<ProcessIdentityRule>? processIdentityRegistry = null)
     {
         var startInfo = new ProcessStartInfo(executable)
         {
@@ -62,7 +63,9 @@ public static class SubjectProcessRunner
             return StartFailure("permission-failure");
         }
 
-        await using var processObserver = new ProcessTreeObserver(process);
+        await using var processObserver = new ProcessTreeObserver(
+            process,
+            processIdentityRegistry ?? []);
         var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, standardOutputLimit, cancellationToken);
         var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, standardErrorLimit, cancellationToken);
         var controlTask = control is null

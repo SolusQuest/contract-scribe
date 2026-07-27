@@ -22,7 +22,10 @@
     "schemas/validation/m1-host-validation-review-v1.schema.json",
     "schemas/validation/m1-host-validation-subject-v1.schema.json",
     "schemas/validation/m1-host-validation-vectors-v1.schema.json",
+    "schemas/validation/m1-host-calibrated-bounds-v1.schema.json",
+    "schemas/validation/m1-host-failure-registry-v1.schema.json",
     "tests/ContractScribe.HostValidation/BundleValidator.cs",
+    "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs",
     "tests/ContractScribe.HostValidation/CanonicalJson.cs",
     "tests/ContractScribe.HostValidation/CellExecutor.cs",
     "tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj",
@@ -71,13 +74,14 @@
   ],
   "subjectSourceContract": {
     "sourceRoots": [
+      "ContractScribe.slnx",
       "Directory.Build.props",
       "Directory.Packages.props",
       "global.json",
       "src"
     ],
-    "failureRegistry": "docs/20_architecture/decisions/0002-process-topology.md",
-    "calibratedBounds": "docs/20_architecture/validation/m1-host-validation-protocol.md",
+    "failureRegistry": "src/ContractScribe.Core/Hosting/host-failure-registry-v1.json",
+    "calibratedBounds": "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json",
     "buildRecipe": "Directory.Build.props",
     "commandContract": "schemas/validation/m1-host-validation-subject-v1.schema.json",
     "contractBaseline": "tests/fixtures/m1-contract-baseline/v1/manifest.json",

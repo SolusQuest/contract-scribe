@@ -47,7 +47,13 @@ public static class RunSemantics
         {
             diagnostics.Add("HV207_PROCESS_OBSERVATION_INCOMPLETE");
         }
-        if (RequiresControl(vector.VectorId) && !run.Process.ControlCompleted)
+        var expectedControl = ExpectedControl(vector.VectorId);
+        if (expectedControl is not null
+            && (!run.Process.ControlCompleted
+                || run.Process.ObservedGateName != expectedControl.Value.Gate
+                || run.Process.ObservedControlAction != expectedControl.Value.Action
+                || expectedControl.Value.Action == "observe"
+                    && !run.Process.PostGateSampleObserved))
         {
             diagnostics.Add("HV224_CONTROL_GATE_INCOMPLETE");
         }
@@ -102,6 +108,22 @@ public static class RunSemantics
             or "publication.kill-before-commit"
             or "publication.kill-after-commit"
             || RequiresSynchronizedTree(vectorId);
+
+    public static (string Gate, string Action)? ExpectedControl(string vectorId) =>
+        vectorId switch
+        {
+            "cancellation.before-commit" => ("before-commit", "cancel"),
+            "cancellation.after-commit" => ("after-commit", "cancel"),
+            "cancellation.late-completion" => ("late-completion", "release-late-completion"),
+            "cancellation.terminal-precedence" => ("before-commit", "cancel"),
+            "publication.kill-before-commit" => ("publication-before-commit", "external-kill"),
+            "publication.kill-after-commit" => ("publication-after-commit", "external-kill"),
+            "toolchain.process-topology"
+                or "toolchain.no-automatic-restore"
+                or "network.no-contractscribe-initiated-operation"
+                or "toolchain.owned-subprocesses" => ("process-observation", "observe"),
+            _ => null
+        };
 
     public static string DeriveCellOutcome(IEnumerable<RunEvidence> runs)
     {
@@ -188,7 +210,8 @@ public static class RunSemantics
         if (vector.VectorId == "toolchain.no-automatic-restore"
             && (delta.AllowedDesignTimeCreated.Concat(delta.AllowedDesignTimeChanged)
                     .Any(path => path.EndsWith("project.assets.json", StringComparison.Ordinal))
-                || run.ObservedProcesses.Any(process => process.Role != "subject-runtime")))
+                || run.ObservedProcesses.Any(process =>
+                    process.Role == "restore-or-runtime-download")))
         {
             return "toolchain.restore-or-runtime-download-marker-observed";
         }
@@ -196,20 +219,26 @@ public static class RunSemantics
         {
             if (run.ObservedProcesses.Count(process => process.Role == "subject-runtime") != 1
                 || run.ObservedProcesses.Any(process =>
-                    process.Role is "contractscribe-worker" or "unknown-descendant"))
+                    process.Role is "contractscribe-worker"
+                        or "restore-or-runtime-download"
+                        or "unknown-descendant"))
             {
                 return "process.contractscribe-worker-observed";
             }
         }
         if (vector.VectorId == "network.no-contractscribe-initiated-operation"
             && run.ObservedProcesses.Any(process =>
-                process.Role is "contractscribe-worker" or "unknown-descendant"))
+                process.Role is "contractscribe-worker"
+                    or "restore-or-runtime-download"
+                    or "unknown-descendant"))
         {
             return "network.contractscribe-initiated-operation-observed";
         }
         if (vector.VectorId == "toolchain.owned-subprocesses"
             && run.ObservedProcesses.Any(process =>
-                process.Role is "contractscribe-worker" or "unknown-descendant"))
+                process.Role is "contractscribe-worker"
+                    or "restore-or-runtime-download"
+                    or "unknown-descendant"))
         {
             return "process.unowned-subprocess-observed";
         }

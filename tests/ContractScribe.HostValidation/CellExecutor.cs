@@ -98,13 +98,18 @@ public static class CellExecutor
         {
             throw new ProtocolException("HV190_SUBJECT_SOURCE_BOUNDARY");
         }
-        var expectedSourcePaths = BundleValidator.ExpandProtectedInputPaths(
+        var expectedSourcePaths = BundleValidator.ExpandCommitBoundPaths(
+            context.Root,
+            manifest.SourceConfiguration.HostRevision,
+            sourceContract.SourceRoots);
+        var materializedSourcePaths = BundleValidator.ExpandProtectedInputPaths(
             context.Root,
             sourceContract.SourceRoots);
         var actualSourcePaths = manifest.SourceConfiguration.SourceAndBuildInputs
             .Select(identity => identity.Path)
             .ToArray();
         if (!actualSourcePaths.SequenceEqual(expectedSourcePaths, StringComparer.Ordinal)
+            || !materializedSourcePaths.SequenceEqual(expectedSourcePaths, StringComparer.Ordinal)
             || actualSourcePaths.Distinct(StringComparer.Ordinal).Count() != actualSourcePaths.Length
             || !actualSourcePaths.Any(path => path.StartsWith("src/ContractScribe.", StringComparison.Ordinal))
             || manifest.SourceConfiguration.SourceAndBuildInputs.Any(identity =>
@@ -136,6 +141,7 @@ public static class CellExecutor
         {
             ValidateArtifactIdentities(context.Root, manifest.SourceConfiguration.SourceAndBuildInputs);
             ValidateArtifactIdentities(context.Root, namedSourceArtifacts);
+            ValidateHostOwnedRegistryAndBounds(context.Root, manifest.SourceConfiguration);
         }
         var expectedCells = context.Protocol.RequiredCells.Select(cell => cell.CellId).Order(StringComparer.Ordinal).ToArray();
         var actualCells = manifest.Cells.Select(cell => cell.Materialization.CellId).Order(StringComparer.Ordinal).ToArray();
@@ -172,9 +178,9 @@ public static class CellExecutor
             {
                 throw new ProtocolException("HV190_SUBJECT_SOURCE_BOUNDARY");
             }
-            foreach (var argument in cell.ArgumentPrefix)
+            if (cell.ArgumentPrefix.Count != 0)
             {
-                PublicSafetyScanner.EnsureSafeText(argument);
+                throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
             }
 
             var expectedFixtures = context.Vectors.Vectors
@@ -199,6 +205,15 @@ public static class CellExecutor
                     || fixture.ExecutorKind == "harness-static")
                 {
                     throw new ProtocolException("HV179_FIXTURE_CAPABILITY_STATE");
+                }
+                var identityRegistry = fixture.ProcessIdentityRegistry ?? [];
+                if (fixture.CapabilityAvailable && fixture.ProcessIdentityRegistry is null
+                    || identityRegistry.Select(rule => rule.FingerprintSha256)
+                        .Distinct(StringComparer.Ordinal).Count() != identityRegistry.Count
+                    || identityRegistry.Any(rule =>
+                        rule.Role is not ("toolchain-owned" or "restore-or-runtime-download")))
+                {
+                    throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
                 }
                 var repositoryRoot = RepositoryPaths.ResolveConfined(
                     context.Root,
@@ -345,7 +360,8 @@ public static class CellExecutor
                 context.Protocol.ExecutionContract.StandardErrorByteLimit,
                 TimeSpan.FromSeconds(context.Protocol.ExecutionContract.SubjectTimeoutSeconds),
                 cancellationToken,
-                control).ConfigureAwait(false);
+                control,
+                fixture.ProcessIdentityRegistry).ConfigureAwait(false);
             var after = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
             var diagnostics = ValidateStreams(execution);
@@ -390,7 +406,10 @@ public static class CellExecutor
                     : execution.ProcessTermination,
                 execution.TimedOut,
                 execution.ControlCompleted,
-                execution.ObservationComplete);
+                execution.ObservationComplete,
+                execution.ControlCompleted ? control?.GateName : null,
+                execution.ControlCompleted ? control?.Action : null,
+                execution.ControlCompleted && control?.Action == "observe");
             var provisional = new RunEvidence(
                 vector.VectorId,
                 runId,
@@ -627,15 +646,7 @@ public static class CellExecutor
                 }
                 continue;
             }
-            if (Path.IsPathRooted(argument)
-                || argument.Contains('/', StringComparison.Ordinal)
-                || argument.Contains('\\', StringComparison.Ordinal)
-                || argument.Contains(':', StringComparison.Ordinal)
-                || argument.Length is < 1 or > 128)
-            {
-                throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
-            }
-            PublicSafetyScanner.EnsureSafeText(argument);
+            throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
         }
     }
 
@@ -663,6 +674,7 @@ public static class CellExecutor
             RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
             requireCanonical: true);
         var rootElement = document.RootElement;
+        AuditResultSemanticValidator.Validate(root, rootElement);
         var facts = new ObservedAuditResultFacts(
             rootElement.GetProperty("auditResultVersion").GetInt32(),
             rootElement.GetProperty("policyConfigurationVersion").GetInt32(),
@@ -791,6 +803,55 @@ public static class CellExecutor
             {
                 throw new ProtocolException("HV187_SUBJECT_ARTIFACT_DRIFT");
             }
+        }
+    }
+
+    private static void ValidateHostOwnedRegistryAndBounds(
+        string root,
+        SubjectSourceConfiguration source)
+    {
+        var registryPath = RepositoryPaths.ResolveConfined(root, source.FailureRegistry.Path);
+        SchemaValidation.Validate(
+            registryPath,
+            RepositoryPaths.ResolveConfined(
+                root,
+                "schemas/validation/m1-host-failure-registry-v1.schema.json"),
+            requireCanonical: true);
+        using var registry = CanonicalJson.ReadStrict(registryPath, 1024 * 1024, requireCanonical: true);
+        var failureCodes = registry.RootElement.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("code").GetString())
+            .ToArray();
+        if (failureCodes.Distinct(StringComparer.Ordinal).Count() != failureCodes.Length)
+        {
+            throw new ProtocolException("HV228_HOST_REGISTRY_INVALID");
+        }
+
+        var boundsPath = RepositoryPaths.ResolveConfined(root, source.CalibratedBounds.Path);
+        SchemaValidation.Validate(
+            boundsPath,
+            RepositoryPaths.ResolveConfined(
+                root,
+                "schemas/validation/m1-host-calibrated-bounds-v1.schema.json"),
+            requireCanonical: true);
+        using var bounds = CanonicalJson.ReadStrict(boundsPath, 1024 * 1024, requireCanonical: true);
+        var names = bounds.RootElement.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("name").GetString())
+            .ToArray();
+        var expectedNames = new[]
+        {
+            "diagnostic-count",
+            "diagnostic-utf8-bytes",
+            "graceful-shutdown-timeout",
+            "sdk-discovery-timeout",
+            "temporary-disk-bytes",
+            "toolchain-subprocess-count",
+            "total-audit-timeout",
+            "workspace-load-timeout"
+        };
+        if (!names.Order(StringComparer.Ordinal).SequenceEqual(expectedNames, StringComparer.Ordinal)
+            || names.Distinct(StringComparer.Ordinal).Count() != names.Length)
+        {
+            throw new ProtocolException("HV229_HOST_BOUNDS_INVALID");
         }
     }
 

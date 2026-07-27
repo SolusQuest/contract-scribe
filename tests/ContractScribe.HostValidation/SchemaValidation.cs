@@ -54,6 +54,28 @@ public static class SchemaValidation
         }
     }
 
+    public static void ValidateElementDefinition(
+        JsonElement element,
+        string schemaPath,
+        string definition)
+    {
+        var key = $"{Path.GetFullPath(schemaPath)}#{definition}";
+        var schema = Schemas.GetOrAdd(
+            key,
+            _ => new Lazy<JsonSchema>(
+                () => LoadDefinition(schemaPath, definition),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        var result = schema.Evaluate(element, new EvaluationOptions
+        {
+            OutputFormat = OutputFormat.List,
+            RequireFormatValidation = true
+        });
+        if (!result.IsValid)
+        {
+            throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS");
+        }
+    }
+
     private static JsonSchema LoadSchema(string schemaPath)
     {
         using var schemaDocument = CanonicalJson.ReadStrict(schemaPath, 2 * 1024 * 1024);

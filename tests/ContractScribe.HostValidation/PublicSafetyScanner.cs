@@ -42,9 +42,21 @@ public static partial class PublicSafetyScanner
 
     public static void EnsureNoUnsupportedClaims(string text)
     {
-        if (UnsupportedPositiveClaim().IsMatch(text))
+        foreach (var line in text.Split('\n'))
         {
-            throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
+            if (RepositoryBuildCannotAccessSecrets().IsMatch(line))
+            {
+                throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
+            }
+            if (!UnsupportedConcept().IsMatch(line)
+                || ExplicitLimitation().IsMatch(line))
+            {
+                continue;
+            }
+            if (PositiveAssertion().IsMatch(line))
+            {
+                throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
+            }
         }
     }
 
@@ -116,6 +128,15 @@ public static partial class PublicSafetyScanner
     [GeneratedRegex(@"(?i)-----begin [a-z ]+private key-----")]
     private static partial Regex PrivateKeyMarker();
 
-    [GeneratedRegex(@"(?im)^\s*(?:(?:this|the\s+(?:harness|protocol|ci|runner|execution))\s+(?:provides|enforces|guarantees)\s+(?:network[- ]isolation|an?\s+offline\s+sandbox|an?\s+egress\s+sandbox|secret[- ]isolation|credential[- ]isolation|untrusted[- ]msbuild\s+sandboxing|transient[- ]write\s+prevention)|(?:network[- ]isolation|egress[- ]sandbox|secret[- ]isolation|credential[- ]isolation|untrusted[- ]msbuild\s+sandboxing|transient[- ]write\s+prevention)\s+is\s+(?:provided|enforced|guaranteed)|the\s+execution\s+(?:ran|runs)\s+in\s+an?\s+(?:offline\s+|egress\s+)?sandbox|repository[- ]controlled\s+msbuild\s+cannot\s+access\s+secrets)\b")]
-    private static partial Regex UnsupportedPositiveClaim();
+    [GeneratedRegex(@"(?i)\b(?:network|egress|credential|secret|untrusted[- ]msbuild|transient[- ]write)[- ](?:isolation|sandbox(?:ing)?|prevention)\b|\b(?:offline|sandboxed)\b")]
+    private static partial Regex UnsupportedConcept();
+
+    [GeneratedRegex(@"(?i)\b(?:does\s+not|do\s+not|cannot)\s+(?:claim|guarantee|provide|enforce)\b|\b(?:no|without|not(?:\s+an?)?)\s+(?:network|egress|credential|secret|offline|sandbox|sandboxed|untrusted[- ]msbuild|transient[- ]write)[- ]")]
+    private static partial Regex ExplicitLimitation();
+
+    [GeneratedRegex(@"(?i)\b(?:guarantees?|provides?|enforces?|ensures?)\b|\b(?:is|are|runs?|ran)\b.*\b(?:isolated|isolation|offline|sandbox|sandboxed|prevention)\b|\b(?:isolation|sandbox(?:ing)?|prevention)\b\s+(?:is|are)\s+(?:provided|enforced|guaranteed)\b")]
+    private static partial Regex PositiveAssertion();
+
+    [GeneratedRegex(@"(?i)\brepository[- ]controlled\s+msbuild\s+cannot\s+access\s+(?:credentials?|secrets?)\b")]
+    private static partial Regex RepositoryBuildCannotAccessSecrets();
 }

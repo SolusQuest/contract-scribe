@@ -213,6 +213,41 @@ public static class BundleValidator
         }
     }
 
+    public static string[] ExpandCommitBoundPaths(
+        string root,
+        string revision,
+        IReadOnlyList<string> roots)
+    {
+        root = RepositoryPaths.NormalizeRoot(root);
+        ValidateInventoryPaths(roots);
+        if (revision.Length != 40 || !revision.All(Uri.IsHexDigit))
+        {
+            throw new ProtocolException("HV225_SOURCE_REVISION_INVALID");
+        }
+        var arguments = new List<string> { "ls-tree", "-r", "--name-only", revision, "--" };
+        arguments.AddRange(roots);
+        var result = RunGit(root, arguments, captureOutput: true);
+        if (result.ExitCode != 0)
+        {
+            throw new ProtocolException("HV225_SOURCE_REVISION_INVALID");
+        }
+        string text;
+        try
+        {
+            text = new UTF8Encoding(false, true).GetString(result.Output);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new ProtocolException("HV226_SOURCE_REVISION_MISMATCH", exception);
+        }
+        var paths = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => path.TrimEnd('\r'))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        ValidateInventoryPaths(paths);
+        return paths;
+    }
+
     public static string ComputeBundleId(IEnumerable<ArtifactIdentity> entries)
     {
         using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -433,7 +468,7 @@ public static class BundleValidator
         }
     }
 
-    internal static string[] ExpandProtectedInputPaths(string root, IReadOnlyList<string> roots)
+    public static string[] ExpandProtectedInputPaths(string root, IReadOnlyList<string> roots)
     {
         ValidateInventoryPaths(roots);
         var paths = new SortedSet<string>(StringComparer.Ordinal);

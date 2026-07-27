@@ -581,10 +581,11 @@ public static class EvidenceValidator
                 subject,
                 evidence,
                 requireCurrentAttempt: false);
-            if (!IsEarlierAttempt(evidence.ValidationAttempt, currentAttempt))
-            {
-                throw new ProtocolException("HV221_SUPERSEDES_INVALID");
-            }
+            ValidateSupersededAttemptIdentity(
+                context.Root,
+                subject.SourceConfiguration,
+                currentAttempt,
+                evidence.ValidationAttempt);
             PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(path));
             identities.Add($"evidence.{CanonicalJson.Sha256File(path)}");
         }
@@ -594,6 +595,25 @@ public static class EvidenceValidator
             throw new ProtocolException("HV221_SUPERSEDES_INVALID");
         }
         return ordered;
+    }
+
+    public static void ValidateSupersededAttemptIdentity(
+        string root,
+        SubjectSourceConfiguration source,
+        ValidationAttemptIdentity current,
+        ValidationAttemptIdentity candidate)
+    {
+        if (candidate.HostRevision != source.HostRevision
+            || candidate.Workflow != source.Workflow.Path
+            || candidate.WorkflowRevision != source.Workflow.Sha256
+            || !IsEarlierAttempt(candidate, current))
+        {
+            throw new ProtocolException("HV221_SUPERSEDES_INVALID");
+        }
+        BundleValidator.ValidateCommitAncestry(
+            root,
+            candidate.HostRevision,
+            candidate.ValidationExecutionSha);
     }
 
     private static void ValidateIncompleteBinding(

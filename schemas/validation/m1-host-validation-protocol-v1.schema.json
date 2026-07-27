@@ -83,6 +83,7 @@
       "properties": {
         "sourceRoots": {
           "const": [
+            "ContractScribe.slnx",
             "Directory.Build.props",
             "Directory.Packages.props",
             "global.json",
@@ -90,10 +91,10 @@
           ]
         },
         "failureRegistry": {
-          "const": "docs/20_architecture/decisions/0002-process-topology.md"
+          "const": "src/ContractScribe.Core/Hosting/host-failure-registry-v1.json"
         },
         "calibratedBounds": {
-          "const": "docs/20_architecture/validation/m1-host-validation-protocol.md"
+          "const": "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json"
         },
         "buildRecipe": {
           "const": "Directory.Build.props"

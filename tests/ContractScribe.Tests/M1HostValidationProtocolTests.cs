@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.HostValidation;
 
 namespace ContractScribe.Tests;
@@ -230,13 +231,369 @@ public sealed class M1HostValidationProtocolTests
         {
             "Network isolation is enforced.",
             "The execution ran in an egress sandbox.",
-            "Repository-controlled MSBuild cannot access secrets."
+            "Repository-controlled MSBuild cannot access secrets.",
+            "ContractScribe guarantees network isolation.",
+            "The host enforces credential isolation.",
+            "This validation is fully offline and sandboxed."
         })
         {
             Assert.Equal(
                 "HV199_PUBLIC_UNSUPPORTED_CLAIM",
                 Assert.Throws<ProtocolException>(() =>
                     PublicSafetyScanner.EnsureNoUnsupportedClaims(claim)).Code);
+        }
+        PublicSafetyScanner.EnsureNoUnsupportedClaims(
+            "This protocol does not claim network isolation and is not an egress sandbox.");
+    }
+
+    [Fact]
+    public void HostValidation_ProductionCommandContractRejectsPrefixesAndLiteralArguments()
+    {
+        var subjectSchema = Path.Join(
+            Root,
+            "schemas",
+            "validation",
+            "m1-host-validation-subject-v1.schema.json");
+        var template = JsonNode.Parse(File.ReadAllText(
+            Path.Join(FixtureRoot, "execution-subject.template.json")))!.AsObject();
+        template["cells"]![0]!["argumentPrefix"] = new JsonArray("adaptable-command");
+        var temp = Path.Join(Path.GetTempPath(), $"contractscribe-subject-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(temp, template.ToJsonString(), new UTF8Encoding(false));
+            Assert.Equal(
+                "HV111_SCHEMA_REJECTED",
+                Assert.Throws<ProtocolException>(() =>
+                    SchemaValidation.Validate(temp, subjectSchema)).Code);
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
+
+        var context = BundleValidator.Validate(Root);
+        var protocolPath = "tests/fixtures/m1-host-validation/v1/protocol.json";
+        var protocolIdentity = new ArtifactIdentity(
+            protocolPath,
+            CanonicalJson.Sha256File(Path.Join(
+                Root,
+                protocolPath.Replace('/', Path.DirectorySeparatorChar))));
+        var cell = new ExecutionCell(
+            new CellMaterialization(
+                "ubuntu-x64",
+                "1",
+                "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+                "synthetic",
+                "linux-x64",
+                "X64",
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                [protocolIdentity, protocolIdentity]),
+            "dotnet-dll",
+            protocolPath,
+            [],
+            []);
+        var fixture = new FixtureRealization(
+            "failure.runtime-load-before-entry",
+            "external-process",
+            "tests/fixtures",
+            new string('1', 64),
+            true,
+            null,
+            "dotnet",
+            ["repository:m1-host-validation/v1/protocol.json", "Release"],
+            null,
+            [protocolIdentity],
+            [],
+            "bounded-polling",
+            null,
+            null,
+            []);
+        Assert.Equal(
+            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
+            Assert.Throws<ProtocolException>(() =>
+                CellExecutor.ValidateExecutorArrangement(
+                    Root,
+                    Path.Join(Root, "tests", "fixtures"),
+                    cell,
+                    fixture,
+                    allowMaterializationDrift: false)).Code);
+    }
+
+    [Fact]
+    public void HostValidation_AuditResultSemanticClosureRejectsEmptyAndContradictoryResults()
+    {
+        var validPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "golden",
+            "required-present.canonical.json");
+        using (var valid = CanonicalJson.ReadStrict(validPath, 2 * 1024 * 1024))
+        {
+            AuditResultSemanticValidator.Validate(Root, valid.RootElement);
+        }
+
+        var emptyPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "empty-results.json");
+        using (var empty = CanonicalJson.ReadStrict(emptyPath, 2 * 1024 * 1024))
+        {
+            Assert.Equal(
+                "HV230_AUDIT_RESULT_SEMANTICS",
+                Assert.Throws<ProtocolException>(() =>
+                    AuditResultSemanticValidator.Validate(Root, empty.RootElement)).Code);
+        }
+
+        var contradiction = JsonNode.Parse(File.ReadAllText(validPath))!.AsObject();
+        contradiction["results"]![0]!["auditOutcome"] = "audit.outcome.violation";
+        using var contradictoryDocument = JsonDocument.Parse(contradiction.ToJsonString());
+        Assert.Equal(
+            "HV230_AUDIT_RESULT_SEMANTICS",
+            Assert.Throws<ProtocolException>(() =>
+                AuditResultSemanticValidator.Validate(
+                    Root,
+                    contradictoryDocument.RootElement)).Code);
+    }
+
+    [Fact]
+    public void HostValidation_ControlEvidenceRequiresExactGateActionAndPostGateSample()
+    {
+        var context = BundleValidator.Validate(Root);
+        var (subject, evidence) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var vector = context.Vectors.Vectors.Single(candidate =>
+            candidate.VectorId == "toolchain.process-topology");
+        var fixture = subject.Cells[0].Fixtures.Single(candidate =>
+            candidate.VectorId == vector.VectorId) with
+        {
+            CapabilityAvailable = true,
+            BlockedReasonCode = null,
+            ProcessIdentityRegistry = []
+        };
+        var baseline = CreateMatchedRun(
+            context,
+            subject,
+            vector.VectorId,
+            "run-1",
+            701,
+            '1') with
+        {
+            Process = new ProcessObservation(
+                0,
+                "started",
+                "normal",
+                false,
+                true,
+                true,
+                "process-observation",
+                "observe",
+                true)
+        };
+        foreach (var process in new[]
+        {
+            baseline.Process with { ObservedGateName = "before-commit" },
+            baseline.Process with { ObservedControlAction = "cancel" },
+            baseline.Process with { PostGateSampleObserved = false }
+        })
+        {
+            var derived = RunSemantics.Derive(
+                context,
+                vector,
+                baseline with { Process = process },
+                fixture,
+                subject.SourceConfiguration);
+            Assert.Contains("HV224_CONTROL_GATE_INCOMPLETE", derived.DiagnosticCodes);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_ProtectedProcessIdentityDistinguishesToolchainWorkerAndRestore()
+    {
+        var entryPoint = Path.Join(
+            Root,
+            "tests",
+            "ContractScribe.HostValidation",
+            "bin",
+            new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release",
+            "net10.0",
+            "ContractScribe.HostValidation.dll");
+        Assert.True(File.Exists(entryPoint));
+        var fingerprint = ProcessTreeObserver.ComputeIdentityFingerprint(
+            "dotnet",
+            entryPoint,
+            ["build"]);
+        Assert.Equal(
+            "toolchain-owned",
+            ProcessTreeObserver.ClassifyIdentity(
+                "dotnet",
+                entryPoint,
+                ["build"],
+                [new ProcessIdentityRule(fingerprint, "toolchain-owned")]));
+        Assert.Equal(
+            "contractscribe-worker",
+            ProcessTreeObserver.ClassifyIdentity(
+                "dotnet",
+                entryPoint,
+                ["restore"],
+                [new ProcessIdentityRule(fingerprint, "toolchain-owned")]));
+        var restoreFingerprint = ProcessTreeObserver.ComputeIdentityFingerprint(
+            "dotnet",
+            entryPoint,
+            ["restore"]);
+        Assert.Equal(
+            "restore-or-runtime-download",
+            ProcessTreeObserver.ClassifyIdentity(
+                "dotnet",
+                entryPoint,
+                ["restore"],
+                [new ProcessIdentityRule(
+                    restoreFingerprint,
+                    "restore-or-runtime-download")]));
+        Assert.Equal(
+            "contractscribe-worker",
+            ProcessTreeObserver.ClassifyIdentity("dotnet", entryPoint, [], []));
+        Assert.Equal(
+            "unknown-descendant",
+            ProcessTreeObserver.ClassifyIdentity("msbuild", entryPoint, [], []));
+
+        var context = BundleValidator.Validate(Root);
+        var (subject, _) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var vector = context.Vectors.Vectors.Single(candidate =>
+            candidate.VectorId == "toolchain.no-automatic-restore");
+        var fixture = subject.Cells[0].Fixtures.Single(candidate =>
+            candidate.VectorId == vector.VectorId) with
+        {
+            CapabilityAvailable = true,
+            BlockedReasonCode = null,
+            ProcessIdentityRegistry = []
+        };
+        var baseline = CreateMatchedRun(
+            context,
+            subject,
+            vector.VectorId,
+            "run-1",
+            702,
+            '2') with
+        {
+            Process = new ProcessObservation(
+                0,
+                "started",
+                "normal",
+                false,
+                true,
+                true,
+                "process-observation",
+                "observe",
+                true)
+        };
+        var permitted = baseline with
+        {
+            ObservedProcesses =
+            [
+                baseline.ObservedProcesses[0],
+                new ObservedProcess(703, 702, "toolchain-owned", "msbuild")
+            ]
+        };
+        Assert.Equal(
+            vector.ExpectedObservation,
+            RunSemantics.Derive(
+                context,
+                vector,
+                permitted,
+                fixture,
+                subject.SourceConfiguration).Observation);
+        var restore = permitted with
+        {
+            ObservedProcesses =
+            [
+                baseline.ObservedProcesses[0],
+                new ObservedProcess(
+                    704,
+                    702,
+                    "restore-or-runtime-download",
+                    "dotnet")
+            ]
+        };
+        Assert.Equal(
+            "toolchain.restore-or-runtime-download-marker-observed",
+            RunSemantics.Derive(
+                context,
+                vector,
+                restore,
+                fixture,
+                subject.SourceConfiguration).Observation);
+    }
+
+    [Fact]
+    public void HostValidation_SupersededAttemptsMustShareHostAndWorkflowLineage()
+    {
+        var context = BundleValidator.Validate(Root);
+        var (subject, _) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var current = subject.ValidationAttempt with
+        {
+            WorkflowRunId = "2",
+            RunAttempt = 1
+        };
+        var candidate = subject.ValidationAttempt with
+        {
+            WorkflowRunId = "1",
+            RunAttempt = 1
+        };
+        foreach (var mismatched in new[]
+        {
+            candidate with { HostRevision = new string('2', 40) },
+            candidate with { Workflow = "tests/other-workflow.yml" },
+            candidate with { WorkflowRevision = new string('2', 64) }
+        })
+        {
+            Assert.Equal(
+                "HV221_SUPERSEDES_INVALID",
+                Assert.Throws<ProtocolException>(() =>
+                    EvidenceValidator.ValidateSupersededAttemptIdentity(
+                        Root,
+                        subject.SourceConfiguration,
+                        current,
+                        mismatched)).Code);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_CommitBoundEnumerationDetectsMaterializedDeletion()
+    {
+        var temp = Path.Join(Path.GetTempPath(), $"contractscribe-git-tree-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Join(temp, "src"));
+        try
+        {
+            File.WriteAllText(Path.Join(temp, "ContractScribe.slnx"), "<Solution />\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Join(temp, "src", "A.cs"), "class A {}\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Join(temp, "src", "B.cs"), "class B {}\n", new UTF8Encoding(false));
+            RunGit(temp, "init");
+            RunGit(temp, "config", "user.email", "host-validation@example.invalid");
+            RunGit(temp, "config", "user.name", "Host Validation");
+            RunGit(temp, "add", "src");
+            RunGit(temp, "commit", "-m", "fixture");
+            var revision = RunGit(temp, "rev-parse", "HEAD").Trim();
+            File.Delete(Path.Join(temp, "src", "B.cs"));
+
+            Assert.Equal(
+                ["src/A.cs", "src/B.cs"],
+                BundleValidator.ExpandCommitBoundPaths(temp, revision, ["src"]));
+            Assert.Equal(
+                ["src/A.cs"],
+                BundleValidator.ExpandProtectedInputPaths(temp, ["src"]));
+        }
+        finally
+        {
+            NormalizeFileAttributes(temp);
+            Directory.Delete(temp, recursive: true);
         }
     }
 
@@ -932,6 +1289,38 @@ public sealed class M1HostValidationProtocolTests
             current = current.Parent;
         }
         throw new InvalidOperationException("Could not find the repository root.");
+    }
+
+    private static string RunGit(string workingDirectory, params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start git.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(
+            process.ExitCode == 0,
+            $"git {string.Join(' ', arguments)} failed: {error}");
+        return output;
+    }
+
+    private static void NormalizeFileAttributes(string root)
+    {
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
     }
 
     private static (ExecutionSubjectManifest Subject, CellEvidence Evidence) CreateSyntheticIncompleteCell(
