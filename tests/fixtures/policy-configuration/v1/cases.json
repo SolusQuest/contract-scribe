@@ -278,7 +278,7 @@
           "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222"
         }
       },
-      "expected": { "error": { "code": "policy.input.invalid-contribution", "pointer": "/generatedOutput/producerId" } }
+      "expected": { "error": { "code": "run.generated.authority-conflict", "pointer": "/generatedOutput/producerId" } }
     },
     {
       "caseId": "generated-input-invalid-output-prefix",
@@ -292,7 +292,33 @@
           "outputId": "tgo.2222222222222222222222222222222222222222222222222222222222222222"
         }
       },
-      "expected": { "error": { "code": "policy.input.invalid-contribution", "pointer": "/generatedOutput/outputId" } }
+      "expected": { "error": { "code": "run.generated.authority-conflict", "pointer": "/generatedOutput/outputId" } }
+    },
+    {
+      "caseId": "generated-input-missing-producer-identity",
+      "stage": "input",
+      "policyFile": "policies/generated-input.json",
+      "input": {
+        "projectPath": "src/App/App.csproj",
+        "generatedOutput": {
+          "producerKind": "source-generator",
+          "outputId": "sgo.2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "expected": { "error": { "code": "run.generated.missing-identity", "pointer": "/generatedOutput/producerId" } }
+    },
+    {
+      "caseId": "generated-input-missing-output-identity",
+      "stage": "input",
+      "policyFile": "policies/generated-input.json",
+      "input": {
+        "projectPath": "src/App/App.csproj",
+        "generatedOutput": {
+          "producerKind": "tool-generated",
+          "producerId": "tgp.1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "expected": { "error": { "code": "run.generated.missing-identity", "pointer": "/generatedOutput/outputId" } }
     },
     {
       "caseId": "generated-input-both-variants",

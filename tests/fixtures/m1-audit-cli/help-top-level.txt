@@ -1,0 +1,13 @@
+ContractScribe CLI
+
+Usage:
+  contract-scribe [--help | --version | doctor]
+  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>
+
+Commands:
+  audit       Run the deterministic XML documentation audit.
+  doctor      Print an allowlisted local runtime diagnostic without network or credential access.
+
+Options:
+  -h, --help      Print this help.
+  -v, --version   Print the tool version.

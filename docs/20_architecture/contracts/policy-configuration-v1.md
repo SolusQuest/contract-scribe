@@ -74,7 +74,7 @@ The test-only conformance oracle returns one structured outcome and stops at the
 8. Evaluation input validation: `policy.input.invalid-path`, or a run-level generated-fact failure owned by the taxonomy registry.
 9. Rule resolution: an effective decision and matched rule ID, or a null matched rule ID for default fallback.
 
-Error outcomes contain `code`, an RFC 6901 `pointer` when an instance location exists, and `schemaKeyword` only for stage 5. Human-readable messages are non-normative.
+Error outcomes contain `code`, an RFC 6901 `pointer` when an instance location exists, and `schemaKeyword` only for stage 6. Human-readable messages are non-normative.
 
 Any duplicate property, including `schemaVersion` or `targetProfile`, fails at stage 3. Stage 4 applies only to an object with exactly one integer `schemaVersion` other than `1`. Stage 5 applies only to an object whose unique integer `schemaVersion` is `1`; it distinguishes a missing profile from any present non-enumerated value. Missing, null, string, Boolean, non-integral, and non-object schema-version cases fail at stage 6.
 

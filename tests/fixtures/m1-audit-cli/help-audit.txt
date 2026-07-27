@@ -1,0 +1,23 @@
+ContractScribe audit
+
+Usage:
+  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>
+
+Options:
+  --repository-root <path>  Repository root directory. Must exist.
+  --input <path>            Audit input (.sln, .slnx, or .csproj). Must resolve inside the repository root.
+  --policy <path>           Policy configuration file. Must resolve inside the repository root.
+  --output <path>           Audit result file. Must resolve outside the repository root.
+  -h, --help                Print this help.
+
+All four path options are required, take exactly one value, and may appear in any order. Both "--option value" and "--option=value" forms are accepted.
+
+Exit codes:
+  0  No violations (also help, version, and doctor).
+  1  Documentation violations found.
+  2  Invalid command-line usage.
+  3  No audit judgments (no results, or every result skipped).
+  4  Invalid input or unavailable environment.
+  5  Load, audit, or publication failure.
+  6  Cancelled.
+  7  Timeout.

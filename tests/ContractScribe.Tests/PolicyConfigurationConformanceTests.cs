@@ -170,9 +170,9 @@ internal sealed record EvaluationInput(
     [property: JsonPropertyName("generatedOutput")] GeneratedOutputInput? GeneratedOutput = null);
 
 internal sealed record GeneratedOutputInput(
-    [property: JsonPropertyName("producerKind")] string ProducerKind,
-    [property: JsonPropertyName("producerId")] string ProducerId,
-    [property: JsonPropertyName("outputId")] string OutputId);
+    [property: JsonPropertyName("producerKind")] string? ProducerKind,
+    [property: JsonPropertyName("producerId")] string? ProducerId,
+    [property: JsonPropertyName("outputId")] string? OutputId);
 
 internal sealed record ExpectedOutcome(
     [property: JsonPropertyName("decision")] string? Decision,
@@ -301,7 +301,8 @@ internal static class PolicyConfigurationV1Conformance
             "policy.target-profile.required" or "policy.target-profile.invalid" => "profile",
             "policy.schema.invalid-document" => "schema",
             "policy.semantic.duplicate-rule-id" or "policy.semantic.duplicate-priority" or "policy.semantic.invalid-pattern" => "semantic",
-            "policy.input.invalid-path" or "policy.input.invalid-contribution" => "input",
+            "policy.input.invalid-path" or "policy.input.invalid-contribution"
+                or "run.generated.missing-identity" or "run.generated.authority-conflict" => "input",
             _ => throw new InvalidOperationException($"Unknown conformance error code '{errorCode}'.")
         };
     }
@@ -422,14 +423,24 @@ internal static class PolicyConfigurationV1Conformance
 
                 var producerPattern = generated.ProducerKind == "source-generator" ? "^sgp\\.[0-9a-f]{64}$" : "^tgp\\.[0-9a-f]{64}$";
                 var outputPattern = generated.ProducerKind == "source-generator" ? "^sgo\\.[0-9a-f]{64}$" : "^tgo\\.[0-9a-f]{64}$";
-                if (generated.ProducerId is null || !Regex.IsMatch(generated.ProducerId, producerPattern, RegexOptions.CultureInvariant))
+                if (generated.ProducerId is null)
                 {
-                    return Error("policy.input.invalid-contribution", "/generatedOutput/producerId");
+                    return Error("run.generated.missing-identity", "/generatedOutput/producerId");
                 }
 
-                if (generated.OutputId is null || !Regex.IsMatch(generated.OutputId, outputPattern, RegexOptions.CultureInvariant))
+                if (!Regex.IsMatch(generated.ProducerId, producerPattern, RegexOptions.CultureInvariant))
                 {
-                    return Error("policy.input.invalid-contribution", "/generatedOutput/outputId");
+                    return Error("run.generated.authority-conflict", "/generatedOutput/producerId");
+                }
+
+                if (generated.OutputId is null)
+                {
+                    return Error("run.generated.missing-identity", "/generatedOutput/outputId");
+                }
+
+                if (!Regex.IsMatch(generated.OutputId, outputPattern, RegexOptions.CultureInvariant))
+                {
+                    return Error("run.generated.authority-conflict", "/generatedOutput/outputId");
                 }
             }
             else
