@@ -52,6 +52,9 @@ public sealed class RepositoryLoader
             state = new LoaderExecutionState();
             state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
             state.AddProtected(pathResolver.RelativeIdentity(paths.LexicalRoot, paths.LexicalInput));
+            state.AddPolicy(
+                ReparseEntryIdentities(paths.PhysicalRoot, paths.TraversedReparseEntries, pathResolver),
+                []);
             Observe(LoaderStage.PathResolution, cancellationToken);
             before = inventory(paths.PhysicalRoot, cancellationToken);
             Observe(LoaderStage.BaselineCapture, cancellationToken);
@@ -208,6 +211,25 @@ public sealed class RepositoryLoader
     private static bool IsRepositoryInputExtension(string path) =>
         Path.GetExtension(path).ToLowerInvariant() is
             ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".slnx" or ".editorconfig";
+
+    private static IEnumerable<string> ReparseEntryIdentities(
+        string physicalRoot,
+        IEnumerable<string> entries,
+        RepositoryPathResolver resolver) =>
+        entries
+            .Where(entry => IsContained(physicalRoot, entry))
+            .Select(entry => resolver.RelativeIdentity(physicalRoot, entry));
+
+    private static bool IsContained(string root, string path)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var normalizedPath = Path.GetFullPath(path);
+        return normalizedPath.Equals(normalizedRoot, comparison)
+            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
+    }
 }
 
 internal static class PostRegistrationLoader
@@ -224,7 +246,7 @@ internal static class PostRegistrationLoader
     {
         var identities = new GeneratedIdentityHasher(digest);
         VerifyExecutingMsbuild(toolchain);
-        var roots = ResolveRoots(paths, pathResolver);
+        var roots = ResolveRoots(paths, pathResolver, state);
         Observe(observer, LoaderStage.InputParsing, cancellationToken);
         var graph = EvaluateGraph(paths, roots, pathResolver, state, cancellationToken);
         var graphIdentities = graph.Values.Select(node => node.Identity).ToHashSet(StringComparer.Ordinal);
@@ -330,6 +352,11 @@ internal static class PostRegistrationLoader
                     authoritativeGenerated,
                     identities,
                     cancellationToken));
+                if (authoritativeGenerated.Count != 0)
+                {
+                    throw LoaderException.Generated("run.generated.authority-conflict");
+                }
+
                 var toolFacts = CreateToolGeneratedFacts(
                     toolGeneratedSources.Where(input => input.ProjectIdentity == node.Identity).ToArray(),
                     node.Identity,
@@ -386,11 +413,17 @@ internal static class PostRegistrationLoader
 
     private static IReadOnlyList<string> ResolveRoots(
         ResolvedRepositoryPaths paths,
-        RepositoryPathResolver pathResolver)
+        RepositoryPathResolver pathResolver,
+        LoaderExecutionState state)
     {
         if (paths.PhysicalInput.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
         {
-            return [pathResolver.ResolveProject(paths.LexicalRoot, paths.PhysicalRoot, paths.LexicalInput)];
+            var directProject = pathResolver.ResolveProject(
+                paths.LexicalRoot,
+                paths.PhysicalRoot,
+                paths.LexicalInput);
+            state.AddPolicy(ProtectionIdentities(paths, directProject, pathResolver), []);
+            return [directProject.PhysicalPath];
         }
 
         var parsed = SolutionFile.Parse(paths.PhysicalInput);
@@ -407,12 +440,16 @@ internal static class PostRegistrationLoader
             .Select(project => pathResolver.ResolveProject(paths.LexicalRoot, paths.PhysicalRoot, project.AbsolutePath))
             .ToArray();
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        if (resolved.Distinct(comparer).Count() != resolved.Length)
+        if (resolved.Select(project => project.PhysicalPath).Distinct(comparer).Count() != resolved.Length)
         {
             throw LoaderException.Graph("graph.duplicate-project");
         }
 
+        state.AddPolicy(
+            resolved.SelectMany(project => ProtectionIdentities(paths, project, pathResolver)),
+            []);
         return resolved
+            .Select(project => project.PhysicalPath)
             .OrderBy(path => pathResolver.RelativeIdentity(paths.PhysicalRoot, path), StringComparer.Ordinal)
             .ToArray();
     }
@@ -477,10 +514,13 @@ internal static class PostRegistrationLoader
             {
                 throw LoaderException.Graph("graph.project-unloadable");
             }
-            var references = project.GetItems("ProjectReference")
+            var referenceResolutions = project.GetItems("ProjectReference")
                 .Select(item => item.GetMetadataValue("FullPath"))
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(path => pathResolver.ResolveProject(paths.LexicalRoot, paths.PhysicalRoot, path))
+                .ToArray();
+            var references = referenceResolutions
+                .Select(reference => reference.PhysicalPath)
                 .Order(comparer)
                 .ToArray();
             if (references.Distinct(comparer).Count() != references.Length)
@@ -498,7 +538,10 @@ internal static class PostRegistrationLoader
 
             var protectedPaths = ProtectedPaths(paths, projectPath, project, pathResolver);
             var allowedRoots = AllowedOutputRoots(paths.PhysicalRoot, project, pathResolver);
-            state.AddPolicy(protectedPaths, allowedRoots);
+            state.AddPolicy(
+                protectedPaths.Concat(referenceResolutions.SelectMany(
+                    reference => ProtectionIdentities(paths, reference, pathResolver))),
+                allowedRoots);
             var identity = pathResolver.RelativeIdentity(paths.PhysicalRoot, projectPath);
             graph[projectPath] = new EvaluatedProject(
                 projectPath,
@@ -531,18 +574,24 @@ internal static class PostRegistrationLoader
             .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
             .Select(path => Path.GetFullPath(path))
             .Where(path => IsContained(paths.PhysicalRoot, path))
-            .SelectMany(path => new[]
-            {
-                resolver.RelativeIdentity(paths.PhysicalRoot, path),
-                resolver.RelativeIdentity(
-                    paths.PhysicalRoot,
-                    resolver.ResolveSemantic(paths.PhysicalRoot, path)),
-            })
+            .SelectMany(path => ProtectionIdentities(
+                paths,
+                resolver.ResolveSemantic(paths.PhysicalRoot, path),
+                resolver).Append(resolver.RelativeIdentity(paths.PhysicalRoot, path)))
             .Distinct(PathComparer())
             .Order(StringComparer.Ordinal)
             .ToArray();
         return semanticPaths;
     }
+
+    private static IEnumerable<string> ProtectionIdentities(
+        ResolvedRepositoryPaths paths,
+        ResolvedPhysicalPath resolution,
+        RepositoryPathResolver resolver) =>
+        resolution.TraversedReparseEntries
+            .Append(resolution.PhysicalPath)
+            .Where(path => IsContained(paths.PhysicalRoot, path))
+            .Select(path => resolver.RelativeIdentity(paths.PhysicalRoot, path));
 
     private static IReadOnlyList<string> AllowedOutputRoots(
         string root,
@@ -690,9 +739,9 @@ internal static class PostRegistrationLoader
         var normalizedInputs = inputs
             .Select(input => input with
             {
-                ProducerNamespace = input.ProducerNamespace.Normalize(),
-                ProducerName = input.ProducerName.Normalize(),
-                OutputName = input.OutputName.Normalize(),
+                ProducerNamespace = NormalizeToolIdentityField(input.ProducerNamespace, grammar),
+                ProducerName = NormalizeToolIdentityField(input.ProducerName, grammar),
+                OutputName = NormalizeToolIdentityField(input.OutputName, grammar),
             })
             .GroupBy(
                 input => (input.ProjectIdentity, input.ProducerNamespace, input.ProducerName, input.OutputName))
@@ -711,9 +760,7 @@ internal static class PostRegistrationLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (input.ProjectIdentity != projectIdentity
-                || !grammar.IsMatch(input.ProducerNamespace)
-                || !grammar.IsMatch(input.ProducerName)
-                || !grammar.IsMatch(input.OutputName))
+                || string.IsNullOrWhiteSpace(input.ProjectIdentity))
             {
                 throw LoaderException.Generated("run.generated.missing-identity");
             }
@@ -747,6 +794,34 @@ internal static class PostRegistrationLoader
         }
 
         return facts;
+    }
+
+    private static string NormalizeToolIdentityField(
+        string? value,
+        System.Text.RegularExpressions.Regex grammar)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
+        string normalized;
+        try
+        {
+            normalized = value.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
+        var bytes = StrictUtf8(normalized);
+        if (bytes.Length == 0 || bytes.Length > 4096 || !grammar.IsMatch(normalized))
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
+        return normalized;
     }
 
     private static byte[] StrictUtf8(string value)
@@ -937,7 +1012,8 @@ internal sealed class GeneratedIdentityHasher
                 bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
                     .GetBytes(raw.Normalize());
             }
-            catch (EncoderFallbackException)
+            catch (Exception exception) when (
+                exception is ArgumentException or EncoderFallbackException)
             {
                 throw LoaderException.Generated("run.generated.missing-identity");
             }

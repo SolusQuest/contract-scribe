@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -280,6 +282,50 @@ public sealed class RepositoryLoaderTests
         var app = Assert.Single(session.Projects, project => project.ProjectIdentity == "App/App.csproj");
         Assert.NotNull(app.Compilation.GetTypeByMetadataName("FixtureGenerated"));
         Assert.NotNull(app.Compilation.GetTypeByMetadataName("ToolGenerated"));
+    }
+
+    [Theory]
+    [InlineData("namespace")]
+    [InlineData("producer")]
+    [InlineData("output")]
+    public async Task InvalidUnicodeToolIdentityUsesTheStableGeneratedFailure(string field)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        const string invalidUnicode = "\uD800";
+        var outcome = await new RepositoryLoader().LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj",
+            [
+                new(
+                    "App/App.csproj",
+                    field == "namespace" ? invalidUnicode : "ContractScribe",
+                    field == "producer" ? invalidUnicode : "FixtureTool",
+                    field == "output" ? invalidUnicode : "FixtureOutput",
+                    "public static class ToolGenerated { }"),
+            ]));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("run.generated.missing-identity", outcome.PrimaryFailure?.Code);
+        Assert.DoesNotContain(
+            invalidUnicode,
+            string.Join(
+                '|',
+                outcome.SecondaryFacts.Select(fact => fact.Code)
+                    .Append(outcome.PrimaryFailure?.Code ?? string.Empty)));
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsAuthoritativeGeneratedDocumentOmittedByTheRerun()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(processSensitiveGenerator: true);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("run.generated.authority-conflict", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
     }
 
     [Fact]
@@ -584,29 +630,77 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
-    public async Task BuildHostProcessEndsAfterTheSuccessfulSessionIsDisposed()
+    public async Task RetargetedTraversedAliasUnderAnOutputRootIsProtectedDrift()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var before = CurrentBuildHostProcessIds();
-        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
-        using var monitoring = new CancellationTokenSource();
-        var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
-        var loader = new RepositoryLoader();
+        var firstTarget = Path.Combine(fixture.Root, "SharedOne");
+        var secondTarget = Path.Combine(fixture.Root, "SharedTwo");
+        Directory.CreateDirectory(firstTarget);
+        Directory.CreateDirectory(secondTarget);
+        await File.WriteAllTextAsync(
+            Path.Combine(firstTarget, "Linked.cs"),
+            "public static class LinkedSource { }");
+        await File.WriteAllTextAsync(
+            Path.Combine(secondTarget, "Linked.cs"),
+            "public static class LinkedSource { }");
+        var alias = Path.Combine(fixture.Root, "App", "obj", "Alias");
+        CreateDirectoryLink(alias, firstTarget);
+        var project = Path.Combine(fixture.Root, "App", "App.csproj");
+        var projectText = await File.ReadAllTextAsync(project);
+        await File.WriteAllTextAsync(
+            project,
+            projectText.Replace(
+                "</Project>",
+                """<ItemGroup><Compile Include="obj/Alias/Linked.cs" /></ItemGroup></Project>""",
+                StringComparison.Ordinal));
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                Directory.Delete(alias);
+                CreateDirectoryLink(alias, secondTarget);
+            }
+        });
 
         var outcome = await loader.LoadAsync(
             new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
-        monitoring.Cancel();
-        await monitor;
-        var spawned = observed.Keys.Except(before).ToArray();
-        var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
-        Assert.NotEmpty(spawned);
-        await session.DisposeAsync();
 
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => spawned.All(ProcessHasExited),
-                TimeSpan.FromSeconds(10)),
-            $"BuildHost process remained after disposal: {string.Join(',', spawned)}");
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task BuildHostProcessEndsAfterTheSuccessfulSessionIsDisposed()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var ready = Path.Combine(fixture.Root, "unrelated.ready");
+        var release = Path.Combine(fixture.Root, "unrelated.release");
+        using var unrelated = StartLoaderProbe(fixture.Root, "churn", ready, release);
+        try
+        {
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(ready),
+                    TimeSpan.FromSeconds(30)),
+                "The unrelated loader probe did not reach its held session.");
+            int[] unrelatedHosts = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (unrelatedHosts = CurrentBuildHostDescendants(unrelated.Id)).Length != 0,
+                    TimeSpan.FromSeconds(30)),
+                "The unrelated loader probe did not expose its own BuildHost descendant.");
+
+            var spawned = await RunLoaderProbeAsync(fixture.Root, "success");
+
+            Assert.False(unrelated.HasExited);
+            Assert.Empty(spawned.Intersect(unrelatedHosts));
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(release, "release");
+            await unrelated.WaitForExitAsync();
+        }
     }
 
     [Theory]
@@ -615,47 +709,7 @@ public sealed class RepositoryLoaderTests
     public async Task BuildHostProcessEndsAfterFailureOrCancellation(string mode)
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var before = CurrentBuildHostProcessIds();
-        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
-        using var monitoring = new CancellationTokenSource();
-        var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
-        using var cancellation = new CancellationTokenSource();
-        var loader = new RepositoryLoader(stage =>
-        {
-            if (mode == "cancellation" && stage == LoaderStage.Compilation)
-            {
-                cancellation.Cancel();
-            }
-        });
-        var generated = mode == "failure"
-            ? new[]
-            {
-                new ToolGeneratedSourceInput(
-                    "App/App.csproj",
-                    "ContractScribe",
-                    "FixtureTool",
-                    "Broken",
-                    "public class {"),
-            }
-            : null;
-
-        var outcome = await loader.LoadAsync(
-            new RepositoryLoadRequest(fixture.Root, "App/App.csproj", generated),
-            cancellation.Token);
-        monitoring.Cancel();
-        await monitor;
-        var spawned = observed.Keys.Except(before).ToArray();
-
-        Assert.Equal(
-            mode == "failure" ? RepositoryLoadStatus.Failure : RepositoryLoadStatus.Cancelled,
-            outcome.Status);
-        Assert.NotEmpty(spawned);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => spawned.All(ProcessHasExited)
-                    && !CurrentBuildHostProcessIds().Except(before).Any(),
-                TimeSpan.FromSeconds(10)),
-            $"BuildHost process remained after {mode}: {string.Join(',', spawned)}");
+        await RunLoaderProbeAsync(fixture.Root, mode);
     }
 
     [Fact]
@@ -972,35 +1026,197 @@ public sealed class RepositoryLoaderTests
         }
     }
 
-    private static int[] CurrentBuildHostProcessIds() =>
-        Process.GetProcessesByName("dotnet")
-            .Where(IsBuildHostProcess)
+    private static async Task<int[]> RunLoaderProbeAsync(string repositoryRoot, string mode)
+    {
+        using var probe = StartLoaderProbe(repositoryRoot, mode);
+        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+        using var monitoring = new CancellationTokenSource();
+        var monitor = MonitorBuildHostDescendantsAsync(probe.Id, observed, monitoring.Token);
+        var stdout = probe.StandardOutput.ReadToEndAsync();
+        var stderr = probe.StandardError.ReadToEndAsync();
+        await probe.WaitForExitAsync();
+        monitoring.Cancel();
+        await monitor;
+        var spawned = observed.Keys.Order().ToArray();
+        var output = await stdout;
+        var error = await stderr;
+
+        Assert.True(
+            probe.ExitCode == 0,
+            $"Loader probe failed for {mode} with exit {probe.ExitCode}:{Environment.NewLine}{output}{Environment.NewLine}{error}");
+        Assert.NotEmpty(spawned);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => spawned.All(ProcessHasExited),
+                TimeSpan.FromSeconds(10)),
+            $"BuildHost descendant remained after {mode}: {string.Join(',', spawned)}");
+        return spawned;
+    }
+
+    private static Process StartLoaderProbe(
+        string repositoryRoot,
+        string mode,
+        string? readyPath = null,
+        string? releasePath = null)
+    {
+        var probePath = LoaderProbePath();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(probePath);
+        startInfo.ArgumentList.Add(repositoryRoot);
+        startInfo.ArgumentList.Add("App/App.csproj");
+        startInfo.ArgumentList.Add(mode);
+        if (readyPath is not null && releasePath is not null)
+        {
+            startInfo.ArgumentList.Add(readyPath);
+            startInfo.ArgumentList.Add(releasePath);
+        }
+
+        startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        startInfo.Environment["DOTNET_NOLOGO"] = "true";
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Loader probe failed to start.");
+    }
+
+    private static string LoaderProbePath()
+    {
+        var configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase)
+            ? "Release"
+            : "Debug";
+        var path = Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "ContractScribe.LoaderProbe",
+            "bin",
+            configuration,
+            "net10.0",
+            "ContractScribe.LoaderProbe.dll");
+        return File.Exists(path)
+            ? path
+            : throw new InvalidOperationException("The loader probe was not built.");
+    }
+
+    private static string ExpectedBuildHostPath() =>
+        Path.Combine(
+            Path.GetDirectoryName(LoaderProbePath())!,
+            "BuildHost-netcore",
+            "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll");
+
+    private static int[] CurrentBuildHostDescendants(int ancestorProcessId)
+    {
+        var expectedPath = ExpectedBuildHostPath();
+        return Process.GetProcessesByName("dotnet")
             .Select(process =>
             {
                 using (process)
                 {
-                    return process.Id;
+                    return process.Id != ancestorProcessId
+                        && IsDescendantOf(process.Id, ancestorProcessId)
+                        && IsExpectedBuildHostProcess(process, expectedPath)
+                            ? process.Id
+                            : (int?)null;
                 }
             })
+            .Where(processId => processId is not null)
+            .Select(processId => processId!.Value)
             .Order()
             .ToArray();
+    }
 
-    private static bool IsBuildHostProcess(Process process)
+    private static bool IsExpectedBuildHostProcess(Process process, string expectedPath)
     {
         try
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                var commandLine = File.ReadAllBytes($"/proc/{process.Id}/cmdline");
+                return Encoding.UTF8.GetString(commandLine)
+                    .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(argument => string.Equals(
+                        Path.GetFullPath(argument),
+                        Path.GetFullPath(expectedPath),
+                        StringComparison.Ordinal));
+            }
+
             return process.Modules.Cast<ProcessModule>().Any(module =>
-                module.FileName.EndsWith(
-                    "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll",
+                string.Equals(
+                    Path.GetFullPath(module.FileName),
+                    Path.GetFullPath(expectedPath),
                     StringComparison.OrdinalIgnoreCase));
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception)
         {
             return false;
         }
-        catch (System.ComponentModel.Win32Exception)
+    }
+
+    private static bool IsDescendantOf(int processId, int ancestorProcessId)
+    {
+        var visited = new HashSet<int>();
+        var current = processId;
+        while (visited.Add(current))
         {
-            return false;
+            var parent = ParentProcessId(current);
+            if (parent == ancestorProcessId)
+            {
+                return true;
+            }
+
+            if (parent is null or <= 1)
+            {
+                return false;
+            }
+
+            current = parent.Value;
+        }
+
+        return false;
+    }
+
+    private static int? ParentProcessId(int processId)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                var stat = File.ReadAllText($"/proc/{processId}/stat");
+                var afterName = stat[(stat.LastIndexOf(')') + 2)..]
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return int.Parse(afterName[1], System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            using var process = Process.GetProcessById(processId);
+            var information = new ProcessBasicInformation();
+            var status = NtQueryInformationProcess(
+                process.Handle,
+                0,
+                ref information,
+                Marshal.SizeOf<ProcessBasicInformation>(),
+                out _);
+            return status == 0
+                ? checked((int)information.InheritedFromUniqueProcessId)
+                : null;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or InvalidOperationException
+                or OverflowException
+                or System.ComponentModel.Win32Exception)
+        {
+            return null;
         }
     }
 
@@ -1017,7 +1233,8 @@ public sealed class RepositoryLoaderTests
         }
     }
 
-    private static async Task MonitorDotnetProcessesAsync(
+    private static async Task MonitorBuildHostDescendantsAsync(
+        int ancestorProcessId,
         System.Collections.Concurrent.ConcurrentDictionary<int, byte> observed,
         CancellationToken cancellationToken)
     {
@@ -1026,7 +1243,7 @@ public sealed class RepositoryLoaderTests
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                foreach (var processId in CurrentBuildHostProcessIds())
+                foreach (var processId in CurrentBuildHostDescendants(ancestorProcessId))
                 {
                     observed.TryAdd(processId, 0);
                 }
@@ -1037,6 +1254,37 @@ public sealed class RepositoryLoaderTests
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Repository root not found.");
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        ref ProcessBasicInformation processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
     }
 }
 
@@ -1058,7 +1306,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
     public static async Task<LoaderFixture> CreateAsync(
         string? appProject = null,
         string? libraryProject = null,
-        bool withGenerator = false)
+        bool withGenerator = false,
+        bool processSensitiveGenerator = false)
     {
         var root = Path.Combine(Path.GetTempPath(), "contract-scribe-issue36", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "App"));
@@ -1123,7 +1372,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await File.WriteAllTextAsync(
             Path.Combine(root, "Library", "Library.cs"),
             """public static class Library { public static string Value => "ok"; }""");
-        if (withGenerator)
+        if (withGenerator || processSensitiveGenerator)
         {
             var repositoryRoot = FindRepositoryRoot();
             var configuration = AppContext.BaseDirectory.Contains(
@@ -1148,14 +1397,34 @@ internal sealed class LoaderFixture : IAsyncDisposable
             Directory.CreateDirectory(analyzers);
             File.Copy(generatorPath, Path.Combine(analyzers, Path.GetFileName(generatorPath)));
             var projectText = await File.ReadAllTextAsync(Path.Combine(root, "App", "App.csproj"));
+            var processSensitiveConfiguration = processSensitiveGenerator
+                ?
+                """
+                <PropertyGroup>
+                  <ContractScribeTestGeneratorMarker>$(MSBuildProjectDirectory)/../generator.marker</ContractScribeTestGeneratorMarker>
+                </PropertyGroup>
+                <ItemGroup>
+                  <CompilerVisibleProperty Include="ContractScribeTestGeneratorMarker" />
+                </ItemGroup>
+                """
+                : string.Empty;
             projectText = projectText.Replace(
                 "</Project>",
-                """<ItemGroup><Analyzer Include="../Analyzers/ContractScribe.TestGenerator.dll" /></ItemGroup></Project>""",
+                $"""
+                <ItemGroup><Analyzer Include="../Analyzers/ContractScribe.TestGenerator.dll" /></ItemGroup>
+                {processSensitiveConfiguration}
+                </Project>
+                """,
                 StringComparison.Ordinal);
             await File.WriteAllTextAsync(Path.Combine(root, "App", "App.csproj"), projectText);
         }
 
         await PrepareAsync(root);
+        if (processSensitiveGenerator)
+        {
+            File.Delete(Path.Combine(root, "generator.marker"));
+        }
+
         return new LoaderFixture(root);
     }
 
@@ -1189,6 +1458,17 @@ internal sealed class LoaderFixture : IAsyncDisposable
               <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
               <RuntimeFrameworkVersion Condition="'$(TargetFramework)' == 'net9.0'">9.0.0</RuntimeFrameworkVersion>
             </PropertyGroup>
+            <ItemGroup>
+              <KnownFrameworkReference Update="Microsoft.NETCore.App"
+                                       Condition="'$(TargetFramework)' == 'net9.0'"
+                                       TargetingPackVersion="9.0.0" />
+              <KnownFrameworkReference Update="Microsoft.AspNetCore.App"
+                                       Condition="'$(TargetFramework)' == 'net9.0'"
+                                       TargetingPackVersion="9.0.0" />
+              <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App"
+                                       Condition="'$(TargetFramework)' == 'net9.0'"
+                                       TargetingPackVersion="9.0.0" />
+            </ItemGroup>
             </Project>
             """,
             StringComparison.Ordinal);

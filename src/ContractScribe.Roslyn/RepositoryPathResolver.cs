@@ -43,13 +43,22 @@ internal sealed class RepositoryPathResolver
             throw LoaderException.Input("input.path-not-found");
         }
 
-        var physicalRoot = ResolveExistingPath(lexicalRoot);
-        var physicalInput = ResolveExistingPath(lexicalInput, physicalRoot);
-        RequireContained(physicalRoot, physicalInput, "input.path-outside-root");
-        return new ResolvedRepositoryPaths(lexicalRoot, physicalRoot, lexicalInput, physicalInput);
+        var rootResolution = ResolveExistingPath(lexicalRoot);
+        var physicalRoot = rootResolution.PhysicalPath;
+        var inputResolution = ResolveExistingPath(lexicalInput, physicalRoot);
+        RequireContained(physicalRoot, inputResolution.PhysicalPath, "input.path-outside-root");
+        return new ResolvedRepositoryPaths(
+            lexicalRoot,
+            physicalRoot,
+            lexicalInput,
+            inputResolution.PhysicalPath,
+            rootResolution.TraversedReparseEntries
+                .Concat(inputResolution.TraversedReparseEntries)
+                .Distinct(PathComparer())
+                .ToArray());
     }
 
-    public string ResolveProject(string lexicalRoot, string physicalRoot, string projectPath)
+    public ResolvedPhysicalPath ResolveProject(string lexicalRoot, string physicalRoot, string projectPath)
     {
         var lexicalProject = Path.GetFullPath(projectPath);
         RequireContained(lexicalRoot, lexicalProject, "graph.project-outside-root");
@@ -63,18 +72,18 @@ internal sealed class RepositoryPathResolver
             throw LoaderException.Graph("graph.project-not-found");
         }
 
-        var physicalProject = ResolveExistingPath(lexicalProject, physicalRoot);
-        RequireContained(physicalRoot, physicalProject, "graph.project-outside-root");
-        return physicalProject;
+        var resolution = ResolveExistingPath(lexicalProject, physicalRoot);
+        RequireContained(physicalRoot, resolution.PhysicalPath, "graph.project-outside-root");
+        return resolution;
     }
 
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
         Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/');
 
-    public string ResolveSemantic(string physicalRoot, string path) =>
+    public ResolvedPhysicalPath ResolveSemantic(string physicalRoot, string path) =>
         ResolveExistingPath(Path.GetFullPath(path), physicalRoot);
 
-    private string ResolveExistingPath(string path, string? containmentRoot = null)
+    private ResolvedPhysicalPath ResolveExistingPath(string path, string? containmentRoot = null)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full) ?? throw LoaderException.Input("input.path-invalid");
@@ -84,6 +93,7 @@ internal sealed class RepositoryPathResolver
             StringSplitOptions.RemoveEmptyEntries);
         var visited = new HashSet<string>(
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var traversedReparseEntries = new List<string>();
         var hops = 0;
         foreach (var segment in segments)
         {
@@ -98,6 +108,7 @@ internal sealed class RepositoryPathResolver
 
             while ((info.Attributes & FileAttributes.ReparsePoint) != 0)
             {
+                traversedReparseEntries.Add(Path.GetFullPath(current));
                 if (++hops > 32)
                 {
                     throw LoaderException.Input("input.path-link-limit");
@@ -126,7 +137,9 @@ internal sealed class RepositoryPathResolver
             }
         }
 
-        return TrimDirectory(Path.GetFullPath(current));
+        return new ResolvedPhysicalPath(
+            TrimDirectory(Path.GetFullPath(current)),
+            traversedReparseEntries.Distinct(PathComparer()).ToArray());
     }
 
     private void RequireContained(string root, string candidate, string code)
@@ -152,13 +165,21 @@ internal sealed class RepositoryPathResolver
             ? path
             : Path.TrimEndingDirectorySeparator(path);
     }
+
+    private static StringComparer PathComparer() =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
+
+internal sealed record ResolvedPhysicalPath(
+    string PhysicalPath,
+    IReadOnlyList<string> TraversedReparseEntries);
 
 internal sealed record ResolvedRepositoryPaths(
     string LexicalRoot,
     string PhysicalRoot,
     string LexicalInput,
-    string PhysicalInput);
+    string PhysicalInput,
+    IReadOnlyList<string> TraversedReparseEntries);
 
 internal sealed class LoaderException : Exception
 {
