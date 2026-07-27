@@ -350,6 +350,11 @@ This track never counts toward M1 progress while it remains non-gating.
 - richer exception documentation;
 - analyzer, generator, custom-target, and multi-targeting support expansion;
 - additional private or specialized target profiles;
+- marker-based opt-in private XML documentation targets:
+  - use declaration-local `cscribe:doc` and `cscribe:doc+components` placeholders; `+components` includes applicable taxonomy components, not descendant declarations;
+  - extend M1 target selection and evidence, M2 placeholder-safe patching, and M3 proposal generation;
+  - support deterministic marker-first discovery without requiring enumeration of the complete private surface;
+  - reassess after the M3 end-to-end pipeline is validated; implementation remains non-gating Post-MVP work unless an explicit roadmap amendment promotes it.
 - incremental audit and evidence caches;
 - additional provider adapters and evaluation datasets;
 - child-process or stronger isolation topology;
