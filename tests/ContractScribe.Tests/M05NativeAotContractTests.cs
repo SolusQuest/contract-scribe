@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
@@ -154,11 +155,23 @@ public sealed class M05NativeAotContractTests
     public void AggregateScriptImplementsTheClosedTruthTable(string firstOutcome, string secondOutcome, string expectedOutcome, int expectedExitCode)
     {
         var root = FindRepositoryRoot();
-        var directory = Path.Join(root, "TestResults", "m05-aggregate-tests", Guid.NewGuid().ToString("N"));
+        var runId = Guid.NewGuid().ToString("N");
+        var directory = Path.Join(root, "TestResults", "m05-aggregate-tests", runId);
         Directory.CreateDirectory(directory);
-        var summaryPath = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "evidence", "m0.5-summary-v1.json");
+        var evidenceRoot = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "evidence");
+        var scratchDirectory = Path.Join(evidenceRoot, ".m05-aggregate-scratch-" + runId);
+        var scratchSummaryPath = Path.Join(scratchDirectory, "m0.5-summary-v1.json");
+        var scratchOutputArgument = "tests/fixtures/roslyn-msbuild/v1/evidence/.m05-aggregate-scratch-" + runId + "/m0.5-summary-v1.json";
+        var trackedSummaryPath = Path.Join(evidenceRoot, "m0.5-summary-v1.json");
+        var trackedStatusBefore = GitTrackedFixtureStatus(root);
+        var trackedSummaryHashBefore = Sha256(trackedSummaryPath);
         try
         {
+            var normalizedEvidenceRoot = Path.GetFullPath(evidenceRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var normalizedScratch = Path.GetFullPath(scratchSummaryPath);
+            Assert.True(normalizedScratch.StartsWith(normalizedEvidenceRoot, StringComparison.Ordinal), "The scratch summary path escapes the controlled evidence directory.");
+            Assert.Equal("m0.5-summary-v1.json", Path.GetFileName(normalizedScratch));
+
             var linuxPath = Path.Join(directory, "linux.json");
             var windowsPath = Path.Join(directory, "windows.json");
             File.WriteAllText(linuxPath, CreateCell("Ubuntu", "linux-x64", firstOutcome));
@@ -177,20 +190,232 @@ public sealed class M05NativeAotContractTests
             startInfo.ArgumentList.Add(linuxPath);
             startInfo.ArgumentList.Add("-WindowsEvidencePath");
             startInfo.ArgumentList.Add(windowsPath);
+            startInfo.ArgumentList.Add("-OutputPath");
+            startInfo.ArgumentList.Add(scratchOutputArgument);
             using var process = Process.Start(startInfo)!;
             var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
             process.WaitForExit();
 
-            Assert.Equal(expectedExitCode, process.ExitCode);
+            Assert.True(process.ExitCode == expectedExitCode, $"Aggregate exit code mismatch. stdout: {stdout}; stderr: {stderr}");
             Assert.Contains($"M0.5 aggregate outcome: {expectedOutcome}", stdout, StringComparison.Ordinal);
-            using var summary = JsonDocument.Parse(File.ReadAllText(summaryPath));
+            using var summary = JsonDocument.Parse(File.ReadAllText(scratchSummaryPath));
             Assert.Equal(expectedOutcome, summary.RootElement.GetProperty("outcome").GetString());
             Assert.Equal(expectedExitCode, summary.RootElement.GetProperty("exitCode").GetInt32());
         }
         finally
         {
-            if (File.Exists(summaryPath)) File.Delete(summaryPath);
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteDirectoryWithRetries(scratchDirectory);
+            DeleteDirectoryWithRetries(directory);
+        }
+
+        Assert.False(Directory.Exists(scratchDirectory), "The run's scratch directory was not cleaned up.");
+        Assert.Equal(trackedStatusBefore, GitTrackedFixtureStatus(root));
+        Assert.Equal(trackedSummaryHashBefore, Sha256(trackedSummaryPath));
+    }
+
+    private const string AggregateHelperScript = """
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$AggregatePath,
+            [Parameter(Mandatory = $true)]
+            [string]$LinuxEvidencePath,
+            [Parameter(Mandatory = $true)]
+            [string]$WindowsEvidencePath,
+            [Parameter(Mandatory = $true)]
+            [string]$OutputPath,
+            [Parameter(Mandatory = $true)]
+            [string]$ScratchSummaryPath,
+            [Parameter(Mandatory = $true)]
+            [string]$ReadyPath,
+            [Parameter(Mandatory = $true)]
+            [string]$ReleasePath
+        )
+        $ErrorActionPreference = "Stop"
+        $startInfo = [Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = "pwsh"
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        [void]$startInfo.ArgumentList.Add("-NoProfile")
+        [void]$startInfo.ArgumentList.Add("-File")
+        [void]$startInfo.ArgumentList.Add($AggregatePath)
+        [void]$startInfo.ArgumentList.Add("-LinuxEvidencePath")
+        [void]$startInfo.ArgumentList.Add($LinuxEvidencePath)
+        [void]$startInfo.ArgumentList.Add("-WindowsEvidencePath")
+        [void]$startInfo.ArgumentList.Add($WindowsEvidencePath)
+        [void]$startInfo.ArgumentList.Add("-OutputPath")
+        [void]$startInfo.ArgumentList.Add($OutputPath)
+        $nested = [Diagnostics.Process]::Start($startInfo)
+        $nestedStdout = $nested.StandardOutput.ReadToEnd()
+        $nestedStderr = $nested.StandardError.ReadToEnd()
+        $nested.WaitForExit()
+        Write-Output "nested aggregate pid=$($nested.Id) exit=$($nested.ExitCode)"
+        Write-Output $nestedStdout
+        if ($nestedStderr) { Write-Output "nested stderr: $nestedStderr" }
+        if ($nested.ExitCode -ne 0) { exit 10 }
+        if (-not (Test-Path -LiteralPath $ScratchSummaryPath)) { exit 11 }
+        $summary = Get-Content -LiteralPath $ScratchSummaryPath -Raw | ConvertFrom-Json
+        if ($summary.outcome -ne "feasible-clean" -or $summary.exitCode -ne 0) { exit 12 }
+        [IO.File]::WriteAllText($ReadyPath, "ready`n", [Text.UTF8Encoding]::new($false))
+        while (-not (Test-Path -LiteralPath $ReleasePath)) { Start-Sleep -Milliseconds 200 }
+        exit 0
+        """;
+
+    [Fact]
+    public void AggregateScriptInterruptionNeverMutatesTheTrackedSummary()
+    {
+        var root = FindRepositoryRoot();
+        var runId = Guid.NewGuid().ToString("N");
+        var directory = Path.Join(root, "TestResults", "m05-aggregate-tests", runId);
+        Directory.CreateDirectory(directory);
+        var evidenceRoot = Path.Join(root, "tests", "fixtures", "roslyn-msbuild", "v1", "evidence");
+        var scratchDirectory = Path.Join(evidenceRoot, ".m05-aggregate-scratch-" + runId);
+        var scratchSummaryPath = Path.Join(scratchDirectory, "m0.5-summary-v1.json");
+        var scratchOutputArgument = "tests/fixtures/roslyn-msbuild/v1/evidence/.m05-aggregate-scratch-" + runId + "/m0.5-summary-v1.json";
+        var trackedSummaryPath = Path.Join(evidenceRoot, "m0.5-summary-v1.json");
+        var trackedStatusBefore = GitTrackedFixtureStatus(root);
+        var trackedSummaryHashBefore = Sha256(trackedSummaryPath);
+        Process? helper = null;
+        try
+        {
+            var linuxPath = Path.Join(directory, "linux.json");
+            var windowsPath = Path.Join(directory, "windows.json");
+            File.WriteAllText(linuxPath, CreateCell("Ubuntu", "linux-x64", "feasible-clean"));
+            File.WriteAllText(windowsPath, CreateCell("Windows", "win-x64", "feasible-clean"));
+            var readyPath = Path.Join(directory, "ready.signal");
+            var releasePath = Path.Join(directory, "release.signal");
+            var helperPath = Path.Join(directory, "aggregate-helper.ps1");
+            File.WriteAllText(helperPath, AggregateHelperScript);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(helperPath);
+            startInfo.ArgumentList.Add("-AggregatePath");
+            startInfo.ArgumentList.Add(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
+            startInfo.ArgumentList.Add("-LinuxEvidencePath");
+            startInfo.ArgumentList.Add(linuxPath);
+            startInfo.ArgumentList.Add("-WindowsEvidencePath");
+            startInfo.ArgumentList.Add(windowsPath);
+            startInfo.ArgumentList.Add("-OutputPath");
+            startInfo.ArgumentList.Add(scratchOutputArgument);
+            startInfo.ArgumentList.Add("-ScratchSummaryPath");
+            startInfo.ArgumentList.Add(scratchSummaryPath);
+            startInfo.ArgumentList.Add("-ReadyPath");
+            startInfo.ArgumentList.Add(readyPath);
+            startInfo.ArgumentList.Add("-ReleasePath");
+            startInfo.ArgumentList.Add(releasePath);
+            helper = Process.Start(startInfo)!;
+
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            var ready = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(readyPath))
+                {
+                    ready = true;
+                    break;
+                }
+                if (helper.HasExited)
+                {
+                    break;
+                }
+                Thread.Sleep(100);
+            }
+
+            if (!ready && !helper.HasExited)
+            {
+                helper.Kill(entireProcessTree: true);
+                var timeoutKillTerminated = helper.WaitForExit(30000);
+                Assert.True(timeoutKillTerminated, "The helper process tree did not terminate after the readiness-timeout kill.");
+            }
+
+            if (!ready)
+            {
+                var helperState = helper.HasExited ? "premature exit code " + helper.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) : "still running after timeout";
+                Assert.True(ready, $"The helper did not reach readiness ({helperState}). stdout: {helper.StandardOutput.ReadToEnd()}; stderr: {helper.StandardError.ReadToEnd()}");
+            }
+
+            helper.Kill(entireProcessTree: true);
+            var terminated = helper.WaitForExit(30000);
+            Assert.True(terminated, "The helper process tree did not terminate within the bounded wait after the deliberate kill.");
+
+            Assert.Equal(trackedStatusBefore, GitTrackedFixtureStatus(root));
+            Assert.Equal(trackedSummaryHashBefore, Sha256(trackedSummaryPath));
+            var residue = Directory.EnumerateFileSystemEntries(evidenceRoot, ".m05-aggregate-scratch-*").ToArray();
+            Assert.All(residue, entry => Assert.Equal(scratchDirectory, entry));
+        }
+        finally
+        {
+            if (helper is not null)
+            {
+                if (!helper.HasExited)
+                {
+                    helper.Kill(entireProcessTree: true);
+                    helper.WaitForExit(30000);
+                }
+                helper.Dispose();
+            }
+            DeleteDirectoryWithRetries(scratchDirectory);
+            DeleteDirectoryWithRetries(directory);
+        }
+
+        Assert.False(Directory.Exists(scratchDirectory), "The interrupted run's scratch residue was not cleaned up.");
+    }
+
+    private static string GitTrackedFixtureStatus(string root)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = root
+        };
+        startInfo.ArgumentList.Add("status");
+        startInfo.ArgumentList.Add("--porcelain");
+        startInfo.ArgumentList.Add("--untracked-files=no");
+        startInfo.ArgumentList.Add("--");
+        startInfo.ArgumentList.Add("tests/fixtures/roslyn-msbuild/v1");
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"git status failed. stderr: {stderr}");
+        return stdout;
+    }
+
+    private static string Sha256(string path)
+        => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static void DeleteDirectoryWithRetries(string path)
+    {
+        for (var attempt = 0; attempt < 5 && Directory.Exists(path); attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException exception)
+            {
+                if (attempt == 4) Console.Error.WriteLine($"Cleanup failed for {path}: {exception.Message}");
+                Thread.Sleep(200);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                if (attempt == 4) Console.Error.WriteLine($"Cleanup failed for {path}: {exception.Message}");
+                Thread.Sleep(200);
+            }
         }
     }
 
