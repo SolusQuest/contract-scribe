@@ -14,7 +14,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static readonly Lazy<JsonSchema> EvidenceSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json"))));
     private static readonly Lazy<JsonSchema> CandidateLocatorSchema = new(() =>
     {
-        var schema = JsonNode.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json")))!.AsObject();
+        var schema = JsonNode.Parse(File.ReadAllText(Path.Join(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.schema.json")))!.AsObject();
         return JsonSchema.FromText(new JsonObject
         {
             ["$schema"] = "https://json-schema.org/draft/2020-12/schema",
@@ -184,7 +184,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     public void ProfileMembership_ExecutesEveryAdrAccessibilityCaseAgainstCompiledSymbols()
     {
         var root = FindRepositoryRoot();
-        using var annex = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "tests", "fixtures", "m1-target-observation", "adr-0003-vectors.json")));
+        using var annex = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "m1-target-observation", "adr-0003-vectors.json")));
         var compilation = CreateProfileMembershipCompilation();
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var symbols = EnumerateSymbols(compilation.Assembly.GlobalNamespace)
@@ -220,10 +220,59 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
+    public void RelationEmission_AppliesEachAdrSourceRuleForBothProfiles()
+    {
+        var compilation = CreateProfileCompilation("profile-relations.cs");
+        Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+
+        INamedTypeSymbol Type(string name) => compilation.GetTypeByMetadataName($"RelationProfiles.{name}")!;
+        IMethodSymbol Method(string type, string name) => Type(type).GetMembers(name).OfType<IMethodSymbol>().Single();
+        IMethodSymbol ExplicitMethod(string type) => Type(type).GetMembers().OfType<IMethodSymbol>().Single(method => method.ExplicitInterfaceImplementations.Length == 1);
+        string Id(ISymbol symbol) => symbol.GetDocumentationCommentId()!;
+        string RelationKey(string kind, ISymbol source, ISymbol target) => $"{kind}|{Id(source)}|{Id(target.OriginalDefinition)}";
+        string ActualRelationKey(Dictionary<string, object> relation)
+        {
+            var source = (Dictionary<string, object>)relation["sourceSymbolRef"];
+            var target = (Dictionary<string, object>)relation["targetSymbolRef"];
+            return $"{relation["relationKind"]}|{source["documentationCommentId"]}|{target["documentationCommentId"]}";
+        }
+
+        var publicRelations = new[]
+        {
+            RelationKey("relation.overrides", Method("PublicOverride", "Override"), Method("PublicBase", "Override")),
+            RelationKey("relation.implicit-interface-implementation", Method("PublicImplementation", "Implicit"), Method("IRelationContract", "Implicit")),
+            RelationKey("relation.explicit-interface-implementation", ExplicitMethod("PublicImplementation"), Method("IRelationContract", "Explicit")),
+            RelationKey("relation.inherited-interface-member", Type("IPublicDerivedContract"), Method("IInheritedContract", "Inherited"))
+        };
+        var internalRelations = new[]
+        {
+            RelationKey("relation.overrides", Method("InternalOverride", "Override"), Method("PublicBase", "Override")),
+            RelationKey("relation.implicit-interface-implementation", Method("InternalImplementation", "Implicit"), Method("IRelationContract", "Implicit")),
+            RelationKey("relation.explicit-interface-implementation", ExplicitMethod("InternalImplementation"), Method("IRelationContract", "Explicit")),
+            RelationKey("relation.inherited-interface-member", Type("IInternalDerivedContract"), Method("IInheritedContract", "Inherited"))
+        };
+
+        foreach (var (profile, expected) in new[]
+        {
+            ("profile.external-api", publicRelations),
+            ("profile.assembly-visible", publicRelations.Concat(internalRelations).ToArray())
+        })
+        {
+            var manifest = CreateProfileManifest(profile, "profile-relations.cs");
+            var targetsBefore = ClassifyTargets(compilation, manifest).ToArray();
+            var componentsBefore = ClassifyComponents(compilation, manifest).ToArray();
+            var actual = ClassifyRelationRecords(compilation, "profile.relations", profile).Select(ActualRelationKey).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            Assert.Equal(expected.Order(StringComparer.Ordinal), actual);
+            Assert.Equal(targetsBefore, ClassifyTargets(compilation, manifest).ToArray());
+            Assert.Equal(componentsBefore, ClassifyComponents(compilation, manifest).ToArray());
+        }
+    }
+
+    [Fact]
     public void PartialAmbiguity_PrecedesMixedOriginAcrossProseRegistryAndOracle()
     {
         var root = FindRepositoryRoot();
-        var prose = File.ReadAllText(Path.Combine(root, "docs", "20_architecture", "contracts", "symbol-evidence-taxonomy-v1.md"));
+        var prose = File.ReadAllText(Path.Join(root, "docs", "20_architecture", "contracts", "symbol-evidence-taxonomy-v1.md"));
         Assert.Contains("`skip.ambiguous.partial-declaration` wins while origin remains `origin.mixed`", prose, StringComparison.Ordinal);
         Assert.True(RegistryEntries.Value["skip.ambiguous.partial-declaration"].GetProperty("precedence").GetInt32()
             < RegistryEntries.Value["skip.ambiguous.mixed-origin"].GetProperty("precedence").GetInt32());
@@ -415,13 +464,25 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     private static CSharpCompilation CreateProfileMembershipCompilation()
+        => CreateProfileCompilation("profile-membership.cs");
+
+    private static CSharpCompilation CreateProfileCompilation(string fixtureFile)
     {
         var baseline = CreateFixtureCompilation();
         var root = FindRepositoryRoot();
-        var path = Path.Combine(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "profile-membership.cs");
+        var path = Path.Join(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", fixtureFile);
         var parseOptions = (CSharpParseOptions)baseline.SyntaxTrees.First().Options;
-        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: "profile-membership.cs", encoding: System.Text.Encoding.UTF8);
-        return CSharpCompilation.Create("profile-membership", [tree], baseline.References, baseline.Options);
+        var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: fixtureFile, encoding: System.Text.Encoding.UTF8);
+        return CSharpCompilation.Create(Path.GetFileNameWithoutExtension(fixtureFile), [tree], baseline.References, baseline.Options);
+    }
+
+    private static JsonElement CreateProfileManifest(string profile, string fixtureFile)
+    {
+        var root = FindRepositoryRoot();
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "symbol-evidence-taxonomy", "v1", "manifest.json")))!.AsObject();
+        manifest["targetProfile"] = profile;
+        manifest["sourceProvenance"]!.AsObject()[fixtureFile] = "origin.source";
+        return JsonSerializer.SerializeToElement(manifest);
     }
 
     private static bool ExpectedMembership(string expectation) => expectation switch
@@ -723,16 +784,16 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         {
             foreach (var member in type.GetMembers().Where(IsRelationMember))
             {
-                if (GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
-                foreach (var implemented in GetExplicitInterfaceMembers(member))
-                    if (ContainingTypesReachable(member.ContainingType, targetProfile) && IsDocumentationTarget(implemented, targetProfile) && member.GetDocumentationCommentId() is { } explicitSource && implemented.OriginalDefinition.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
+                if (IsDocumentationTarget(member, targetProfile) && GetOverriddenMember(member) is { } overridden && member.GetDocumentationCommentId() is { } source && overridden.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.overrides", source, target, context);
+                foreach (var implemented in GetExplicitInterfaceMembers(member).Where(implemented => ContainingTypesReachable(member.ContainingType, targetProfile) && IsDocumentationTarget(implemented, targetProfile)))
+                    if (member.GetDocumentationCommentId() is { } explicitSource && implemented.OriginalDefinition.GetDocumentationCommentId() is { } explicitTarget) yield return Relation("relation.explicit-interface-implementation", explicitSource, explicitTarget, context);
             }
-            if (type.TypeKind == TypeKind.Interface)
+            if (type.TypeKind == TypeKind.Interface && IsDocumentationTarget(type, targetProfile))
                 foreach (var inherited in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(symbol => IsDocumentationTarget(symbol, targetProfile)))
                     if (type.GetDocumentationCommentId() is { } source && inherited.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.inherited-interface-member", source, target, context);
             if (type.TypeKind != TypeKind.Interface)
-                foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember))
-                    if (IsDocumentationTarget(interfaceMember, targetProfile) && type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && implementation.Locations.Any(location => location.IsInSource) && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
+                foreach (var interfaceMember in type.AllInterfaces.SelectMany(@interface => @interface.GetMembers()).Where(IsRelationMember).Where(interfaceMember => IsDocumentationTarget(interfaceMember, targetProfile)))
+                    if (type.FindImplementationForInterfaceMember(interfaceMember) is { } implementation && implementation.Locations.Any(location => location.IsInSource) && IsDocumentationTarget(implementation, targetProfile) && IsRelationMember(implementation) && !GetExplicitInterfaceMembers(implementation).Any() && implementation.GetDocumentationCommentId() is { } source && interfaceMember.OriginalDefinition.GetDocumentationCommentId() is { } target) yield return Relation("relation.implicit-interface-implementation", source, target, context);
         }
     }
 

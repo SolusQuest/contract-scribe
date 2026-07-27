@@ -209,9 +209,8 @@ public static class AuditResultCanonicalizer
             Require(evidenceItems.TryGetValue(evidenceId, out var evidence), "Authority references missing evidence.");
             Require(JsonElement.DeepEquals(evidence.GetProperty("subject"), expectedSubject), "Authority evidence subject does not match classification.");
         }
-        foreach (var evidenceId in malformedEvidenceIds)
+        foreach (var evidence in malformedEvidenceIds.Select(evidenceId => evidenceItems[evidenceId]))
         {
-            var evidence = evidenceItems[evidenceId];
             Require(evidence.GetProperty("kind").GetString() == "evidence.source.xml-documentation", "Malformed authority requires XML-documentation evidence.");
             Require(evidence.GetProperty("relation").GetString() == "evidence.documents", "Malformed authority requires documents relation.");
             Require(!evidence.GetProperty("isTruncated").GetBoolean(), "Malformed authority evidence must be untruncated.");

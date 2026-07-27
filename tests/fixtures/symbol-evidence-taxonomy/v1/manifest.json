@@ -1706,18 +1706,6 @@
       "relationKind": "relation.overrides",
       "sourceSymbolRef": {
         "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Derived.ProtectedMember"
-      },
-      "targetSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
-        "documentationCommentId": "M:TaxonomyFixtures.Base.ProtectedMember"
-      }
-    },
-    {
-      "recordType": "RelationObservation",
-      "relationKind": "relation.overrides",
-      "sourceSymbolRef": {
-        "compilationContextRef": "synthetic.v1",
         "documentationCommentId": "P:TaxonomyFixtures.ShapeDerived.Item(System.Int32)"
       },
       "targetSymbolRef": {
