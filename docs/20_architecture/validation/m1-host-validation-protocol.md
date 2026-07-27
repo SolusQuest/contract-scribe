@@ -28,11 +28,11 @@ The artifact lock and independent review record are not bundle members. No bundl
 
 Execution uses three additional identity layers:
 
-1. A cross-cell source/configuration manifest binds the exact Issue #24 source revision, production sources and projects, props/targets, package and lock inputs, failure registry, calibrated-bound manifest, build recipe, command/control contract, logical fixtures, contract baseline, workflow revision, runner policy, and environment policy.
+1. A cross-cell source/configuration manifest binds the exact Issue #24 source revision and a closed, generated inventory from frozen roots. It covers production sources and projects, props/targets, package and lock inputs, failure registry, calibrated-bound manifest, build recipe, command/control contract, logical fixtures, contract baseline, workflow revision, runner policy, and environment policy. Every named recipe or policy is a path-plus-content identity, and `sourceConfigurationId` is the canonical digest of the complete ordered record.
 2. A per-cell materialization manifest binds the concrete runner image, RID, architecture, selected SDK/runtime/MSBuild, built production subject and harness artifacts, platform fixture realization, and bounded process observations.
-3. A validation-execution identity binds workflow identity and revision, workflow run ID, run attempt, validation execution SHA, exact host revision, per-cell job IDs and immutable URLs, upstream matrix result, and evidence-publication revision.
+3. A pre-execution validation-attempt identity binds workflow identity and revision, workflow run ID, run attempt, validation execution SHA, and exact host revision. Per-cell job identities remain materialization facts. Matrix result and evidence-publisher source revision are finalization identities and appear only in aggregate evidence; the publisher revision equals the validation execution SHA and is not a self-reference to a future commit containing the aggregate.
 
-Ubuntu and Windows evidence from different workflow runs or run attempts cannot be combined. Reruns create immutable new evidence instances. They may supersede, but never overwrite or splice, earlier records. A changed source, build input, package, toolchain, runner image, environment policy, workflow, protocol, or materialized artifact invalidates evidence bound to the prior identity.
+Ubuntu and Windows evidence from different workflow runs or run attempts cannot be combined. In GitHub Actions, the harness compares the claimed run, attempt, job, execution SHA, operating system, and architecture with the running environment. Reruns create immutable new evidence instances. They may supersede, but never overwrite or splice, earlier records. A changed source, build input, package, toolchain, runner image, environment policy, workflow, protocol, or materialized artifact invalidates evidence bound to the prior identity.
 
 ## Required matrix and run expansion
 
@@ -61,6 +61,8 @@ The production subject descriptor is a contract that Issue #24 must implement be
 - It does not write raw stdout/stderr as a result channel.
 
 The self-test subject is structurally separate and has `allowedForProductionEvidence: false`. Self-test observations can prove harness behavior only; they can never satisfy a production cell or aggregate schema.
+
+`executorKind` is executable, not documentary. `production-host` invokes only the Issue #24 entry point. `external-process` invokes the protected per-vector executable and argument arrangement. `platform-fixture` invokes an already provisioned platform arrangement whose recipe and artifacts are protected inputs. `harness-static` invokes a closed code registry; it cannot manufacture a pass from the vector's expected value. Helpers, arguments, provisioning inputs, expected external fatal cause, result location, design-time allowlist, and synchronized observation mode are bound by each cell's fixture realization.
 
 The named-gate mechanism uses an audit-unique system-temporary `controlRoot`. For one frozen gate name, the subject creates the zero-byte `<gate>.reached` marker only after entering the named state. The harness then creates `cancel.requested` and `<gate>.release` for cooperative cancellation/late release, or externally terminates the subject process tree for `external-kill`. Neither side infers ordering from elapsed sleeps. A missing marker at the 30-second protocol timeout is infrastructure-incomplete, and all control files are non-public temporary state deleted by the harness.
 
@@ -138,9 +140,9 @@ Directory auto-discovery is not tested or claimed. Missing, invalid, and nested 
 
 ## Independent observers
 
-The harness snapshots a closed repository inventory before subject execution and compares existence and SHA-256 afterward. It records protected source/project creation, deletion, and content change; other unexpected writes; and separately allowlisted `bin`/`obj` design-time output. It runs after success, handled failure, cancellation, and every case where the harness survives.
+The harness snapshots a closed repository inventory before subject execution and compares existence and SHA-256 afterward. It records protected source/project creation, deletion, and content change; other unexpected writes; and fixture-specific allowlisted design-time output. A directory merely named `bin` or `obj` is not globally trusted. Reparse entries are recorded without traversal. Allowed-output deletion and every non-allowlisted creation, deletion, or change remain observable. Protected mutation is rejected on every ordinary vector; only the dedicated protected-write detection vector expects that mutation.
 
-The harness samples the subject process tree and distinguishes the subject runtime, additional ContractScribe workers, toolchain-owned processes, and unknown descendants. Missing-assets/no-restore validation combines process observation with absence of assets or other restore outputs.
+The harness records the root subject synchronously before polling descendants, then distinguishes additional ContractScribe workers, toolchain-owned processes, and unknown descendants. Claims about zero workers or short-lived restore processes require a protected synchronized-tree arrangement; bounded polling alone yields incomplete evidence. Missing-assets/no-restore validation uses exact restore-output markers and does not classify every toolchain subprocess as restore.
 
 Fatal-process fixtures record the externally arranged cause (`out-of-memory`, `stack-overflow`, or `abort`) in the per-cell fixture realization. The harness never infers an OOM from an ambiguous Unix signal alone; the arrangement, materialized helper, runner policy, and observed termination are protected together. If the cell cannot establish that cause, the capability is unavailable and the vector is incomplete rather than passing under a guessed classification.
 
@@ -160,6 +162,8 @@ The only public execution artifacts are:
 
 The same credential-marker, machine-path, raw-log, and bounded-field scans apply to successful and non-success artifacts and to captured CI-visible harness output.
 
+Machine-path rejection covers drive-rooted paths, UNC paths, and Unix runner/temp/toolchain roots while permitting HTTPS identities and repository-relative paths. Credential markers include bearer authorization headers. The prohibited-claim policy executes over normative protocol prose and rejects positive claims of network isolation, offline sandboxing, untrusted-MSBuild sandboxing, or transient-write prevention.
+
 The precise network statement is: the deterministic host has no declared network dependency and ContractScribe initiates no provider, GitHub, update, telemetry, restore, runtime-download, or other declared network-dependent operation. Ordinary CI is not an egress sandbox and this protocol does not claim network isolation.
 
 ## Evidence acceptance
@@ -172,9 +176,13 @@ Before subject execution, the harness validates:
 - bidirectional requirements-to-vector/validator coverage;
 - project/package/reference boundaries;
 - review binding when production evidence is being accepted;
-- the cross-cell source/configuration manifest and current per-cell materialization.
+- the closed cross-cell source/configuration identity, exact execution-subject manifest content identity, and current per-cell materialization.
 
-Per-cell evidence is accepted only when its exact run triples equal the expanded oracle set for that cell. Missing, duplicate, unexpected, substituted, or wrong-cell runs fail closed. Aggregate evidence requires exactly both cells, one bundle and accepted review, one validation-execution identity, and no mixed run attempt.
+Per-cell evidence is accepted only when its exact run triples equal the expanded oracle set for that cell. Validation re-derives subject/process legality, failure-registry binding, observation, enforcement class, vector verdict, and cell outcome from independently observed process, repository, and canonical-result facts. Missing, duplicate, unexpected, substituted, contradictory, or wrong-cell runs fail closed. Equality uses a closed field registry; canonical result commitments are recomputed from the exact published canonical bytes, fresh-process rows require distinct observed root process IDs, and designated equality is enforced within and across cells.
+
+Aggregation accepts the exact referenced cell files, validates them, recomputes their hashes, enforces one bundle/review/source/subject/attempt identity, evaluates cross-cell equality, and derives the aggregate outcome. A standalone aggregate assertion cannot be accepted or published.
+
+All command inputs and protected bundle/source paths are validated before stale-output invalidation. Output files must be disjoint from every input and protected artifact, must not overlap input directories or traverse links, and, when repository-local, must be under `TestResults/m1-host-validation/`.
 
 Failed, cancelled, timed-out, invalidated, or infrastructure-incomplete attempts produce immutable incomplete evidence when the harness can safely do so. A later success does not erase them.
 
@@ -204,10 +212,11 @@ dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostVali
 dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- dry-run --root . --cell windows-x64
 dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- self-test --root .
 dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- run-cell --root . --subject-manifest <execution-subject> --review <review> --cell <cell> --output <cell-evidence> --incomplete-output <incomplete-evidence>
-dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- validate-cell --root . --review <review> --evidence <cell-evidence>
-dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- validate-incomplete --root . --review <review> --evidence <incomplete-evidence>
-dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- aggregate --root . --review <review> --evidence <ubuntu>;<windows> --output <aggregate>
-dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- prepare-public --root . --review <review> --kind <cell|aggregate|incomplete> --source <evidence> --output <allowlisted-name>
+dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- validate-cell --root . --review <review> --subject-manifest <execution-subject> --evidence <cell-evidence>
+dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- validate-incomplete --root . --review <review> --subject-manifest <execution-subject> --evidence <incomplete-evidence>
+dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- aggregate --root . --review <review> --subject-manifest <execution-subject> --evidence <ubuntu>;<windows> --matrix-result <passed|failed|incomplete> --publication-revision <commit> --output <aggregate>
+dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- validate-aggregate --root . --review <review> --subject-manifest <execution-subject> --evidence <aggregate> --cell-evidence <ubuntu>;<windows>
+dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- prepare-public --root . --review <review> --subject-manifest <execution-subject> --kind <cell|aggregate|incomplete> --source <evidence> --cell-evidence <ubuntu>;<windows> --output <allowlisted-name>
 ```
 
 `lock-protected-inputs` and `lock-bundle` are maintainer commands. Any regenerated identity requires a new exact review. The CI `validate-bundle`, `dry-run`, and `self-test` executions validate the oracle and harness on both operating systems; they are not production-host pass evidence.

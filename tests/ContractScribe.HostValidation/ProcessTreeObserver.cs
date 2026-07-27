@@ -9,12 +9,34 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
     private readonly CancellationTokenSource cancellation = new();
     private readonly Dictionary<int, ObservedProcess> observed = new();
     private readonly Task sampler;
+    private bool complete = true;
 
-    public ProcessTreeObserver(int subjectProcessId)
+    public ProcessTreeObserver(Process subjectProcess)
     {
-        this.subjectProcessId = subjectProcessId;
+        subjectProcessId = subjectProcess.Id;
+        try
+        {
+            observed[subjectProcessId] = new ObservedProcess(
+                subjectProcessId,
+                GetParentProcessId(subjectProcess),
+                "subject-runtime",
+                SanitizeImageName(subjectProcess.ProcessName));
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException
+                or IOException
+                or UnauthorizedAccessException
+                or FormatException
+                or OverflowException)
+        {
+            complete = false;
+        }
         sampler = SampleAsync(cancellation.Token);
     }
+
+    public bool ObservationComplete => complete && !sampler.IsFaulted;
 
     public IReadOnlyList<ObservedProcess> Snapshot()
     {
@@ -36,6 +58,10 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
+        catch
+        {
+            complete = false;
+        }
         cancellation.Dispose();
     }
 
@@ -52,8 +78,16 @@ internal sealed class ProcessTreeObserver : IAsyncDisposable
                     {
                         processes[process.Id] = (GetParentProcessId(process), SanitizeImageName(process.ProcessName));
                     }
-                    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+                    catch (Exception exception) when (
+                        exception is InvalidOperationException
+                            or System.ComponentModel.Win32Exception
+                            or NotSupportedException
+                            or IOException
+                            or UnauthorizedAccessException
+                            or FormatException
+                            or OverflowException)
                     {
+                        // A system process may exit between enumeration and inspection.
                     }
                 }
             }

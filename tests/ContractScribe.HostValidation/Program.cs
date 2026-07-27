@@ -79,12 +79,14 @@ public static class Program
                     var cell = Required(options, "--cell");
                     var incompleteOutput = Required(options, "--incomplete-output");
                     var output = Required(options, "--output");
-                    if (Path.GetFullPath(output).Equals(
-                        Path.GetFullPath(incompleteOutput),
-                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-                    {
-                        throw new ProtocolException("HV194_OUTPUT_PATH_COLLISION");
-                    }
+                    var context = BundleValidator.Validate(root, requireReview: true, review);
+                    _ = BundleValidator.ValidateReview(context.Root, review, context.Lock.BundleId);
+                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
+                    OutputPathGuard.Validate(
+                        context,
+                        SubjectInputPaths(context.Root, subject).Append(subjectManifest).Append(review),
+                        output,
+                        incompleteOutput);
                     CanonicalJson.InvalidateOutput(output);
                     CanonicalJson.InvalidateOutput(incompleteOutput);
                     try
@@ -122,13 +124,26 @@ public static class Program
                             "harness-or-ci-cancelled");
                         throw;
                     }
+                    catch
+                    {
+                        IncompleteEvidenceWriter.TryWrite(
+                            root,
+                            subjectManifest,
+                            review,
+                            cell,
+                            incompleteOutput,
+                            "HV999_INTERNAL_ERROR",
+                            "protocol-failure");
+                        throw;
+                    }
                 }
             case "validate-cell":
                 {
                     var evidence = EvidenceValidator.ValidateCell(
                         Required(options, "--root"),
                         Required(options, "--evidence"),
-                        Optional(options, "--review"));
+                        Optional(options, "--review"),
+                        Required(options, "--subject-manifest"));
                     Console.WriteLine($"HV000_CELL_VALID {evidence.Cell.CellId}");
                     return 0;
                 }
@@ -137,36 +152,85 @@ public static class Program
                     _ = EvidenceValidator.ValidateIncomplete(
                         Required(options, "--root"),
                         Required(options, "--evidence"),
-                        Optional(options, "--review"));
+                        Optional(options, "--review"),
+                        Required(options, "--subject-manifest"));
                     Console.WriteLine("HV000_INCOMPLETE_VALID");
                     return 0;
                 }
             case "aggregate":
                 {
+                    var root = Required(options, "--root");
                     var evidencePaths = Required(options, "--evidence").Split(';', StringSplitOptions.RemoveEmptyEntries);
                     var output = Required(options, "--output");
-                    EnsureDistinctOutput(output, evidencePaths);
+                    var review = Required(options, "--review");
+                    var subjectManifest = Required(options, "--subject-manifest");
+                    var supersedes = Optional(options, "--supersedes")?
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var context = BundleValidator.Validate(root, requireReview: true, review);
+                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
+                    OutputPathGuard.Validate(
+                        context,
+                        evidencePaths.Concat(supersedes).Append(review).Append(subjectManifest)
+                            .Concat(SubjectInputPaths(context.Root, subject)),
+                        output);
                     CanonicalJson.InvalidateOutput(output);
                     var aggregate = EvidenceValidator.Aggregate(
-                        Required(options, "--root"),
+                        root,
                         evidencePaths,
                         output,
-                        Optional(options, "--review"));
+                        review,
+                        subjectManifest,
+                        new AggregateFinalizationIdentity(
+                            Required(options, "--matrix-result"),
+                            Required(options, "--publication-revision")),
+                        supersedes);
                     Console.WriteLine($"HV000_AGGREGATE {aggregate.Outcome}");
+                    return 0;
+                }
+            case "validate-aggregate":
+                {
+                    var evidencePaths = Required(options, "--cell-evidence")
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries);
+                    var supersedes = Optional(options, "--supersedes")?
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var aggregate = EvidenceValidator.ValidateAggregate(
+                        Required(options, "--root"),
+                        Required(options, "--evidence"),
+                        evidencePaths,
+                        Optional(options, "--review"),
+                        Required(options, "--subject-manifest"),
+                        supersedes);
+                    Console.WriteLine($"HV000_AGGREGATE_VALID {aggregate.Outcome}");
                     return 0;
                 }
             case "prepare-public":
                 {
+                    var root = Required(options, "--root");
                     var source = Required(options, "--source");
                     var output = Required(options, "--output");
-                    EnsureDistinctOutput(output, [source]);
+                    var review = Required(options, "--review");
+                    var subjectManifest = Required(options, "--subject-manifest");
+                    var cells = Optional(options, "--cell-evidence")?
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var supersedes = Optional(options, "--supersedes")?
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    var context = BundleValidator.Validate(root, requireReview: true, review);
+                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
+                    OutputPathGuard.Validate(
+                        context,
+                        cells.Concat(supersedes).Append(source).Append(review).Append(subjectManifest)
+                            .Concat(SubjectInputPaths(context.Root, subject)),
+                        output);
                     CanonicalJson.InvalidateOutput(output);
                     EvidenceValidator.PreparePublicArtifact(
-                        Required(options, "--root"),
+                        root,
                         Required(options, "--kind"),
                         source,
                         output,
-                        Optional(options, "--review"));
+                        review,
+                        subjectManifest,
+                        cells,
+                        supersedes);
                     Console.WriteLine("HV000_PUBLIC_PREPARED");
                     return 0;
                 }
@@ -205,7 +269,8 @@ public static class Program
             "committed",
             "published",
             "internally-enforceable",
-            "self-test.observation.stable");
+            "self-test.observation.stable",
+            null);
 
         switch (behavior)
         {
@@ -346,13 +411,19 @@ public static class Program
     private static string? Optional(IReadOnlyDictionary<string, string?> options, string name) =>
         options.TryGetValue(name, out var value) ? value : null;
 
-    private static void EnsureDistinctOutput(string output, IEnumerable<string> inputs)
-    {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var fullOutput = Path.GetFullPath(output);
-        if (inputs.Any(input => fullOutput.Equals(Path.GetFullPath(input), comparison)))
-        {
-            throw new ProtocolException("HV194_OUTPUT_PATH_COLLISION");
-        }
-    }
+    private static IEnumerable<string> SubjectInputPaths(
+        string root,
+        ExecutionSubjectManifest subject) =>
+        subject.SourceConfiguration.SourceAndBuildInputs
+            .Concat(
+            [
+                subject.SourceConfiguration.FailureRegistry,
+                subject.SourceConfiguration.CalibratedBounds,
+                subject.SourceConfiguration.BuildRecipe,
+                subject.SourceConfiguration.CommandContract,
+                subject.SourceConfiguration.ContractBaseline,
+                subject.SourceConfiguration.EnvironmentPolicy,
+                subject.SourceConfiguration.Workflow
+            ])
+            .Select(identity => RepositoryPaths.ResolveConfined(root, identity.Path));
 }

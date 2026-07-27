@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -16,6 +17,7 @@ public static class BundleValidator
     public const string ProtocolRelativePath = "tests/fixtures/m1-host-validation/v1/protocol.json";
     public const string VectorsRelativePath = "tests/fixtures/m1-host-validation/v1/vectors.json";
     public const string CrosswalkRelativePath = "tests/fixtures/m1-host-validation/v1/requirements-crosswalk.json";
+    public const string AuthoritativeSourcesRelativePath = "tests/fixtures/m1-host-validation/v1/authoritative-source-keys.json";
     public const string ProtectedInputsRelativePath = "tests/fixtures/m1-host-validation/v1/protected-inputs.json";
     public const string LockRelativePath = "tests/fixtures/m1-host-validation/v1/artifact-lock.json";
     public const string ReviewRelativePath = "tests/fixtures/m1-host-validation/v1/independent-review.json";
@@ -46,6 +48,7 @@ public static class BundleValidator
         var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(lockPath, ManifestLimit, requireCanonical: true);
 
         ValidateProtocolSemantics(root, protocol, vectors);
+        StaticValidatorRegistry.ValidateRegistry(protocol.RequiredValidators, vectors.Vectors);
         ValidateLock(root, protocol, artifactLock);
         ValidateCrosswalk(root, protocol, vectors, crosswalkPath);
         if (!allowProtectedInputDrift)
@@ -134,8 +137,27 @@ public static class BundleValidator
         {
             throw new ProtocolException("HV166_REVIEW_ID_MISMATCH");
         }
+        ValidateReviewedCommit(root, review, bundleId);
 
         return review;
+    }
+
+    public static string ComputeSourceConfigurationId(SubjectSourceConfiguration source)
+    {
+        var identity = new
+        {
+            source.HostRevision,
+            source.SourceRoots,
+            source.SourceAndBuildInputs,
+            source.FailureRegistry,
+            source.CalibratedBounds,
+            source.BuildRecipe,
+            source.CommandContract,
+            source.ContractBaseline,
+            source.EnvironmentPolicy,
+            source.Workflow
+        };
+        return $"source.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(identity))}";
     }
 
     public static string ComputeReviewId(ReviewRecord review)
@@ -277,6 +299,26 @@ public static class BundleValidator
 
         var rows = rootElement.GetProperty("rows").EnumerateArray().ToArray();
         EnsureUnique(rows.Select(row => row.GetProperty("sourceKey").GetString()!), "HV138_DUPLICATE_SOURCE_KEY");
+        using var authoritativeDocument = CanonicalJson.ReadStrict(
+            RepositoryPaths.ResolveConfined(root, AuthoritativeSourcesRelativePath),
+            ManifestLimit);
+        if (authoritativeDocument.RootElement.GetProperty("formatVersion").GetString()
+                != "contractscribe-m1-host-validation-authoritative-sources-v1")
+        {
+            throw new ProtocolException("HV219_AUTHORITATIVE_SOURCE_VERSION");
+        }
+        var authoritativeKeys = authoritativeDocument.RootElement.GetProperty("sourceKeys")
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var rowKeys = rows.Select(row => row.GetProperty("sourceKey").GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (!rowKeys.SequenceEqual(authoritativeKeys, StringComparer.Ordinal)
+            || authoritativeKeys.Distinct(StringComparer.Ordinal).Count() != authoritativeKeys.Length)
+        {
+            throw new ProtocolException("HV220_AUTHORITATIVE_SOURCE_SET");
+        }
         var vectorIds = catalog.Vectors.Select(vector => vector.VectorId).ToHashSet(StringComparer.Ordinal);
         var validatorIds = protocol.RequiredValidators.ToHashSet(StringComparer.Ordinal);
         var referencedVectors = new HashSet<string>(StringComparer.Ordinal);
@@ -321,6 +363,9 @@ public static class BundleValidator
         SchemaValidation.Validate(
             RepositoryPaths.ResolveConfined(root, "tests/fixtures/m1-host-validation/v1/self-test-subject.json"),
             schema);
+        SchemaValidation.Validate(
+            RepositoryPaths.ResolveConfined(root, "tests/fixtures/m1-host-validation/v1/execution-subject.template.json"),
+            schema);
     }
 
     private static void ValidateProtectedInputs(string root)
@@ -352,7 +397,7 @@ public static class BundleValidator
         }
     }
 
-    private static string[] ExpandProtectedInputPaths(string root, IReadOnlyList<string> roots)
+    internal static string[] ExpandProtectedInputPaths(string root, IReadOnlyList<string> roots)
     {
         ValidateInventoryPaths(roots);
         var paths = new SortedSet<string>(StringComparer.Ordinal);
@@ -384,7 +429,7 @@ public static class BundleValidator
         return paths.ToArray();
     }
 
-    private static void ValidateProjectBoundary(string root)
+    internal static void ValidateProjectBoundary(string root)
     {
         var harnessProject = XDocument.Load(RepositoryPaths.ResolveConfined(
             root,
@@ -443,6 +488,29 @@ public static class BundleValidator
         }
     }
 
+    internal static void ValidateProhibitedClaims(string root)
+    {
+        var protocol = CanonicalJson.DeserializeStrict<ProtocolManifest>(
+            RepositoryPaths.ResolveConfined(root, ProtocolRelativePath),
+            ManifestLimit);
+        var expected = new[]
+        {
+            "network-isolation-enforced",
+            "offline-sandbox",
+            "untrusted-msbuild-sandboxed",
+            "transient-writes-prevented"
+        };
+        if (!protocol.PublicSafety.ProhibitedClaims.SequenceEqual(expected, StringComparer.Ordinal)
+            || protocol.PublicSafety.NetworkClaim
+                != "no-declared-network-dependency-and-no-contractscribe-initiated-network-operation")
+        {
+            throw new ProtocolException("HV201_PUBLIC_CLAIM_POLICY");
+        }
+
+        PublicSafetyScanner.EnsureNoUnsupportedClaims(File.ReadAllText(
+            RepositoryPaths.ResolveConfined(root, "docs/20_architecture/validation/m1-host-validation-protocol.md")));
+    }
+
     private static void ValidateProtocolCorpusSafety(string root)
     {
         var paths = new[]
@@ -450,13 +518,75 @@ public static class BundleValidator
             ProtocolRelativePath,
             VectorsRelativePath,
             CrosswalkRelativePath,
+            AuthoritativeSourcesRelativePath,
+            "tests/fixtures/m1-host-validation/v1/evidence-mutation-corpus.json",
             "tests/fixtures/m1-host-validation/v1/production-subject.template.json",
-            "tests/fixtures/m1-host-validation/v1/self-test-subject.json"
+            "tests/fixtures/m1-host-validation/v1/self-test-subject.json",
+            "tests/fixtures/m1-host-validation/v1/execution-subject.template.json"
         };
         foreach (var path in paths)
         {
             PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(RepositoryPaths.ResolveConfined(root, path)));
         }
+        ValidateProhibitedClaims(root);
+    }
+
+    private static void ValidateReviewedCommit(string root, ReviewRecord review, string bundleId)
+    {
+        var lockPath = RepositoryPaths.ResolveConfined(root, LockRelativePath);
+        var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(
+            lockPath,
+            ManifestLimit,
+            requireCanonical: true);
+        if (artifactLock.BundleId != bundleId
+            || RunGit(root, ["cat-file", "-e", $"{review.ReviewedHead}^{{commit}}"], captureOutput: false).ExitCode != 0
+            || RunGit(root, ["merge-base", "--is-ancestor", review.ReviewedHead, "HEAD"], captureOutput: false).ExitCode != 0)
+        {
+            throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
+        }
+
+        foreach (var entry in artifactLock.Entries)
+        {
+            var result = RunGit(root, ["show", $"{review.ReviewedHead}:{entry.Path}"], captureOutput: true);
+            if (result.ExitCode != 0 || CanonicalJson.Sha256(result.Output) != entry.Sha256)
+            {
+                throw new ProtocolException("HV203_REVIEWED_BUNDLE_MISMATCH");
+            }
+        }
+    }
+
+    private static (int ExitCode, byte[] Output) RunGit(
+        string root,
+        IReadOnlyList<string> arguments,
+        bool captureOutput)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            RedirectStandardOutput = captureOutput,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
+        using var output = new MemoryStream();
+        if (captureOutput)
+        {
+            process.StandardOutput.BaseStream.CopyTo(output);
+        }
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (error.Length > 4096)
+        {
+            throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
+        }
+        return (process.ExitCode, output.ToArray());
     }
 
     private static void ValidateInventoryPaths(IReadOnlyList<string> inventory)

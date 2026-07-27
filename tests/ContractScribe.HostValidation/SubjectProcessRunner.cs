@@ -45,7 +45,7 @@ public static class SubjectProcessRunner
         {
             return StartFailure("permission-failure");
         }
-        catch (Win32Exception exception) when (exception.NativeErrorCode is 193 or 216)
+        catch (Win32Exception exception) when (exception.NativeErrorCode is 8 or 193 or 216)
         {
             return StartFailure("runtime-load-failure");
         }
@@ -62,7 +62,7 @@ public static class SubjectProcessRunner
             return StartFailure("permission-failure");
         }
 
-        await using var processObserver = new ProcessTreeObserver(process.Id);
+        await using var processObserver = new ProcessTreeObserver(process);
         var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, standardOutputLimit, cancellationToken);
         var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, standardErrorLimit, cancellationToken);
         var controlTask = control is null
@@ -110,6 +110,7 @@ public static class SubjectProcessRunner
             IsValidUtf8(stderr.Bytes),
             timedOut,
             controlCompleted,
+            processObserver.ObservationComplete,
             processObserver.Snapshot());
     }
 
@@ -125,6 +126,7 @@ public static class SubjectProcessRunner
             true,
             true,
             false,
+            true,
             true,
             []);
 
@@ -156,6 +158,9 @@ public static class SubjectProcessRunner
                 return true;
             case "release-late-completion":
                 File.WriteAllText(Path.Join(control.ControlRoot, "cancel.requested"), string.Empty);
+                File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
+                return true;
+            case "observe":
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
                 return true;
             default:

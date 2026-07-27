@@ -1,0 +1,130 @@
+{
+  "formatVersion": "contractscribe-m1-host-validation-evidence-mutation-corpus-v1",
+  "cases": [
+    {
+      "caseId": "cell.subject-vector-mismatch",
+      "target": "cell",
+      "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
+    },
+    {
+      "caseId": "cell.subject-run-mismatch",
+      "target": "cell",
+      "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
+    },
+    {
+      "caseId": "cell.subject-process-start-conflict",
+      "target": "cell",
+      "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
+    },
+    {
+      "caseId": "cell.subject-process-termination-conflict",
+      "target": "cell",
+      "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
+    },
+    {
+      "caseId": "cell.result-commitment-conflict",
+      "target": "cell",
+      "expectedCode": "HV209_SUBJECT_OBSERVER_CONTRADICTION"
+    },
+    {
+      "caseId": "cell.failure-registry-mismatch",
+      "target": "cell",
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "cell.false-run-verdict",
+      "target": "cell",
+      "expectedCode": "HV156_FALSE_MATCH"
+    },
+    {
+      "caseId": "cell.false-cell-outcome",
+      "target": "cell",
+      "expectedCode": "HV213_FALSE_CELL_OUTCOME"
+    },
+    {
+      "caseId": "cell.missing-run",
+      "target": "cell",
+      "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
+    },
+    {
+      "caseId": "cell.duplicate-run",
+      "target": "cell",
+      "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
+    },
+    {
+      "caseId": "cell.unknown-run",
+      "target": "cell",
+      "expectedCode": "HV154_EVIDENCE_EXECUTION_SET"
+    },
+    {
+      "caseId": "cell.within-cell-nondeterminism",
+      "target": "cell",
+      "expectedCode": "HV217_DETERMINISM_MISMATCH"
+    },
+    {
+      "caseId": "cell.fresh-process-not-proven",
+      "target": "cell",
+      "expectedCode": "HV216_FRESH_PROCESS_NOT_PROVEN"
+    },
+    {
+      "caseId": "cell.protected-write-on-ordinary-vector",
+      "target": "cell",
+      "expectedCode": "HV156_FALSE_MATCH"
+    },
+    {
+      "caseId": "aggregate.tampered-cell-hash",
+      "target": "aggregate",
+      "expectedCode": "HV214_AGGREGATE_DERIVATION_MISMATCH"
+    },
+    {
+      "caseId": "aggregate.forged-pass",
+      "target": "aggregate",
+      "expectedCode": "HV214_AGGREGATE_DERIVATION_MISMATCH"
+    },
+    {
+      "caseId": "aggregate.mixed-attempt",
+      "target": "aggregate",
+      "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
+    },
+    {
+      "caseId": "aggregate.cross-cell-nondeterminism",
+      "target": "aggregate",
+      "expectedCode": "HV217_DETERMINISM_MISMATCH"
+    },
+    {
+      "caseId": "incomplete.review-mismatch",
+      "target": "incomplete",
+      "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
+    },
+    {
+      "caseId": "incomplete.classification-mismatch",
+      "target": "incomplete",
+      "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
+    },
+    {
+      "caseId": "public.absolute-windows-path",
+      "target": "public",
+      "expectedCode": "HV118_PUBLIC_MACHINE_PATH"
+    },
+    {
+      "caseId": "public.absolute-unix-path",
+      "target": "public",
+      "expectedCode": "HV118_PUBLIC_MACHINE_PATH"
+    },
+    {
+      "caseId": "public.bearer-credential",
+      "target": "public",
+      "expectedCode": "HV119_PUBLIC_CREDENTIAL_MARKER"
+    },
+    {
+      "caseId": "output.subject-manifest-collision",
+      "target": "output",
+      "expectedCode": "HV194_OUTPUT_PATH_COLLISION"
+    },
+    {
+      "caseId": "output.protected-repository-path",
+      "target": "output",
+      "expectedCode": "HV204_OUTPUT_PROTECTED"
+    }
+  ]
+}

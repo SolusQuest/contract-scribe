@@ -142,11 +142,11 @@ public sealed class M1HostValidationProtocolTests
         try
         {
             File.WriteAllText(Path.Join(temp, "Sample.cs"), "class Sample { }\n", new UTF8Encoding(false));
-            var before = RepositoryObserver.Capture(temp);
+            var before = RepositoryObserver.Capture(temp, ["obj"]);
             File.AppendAllText(Path.Join(temp, "Sample.cs"), "// mutation\n", new UTF8Encoding(false));
             Directory.CreateDirectory(Path.Join(temp, "obj"));
             File.WriteAllText(Path.Join(temp, "obj", "design-time.marker"), "synthetic\n", new UTF8Encoding(false));
-            var delta = RepositoryObserver.Compare(before, RepositoryObserver.Capture(temp));
+            var delta = RepositoryObserver.Compare(before, RepositoryObserver.Capture(temp, ["obj"]));
 
             Assert.Equal(new[] { "Sample.cs" }, delta.ProtectedChanged);
             Assert.Equal(new[] { "obj/design-time.marker" }, delta.AllowedDesignTimeCreated);
@@ -195,14 +195,173 @@ public sealed class M1HostValidationProtocolTests
 
             var acceptedReview = review with { ReviewId = BundleValidator.ComputeReviewId(review) };
             CanonicalJson.WriteCanonical(reviewPath, acceptedReview);
-            Assert.Equal(
-                acceptedReview.ReviewId,
-                BundleValidator.ValidateReview(Root, reviewPath, context.Lock.BundleId).ReviewId);
+            var commitFailure = Assert.Throws<ProtocolException>(() =>
+                BundleValidator.ValidateReview(Root, reviewPath, context.Lock.BundleId));
+            Assert.Equal("HV202_REVIEWED_COMMIT_INVALID", commitFailure.Code);
         }
         finally
         {
             Directory.Delete(tempRoot, recursive: true);
         }
+    }
+
+    [Fact]
+    public void HostValidation_StaticValidatorsAndPublicSafetyCorpusExecute()
+    {
+        var context = BundleValidator.Validate(Root);
+        foreach (var vector in context.Vectors.Vectors.Where(vector => vector.ExecutorKind == "harness-static"))
+        {
+            var result = StaticValidatorRegistry.Execute(Root, vector);
+            Assert.Equal(vector.ExpectedObservation, result.ObservationCode);
+            Assert.Equal(vector.ExpectedEnforcementClass, result.EnforcementClass);
+        }
+
+        PublicSafetyScanner.SelfTestMachinePaths();
+        PublicSafetyScanner.SelfTestCredentialMarkers();
+        var bearer = Assert.Throws<ProtocolException>(() =>
+            PublicSafetyScanner.EnsureSafeText(
+                string.Concat("Authorization:", " Bearer synthetic-value")));
+        Assert.Equal("HV119_PUBLIC_CREDENTIAL_MARKER", bearer.Code);
+        var unsupportedClaim = Assert.Throws<ProtocolException>(() =>
+            PublicSafetyScanner.EnsureNoUnsupportedClaims(
+                "The harness guarantees network isolation for this run."));
+        Assert.Equal("HV199_PUBLIC_UNSUPPORTED_CLAIM", unsupportedClaim.Code);
+    }
+
+    [Fact]
+    public void HostValidation_EvidenceMutationCorpusIsClosedAndExecutable()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(
+            Path.Join(FixtureRoot, "evidence-mutation-corpus.json")));
+        Assert.Equal(
+            "contractscribe-m1-host-validation-evidence-mutation-corpus-v1",
+            document.RootElement.GetProperty("formatVersion").GetString());
+        var cases = document.RootElement.GetProperty("cases").EnumerateArray().ToArray();
+        Assert.Equal(25, cases.Length);
+        Assert.Equal(cases.Length, cases.Select(item => item.GetProperty("caseId").GetString())
+            .Distinct(StringComparer.Ordinal).Count());
+
+        var context = BundleValidator.Validate(Root);
+        var vector = context.Vectors.Vectors.First(candidate =>
+            candidate.ExecutorKind == "production-host"
+            && candidate.VectorId != "repository-write.protected-files");
+        var sha = new string('1', 64);
+        var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
+        var source = new SubjectSourceConfiguration(
+            $"source.{sha}",
+            new string('1', 40),
+            ["src/ContractScribe.Core"],
+            [artifact],
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact);
+        var fixture = new FixtureRealization(
+            vector.VectorId,
+            vector.ExecutorKind,
+            "tests/fixtures",
+            sha,
+            true,
+            null,
+            null,
+            [],
+            null,
+            [],
+            [],
+            "bounded-polling",
+            null,
+            null);
+        var subject = new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            vector.VectorId,
+            "run-1",
+            "started",
+            "normal",
+            "compliant",
+            "succeeded",
+            null,
+            null,
+            null,
+            "committed",
+            "published",
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedObservation,
+            null);
+        var run = new RunEvidence(
+            vector.VectorId,
+            "run-1",
+            "matched",
+            vector.ExpectedObservation,
+            vector.ExpectedObservation,
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedEnforcementClass,
+            subject,
+            new ProcessObservation(0, "started", "normal", false, true, true),
+            null,
+            new RepositoryDelta([], [], ["Sample.cs"], [], [], [], [], [], []),
+            [new ObservedProcess(100, 1, "subject-runtime", "dotnet")],
+            []);
+        var derived = RunSemantics.Derive(context, vector, run, fixture, source);
+        Assert.Equal("repository.protected-mutation-unexpected", derived.Observation);
+        Assert.Equal("subject-nonconformance", derived.Verdict);
+
+        var contradiction = run with
+        {
+            Process = run.Process with { ProcessTermination = "crash" }
+        };
+        var failure = Assert.Throws<ProtocolException>(() =>
+            RunSemantics.Derive(context, vector, contradiction, fixture, source));
+        Assert.Equal("HV209_SUBJECT_OBSERVER_CONTRADICTION", failure.Code);
+    }
+
+    [Fact]
+    public void HostValidation_OutputGuardRejectsProtectedAndInputCollisions()
+    {
+        var context = BundleValidator.Validate(Root);
+        var subject = Path.Join(Root, "TestResults", "m1-host-validation", "subject.json");
+        var collision = Assert.Throws<ProtocolException>(() =>
+            OutputPathGuard.Validate(context, [subject], subject));
+        Assert.Equal("HV194_OUTPUT_PATH_COLLISION", collision.Code);
+
+        var protectedOutput = Path.Join(Root, "src", "ContractScribe.Core", "forbidden.json");
+        var protectedFailure = Assert.Throws<ProtocolException>(() =>
+            OutputPathGuard.Validate(context, [], protectedOutput));
+        Assert.Equal("HV204_OUTPUT_PROTECTED", protectedFailure.Code);
+    }
+
+    [Fact]
+    public void HostValidation_CellSemanticMutationCorpusRejectsFalsePasses()
+    {
+        var context = BundleValidator.Validate(Root);
+        var (subject, evidence) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        EvidenceValidator.ValidateCellSemantics(context, subject, evidence);
+
+        var missing = evidence with { Runs = evidence.Runs.Skip(1).ToArray() };
+        Assert.Equal(
+            "HV154_EVIDENCE_EXECUTION_SET",
+            Assert.Throws<ProtocolException>(() =>
+                EvidenceValidator.ValidateCellSemantics(context, subject, missing)).Code);
+
+        var firstBlocked = evidence.Runs.First(run => run.Verdict == "vector-environment-blocked");
+        var falseMatch = evidence with
+        {
+            Runs = evidence.Runs.Select(run => run == firstBlocked
+                ? run with { Verdict = "matched" }
+                : run).ToArray()
+        };
+        Assert.Equal(
+            "HV156_FALSE_MATCH",
+            Assert.Throws<ProtocolException>(() =>
+                EvidenceValidator.ValidateCellSemantics(context, subject, falseMatch)).Code);
+
+        var falseOutcome = evidence with { Outcome = "passed" };
+        Assert.Equal(
+            "HV213_FALSE_CELL_OUTCOME",
+            Assert.Throws<ProtocolException>(() =>
+                EvidenceValidator.ValidateCellSemantics(context, subject, falseOutcome)).Code);
     }
 
     [Fact]
@@ -251,5 +410,143 @@ public sealed class M1HostValidationProtocolTests
             current = current.Parent;
         }
         throw new InvalidOperationException("Could not find the repository root.");
+    }
+
+    private static (ExecutionSubjectManifest Subject, CellEvidence Evidence) CreateSyntheticIncompleteCell(
+        BundleContext context,
+        string cellId)
+    {
+        var sha = new string('1', 64);
+        var commit = new string('1', 40);
+        var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
+        var source = new SubjectSourceConfiguration(
+            $"source.{sha}",
+            commit,
+            ["src/ContractScribe.Core"],
+            [artifact],
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact);
+        var attempt = new ValidationAttemptIdentity(
+            ".github/workflows/ci.yml",
+            sha,
+            "1",
+            1,
+            commit,
+            commit);
+        var protocolCell = context.Protocol.RequiredCells.Single(cell => cell.CellId == cellId);
+        var materialization = new CellMaterialization(
+            cellId,
+            "synthetic-job",
+            "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+            "synthetic-image",
+            protocolCell.Rid,
+            protocolCell.Architecture,
+            "10.0.102",
+            "10.0.0",
+            "18.0.0",
+            [artifact, new ArtifactIdentity("src/ContractScribe.Cli/ContractScribe.Cli.csproj", sha)]);
+        var vectors = context.Vectors.Vectors
+            .Where(vector => vector.Cells.Contains(cellId, StringComparer.Ordinal))
+            .ToArray();
+        var fixtures = vectors.Where(vector => vector.ExecutorKind != "harness-static")
+            .Select(vector => new FixtureRealization(
+                vector.VectorId,
+                vector.ExecutorKind,
+                "tests/fixtures",
+                sha,
+                false,
+                "HV900_SYNTHETIC_CAPABILITY",
+                null,
+                [],
+                null,
+                [],
+                [],
+                "bounded-polling",
+                null,
+                null))
+            .ToArray();
+        var executionCell = new ExecutionCell(
+            materialization,
+            "dotnet-dll",
+            "src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll",
+            [],
+            fixtures);
+        var subject = new ExecutionSubjectManifest(
+            "contractscribe-m1-host-validation-execution-subject-v1",
+            context.Lock.BundleId,
+            "production-host",
+            "issue-24",
+            "prebuilt-in-process-test-entrypoint",
+            source,
+            attempt,
+            [executionCell]);
+        var fixturesByVector = fixtures.ToDictionary(fixture => fixture.VectorId, StringComparer.Ordinal);
+        var runs = new List<RunEvidence>();
+        foreach (var vector in vectors)
+        {
+            foreach (var runId in vector.RunIds)
+            {
+                if (vector.ExecutorKind == "harness-static")
+                {
+                    var result = StaticValidatorRegistry.Execute(Root, vector);
+                    runs.Add(new RunEvidence(
+                        vector.VectorId,
+                        runId,
+                        "matched",
+                        vector.ExpectedObservation,
+                        result.ObservationCode,
+                        vector.ExpectedEnforcementClass,
+                        result.EnforcementClass,
+                        null,
+                        new ProcessObservation(null, "not-started", "not-started", false, true, true),
+                        null,
+                        new RepositoryDelta([], [], [], [], [], [], [], [], []),
+                        [],
+                        []));
+                    continue;
+                }
+                var fixture = fixturesByVector[vector.VectorId];
+                var provisional = new RunEvidence(
+                    vector.VectorId,
+                    runId,
+                    "vector-environment-blocked",
+                    vector.ExpectedObservation,
+                    "vector.capability-unavailable",
+                    vector.ExpectedEnforcementClass,
+                    vector.ExpectedEnforcementClass,
+                    null,
+                    new ProcessObservation(null, "not-started", "not-started", false, true, true),
+                    null,
+                    new RepositoryDelta([], [], [], [], [], [], [], [], []),
+                    [],
+                    ["HV900_SYNTHETIC_CAPABILITY"]);
+                var derived = RunSemantics.Derive(context, vector, provisional, fixture, source);
+                runs.Add(provisional with
+                {
+                    Verdict = derived.Verdict,
+                    ObservedObservation = derived.Observation,
+                    ObservedEnforcementClass = derived.EnforcementClass,
+                    DiagnosticCodes = derived.DiagnosticCodes
+                });
+            }
+        }
+        var evidence = new CellEvidence(
+            "contractscribe-m1-host-validation-cell-evidence-v1",
+            context.Lock.BundleId,
+            $"review.{sha}",
+            source.SourceConfigurationId,
+            sha,
+            attempt,
+            materialization,
+            runs.OrderBy(run => run.VectorId, StringComparer.Ordinal)
+                .ThenBy(run => run.RunId, StringComparer.Ordinal)
+                .ToArray(),
+            "environment-or-infrastructure-incomplete");
+        return (subject, evidence);
     }
 }

@@ -13,7 +13,8 @@
       "continue",
       "cancel",
       "external-kill",
-      "release-late-completion"
+      "release-late-completion",
+      "observe"
     ],
     "shellAllowed": false
   },

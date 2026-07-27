@@ -76,7 +76,8 @@
                 "continue",
                 "cancel",
                 "external-kill",
-                "release-late-completion"
+                "release-late-completion",
+                "observe"
               ]
             },
             "shellAllowed": {
@@ -171,7 +172,7 @@
         "implementationOwner",
         "entryPointContract",
         "sourceConfiguration",
-        "validationExecution",
+        "validationAttempt",
         "cells"
       ],
       "properties": {
@@ -194,9 +195,6 @@
         "sourceConfiguration": {
           "$ref": "#/$defs/sourceConfiguration"
         },
-        "validationExecution": {
-          "$ref": "#/$defs/validationExecution"
-        },
         "cells": {
           "type": "array",
           "minItems": 2,
@@ -204,6 +202,9 @@
           "items": {
             "$ref": "#/$defs/executionCell"
           }
+        },
+        "validationAttempt": {
+          "$ref": "#/$defs/validationAttempt"
         }
       },
       "additionalProperties": false
@@ -211,24 +212,39 @@
     "sourceConfiguration": {
       "type": "object",
       "required": [
+        "sourceConfigurationId",
         "hostRevision",
+        "sourceRoots",
         "sourceAndBuildInputs",
         "failureRegistry",
         "calibratedBounds",
-        "buildRecipeSha256",
-        "commandContractSha256",
-        "contractBaselineSha256",
-        "environmentPolicySha256",
-        "workflowSha256"
+        "buildRecipe",
+        "commandContract",
+        "contractBaseline",
+        "environmentPolicy",
+        "workflow"
       ],
       "properties": {
+        "sourceConfigurationId": {
+          "type": "string",
+          "pattern": "^source\\.[0-9a-f]{64}$"
+        },
         "hostRevision": {
           "$ref": "#/$defs/commit"
+        },
+        "sourceRoots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
         },
         "sourceAndBuildInputs": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 512,
+          "maxItems": 1024,
           "items": {
             "$ref": "#/$defs/artifactIdentity"
           }
@@ -239,67 +255,20 @@
         "calibratedBounds": {
           "$ref": "#/$defs/artifactIdentity"
         },
-        "buildRecipeSha256": {
-          "$ref": "#/$defs/sha256"
+        "buildRecipe": {
+          "$ref": "#/$defs/artifactIdentity"
         },
-        "commandContractSha256": {
-          "$ref": "#/$defs/sha256"
+        "commandContract": {
+          "$ref": "#/$defs/artifactIdentity"
         },
-        "contractBaselineSha256": {
-          "$ref": "#/$defs/sha256"
+        "contractBaseline": {
+          "$ref": "#/$defs/artifactIdentity"
         },
-        "environmentPolicySha256": {
-          "$ref": "#/$defs/sha256"
+        "environmentPolicy": {
+          "$ref": "#/$defs/artifactIdentity"
         },
-        "workflowSha256": {
-          "$ref": "#/$defs/sha256"
-        }
-      },
-      "additionalProperties": false
-    },
-    "validationExecution": {
-      "type": "object",
-      "required": [
-        "workflow",
-        "workflowRevision",
-        "workflowRunId",
-        "runAttempt",
-        "validationExecutionSha",
-        "hostRevision",
-        "matrixResult",
-        "evidencePublicationRevision"
-      ],
-      "properties": {
         "workflow": {
-          "$ref": "#/$defs/repositoryPath"
-        },
-        "workflowRevision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "workflowRunId": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]{0,19}$"
-        },
-        "runAttempt": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "validationExecutionSha": {
-          "$ref": "#/$defs/commit"
-        },
-        "hostRevision": {
-          "$ref": "#/$defs/commit"
-        },
-        "matrixResult": {
-          "enum": [
-            "success",
-            "failure",
-            "cancelled"
-          ]
-        },
-        "evidencePublicationRevision": {
-          "$ref": "#/$defs/commit"
+          "$ref": "#/$defs/artifactIdentity"
         }
       },
       "additionalProperties": false
@@ -412,10 +381,17 @@
       "type": "object",
       "required": [
         "vectorId",
+        "executorKind",
         "repositoryRoot",
         "repositoryIdentitySha256",
         "capabilityAvailable",
         "blockedReasonCode",
+        "executable",
+        "arguments",
+        "executableSha256",
+        "arrangementInputs",
+        "allowedDesignTimeRoots",
+        "processObservationMode",
         "resultPath",
         "externalCause"
       ],
@@ -424,6 +400,13 @@
           "type": "string",
           "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
           "maxLength": 96
+        },
+        "executorKind": {
+          "enum": [
+            "production-host",
+            "external-process",
+            "platform-fixture"
+          ]
         },
         "repositoryRoot": {
           "$ref": "#/$defs/repositoryPath"
@@ -435,18 +418,79 @@
           "type": "boolean"
         },
         "blockedReasonCode": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$"
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executable": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "arguments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "executableSha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "arrangementInputs": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/artifactIdentity"
+          }
+        },
+        "allowedDesignTimeRoots": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
+        },
+        "processObservationMode": {
+          "enum": [
+            "bounded-polling",
+            "synchronized-tree"
+          ]
         },
         "resultPath": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/repositoryPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "externalCause": {
           "type": [
@@ -561,7 +605,8 @@
               "after-commit",
               "late-completion",
               "publication-before-commit",
-              "publication-after-commit"
+              "publication-after-commit",
+              "process-observation"
             ]
           }
         },
@@ -570,7 +615,8 @@
             "continue",
             "cancel",
             "external-kill",
-            "release-late-completion"
+            "release-late-completion",
+            "observe"
           ]
         }
       },
@@ -592,7 +638,8 @@
         "terminalState",
         "artifactState",
         "enforcementClass",
-        "observationCode"
+        "observationCode",
+        "canonicalResult"
       ],
       "properties": {
         "formatVersion": {
@@ -709,6 +756,16 @@
           "type": "string",
           "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
           "maxLength": 128
+        },
+        "canonicalResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "allOf": [
@@ -767,6 +824,68 @@
           }
         }
       ],
+      "additionalProperties": false
+    },
+    "validationAttempt": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "$ref": "#/$defs/commit"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonicalResult": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "byteCount",
+        "encoding",
+        "canonical"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "encoding": {
+          "const": "canonical-json-utf8-no-bom-single-lf"
+        },
+        "canonical": {
+          "const": true
+        }
+      },
       "additionalProperties": false
     }
   }

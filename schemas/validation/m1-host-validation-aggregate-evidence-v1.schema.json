@@ -6,7 +6,9 @@
     "formatVersion",
     "bundleId",
     "reviewId",
-    "validationExecution",
+    "sourceConfigurationId",
+    "validationAttempt",
+    "finalization",
     "cells",
     "outcome",
     "supersedes"
@@ -22,9 +24,6 @@
     "reviewId": {
       "type": "string",
       "pattern": "^review\\.[0-9a-f]{64}$"
-    },
-    "validationExecution": {
-      "$ref": "#/$defs/validationExecution"
     },
     "cells": {
       "type": "array",
@@ -45,63 +44,20 @@
         "type": "string",
         "pattern": "^evidence\\.[0-9a-f]{64}$"
       }
+    },
+    "sourceConfigurationId": {
+      "type": "string",
+      "pattern": "^source\\.[0-9a-f]{64}$"
+    },
+    "validationAttempt": {
+      "$ref": "#/$defs/validationAttempt"
+    },
+    "finalization": {
+      "$ref": "#/$defs/finalization"
     }
   },
   "additionalProperties": false,
   "$defs": {
-    "validationExecution": {
-      "type": "object",
-      "required": [
-        "workflow",
-        "workflowRevision",
-        "workflowRunId",
-        "runAttempt",
-        "validationExecutionSha",
-        "hostRevision",
-        "matrixResult",
-        "evidencePublicationRevision"
-      ],
-      "properties": {
-        "workflow": {
-          "type": "string",
-          "pattern": "^(?!/)(?!.*\\\\)[A-Za-z0-9._/-]+$",
-          "maxLength": 256
-        },
-        "workflowRevision": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "workflowRunId": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]{0,19}$"
-        },
-        "runAttempt": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "validationExecutionSha": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "hostRevision": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "matrixResult": {
-          "enum": [
-            "success",
-            "failure",
-            "cancelled"
-          ]
-        },
-        "evidencePublicationRevision": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        }
-      },
-      "additionalProperties": false
-    },
     "cell": {
       "type": "object",
       "required": [
@@ -136,6 +92,67 @@
         "harness-or-ci-timed-out",
         "passed"
       ]
+    },
+    "validationAttempt": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\\\)[A-Za-z0-9._/-]+$",
+          "maxLength": 256
+        },
+        "workflowRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "hostRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "finalization": {
+      "type": "object",
+      "required": [
+        "matrixResult",
+        "evidencePublicationRevision"
+      ],
+      "properties": {
+        "matrixResult": {
+          "enum": [
+            "passed",
+            "failed",
+            "incomplete"
+          ]
+        },
+        "evidencePublicationRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

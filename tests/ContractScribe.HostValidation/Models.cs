@@ -127,7 +127,14 @@ public sealed record SubjectResponse(
     string TerminalState,
     string ArtifactState,
     string EnforcementClass,
-    string ObservationCode);
+    string ObservationCode,
+    CanonicalResultCommitment? CanonicalResult);
+
+public sealed record CanonicalResultCommitment(
+    string Sha256,
+    long ByteCount,
+    string Encoding,
+    bool Canonical);
 
 public sealed record ProcessExecutionResult(
     int? ExitCode,
@@ -141,6 +148,7 @@ public sealed record ProcessExecutionResult(
     bool StandardErrorValidUtf8,
     bool TimedOut,
     bool ControlCompleted,
+    bool ObservationComplete,
     IReadOnlyList<ObservedProcess> ObservedProcesses);
 
 public sealed record SubjectControl(
@@ -156,19 +164,21 @@ public sealed record ExecutionSubjectManifest(
     string ImplementationOwner,
     string EntryPointContract,
     SubjectSourceConfiguration SourceConfiguration,
-    ValidationExecutionIdentity ValidationExecution,
+    ValidationAttemptIdentity ValidationAttempt,
     IReadOnlyList<ExecutionCell> Cells);
 
 public sealed record SubjectSourceConfiguration(
+    string SourceConfigurationId,
     string HostRevision,
+    IReadOnlyList<string> SourceRoots,
     IReadOnlyList<ArtifactIdentity> SourceAndBuildInputs,
     ArtifactIdentity FailureRegistry,
     ArtifactIdentity CalibratedBounds,
-    string BuildRecipeSha256,
-    string CommandContractSha256,
-    string ContractBaselineSha256,
-    string EnvironmentPolicySha256,
-    string WorkflowSha256);
+    ArtifactIdentity BuildRecipe,
+    ArtifactIdentity CommandContract,
+    ArtifactIdentity ContractBaseline,
+    ArtifactIdentity EnvironmentPolicy,
+    ArtifactIdentity Workflow);
 
 public sealed record ExecutionCell(
     CellMaterialization Materialization,
@@ -179,10 +189,17 @@ public sealed record ExecutionCell(
 
 public sealed record FixtureRealization(
     string VectorId,
+    string ExecutorKind,
     string RepositoryRoot,
     string RepositoryIdentitySha256,
     bool CapabilityAvailable,
     string? BlockedReasonCode,
+    string? Executable,
+    IReadOnlyList<string> Arguments,
+    string? ExecutableSha256,
+    IReadOnlyList<ArtifactIdentity> ArrangementInputs,
+    IReadOnlyList<string> AllowedDesignTimeRoots,
+    string ProcessObservationMode,
     string? ResultPath,
     string? ExternalCause);
 
@@ -205,24 +222,29 @@ public sealed record RepositoryDelta(
     IReadOnlyList<string> OtherDeleted,
     IReadOnlyList<string> OtherChanged,
     IReadOnlyList<string> AllowedDesignTimeCreated,
+    IReadOnlyList<string> AllowedDesignTimeDeleted,
     IReadOnlyList<string> AllowedDesignTimeChanged);
 
 public sealed record CellEvidence(
     string FormatVersion,
     string BundleId,
     string ReviewId,
-    ValidationExecutionIdentity ValidationExecution,
+    string SourceConfigurationId,
+    string SubjectManifestSha256,
+    ValidationAttemptIdentity ValidationAttempt,
     CellMaterialization Cell,
     IReadOnlyList<RunEvidence> Runs,
     string Outcome);
 
-public sealed record ValidationExecutionIdentity(
+public sealed record ValidationAttemptIdentity(
     string Workflow,
     string WorkflowRevision,
     string WorkflowRunId,
     int RunAttempt,
     string ValidationExecutionSha,
-    string HostRevision,
+    string HostRevision);
+
+public sealed record AggregateFinalizationIdentity(
     string MatrixResult,
     string EvidencePublicationRevision);
 
@@ -246,16 +268,28 @@ public sealed record RunEvidence(
     string ObservedObservation,
     string ExpectedEnforcementClass,
     string ObservedEnforcementClass,
-    SubjectResponse Subject,
+    SubjectResponse? Subject,
+    ProcessObservation Process,
+    CanonicalResultCommitment? ObservedCanonicalResult,
     RepositoryDelta RepositoryDelta,
     IReadOnlyList<ObservedProcess> ObservedProcesses,
     IReadOnlyList<string> DiagnosticCodes);
+
+public sealed record ProcessObservation(
+    int? ExitCode,
+    string ProcessStart,
+    string ProcessTermination,
+    bool TimedOut,
+    bool ControlCompleted,
+    bool ObservationComplete);
 
 public sealed record AggregateEvidence(
     string FormatVersion,
     string BundleId,
     string ReviewId,
-    ValidationExecutionIdentity ValidationExecution,
+    string SourceConfigurationId,
+    ValidationAttemptIdentity ValidationAttempt,
+    AggregateFinalizationIdentity Finalization,
     IReadOnlyList<CellAggregate> Cells,
     string Outcome,
     IReadOnlyList<string> Supersedes);
@@ -269,7 +303,8 @@ public sealed record IncompleteEvidence(
     string FormatVersion,
     string BundleId,
     string ReviewId,
-    ValidationExecutionIdentity ValidationExecution,
+    string SourceConfigurationId,
+    ValidationAttemptIdentity ValidationAttempt,
     string? CellId,
     string Classification,
     IReadOnlyList<string> DiagnosticCodes,

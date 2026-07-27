@@ -153,6 +153,7 @@ public static class CanonicalJson
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                // Publication already succeeded or failed; staging cleanup is non-authoritative.
             }
         }
     }

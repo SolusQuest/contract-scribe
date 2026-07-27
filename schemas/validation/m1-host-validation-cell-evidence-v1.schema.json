@@ -6,7 +6,9 @@
     "formatVersion",
     "bundleId",
     "reviewId",
-    "validationExecution",
+    "sourceConfigurationId",
+    "subjectManifestSha256",
+    "validationAttempt",
     "cell",
     "runs",
     "outcome"
@@ -21,8 +23,15 @@
     "reviewId": {
       "$ref": "#/$defs/reviewId"
     },
-    "validationExecution": {
-      "$ref": "#/$defs/validationExecution"
+    "sourceConfigurationId": {
+      "type": "string",
+      "pattern": "^source\\.[0-9a-f]{64}$"
+    },
+    "subjectManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "validationAttempt": {
+      "$ref": "#/$defs/validationAttempt"
     },
     "cell": {
       "$ref": "#/$defs/cell"
@@ -68,53 +77,6 @@
       "minLength": 1,
       "maxLength": 256,
       "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
-    },
-    "validationExecution": {
-      "type": "object",
-      "required": [
-        "workflow",
-        "workflowRevision",
-        "workflowRunId",
-        "runAttempt",
-        "validationExecutionSha",
-        "hostRevision",
-        "matrixResult",
-        "evidencePublicationRevision"
-      ],
-      "properties": {
-        "workflow": {
-          "$ref": "#/$defs/repositoryPath"
-        },
-        "workflowRevision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "workflowRunId": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]{0,19}$"
-        },
-        "runAttempt": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "validationExecutionSha": {
-          "$ref": "#/$defs/commit"
-        },
-        "hostRevision": {
-          "$ref": "#/$defs/commit"
-        },
-        "matrixResult": {
-          "enum": [
-            "success",
-            "failure",
-            "cancelled"
-          ]
-        },
-        "evidencePublicationRevision": {
-          "$ref": "#/$defs/commit"
-        }
-      },
-      "additionalProperties": false
     },
     "artifactIdentity": {
       "type": "object",
@@ -205,6 +167,8 @@
         "expectedEnforcementClass",
         "observedEnforcementClass",
         "subject",
+        "process",
+        "observedCanonicalResult",
         "repositoryDelta",
         "observedProcesses",
         "diagnosticCodes"
@@ -243,7 +207,14 @@
           "$ref": "#/$defs/enforcementClass"
         },
         "subject": {
-          "$ref": "#/$defs/subject"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/subject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "repositoryDelta": {
           "$ref": "#/$defs/repositoryDelta"
@@ -264,6 +235,19 @@
             "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$",
             "maxLength": 64
           }
+        },
+        "process": {
+          "$ref": "#/$defs/processObservation"
+        },
+        "observedCanonicalResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -284,7 +268,8 @@
         "terminalState",
         "artifactState",
         "enforcementClass",
-        "observationCode"
+        "observationCode",
+        "canonicalResult"
       ],
       "properties": {
         "formatVersion": {
@@ -394,6 +379,16 @@
         },
         "observationCode": {
           "$ref": "#/$defs/safeToken"
+        },
+        "canonicalResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -416,6 +411,7 @@
         "otherDeleted",
         "otherChanged",
         "allowedDesignTimeCreated",
+        "allowedDesignTimeDeleted",
         "allowedDesignTimeChanged"
       ],
       "properties": {
@@ -441,6 +437,9 @@
           "$ref": "#/$defs/pathArray"
         },
         "allowedDesignTimeChanged": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "allowedDesignTimeDeleted": {
           "$ref": "#/$defs/pathArray"
         }
       },
@@ -497,6 +496,118 @@
         "harness-or-ci-timed-out",
         "passed"
       ]
+    },
+    "validationAttempt": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "$ref": "#/$defs/commit"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonicalResult": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "byteCount",
+        "encoding",
+        "canonical"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "encoding": {
+          "const": "canonical-json-utf8-no-bom-single-lf"
+        },
+        "canonical": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "processObservation": {
+      "type": "object",
+      "required": [
+        "exitCode",
+        "processStart",
+        "processTermination",
+        "timedOut",
+        "controlCompleted",
+        "observationComplete"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processStart": {
+          "enum": [
+            "started",
+            "launch-failure",
+            "runtime-load-failure",
+            "permission-failure",
+            "startup-timeout"
+          ]
+        },
+        "processTermination": {
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "controlCompleted": {
+          "type": "boolean"
+        },
+        "observationComplete": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

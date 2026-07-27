@@ -187,7 +187,10 @@ public static class HarnessSelfTest
                 "schemas/validation/m1-host-validation-subject-v1.schema.json"),
             "subjectRequest",
             requireCanonical: true);
-        var before = RepositoryObserver.Capture(repository);
+        var allowedDesignTimeRoots = behavior is "allowed-obj" or "restore-marker"
+            ? new[] { "obj" }
+            : [];
+        var before = RepositoryObserver.Capture(repository, allowedDesignTimeRoots);
         try
         {
             var assembly = Assembly.GetExecutingAssembly().Location;
@@ -200,7 +203,7 @@ public static class HarnessSelfTest
                 timeout ?? TimeSpan.FromSeconds(5),
                 cancellationToken,
                 control).ConfigureAwait(false);
-            var after = RepositoryObserver.Capture(repository);
+            var after = RepositoryObserver.Capture(repository, allowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
             SubjectResponse? response = null;
             if (File.Exists(responsePath))

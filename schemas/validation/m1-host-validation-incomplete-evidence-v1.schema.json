@@ -6,7 +6,8 @@
     "formatVersion",
     "bundleId",
     "reviewId",
-    "validationExecution",
+    "sourceConfigurationId",
+    "validationAttempt",
     "cellId",
     "classification",
     "diagnosticCodes",
@@ -23,9 +24,6 @@
     "reviewId": {
       "type": "string",
       "pattern": "^review\\.[0-9a-f]{64}$"
-    },
-    "validationExecution": {
-      "$ref": "#/$defs/validationExecution"
     },
     "cellId": {
       "type": [
@@ -63,11 +61,18 @@
     },
     "immutable": {
       "const": true
+    },
+    "sourceConfigurationId": {
+      "type": "string",
+      "pattern": "^source\\.[0-9a-f]{64}$"
+    },
+    "validationAttempt": {
+      "$ref": "#/$defs/validationAttempt"
     }
   },
   "additionalProperties": false,
   "$defs": {
-    "validationExecution": {
+    "validationAttempt": {
       "type": "object",
       "required": [
         "workflow",
@@ -75,9 +80,7 @@
         "workflowRunId",
         "runAttempt",
         "validationExecutionSha",
-        "hostRevision",
-        "matrixResult",
-        "evidencePublicationRevision"
+        "hostRevision"
       ],
       "properties": {
         "workflow": {
@@ -103,17 +106,6 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "hostRevision": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "matrixResult": {
-          "enum": [
-            "success",
-            "failure",
-            "cancelled"
-          ]
-        },
-        "evidencePublicationRevision": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         }

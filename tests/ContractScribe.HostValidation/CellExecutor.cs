@@ -15,6 +15,7 @@ public static class CellExecutor
         var manifest = ValidateSubjectManifest(context, subjectManifestPath);
         var cell = manifest.Cells.SingleOrDefault(cell => cell.Materialization.CellId == cellId)
             ?? throw new ProtocolException("HV173_EXECUTION_CELL_UNKNOWN");
+        ValidateExecutionEnvironment(manifest, cell);
         var vectors = context.Vectors.Vectors
             .Where(vector => vector.Cells.Contains(cellId, StringComparer.Ordinal))
             .ToArray();
@@ -26,13 +27,14 @@ public static class CellExecutor
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 runs.Add(vector.ExecutorKind == "harness-static"
-                    ? CreateStaticRun(vector, runId)
+                    ? CreateStaticRun(context, vector, runId)
                     : await ExecuteSubjectRunAsync(
                         context,
                         cell,
                         vector,
                         runId,
                         fixtures[vector.VectorId],
+                        manifest.SourceConfiguration,
                         cancellationToken).ConfigureAwait(false));
             }
         }
@@ -42,7 +44,9 @@ public static class CellExecutor
             "contractscribe-m1-host-validation-cell-evidence-v1",
             context.Lock.BundleId,
             review.ReviewId,
-            manifest.ValidationExecution,
+            manifest.SourceConfiguration.SourceConfigurationId,
+            CanonicalJson.Sha256File(subjectManifestPath),
+            manifest.ValidationAttempt,
             cell.Materialization,
             runs
                 .OrderBy(run => run.VectorId, StringComparer.Ordinal)
@@ -50,7 +54,7 @@ public static class CellExecutor
                 .ToArray(),
             outcome);
         CanonicalJson.WriteCanonical(outputPath, evidence);
-        return EvidenceValidator.ValidateCell(context.Root, outputPath, reviewPath);
+        return EvidenceValidator.ValidateCell(context.Root, outputPath, reviewPath, subjectManifestPath);
     }
 
     public static ExecutionSubjectManifest ValidateSubjectManifest(
@@ -71,14 +75,23 @@ public static class CellExecutor
             || manifest.SubjectKind != "production-host"
             || manifest.ImplementationOwner != "issue-24"
             || manifest.EntryPointContract != "prebuilt-in-process-test-entrypoint"
-            || manifest.SourceConfiguration.HostRevision != manifest.ValidationExecution.HostRevision
-            || manifest.SourceConfiguration.ContractBaselineSha256 != context.Protocol.Baseline.ContractManifestSha256
-            || manifest.SourceConfiguration.WorkflowSha256 != manifest.ValidationExecution.WorkflowRevision)
+            || manifest.SourceConfiguration.HostRevision != manifest.ValidationAttempt.HostRevision
+            || manifest.SourceConfiguration.ContractBaseline.Sha256 != context.Protocol.Baseline.ContractManifestSha256
+            || manifest.SourceConfiguration.Workflow.Sha256 != manifest.ValidationAttempt.WorkflowRevision
+            || manifest.SourceConfiguration.SourceConfigurationId
+                != BundleValidator.ComputeSourceConfigurationId(manifest.SourceConfiguration))
         {
             throw new ProtocolException("HV174_SUBJECT_IDENTITY_MISMATCH");
         }
-        if (!manifest.SourceConfiguration.SourceAndBuildInputs.Any(identity =>
-                identity.Path.StartsWith("src/ContractScribe.", StringComparison.Ordinal))
+        var expectedSourcePaths = BundleValidator.ExpandProtectedInputPaths(
+            context.Root,
+            manifest.SourceConfiguration.SourceRoots);
+        var actualSourcePaths = manifest.SourceConfiguration.SourceAndBuildInputs
+            .Select(identity => identity.Path)
+            .ToArray();
+        if (!actualSourcePaths.SequenceEqual(expectedSourcePaths, StringComparer.Ordinal)
+            || actualSourcePaths.Distinct(StringComparer.Ordinal).Count() != actualSourcePaths.Length
+            || !actualSourcePaths.Any(path => path.StartsWith("src/ContractScribe.", StringComparison.Ordinal))
             || manifest.SourceConfiguration.SourceAndBuildInputs.Any(identity =>
                 identity.Path.Contains(".Experiment", StringComparison.Ordinal)
                 || identity.Path.StartsWith("tests/ContractScribe.HostValidation/", StringComparison.Ordinal)))
@@ -91,7 +104,15 @@ public static class CellExecutor
             ValidateArtifactIdentities(context.Root, manifest.SourceConfiguration.SourceAndBuildInputs);
             ValidateArtifactIdentities(
                 context.Root,
-                [manifest.SourceConfiguration.FailureRegistry, manifest.SourceConfiguration.CalibratedBounds]);
+                [
+                    manifest.SourceConfiguration.FailureRegistry,
+                    manifest.SourceConfiguration.CalibratedBounds,
+                    manifest.SourceConfiguration.BuildRecipe,
+                    manifest.SourceConfiguration.CommandContract,
+                    manifest.SourceConfiguration.ContractBaseline,
+                    manifest.SourceConfiguration.EnvironmentPolicy,
+                    manifest.SourceConfiguration.Workflow
+                ]);
         }
         var expectedCells = context.Protocol.RequiredCells.Select(cell => cell.CellId).Order(StringComparer.Ordinal).ToArray();
         var actualCells = manifest.Cells.Select(cell => cell.Materialization.CellId).Order(StringComparer.Ordinal).ToArray();
@@ -148,7 +169,11 @@ public static class CellExecutor
 
             foreach (var fixture in cell.Fixtures)
             {
-                if (fixture.CapabilityAvailable == (fixture.BlockedReasonCode is not null))
+                var vector = context.Vectors.Vectors.Single(candidate =>
+                    candidate.VectorId == fixture.VectorId);
+                if (fixture.ExecutorKind != vector.ExecutorKind
+                    || fixture.CapabilityAvailable == (fixture.BlockedReasonCode is not null)
+                    || fixture.ExecutorKind == "harness-static")
                 {
                     throw new ProtocolException("HV179_FIXTURE_CAPABILITY_STATE");
                 }
@@ -158,14 +183,48 @@ public static class CellExecutor
                     mustExist: !allowMaterializationDrift);
                 if (!allowMaterializationDrift
                     && fixture.CapabilityAvailable
-                    && fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(RepositoryObserver.Capture(repositoryRoot)))
+                    && fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(
+                        RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots)))
                 {
                     throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
+                }
+                ValidateArtifactIdentities(context.Root, fixture.ArrangementInputs);
+                foreach (var allowedRoot in fixture.AllowedDesignTimeRoots)
+                {
+                    _ = ResolveFixturePath(repositoryRoot, allowedRoot, mustExist: false);
+                }
+                if (fixture.CapabilityAvailable
+                    && fixture.ExecutorKind is ("external-process" or "platform-fixture"))
+                {
+                    if (string.IsNullOrWhiteSpace(fixture.Executable)
+                        || fixture.ArrangementInputs.Count == 0)
+                    {
+                        throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+                    }
+                    if (fixture.ExecutableSha256 is not null
+                        && fixture.ExecutableSha256 != CanonicalJson.Sha256File(
+                            ResolveExecutable(context.Root, repositoryRoot, fixture.Executable, mustExist: true)))
+                    {
+                        throw new ProtocolException("HV187_SUBJECT_ARTIFACT_DRIFT");
+                    }
+                }
+                if (fixture.CapabilityAvailable
+                    && RunSemantics.RequiresSynchronizedTree(vector.VectorId)
+                    && fixture.ProcessObservationMode != "synchronized-tree")
+                {
+                    throw new ProtocolException("HV207_PROCESS_OBSERVATION_INCOMPLETE");
                 }
                 if (fixture.VectorId is "publication.kill-before-commit" or "publication.kill-after-commit"
                     && string.IsNullOrWhiteSpace(fixture.ResultPath))
                 {
                     throw new ProtocolException("HV181_KILL_RESULT_PATH_REQUIRED");
+                }
+                if (vector.EqualityFields.Contains(
+                        "subject.canonicalResultSha256",
+                        StringComparer.Ordinal)
+                    && string.IsNullOrWhiteSpace(fixture.ResultPath))
+                {
+                    throw new ProtocolException("HV222_CANONICAL_RESULT_PATH_REQUIRED");
                 }
                 var expectedExternalCause = fixture.VectorId switch
                 {
@@ -205,6 +264,7 @@ public static class CellExecutor
         VectorDefinition vector,
         string runId,
         FixtureRealization fixture,
+        SubjectSourceConfiguration source,
         CancellationToken cancellationToken)
     {
         if (!fixture.CapabilityAvailable)
@@ -213,7 +273,7 @@ public static class CellExecutor
         }
 
         var repositoryRoot = RepositoryPaths.ResolveConfined(context.Root, fixture.RepositoryRoot);
-        var before = RepositoryObserver.Capture(repositoryRoot);
+        var before = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
         if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(before))
         {
             throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
@@ -245,18 +305,15 @@ public static class CellExecutor
 
         try
         {
-            var entryPoint = RepositoryPaths.ResolveConfined(context.Root, cell.EntryPoint);
-            var executable = cell.LaunchKind == "dotnet-dll" ? "dotnet" : entryPoint;
-            var arguments = new List<string>();
-            if (cell.LaunchKind == "dotnet-dll")
-            {
-                arguments.Add(entryPoint);
-            }
-            arguments.AddRange(cell.ArgumentPrefix);
-            arguments.Add("--request");
-            arguments.Add(requestPath);
-            arguments.Add("--response");
-            arguments.Add(responsePath);
+            var (executable, arguments) = BuildInvocation(
+                context.Root,
+                repositoryRoot,
+                cell,
+                vector,
+                fixture,
+                requestPath,
+                responsePath,
+                control?.ControlRoot);
             var execution = await SubjectProcessRunner.RunAsync(
                 executable,
                 arguments,
@@ -266,7 +323,7 @@ public static class CellExecutor
                 TimeSpan.FromSeconds(context.Protocol.ExecutionContract.SubjectTimeoutSeconds),
                 cancellationToken,
                 control).ConfigureAwait(false);
-            var after = RepositoryObserver.Capture(repositoryRoot);
+            var after = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
             var diagnostics = ValidateStreams(execution);
             SubjectResponse? response = null;
@@ -297,40 +354,44 @@ public static class CellExecutor
                 }
             }
 
-            var resultExists = fixture.ResultPath is not null
-                && File.Exists(ResolveFixturePath(repositoryRoot, fixture.ResultPath, mustExist: false));
-            var observed = response?.ObservationCode
-                ?? MapExternalObservation(vector.VectorId, execution, resultExists, fixture.ExternalCause);
-            observed = ApplyIndependentObserver(vector.VectorId, observed, delta, execution);
-            var enforcement = response?.EnforcementClass
-                ?? (vector.ExpectedEnforcementClass == "caller-or-os-enforced"
-                    ? "caller-or-os-enforced"
-                    : "observable-only");
-            var verdict = diagnostics.Count != 0 || !execution.ControlCompleted
-                ? "protocol-invalid-observation"
-                : observed == vector.ExpectedObservation && enforcement == vector.ExpectedEnforcementClass
-                    ? "matched"
-                    : "subject-nonconformance";
-            var subject = response ?? CreateExternalSubject(
-                vector,
-                runId,
-                execution,
-                resultExists,
-                enforcement,
-                observed,
-                fixture.ExternalCause);
-            return new RunEvidence(
+            var resultCommitment = ObserveCanonicalResult(repositoryRoot, fixture.ResultPath);
+            var process = new ProcessObservation(
+                execution.ExitCode,
+                execution.ProcessStart,
+                fixture.ExternalCause is not null
+                    && execution.ProcessTermination == "fatal-runtime-termination"
+                    ? fixture.ExternalCause
+                    : execution.ProcessTermination,
+                execution.TimedOut,
+                execution.ControlCompleted,
+                execution.ObservationComplete);
+            var provisional = new RunEvidence(
                 vector.VectorId,
                 runId,
-                verdict,
+                "protocol-invalid-observation",
                 vector.ExpectedObservation,
-                observed,
+                "unvalidated",
                 vector.ExpectedEnforcementClass,
-                enforcement,
-                subject,
+                response?.EnforcementClass ?? vector.ExpectedEnforcementClass,
+                response,
+                process,
+                resultCommitment,
                 delta,
                 execution.ObservedProcesses,
                 diagnostics.Order(StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray());
+            var derived = RunSemantics.Derive(
+                context,
+                vector,
+                provisional,
+                fixture,
+                source);
+            return provisional with
+            {
+                Verdict = derived.Verdict,
+                ObservedObservation = derived.Observation,
+                ObservedEnforcementClass = derived.EnforcementClass,
+                DiagnosticCodes = derived.DiagnosticCodes
+            };
         }
         finally
         {
@@ -340,58 +401,35 @@ public static class CellExecutor
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                // Evidence records the run outcome; temporary workspace cleanup is best-effort.
             }
         }
     }
 
-    private static RunEvidence CreateStaticRun(VectorDefinition vector, string runId)
+    private static RunEvidence CreateStaticRun(
+        BundleContext context,
+        VectorDefinition vector,
+        string runId)
     {
-        var subject = new SubjectResponse(
-            "contractscribe-m1-host-validation-subject-response-v1",
-            vector.VectorId,
-            runId,
-            "started",
-            "normal",
-            null,
-            "succeeded",
-            null,
-            null,
-            null,
-            "committed",
-            "absent",
-            vector.ExpectedEnforcementClass,
-            vector.ExpectedObservation);
+        var result = StaticValidatorRegistry.Execute(context.Root, vector);
         return new RunEvidence(
             vector.VectorId,
             runId,
             "matched",
             vector.ExpectedObservation,
-            vector.ExpectedObservation,
+            result.ObservationCode,
             vector.ExpectedEnforcementClass,
-            vector.ExpectedEnforcementClass,
-            subject,
+            result.EnforcementClass,
+            null,
+            new ProcessObservation(null, "not-started", "not-started", false, true, true),
+            null,
             EmptyDelta(),
             [],
-            []);
+            result.DiagnosticCodes);
     }
 
     private static RunEvidence CreateBlockedRun(VectorDefinition vector, string runId, string reasonCode)
     {
-        var subject = new SubjectResponse(
-            "contractscribe-m1-host-validation-subject-response-v1",
-            vector.VectorId,
-            runId,
-            "not-started",
-            "not-started",
-            null,
-            null,
-            null,
-            null,
-            null,
-            "not-entered",
-            "absent",
-            vector.ExpectedEnforcementClass,
-            "vector.capability-unavailable");
         return new RunEvidence(
             vector.VectorId,
             runId,
@@ -400,35 +438,13 @@ public static class CellExecutor
             "vector.capability-unavailable",
             vector.ExpectedEnforcementClass,
             vector.ExpectedEnforcementClass,
-            subject,
+            null,
+            new ProcessObservation(null, "not-started", "not-started", false, true, true),
+            null,
             EmptyDelta(),
             [],
             [reasonCode]);
     }
-
-    private static SubjectResponse CreateExternalSubject(
-        VectorDefinition vector,
-        string runId,
-        ProcessExecutionResult execution,
-        bool resultExists,
-        string enforcement,
-        string observation,
-        string? externalCause) =>
-        new(
-            "contractscribe-m1-host-validation-subject-response-v1",
-            vector.VectorId,
-            runId,
-            execution.ProcessStart,
-            externalCause ?? execution.ProcessTermination,
-            null,
-            null,
-            null,
-            null,
-            null,
-            "not-entered",
-            resultExists ? "published" : "absent",
-            enforcement,
-            observation);
 
     private static SubjectControl? CreateControl(VectorDefinition vector, string tempRoot, int timeoutSeconds) =>
         vector.VectorId switch
@@ -439,8 +455,162 @@ public static class CellExecutor
             "cancellation.terminal-precedence" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),
             "publication.kill-before-commit" => new(Path.Join(tempRoot, "control"), "publication-before-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
             "publication.kill-after-commit" => new(Path.Join(tempRoot, "control"), "publication-after-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
+            "toolchain.process-topology"
+                or "toolchain.no-automatic-restore"
+                or "network.no-contractscribe-initiated-operation"
+                or "toolchain.owned-subprocesses" =>
+                new(Path.Join(tempRoot, "control"), "process-observation", "observe", TimeSpan.FromSeconds(timeoutSeconds)),
             _ => null
         };
+
+    private static (string Executable, IReadOnlyList<string> Arguments) BuildInvocation(
+        string root,
+        string repositoryRoot,
+        ExecutionCell cell,
+        VectorDefinition vector,
+        FixtureRealization fixture,
+        string requestPath,
+        string responsePath,
+        string? controlRoot)
+    {
+        if (vector.ExecutorKind == "production-host")
+        {
+            var entryPoint = RepositoryPaths.ResolveConfined(root, cell.EntryPoint);
+            var arguments = new List<string>();
+            var executable = cell.LaunchKind == "dotnet-dll" ? "dotnet" : entryPoint;
+            if (cell.LaunchKind == "dotnet-dll")
+            {
+                arguments.Add(entryPoint);
+            }
+            arguments.AddRange(cell.ArgumentPrefix);
+            arguments.Add("--request");
+            arguments.Add(requestPath);
+            arguments.Add("--response");
+            arguments.Add(responsePath);
+            return (executable, arguments);
+        }
+
+        var fixtureExecutable = ResolveExecutable(
+            root,
+            repositoryRoot,
+            fixture.Executable!,
+            mustExist: vector.VectorId != "failure.launch-before-entry");
+        var fixtureArguments = fixture.Arguments.Select(argument => argument switch
+        {
+            "{request}" => requestPath,
+            "{response}" => responsePath,
+            "{repository}" => repositoryRoot,
+            "{control}" => controlRoot ?? string.Empty,
+            _ => argument
+        }).ToArray();
+        if (fixtureArguments.Any(string.IsNullOrEmpty))
+        {
+            throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+        }
+        return (fixtureExecutable, fixtureArguments);
+    }
+
+    private static CanonicalResultCommitment? ObserveCanonicalResult(
+        string repositoryRoot,
+        string? resultPath)
+    {
+        if (resultPath is null)
+        {
+            return null;
+        }
+        var fullPath = ResolveFixturePath(repositoryRoot, resultPath, mustExist: false);
+        if (!File.Exists(fullPath))
+        {
+            return null;
+        }
+        var bytes = File.ReadAllBytes(fullPath);
+        using var _ = CanonicalJson.ReadStrict(
+            fullPath,
+            4 * 1024 * 1024,
+            requireCanonical: true);
+        return new CanonicalResultCommitment(
+            CanonicalJson.Sha256(bytes),
+            bytes.LongLength,
+            "canonical-json-utf8-no-bom-single-lf",
+            true);
+    }
+
+    private static string ResolveExecutable(
+        string root,
+        string repositoryRoot,
+        string executable,
+        bool mustExist)
+    {
+        if (executable == "dotnet")
+        {
+            return executable;
+        }
+        if (executable.StartsWith("repository:", StringComparison.Ordinal))
+        {
+            return ResolveFixturePath(repositoryRoot, executable["repository:".Length..], mustExist);
+        }
+        return RepositoryPaths.ResolveConfined(root, executable, mustExist);
+    }
+
+    private static void ValidateExecutionEnvironment(
+        ExecutionSubjectManifest manifest,
+        ExecutionCell cell)
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+
+        var attempt = manifest.ValidationAttempt;
+        var expectedRunnerOs = cell.Materialization.CellId == "windows-x64" ? "Windows" : "Linux";
+        var observedSdk = ObserveToolVersion("dotnet", ["--version"]);
+        var observedMsbuild = ObserveToolVersion("dotnet", ["msbuild", "-version", "-nologo"]);
+        var observedRuntime = Environment.Version.ToString();
+        if (Environment.GetEnvironmentVariable("GITHUB_RUN_ID") != attempt.WorkflowRunId
+            || !int.TryParse(Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT"), out var runAttempt)
+            || runAttempt != attempt.RunAttempt
+            || Environment.GetEnvironmentVariable("GITHUB_SHA") != attempt.ValidationExecutionSha
+            || Environment.GetEnvironmentVariable("CONTRACTSCRIBE_VALIDATION_JOB_ID") != cell.Materialization.JobId
+            || Environment.GetEnvironmentVariable("CONTRACTSCRIBE_VALIDATION_JOB_URL") != cell.Materialization.JobUrl
+            || Environment.GetEnvironmentVariable("CONTRACTSCRIBE_RUNNER_IMAGE") != cell.Materialization.RunnerImage
+            || Environment.GetEnvironmentVariable("RUNNER_OS") != expectedRunnerOs
+            || Environment.GetEnvironmentVariable("RUNNER_ARCH") != cell.Materialization.Architecture
+            || cell.Materialization.SelectedSdk != observedSdk
+            || cell.Materialization.SelectedRuntime != observedRuntime
+            || cell.Materialization.SelectedMsbuild != observedMsbuild)
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+    }
+
+    private static string ObserveToolVersion(string executable, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        var value = output.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        if (process.ExitCode != 0 || error.Length > 4096 || string.IsNullOrWhiteSpace(value))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+        return value;
+    }
 
     private static List<string> ValidateStreams(ProcessExecutionResult execution)
     {
@@ -460,57 +630,6 @@ public static class CellExecutor
         }
         return diagnostics;
     }
-
-    private static string ApplyIndependentObserver(
-        string vectorId,
-        string observed,
-        RepositoryDelta delta,
-        ProcessExecutionResult execution)
-    {
-        if (vectorId == "repository-write.protected-files" && RepositoryObserver.HasProtectedMutation(delta))
-        {
-            return "repository.protected-files-changed";
-        }
-        if (vectorId == "toolchain.no-automatic-restore"
-            && (delta.AllowedDesignTimeCreated.Any(path => path.EndsWith("project.assets.json", StringComparison.Ordinal))
-                || execution.ObservedProcesses.Any(process =>
-                    process.Role is "toolchain-owned" or "unknown-descendant")))
-        {
-            return "toolchain.restore-or-runtime-download-marker-observed";
-        }
-        if (vectorId == "toolchain.process-topology"
-            && execution.ObservedProcesses.Any(process => process.Role == "contractscribe-worker"))
-        {
-            return "process.contractscribe-worker-observed";
-        }
-        if (vectorId == "repository-write.allowed-design-time"
-            && RepositoryObserver.HasUnexpectedMutation(delta))
-        {
-            return "repository.unexpected-output-observed";
-        }
-        return observed;
-    }
-
-    private static string MapExternalObservation(
-        string vectorId,
-        ProcessExecutionResult execution,
-        bool resultExists,
-        string? externalCause) =>
-        vectorId switch
-        {
-            "failure.launch-before-entry" when execution.ProcessStart == "launch-failure" => "process.launch-failure-no-terminal",
-            "failure.runtime-load-before-entry" when execution.ProcessStart is "runtime-load-failure" or "started" => "process.runtime-load-failure-no-terminal",
-            "failure.permission-before-entry" when execution.ProcessStart == "permission-failure" => "process.permission-failure-no-terminal",
-            "failure.startup-timeout" when execution.TimedOut => "process.startup-timeout-no-terminal",
-            "failure.out-of-memory" when externalCause == "out-of-memory" => "process.out-of-memory-external",
-            "failure.stack-overflow" when externalCause == "stack-overflow" => "process.stack-overflow-external",
-            "failure.abort" when externalCause == "abort" => "process.abort-external",
-            "publication.kill-before-commit" when !resultExists => "publication.kill-leaves-no-valid-result",
-            "publication.kill-before-commit" => "publication.kill-left-valid-result",
-            "publication.kill-after-commit" when resultExists => "publication.committed-result-remains-valid",
-            "publication.kill-after-commit" => "publication.committed-result-missing",
-            _ => "process.no-valid-subject-response"
-        };
 
     private static void ValidateArtifactIdentities(string root, IEnumerable<ArtifactIdentity> identities)
     {
@@ -547,7 +666,7 @@ public static class CellExecutor
     }
 
     private static RepositoryDelta EmptyDelta() =>
-        new([], [], [], [], [], [], [], []);
+        new([], [], [], [], [], [], [], [], []);
 
     private static string SelectCellOutcome(IEnumerable<RunEvidence> runs)
     {

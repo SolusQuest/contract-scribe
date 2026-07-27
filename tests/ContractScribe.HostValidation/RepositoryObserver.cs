@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ContractScribe.HostValidation;
 
 public static class RepositoryObserver
@@ -14,7 +16,9 @@ public static class RepositoryObserver
         [".git", ".tmp", "TestResults"],
         StringComparer.OrdinalIgnoreCase);
 
-    public static RepositorySnapshot Capture(string root)
+    public static RepositorySnapshot Capture(
+        string root,
+        IReadOnlyList<string>? allowedDesignTimeRoots = null)
     {
         var fullRoot = Path.GetFullPath(root);
         if (!Directory.Exists(fullRoot))
@@ -25,38 +29,50 @@ public static class RepositoryObserver
         var protectedFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var otherFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var allowedDesignTimeFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            IgnoreInaccessible = false,
-            AttributesToSkip = FileAttributes.ReparsePoint,
-            ReturnSpecialDirectories = false
-        };
+        var allowedRoots = (allowedDesignTimeRoots ?? [])
+            .Select(path => NormalizeRelative(path).TrimEnd('/') + "/")
+            .ToArray();
 
         try
         {
-            foreach (var path in Directory.EnumerateFiles(fullRoot, "*", options))
+            var pending = new Stack<string>();
+            pending.Push(fullRoot);
+            while (pending.Count != 0)
             {
-                var relative = Path.GetRelativePath(fullRoot, path).Replace(Path.DirectorySeparatorChar, '/');
-                var segments = relative.Split('/');
-                if (segments.Any(segment => IgnoredSegments.Contains(segment)))
+                var directory = pending.Pop();
+                foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                 {
-                    continue;
-                }
+                    var relative = NormalizeRelative(Path.GetRelativePath(fullRoot, path));
+                    var segments = relative.Split('/');
+                    if (segments.Any(segment => IgnoredSegments.Contains(segment)))
+                    {
+                        continue;
+                    }
 
-                var identity = CanonicalJson.Sha256File(path);
-                if (segments.Any(segment => segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
-                    || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
-                {
-                    allowedDesignTimeFiles.Add(relative, identity);
-                }
-                else if (IsProtected(relative))
-                {
-                    protectedFiles.Add(relative, identity);
-                }
-                else
-                {
-                    otherFiles.Add(relative, identity);
+                    var attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        var info = (attributes & FileAttributes.Directory) != 0
+                            ? (FileSystemInfo)new DirectoryInfo(path)
+                            : new FileInfo(path);
+                        var marker = CanonicalJson.Sha256(Encoding.UTF8.GetBytes(
+                            $"reparse\0{info.LinkTarget ?? "unresolved"}"));
+                        AddIdentity(relative, marker, allowedRoots, protectedFiles, otherFiles, allowedDesignTimeFiles);
+                        continue;
+                    }
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        pending.Push(path);
+                        continue;
+                    }
+
+                    AddIdentity(
+                        relative,
+                        CanonicalJson.Sha256File(path),
+                        allowedRoots,
+                        protectedFiles,
+                        otherFiles,
+                        allowedDesignTimeFiles);
                 }
             }
         }
@@ -77,6 +93,7 @@ public static class RepositoryObserver
             Deleted(before.OtherFiles, after.OtherFiles),
             Changed(before.OtherFiles, after.OtherFiles),
             Created(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles),
+            Deleted(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles),
             Changed(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles));
 
     public static bool HasProtectedMutation(RepositoryDelta delta) =>
@@ -88,7 +105,34 @@ public static class RepositoryObserver
         HasProtectedMutation(delta)
         || delta.OtherCreated.Count != 0
         || delta.OtherDeleted.Count != 0
-        || delta.OtherChanged.Count != 0;
+        || delta.OtherChanged.Count != 0
+        || delta.AllowedDesignTimeDeleted.Count != 0;
+
+    private static void AddIdentity(
+        string relative,
+        string identity,
+        IReadOnlyList<string> allowedRoots,
+        IDictionary<string, string> protectedFiles,
+        IDictionary<string, string> otherFiles,
+        IDictionary<string, string> allowedDesignTimeFiles)
+    {
+        if (allowedRoots.Any(root => (relative + "/").StartsWith(root, StringComparison.Ordinal)))
+        {
+            allowedDesignTimeFiles.Add(relative, identity);
+        }
+        else if (IsProtected(relative))
+        {
+            protectedFiles.Add(relative, identity);
+        }
+        else
+        {
+            otherFiles.Add(relative, identity);
+        }
+    }
+
+    private static string NormalizeRelative(string path) =>
+        path.Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
 
     private static bool IsProtected(string relative)
     {
