@@ -69,7 +69,7 @@ internal sealed class RepositoryPathResolver
     }
 
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
-        Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/').Normalize();
+        Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/');
 
     public string ResolveSemantic(string physicalRoot, string path) =>
         ResolveExistingPath(Path.GetFullPath(path), physicalRoot);
@@ -96,26 +96,33 @@ internal sealed class RepositoryPathResolver
                 throw LoaderException.Input("input.path-not-found");
             }
 
-            if ((info.Attributes & FileAttributes.ReparsePoint) == 0)
+            while ((info.Attributes & FileAttributes.ReparsePoint) != 0)
             {
-                continue;
-            }
+                if (++hops > 32)
+                {
+                    throw LoaderException.Input("input.path-link-limit");
+                }
 
-            if (++hops > 32)
-            {
-                throw LoaderException.Input("input.path-link-limit");
-            }
+                var target = info.ResolveLinkTarget(returnFinalTarget: false)
+                    ?? throw LoaderException.Input("input.path-link-invalid");
+                current = Path.GetFullPath(target.FullName);
+                if (containmentRoot is not null)
+                {
+                    RequireContained(containmentRoot, current, "input.path-outside-root");
+                }
 
-            var target = info.ResolveLinkTarget(returnFinalTarget: true)
-                ?? throw LoaderException.Input("input.path-link-invalid");
-            current = Path.GetFullPath(target.FullName);
-            if (containmentRoot is not null)
-            {
-                RequireContained(containmentRoot, current, "input.path-outside-root");
-            }
-            if (!visited.Add(current))
-            {
-                throw LoaderException.Input("input.path-link-loop");
+                if (!visited.Add(current))
+                {
+                    throw LoaderException.Input("input.path-link-loop");
+                }
+
+                info = Directory.Exists(current)
+                    ? new DirectoryInfo(current)
+                    : new FileInfo(current);
+                if (!info.Exists)
+                {
+                    throw LoaderException.Input("input.path-not-found");
+                }
             }
         }
 

@@ -210,6 +210,29 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task RejectsTargetFrameworkSuppliedOnlyByTheEnvironment()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "App", "App.csproj"),
+            """<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup></Project>""");
+        var previous = Environment.GetEnvironmentVariable("TargetFramework");
+        try
+        {
+            Environment.SetEnvironmentVariable("TargetFramework", "net10.0");
+            var outcome = await new RepositoryLoader().LoadAsync(
+                new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+            Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+            Assert.Equal("graph.target-framework-not-single", outcome.PrimaryFailure?.Code);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TargetFramework", previous);
+        }
+    }
+
+    [Fact]
     public async Task MissingAssetsIsCallerOwnedAndDoesNotRestore()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -295,6 +318,17 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public void RepositoryIdentitiesDoNotUnicodeNormalizeDistinctPaths()
+    {
+        var resolver = new RepositoryPathResolver();
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "identity-root"));
+        var composed = resolver.RelativeIdentity(root, Path.Combine(root, "Café", "Project.csproj"));
+        var decomposed = resolver.RelativeIdentity(root, Path.Combine(root, "Cafe\u0301", "Project.csproj"));
+
+        Assert.NotEqual(composed, decomposed);
+    }
+
+    [Fact]
     public async Task RejectsDistinctGeneratedIdentityPreimagesWhenTheDigestCollides()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -312,6 +346,26 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("run.generated.identity-collision", outcome.PrimaryFailure?.Code);
         Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task EqualToolInputsProduceOneFactAndOneCompilationTree()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = "public class DeduplicatedGenerated { }";
+        var outcome = await new RepositoryLoader().LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj",
+            [
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "Output", source),
+                new("App/App.csproj", "ContractScribe", "FixtureTool", "Output", source),
+            ]));
+
+        var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        var app = Assert.Single(session.Projects, project => project.ProjectIdentity == "App/App.csproj");
+        Assert.Single(session.GeneratedSources, fact => fact.ProducerId.StartsWith("tgp.", StringComparison.Ordinal));
+        Assert.Single(app.Compilation.SyntaxTrees, tree => tree.FilePath.StartsWith("tool-generated://", StringComparison.Ordinal));
+        await session.DisposeAsync();
     }
 
     [Theory]
@@ -339,6 +393,38 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(RepositoryLoadStatus.Cancelled, outcome.Status);
         Assert.NotNull(outcome.Toolchain);
         Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task CancellationRemainsPrimaryWhenFinalInventoryThrows()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        using var cancellation = new CancellationTokenSource();
+        var calls = 0;
+        var loader = new RepositoryLoader(
+            stage =>
+            {
+                if (stage == LoaderStage.TerminalValidation)
+                {
+                    cancellation.Cancel();
+                }
+            },
+            inventory: (root, token) =>
+            {
+                if (calls++ == 0)
+                {
+                    return RepositoryInventory.Capture(root, token);
+                }
+
+                throw new IOException("injected final inventory failure");
+            });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"),
+            cancellation.Token);
+
+        Assert.Equal(RepositoryLoadStatus.Cancelled, outcome.Status);
+        Assert.Contains(outcome.SecondaryFacts, fact => fact.Code == "repository.drift-scan-failed");
     }
 
     [Fact]
@@ -478,10 +564,30 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task NewSourceUnderAnAllowedOutputRootIsStillProtected()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = Path.Combine(fixture.Root, "App", "obj", "Injected.cs");
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                File.WriteAllText(source, "public class Injected { }");
+            }
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+    }
+
+    [Fact]
     public async Task BuildHostProcessEndsAfterTheSuccessfulSessionIsDisposed()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var before = CurrentDotnetProcessIds();
+        var before = CurrentBuildHostProcessIds();
         var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
         using var monitoring = new CancellationTokenSource();
         var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
@@ -509,7 +615,7 @@ public sealed class RepositoryLoaderTests
     public async Task BuildHostProcessEndsAfterFailureOrCancellation(string mode)
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var before = CurrentDotnetProcessIds();
+        var before = CurrentBuildHostProcessIds();
         var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
         using var monitoring = new CancellationTokenSource();
         var monitor = MonitorDotnetProcessesAsync(observed, monitoring.Token);
@@ -547,7 +653,7 @@ public sealed class RepositoryLoaderTests
         Assert.True(
             SpinWait.SpinUntil(
                 () => spawned.All(ProcessHasExited)
-                    && !CurrentDotnetProcessIds().Except(before).Any(),
+                    && !CurrentBuildHostProcessIds().Except(before).Any(),
                 TimeSpan.FromSeconds(10)),
             $"BuildHost process remained after {mode}: {string.Join(',', spawned)}");
     }
@@ -757,6 +863,29 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task RejectsDuplicatePhysicalTransitiveReferenceAliases()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        CreateDirectoryLink(
+            Path.Combine(fixture.Root, "Alias"),
+            Path.Combine(fixture.Root, "Library"));
+        var project = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(project);
+        await File.WriteAllTextAsync(
+            project,
+            text.Replace(
+                "</ItemGroup>",
+                """<ProjectReference Include="../Alias/Library.csproj" /></ItemGroup>""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.duplicate-project", outcome.PrimaryFailure?.Code);
+    }
+
+    [Fact]
     public async Task RejectsReferenceThatEscapesAndThenReentersTheRepository()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -780,6 +909,22 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("input.path-outside-root", outcome.PrimaryFailure?.Code);
         Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsDirectLinkToLinkEscapeAndReentry()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await using var outside = await LoaderFixture.CreateAsync();
+        var outsideLink = Path.Combine(outside.Root, "BackInside");
+        CreateDirectoryLink(outsideLink, Path.Combine(fixture.Root, "Library"));
+        CreateDirectoryLink(Path.Combine(fixture.Root, "Chained"), outsideLink);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "Chained/Library.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("input.path-outside-root", outcome.PrimaryFailure?.Code);
     }
 
     [Fact]
@@ -827,8 +972,9 @@ public sealed class RepositoryLoaderTests
         }
     }
 
-    private static int[] CurrentDotnetProcessIds() =>
+    private static int[] CurrentBuildHostProcessIds() =>
         Process.GetProcessesByName("dotnet")
+            .Where(IsBuildHostProcess)
             .Select(process =>
             {
                 using (process)
@@ -838,6 +984,25 @@ public sealed class RepositoryLoaderTests
             })
             .Order()
             .ToArray();
+
+    private static bool IsBuildHostProcess(Process process)
+    {
+        try
+        {
+            return process.Modules.Cast<ProcessModule>().Any(module =>
+                module.FileName.EndsWith(
+                    "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
 
     private static bool ProcessHasExited(int processId)
     {
@@ -861,7 +1026,7 @@ public sealed class RepositoryLoaderTests
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                foreach (var processId in CurrentDotnetProcessIds())
+                foreach (var processId in CurrentBuildHostProcessIds())
                 {
                     observed.TryAdd(processId, 0);
                 }
@@ -935,24 +1100,26 @@ internal sealed class LoaderFixture : IAsyncDisposable
             """);
         await File.WriteAllTextAsync(
             Path.Combine(root, "App", "App.csproj"),
-            appProject
-            ?? """
-               <Project Sdk="Microsoft.NET.Sdk">
-                 <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-                 <ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>
-               </Project>
-               """);
+            PinFixtureFrameworkPacks(
+                appProject
+                ?? """
+                   <Project Sdk="Microsoft.NET.Sdk">
+                     <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                     <ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>
+                   </Project>
+                   """));
         await File.WriteAllTextAsync(
             Path.Combine(root, "App", "App.cs"),
             """public static class App { public static string Value => "ok"; }""");
         await File.WriteAllTextAsync(
             Path.Combine(root, "Library", "Library.csproj"),
-            libraryProject
-            ?? """
-               <Project Sdk="Microsoft.NET.Sdk">
-                 <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-               </Project>
-               """);
+            PinFixtureFrameworkPacks(
+                libraryProject
+                ?? """
+                   <Project Sdk="Microsoft.NET.Sdk">
+                     <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                   </Project>
+                   """));
         await File.WriteAllTextAsync(
             Path.Combine(root, "Library", "Library.cs"),
             """public static class Library { public static string Value => "ok"; }""");
@@ -1013,6 +1180,18 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await RunDotnetAsync(root, ["restore", "Fixture.slnx", "--configfile", "NuGet.Config"]);
         await RunDotnetAsync(root, ["build", "Fixture.slnx", "--no-restore"]);
     }
+
+    private static string PinFixtureFrameworkPacks(string projectText) =>
+        projectText.Replace(
+            "</Project>",
+            """
+            <PropertyGroup>
+              <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+              <RuntimeFrameworkVersion Condition="'$(TargetFramework)' == 'net9.0'">9.0.0</RuntimeFrameworkVersion>
+            </PropertyGroup>
+            </Project>
+            """,
+            StringComparison.Ordinal);
 
     private static void PrepareLocalPackageSource(string root)
     {

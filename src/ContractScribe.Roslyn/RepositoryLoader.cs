@@ -18,6 +18,7 @@ public sealed class RepositoryLoader
     private readonly RepositoryPathResolver pathResolver = new();
     private readonly Action<LoaderStage>? observer;
     private readonly Func<ReadOnlyMemory<byte>, byte[]> digest;
+    private readonly Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>> inventory;
 
     public RepositoryLoader()
         : this(null, null)
@@ -26,10 +27,12 @@ public sealed class RepositoryLoader
 
     internal RepositoryLoader(
         Action<LoaderStage>? observer,
-        Func<ReadOnlyMemory<byte>, byte[]>? digest = null)
+        Func<ReadOnlyMemory<byte>, byte[]>? digest = null,
+        Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory = null)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
+        this.inventory = inventory ?? RepositoryInventory.Capture;
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -48,8 +51,9 @@ public sealed class RepositoryLoader
             paths = pathResolver.Resolve(request.RepositoryRoot, request.InputPath);
             state = new LoaderExecutionState();
             state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
+            state.AddProtected(pathResolver.RelativeIdentity(paths.LexicalRoot, paths.LexicalInput));
             Observe(LoaderStage.PathResolution, cancellationToken);
-            before = RepositoryInventory.Capture(paths.PhysicalRoot, cancellationToken);
+            before = inventory(paths.PhysicalRoot, cancellationToken);
             Observe(LoaderStage.BaselineCapture, cancellationToken);
             selectedToolchain = await MsBuildBootstrap.EnsureRegisteredAsync(
                 Path.GetDirectoryName(paths.PhysicalInput)!,
@@ -97,7 +101,7 @@ public sealed class RepositoryLoader
 
         try
         {
-            var after = RepositoryInventory.Capture(paths.PhysicalRoot, CancellationToken.None);
+            var after = inventory(paths.PhysicalRoot, CancellationToken.None);
             var drift = RepositoryInventory.ChangedPaths(before, after)
                 .Where(path => IsProtectedDrift(path, state))
                 .ToArray();
@@ -122,7 +126,11 @@ public sealed class RepositoryLoader
             if (outcome.Status == RepositoryLoadStatus.Success)
             {
                 outcome.Session?.Dispose();
-                return RepositoryLoadOutcome.Failure(fact, outcome.Toolchain);
+                return RepositoryLoadOutcome.Failure(
+                    fact,
+                    outcome.Toolchain,
+                    outcome.Diagnostics,
+                    outcome.SecondaryFacts);
             }
 
             return outcome.Status == RepositoryLoadStatus.Cancelled
@@ -136,10 +144,23 @@ public sealed class RepositoryLoader
         catch (Exception)
         {
             var fact = new LoaderFact("repository", "repository.drift-scan-failed");
+            if (cancellationToken.IsCancellationRequested)
+            {
+                outcome.Session?.Dispose();
+                return RepositoryLoadOutcome.Cancelled(
+                    outcome.Toolchain,
+                    outcome.Diagnostics,
+                    outcome.SecondaryFacts.Concat([fact]).ToArray());
+            }
+
             if (outcome.Status == RepositoryLoadStatus.Success)
             {
                 outcome.Session?.Dispose();
-                return RepositoryLoadOutcome.Failure(fact, outcome.Toolchain);
+                return RepositoryLoadOutcome.Failure(
+                    fact,
+                    outcome.Toolchain,
+                    outcome.Diagnostics,
+                    outcome.SecondaryFacts);
             }
 
             return outcome.Status == RepositoryLoadStatus.Cancelled
@@ -171,6 +192,11 @@ public sealed class RepositoryLoader
             return true;
         }
 
+        if (IsRepositoryInputExtension(path))
+        {
+            return true;
+        }
+
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
@@ -178,6 +204,10 @@ public sealed class RepositoryLoader
             path.Equals(root, comparison)
             || path.StartsWith(root + "/", comparison));
     }
+
+    private static bool IsRepositoryInputExtension(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is
+            ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".slnx" or ".editorconfig";
 }
 
 internal static class PostRegistrationLoader
@@ -197,6 +227,12 @@ internal static class PostRegistrationLoader
         var roots = ResolveRoots(paths, pathResolver);
         Observe(observer, LoaderStage.InputParsing, cancellationToken);
         var graph = EvaluateGraph(paths, roots, pathResolver, state, cancellationToken);
+        var graphIdentities = graph.Values.Select(node => node.Identity).ToHashSet(StringComparer.Ordinal);
+        if (toolGeneratedSources.Any(input => !graphIdentities.Contains(input.ProjectIdentity)))
+        {
+            throw LoaderException.Generated("run.generated.missing-identity");
+        }
+
         Observe(observer, LoaderStage.GraphEvaluation, cancellationToken);
         var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -278,11 +314,20 @@ internal static class PostRegistrationLoader
 
                 Observe(observer, LoaderStage.Compilation, cancellationToken);
                 var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
+                var authoritativeGenerated = new List<(string Name, string Text)>();
+                foreach (var document in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
+                {
+                    authoritativeGenerated.Add((
+                        document.Name,
+                        (await document.GetTextAsync(cancellationToken)).ToString()));
+                }
+
                 generatedFacts.AddRange(RunGenerators(
                     project,
                     compilation,
                     node.Identity,
                     contextRef,
+                    authoritativeGenerated,
                     identities,
                     cancellationToken));
                 var toolFacts = CreateToolGeneratedFacts(
@@ -308,11 +353,6 @@ internal static class PostRegistrationLoader
             if (state.Diagnostics.Any(diagnostic => diagnostic.Severity == "error"))
             {
                 throw LoaderException.Workspace("workspace.load-failed");
-            }
-
-            if (toolGeneratedSources.Count != generatedFacts.Count(fact => fact.ProducerId.StartsWith("tgp.", StringComparison.Ordinal)))
-            {
-                throw LoaderException.Generated("run.generated.missing-identity");
             }
 
             Observe(observer, LoaderStage.TerminalValidation, cancellationToken);
@@ -407,11 +447,14 @@ internal static class PostRegistrationLoader
             {
                 throw LoaderException.Graph("graph.project-unloadable");
             }
-            var targetFramework = discovery.GetPropertyValue("TargetFramework").Trim();
+            var targetFrameworkProperty = discovery.GetProperty("TargetFramework");
+            var targetFramework = targetFrameworkProperty?.EvaluatedValue.Trim() ?? string.Empty;
             var targetFrameworks = discovery.GetPropertyValue("TargetFrameworks").Trim();
             if (string.IsNullOrWhiteSpace(targetFramework)
                 || !string.IsNullOrWhiteSpace(targetFrameworks)
-                || targetFramework.Contains(';', StringComparison.Ordinal))
+                || targetFramework.Contains(';', StringComparison.Ordinal)
+                || targetFrameworkProperty!.IsEnvironmentProperty
+                || targetFrameworkProperty.IsGlobalProperty)
             {
                 collection.UnloadProject(discovery);
                 throw LoaderException.Graph("graph.target-framework-not-single");
@@ -440,6 +483,12 @@ internal static class PostRegistrationLoader
                 .Select(path => pathResolver.ResolveProject(paths.LexicalRoot, paths.PhysicalRoot, path))
                 .Order(comparer)
                 .ToArray();
+            if (references.Distinct(comparer).Count() != references.Length)
+            {
+                collection.UnloadProject(project);
+                throw LoaderException.Graph("graph.duplicate-project");
+            }
+
             var assets = project.GetPropertyValue("ProjectAssetsFile");
             if (string.IsNullOrWhiteSpace(assets) || !File.Exists(assets))
             {
@@ -475,15 +524,20 @@ internal static class PostRegistrationLoader
         MsBuildProject project,
         RepositoryPathResolver resolver)
     {
-        var semanticPaths = new[] { projectPath, paths.PhysicalInput }
+        var semanticPaths = new[] { projectPath, paths.PhysicalInput, paths.LexicalInput }
             .Concat(project.Imports.Select(import => import.ImportedProject.FullPath))
             .Concat(new[] { "Compile", "AdditionalFiles", "Analyzer", "AnalyzerConfigFiles", "EditorConfigFiles" }
                 .SelectMany(itemType => project.GetItems(itemType).Select(item => item.GetMetadataValue("FullPath"))))
             .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
             .Select(path => Path.GetFullPath(path))
             .Where(path => IsContained(paths.PhysicalRoot, path))
-            .Select(path => resolver.ResolveSemantic(paths.PhysicalRoot, path))
-            .Select(path => resolver.RelativeIdentity(paths.PhysicalRoot, path))
+            .SelectMany(path => new[]
+            {
+                resolver.RelativeIdentity(paths.PhysicalRoot, path),
+                resolver.RelativeIdentity(
+                    paths.PhysicalRoot,
+                    resolver.ResolveSemantic(paths.PhysicalRoot, path)),
+            })
             .Distinct(PathComparer())
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -541,6 +595,7 @@ internal static class PostRegistrationLoader
         Compilation compilation,
         string projectIdentity,
         string contextRef,
+        List<(string Name, string Text)> authoritativeGenerated,
         GeneratedIdentityHasher identities,
         CancellationToken cancellationToken)
     {
@@ -588,10 +643,14 @@ internal static class PostRegistrationLoader
             {
                 var text = source.SourceText.ToString();
                 var sourceBytes = StrictUtf8(text);
-                if (!compilation.SyntaxTrees.Any(tree => tree.GetText(cancellationToken).ContentEquals(source.SourceText)))
+                var authorityIndex = authoritativeGenerated.FindIndex(document =>
+                    string.Equals(document.Name, source.HintName, StringComparison.Ordinal)
+                    && string.Equals(document.Text, text, StringComparison.Ordinal));
+                if (authorityIndex < 0)
                 {
                     throw LoaderException.Generated("run.generated.authority-conflict");
                 }
+                authoritativeGenerated.RemoveAt(authorityIndex);
 
                 facts.Add(new GeneratedSourceFact(
                     projectIdentity,
@@ -628,8 +687,27 @@ internal static class PostRegistrationLoader
         var grammar = new System.Text.RegularExpressions.Regex(
             @"\A[A-Za-z][A-Za-z0-9._-]{0,127}\z",
             System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        var facts = new List<GeneratedSourceFact>(inputs.Count);
-        foreach (var input in inputs)
+        var normalizedInputs = inputs
+            .Select(input => input with
+            {
+                ProducerNamespace = input.ProducerNamespace.Normalize(),
+                ProducerName = input.ProducerName.Normalize(),
+                OutputName = input.OutputName.Normalize(),
+            })
+            .GroupBy(
+                input => (input.ProjectIdentity, input.ProducerNamespace, input.ProducerName, input.OutputName))
+            .Select(group =>
+            {
+                if (group.Select(input => input.SourceText).Distinct(StringComparer.Ordinal).Skip(1).Any())
+                {
+                    throw LoaderException.Generated("run.generated.authority-conflict");
+                }
+
+                return group.First();
+            })
+            .ToArray();
+        var facts = new List<GeneratedSourceFact>(normalizedInputs.Length);
+        foreach (var input in normalizedInputs)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (input.ProjectIdentity != projectIdentity
