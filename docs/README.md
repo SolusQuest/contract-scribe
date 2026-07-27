@@ -31,6 +31,7 @@ The contract lifecycle is especially important before the first release: version
 - [Documentation Scribe](20_architecture/documentation-scribe.md)
 - [Scribe context and prompt economics](20_architecture/scribe-context-and-prompt-economics.md)
 - [Documentation patch boundary](20_architecture/documentation-patch-boundary.md)
+- [Audit CLI v1 (M1)](20_architecture/audit-cli.md)
 - [Campaign and GitHub workflow](20_architecture/campaign-and-github-workflow.md)
 - [Architecture decisions](20_architecture/decisions/)
 
