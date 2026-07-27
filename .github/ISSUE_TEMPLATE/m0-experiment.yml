@@ -1,6 +1,6 @@
 name: M0 experiment
 description: Define a bounded contract or feasibility experiment.
-title: "Task: "
+type: Task
 labels: []
 body:
   - type: markdown

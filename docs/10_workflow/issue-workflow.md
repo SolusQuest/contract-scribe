@@ -1,6 +1,21 @@
 # Issue workflow
 
-Use native GitHub issue types. An executable work issue includes decision, design, documentation, contract, experiment, validation, and implementation work.
+Use the native GitHub issue type as the authoritative type metadata. Apply these rules in order and use the first match:
+
+1. `Bug` for an unexpected problem, regression, or behavior that violates the current contract. This takes precedence even when the correction also improves existing behavior.
+2. `Feature` for a net-new user- or consumer-visible capability, including a new external option or operation on existing functionality.
+3. `Enhancement` for an intentional improvement to existing functionality, behavior, or workflow that neither corrects a contract violation or regression nor introduces a net-new external capability.
+4. `Task` for all remaining bounded decision, design, documentation, contract, experiment, validation, implementation, or coordination work.
+
+Choose the type from the issue's primary outcome. Do not repeat a native type as a title prefix such as `Task:`, `Bug:`, `Feature:`, or `Enhancement:`. Titles describe the concrete outcome. A work-mode qualifier such as `Design:` or `Experiment:` may be used only when it materially disambiguates the outcome; it does not replace the native `Task` type.
+
+## Native type publication gate
+
+Before any remote issue mutation, resolve the reviewed type against the repository's currently enabled native issue types. A configured name is insufficient if the type is disabled or no longer available; this check applies to organization-managed types such as `Enhancement` as well as the default types.
+
+Prove before the first mutation that the selected publishing client sequence can set or correct the resolved type and read the remote native type field back. The sequence may include a separate follow-up client only when its mutation and readback capabilities have already been established. Stop before creating or updating an issue if the complete sequence is unavailable.
+
+After a mutation, read back the native type and compare it with the reviewed value. If mutation or readback fails after a partial remote write, mark the synchronization failed, record the target and observed state, stop dependent writes, and reconcile the issue to the reviewed manifest or perform explicit cleanup before resuming. Do not treat a partially written or unverified issue as published.
 
 Every executable work issue must state:
 
@@ -31,13 +46,16 @@ Before the first tracker write:
 
 1. record the merged baseline commit and verify that it is reachable from `main`;
 2. construct authoritative repository-file links with that full commit SHA;
-3. review one synchronization manifest entry for every proposed tracker write.
+3. review one synchronization manifest entry for every proposed tracker write;
+4. complete the native type publication gate for every proposed issue write.
 
 Each synchronization entry records:
 
 - the existing target or proposed issue or milestone;
 - operation: `create`, `update`, `close`, `move`, or `no change`;
 - reviewed title and body draft, or title and description draft for a milestone;
+- native issue type for every issue entry;
+- verified native-type mutation and readback path for every issue entry;
 - expected state;
 - owning parent;
 - milestone or non-product track;
@@ -47,7 +65,7 @@ Each synchronization entry records:
 
 Repository-file links in issues and milestones identify immutable semantics and must use a full commit SHA whose commit is reachable from `main`. Live issue, pull-request, and milestone URLs are mutable tracker references and are recorded separately. A per-body digest is not required; the reviewed synchronization manifest is the comparison source.
 
-After applying the writes, read back the rendered remote state and compare the title, body, state, milestone, parent/sub-issue relationships, dependencies, contractual labels, and pinned links with the reviewed manifest.
+After applying the writes, read back the rendered remote state and compare the title, body, native issue type, state, milestone, parent/sub-issue relationships, dependencies, contractual labels, and pinned links with the reviewed manifest. A title prefix or body field is not evidence that the native type was set.
 
 A milestone parent issue owns:
 
