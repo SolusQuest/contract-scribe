@@ -76,17 +76,99 @@ public sealed class M05NativeAotContractTests
         Assert.DoesNotContain("$_.Exception", verifier, StringComparison.Ordinal);
     }
 
+    private const string TombstonedVerifierScript = """
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [ValidateSet("linux-x64", "win-x64")]
+            [string]$RuntimeIdentifier,
+            [ValidateSet("Release")]
+            [string]$Configuration = "Release",
+            [string]$EvidencePath,
+            [switch]$EvidenceReproduction
+        )
+
+        [Console]::Error.WriteLine('M0.5-TOMBSTONE: verify-m0.5.ps1 is retired as a current-tree verifier. The M0.5 Native AOT evidence is historical-only, pinned to commit 63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e. Inspect the manifest and evidence at that commit; see docs/20_architecture/experiments/m0.5-native-aot-feasibility.md. No validation was performed.')
+        exit 1
+        """;
+
+    private const string TombstoneDiagnostic = "M0.5-TOMBSTONE: verify-m0.5.ps1 is retired as a current-tree verifier. The M0.5 Native AOT evidence is historical-only, pinned to commit 63fd9a0ab5ff33ae20d8f7b9e66714a96feea39e. Inspect the manifest and evidence at that commit; see docs/20_architecture/experiments/m0.5-native-aot-feasibility.md. No validation was performed.";
+
     [Fact]
-    public void ReproductionSupportsSquashedHistoryAndAggregatePreservesMixedWarnings()
+    public void VerifierEntrypointIsTheFrozenTombstoneScript()
     {
         var root = FindRepositoryRoot();
         var verifier = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "verify-m0.5.ps1"));
+        Assert.Equal(NormalizeScriptText(TombstonedVerifierScript), NormalizeScriptText(verifier));
+    }
+
+    [Fact]
+    public void AggregatePreservesMixedWarnings()
+    {
+        var root = FindRepositoryRoot();
         var aggregate = File.ReadAllText(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "aggregate-m0.5.ps1"));
-        Assert.Contains("cat-file", verifier, StringComparison.Ordinal);
-        Assert.Contains("m04FrozenSourceRevision", verifier, StringComparison.Ordinal);
-        Assert.Contains("verify-m0.5-provenance.ps1", verifier, StringComparison.Ordinal);
         Assert.Contains("$aggregateOutcome -eq \"feasible-clean\"", aggregate, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TombstonedVerifierFailsFastForEveryHistoricalInvocationForm(bool evidenceReproduction, bool evidencePathSentinel)
+    {
+        var root = FindRepositoryRoot();
+        var runId = Guid.NewGuid().ToString("N");
+        var directory = Path.Join(root, "TestResults", "m05-tombstone-tests", runId);
+        Directory.CreateDirectory(directory);
+        var sentinelParent = Path.Join(directory, "nonexistent-parent");
+        var sentinelPath = Path.Join(sentinelParent, "sentinel-evidence.json");
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Join(root, "tests", "ContractScribe.Roslyn.NativeAot.Experiment", "verify-m0.5.ps1"));
+            startInfo.ArgumentList.Add("-RuntimeIdentifier");
+            startInfo.ArgumentList.Add("linux-x64");
+            startInfo.ArgumentList.Add("-Configuration");
+            startInfo.ArgumentList.Add("Release");
+            if (evidenceReproduction)
+            {
+                startInfo.ArgumentList.Add("-EvidenceReproduction");
+            }
+            if (evidencePathSentinel)
+            {
+                startInfo.ArgumentList.Add("-EvidencePath");
+                startInfo.ArgumentList.Add(sentinelPath);
+            }
+            using var process = Process.Start(startInfo)!;
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 1, $"Tombstoned verifier exit code mismatch. stdout: {stdout}; stderr: {stderr}");
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(TombstoneDiagnostic + "\n", stderr.Replace("\r\n", "\n"));
+            if (evidencePathSentinel)
+            {
+                Assert.False(Directory.Exists(sentinelParent), "The tombstoned verifier created the sentinel parent directory.");
+                Assert.False(File.Exists(sentinelPath), "The tombstoned verifier created the sentinel evidence file.");
+            }
+        }
+        finally
+        {
+            DeleteDirectoryWithRetries(directory);
+        }
+    }
+
+    private static string NormalizeScriptText(string text)
+        => text.Replace("\r\n", "\n").TrimEnd('\n') + "\n";
 
     [Fact]
     public void ProvenanceFallbackAcceptsANonAncestorSquashedTreeAndRejectsUnexpectedFiles()
