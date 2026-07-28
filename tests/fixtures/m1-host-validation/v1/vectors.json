@@ -729,8 +729,20 @@
       "expectedObservation": "network.no-contractscribe-initiated-operation",
       "expectedEnforcementClass": "observable-only",
       "supportDisposition": "required",
-      "observerRequirements": ["process-tree", "subject-response"],
-      "protectedInputClasses": ["host-source", "package", "protocol"]
+      "observerRequirements": [
+        "declared-operation-inventory",
+        "bounded-source-metadata-scan",
+        "test-operation-recorder",
+        "restore-runtime-download-process-artifact-observer"
+      ],
+      "protectedInputClasses": [
+        "build-input",
+        "coverage-manifest",
+        "host-source",
+        "package",
+        "protocol",
+        "workflow"
+      ]
     },
     {
       "vectorId": "network.egress-isolation-limitation",
@@ -814,8 +826,18 @@
       "expectedObservation": "bounds.temporary-disk-calibrated",
       "expectedEnforcementClass": "internally-enforceable",
       "supportDisposition": "deferred-owned",
-      "observerRequirements": ["filesystem-delta", "subject-response"],
-      "protectedInputClasses": ["host-source", "protocol"]
+      "observerRequirements": [
+        "known-prestate",
+        "temporary-disk-high-water-gate",
+        "logical-file-byte-snapshot",
+        "retention-breach-observer",
+        "subject-response"
+      ],
+      "protectedInputClasses": [
+        "host-source",
+        "protocol",
+        "temporary-disk-contract"
+      ]
     },
     {
       "vectorId": "bounds.memory-runtime",

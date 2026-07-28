@@ -22,7 +22,8 @@ public static class EvidenceValidator
             evidencePath,
             context.Protocol.ExecutionContract.EvidenceByteLimit,
             requireCanonical: true);
-        if (evidence.BundleId != context.Lock.BundleId)
+        if (evidence.BundleId != context.Lock.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId)
         {
             throw new ProtocolException("HV150_EVIDENCE_BUNDLE_MISMATCH");
         }
@@ -193,6 +194,7 @@ public static class EvidenceValidator
         var aggregate = new AggregateEvidence(
             "contractscribe-m1-host-validation-aggregate-evidence-v1",
             cells[0].BundleId,
+            NetworkClaimSetRegistry.ClaimSetId,
             cells[0].ReviewId,
             cells[0].SourceConfigurationId,
             cells[0].ValidationAttempt,
@@ -309,6 +311,8 @@ public static class EvidenceValidator
             .ToArray();
         if (record.FormatVersion != "contractscribe-m1-host-validation-publication-record-v1"
             || record.BundleId != aggregate.BundleId
+            || record.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
+            || aggregate.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
             || record.ReviewId != aggregate.ReviewId
             || record.SourceConfigurationId != aggregate.SourceConfigurationId
             || !CanonicalJson.SerializeCanonical(record.ValidationAttempt).AsSpan()
@@ -530,6 +534,7 @@ public static class EvidenceValidator
         var first = cells[0];
         if (cells.Skip(1).Any(cell =>
             cell.BundleId != first.BundleId
+            || cell.NetworkClaimSetId != first.NetworkClaimSetId
             || cell.ReviewId != first.ReviewId
             || cell.SourceConfigurationId != first.SourceConfigurationId
             || cell.SubjectManifestSha256 != first.SubjectManifestSha256
@@ -628,6 +633,7 @@ public static class EvidenceValidator
         bool requireCurrentAttempt)
     {
         if (evidence.BundleId != context.Lock.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
             || evidence.ReviewId != review.ReviewId
             || evidence.SourceConfigurationId != subject.SourceConfiguration.SourceConfigurationId
             || requireCurrentAttempt

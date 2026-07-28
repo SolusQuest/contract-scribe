@@ -211,7 +211,9 @@
         "toolchain.owned-subprocesses"
       ],
       "validatorIds": [
-        "observer.process-tree"
+        "observer.process-tree",
+        "observer.temporary-disk-high-water",
+        "observer.native-termination-cause"
       ],
       "requiredCells": [
         "ubuntu-x64",
@@ -234,6 +236,7 @@
         "network.egress-isolation-limitation"
       ],
       "validatorIds": [
+        "evidence.network-bounded-profile",
         "evidence.public-safety",
         "project.boundary"
       ],

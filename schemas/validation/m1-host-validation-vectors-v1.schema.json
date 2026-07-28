@@ -151,12 +151,20 @@
           "items": {
             "enum": [
               "artifact-state",
+              "bounded-source-metadata-scan",
               "canonical-bytes",
+              "declared-operation-inventory",
               "filesystem-delta",
+              "known-prestate",
+              "logical-file-byte-snapshot",
               "process-tree",
               "public-streams",
+              "restore-runtime-download-process-artifact-observer",
+              "retention-breach-observer",
               "selected-toolchain",
-              "subject-response"
+              "subject-response",
+              "temporary-disk-high-water-gate",
+              "test-operation-recorder"
             ]
           }
         },
@@ -168,12 +176,14 @@
             "enum": [
               "build-input",
               "contract",
+              "coverage-manifest",
               "environment-policy",
               "fixture",
               "host-source",
               "package",
               "protocol",
               "runner-image",
+              "temporary-disk-contract",
               "toolchain",
               "workflow"
             ]

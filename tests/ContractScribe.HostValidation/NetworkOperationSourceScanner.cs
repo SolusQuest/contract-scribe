@@ -79,7 +79,11 @@ public static partial class NetworkOperationSourceScanner
         @"(?ix)
         \bType\s*\.\s*GetType\s*\(
         |\bActivator\s*\.\s*CreateInstance\s*\(
-        |\.\s*GetMethod\s*\(
+        |\.\s*GetMethods?\s*\(
+        |\.\s*GetConstructors?\s*\(
+        |\.\s*GetType\s*\(
+        |\.\s*CreateDelegate\s*\(
+        |\.\s*Compile\s*\(
         |\.\s*Invoke\s*\(
         |\bAssembly\s*\.\s*Load(?:From|File)?\s*\(
         |\bAssemblyLoadContext\b
@@ -163,16 +167,24 @@ public static partial class NetworkOperationSourceScanner
     {
         return typeNamespace == "System"
                 && typeName == "Type"
-                && memberName is "GetType" or "GetMethod"
+                && memberName is "GetType" or "GetMethod" or "GetMethods"
+                    or "GetConstructor" or "GetConstructors"
             || typeNamespace == "System"
                 && typeName == "Activator"
                 && memberName == "CreateInstance"
+            || typeNamespace == "System"
+                && typeName == "Delegate"
+                && memberName == "CreateDelegate"
             || typeNamespace == "System.Reflection"
                 && typeName == "Assembly"
-                && memberName.StartsWith("Load", StringComparison.Ordinal)
+                && (memberName.StartsWith("Load", StringComparison.Ordinal)
+                    || memberName == "GetType")
             || typeNamespace == "System.Reflection"
                 && typeName is "MethodBase" or "MethodInfo"
-                && memberName == "Invoke"
+                && memberName is "Invoke" or "CreateDelegate"
+            || typeNamespace == "System.Linq.Expressions"
+                && typeName is "LambdaExpression" or "Expression`1"
+                && memberName == "Compile"
             || typeNamespace == "System.Runtime.InteropServices"
                 && typeName is "NativeLibrary" or "Marshal"
                 && memberName is "Load" or "TryLoad" or "GetExport"
@@ -182,23 +194,38 @@ public static partial class NetworkOperationSourceScanner
     private static IReadOnlySet<string> BuildManagedClosure(IEnumerable<string> roots)
     {
         var rootArray = roots.ToArray();
+        var pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var declaredRoots = rootArray.ToHashSet(pathComparer);
         var directories = rootArray.Select(Path.GetDirectoryName)
             .Where(path => path is not null)
-            .Distinct(OperatingSystem.IsWindows()
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal)
+            .Distinct(pathComparer)
             .ToArray();
         var candidates = directories
             .SelectMany(directory => Directory.EnumerateFiles(directory!, "*.dll", SearchOption.AllDirectories))
             .Select(Path.GetFullPath)
-            .ToDictionary(
+            .GroupBy(
                 GetAssemblySimpleName,
-                path => path,
                 StringComparer.OrdinalIgnoreCase);
+        var candidateByName = candidates.ToDictionary(
+            group => group.Key,
+            group =>
+            {
+                var declaredCandidates = group
+                    .Where(declaredRoots.Contains)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                if (declaredCandidates.Length > 1)
+                {
+                    throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+                }
+                return declaredCandidates.SingleOrDefault()
+                    ?? group.Order(StringComparer.Ordinal).First();
+            },
+            StringComparer.OrdinalIgnoreCase);
         var closure = new HashSet<string>(
-            OperatingSystem.IsWindows()
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal);
+            pathComparer);
         var pending = new Stack<string>(rootArray);
         while (pending.TryPop(out var path))
         {
@@ -207,8 +234,8 @@ public static partial class NetworkOperationSourceScanner
                 continue;
             }
             foreach (var dependency in GetAssemblyReferences(path)
-                         .Where(candidates.ContainsKey)
-                         .Select(reference => candidates[reference]))
+                         .Where(candidateByName.ContainsKey)
+                         .Select(reference => candidateByName[reference]))
             {
                 pending.Push(dependency);
             }

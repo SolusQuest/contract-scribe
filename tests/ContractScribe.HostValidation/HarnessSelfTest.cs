@@ -139,12 +139,44 @@ public static class HarnessSelfTest
                 && cancelled.Response?.ExecutionOutcome == "cancelled",
                 "HV918_SELF_TEST_CONTROL_CANCEL");
 
+            var temporary = await RunFakeAsync(
+                context,
+                temp,
+                "temporary-over-limit",
+                "run-1",
+                cancellationToken).ConfigureAwait(false);
+            Ensure(
+                temporary.Execution.TemporaryDiskHighWater is
+                {
+                    Quantity: "peak-concurrent-logical-file-bytes",
+                    TemporaryWorkBytes: 8 * 1024,
+                    TotalBytes: 8 * 1024,
+                    ObserverComplete: true,
+                    RetentionBreach: false
+                }
+                && temporary.AuditTemporaryFinalBytes == 0,
+                "HV928_SELF_TEST_TEMPORARY_HIGH_WATER");
+            var temporaryCleanup = await RunFakeAsync(
+                context,
+                temp,
+                "temporary-cleanup-before-gate",
+                "run-1",
+                cancellationToken).ConfigureAwait(false);
+            Ensure(
+                temporaryCleanup.Execution.TemporaryDiskHighWater is
+                {
+                    ObserverComplete: true,
+                    RetentionBreach: true
+                }
+                && temporaryCleanup.AuditTemporaryFinalBytes == 0,
+                "HV929_SELF_TEST_TEMPORARY_RETENTION");
+
             var killed = await RunFakeAsync(context, temp, "controlled-kill", "run-1", cancellationToken).ConfigureAwait(false);
             Ensure(
                 killed.Execution.ControlCompleted
                 && killed.Execution.ProcessTermination == "external-kill"
                 && killed.Execution.KillRequestOutcome == "issued"
-                && killed.Execution.FinalPlatformTerminationStatus is not "normal"
+                && HasExactNativeKill(killed.Execution)
                 && killed.Response is null,
                 "HV919_SELF_TEST_CONTROL_KILL");
 
@@ -153,13 +185,38 @@ public static class HarnessSelfTest
                 killRace.Execution.ProcessTermination != "external-kill"
                 && killRace.Execution.ControlOutcome != "issued-and-observed"
                 && (killRace.Execution.KillRequestOutcome != "issued"
-                    || killRace.Execution.FinalPlatformTerminationStatus == "normal"),
+                    || !HasExactNativeKill(killRace.Execution))
+                && killRace.Execution.NativeTerminationCode == 137,
                 "HV926_SELF_TEST_KILL_RACE");
+            Ensure(
+                NativeTerminationObserver.IsExited(137 << 8)
+                && NativeTerminationObserver.ExitStatus(137 << 8) == 137
+                && !NativeTerminationObserver.IsSignaled(137 << 8)
+                && NativeTerminationObserver.IsSignaled(NativeTerminationObserver.UnixSigKill)
+                && NativeTerminationObserver.TermSignal(NativeTerminationObserver.UnixSigKill)
+                    == NativeTerminationObserver.UnixSigKill,
+                "HV927_SELF_TEST_NATIVE_WAIT_STATUS");
         }
         finally
         {
             Directory.Delete(temp, recursive: true);
         }
+    }
+
+    private static bool HasExactNativeKill(ProcessExecutionResult execution)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return execution.NativeTerminationKind == "windows-terminate-process"
+                && execution.NativeTerminationCode
+                    == NativeTerminationObserver.WindowsTerminationSentinel;
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            return execution.NativeTerminationKind == "unix-signal"
+                && execution.NativeTerminationCode == NativeTerminationObserver.UnixSigKill;
+        }
+        return false;
     }
 
     private static async Task<FakeRun> RunFakeAsync(
@@ -173,6 +230,14 @@ public static class HarnessSelfTest
         var requestPath = Path.Join(repository, $".request-{Guid.NewGuid():N}.json");
         var responsePath = Path.Join(Path.GetTempPath(), $"contractscribe-hv-response-{Guid.NewGuid():N}.json");
         var controlRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-control-{Guid.NewGuid():N}");
+        var auditTemporaryRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-audit-temp-{Guid.NewGuid():N}");
+        var stagingRoot = Path.Join(repository, $".staging-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(auditTemporaryRoot);
+        Directory.CreateDirectory(stagingRoot);
+        TemporaryDiskHighWaterObserver? temporaryDiskObserver =
+            behavior is "temporary-over-limit" or "temporary-cleanup-before-gate"
+                ? new(auditTemporaryRoot, stagingRoot)
+                : null;
         SubjectControl? control = behavior switch
         {
             "controlled-cancel" => new(controlRoot, "before-commit", "cancel", TimeSpan.FromSeconds(5)),
@@ -183,6 +248,12 @@ public static class HarnessSelfTest
                 "external-kill",
                 TimeSpan.FromSeconds(5),
                 TimeSpan.FromMilliseconds(100)),
+            "temporary-over-limit" or "temporary-cleanup-before-gate" => new(
+                controlRoot,
+                "temporary-disk-high-water",
+                "measure-temporary-disk",
+                TimeSpan.FromSeconds(5),
+                MeasureTemporaryDisk: temporaryDiskObserver!.CaptureGate),
             _ => null
         };
         var request = new SubjectRequest(
@@ -194,7 +265,10 @@ public static class HarnessSelfTest
             responsePath,
             control?.ControlRoot,
             control is null ? [] : [control.GateName],
-            control?.Action ?? "continue");
+            control?.Action ?? "continue",
+            null,
+            null,
+            auditTemporaryRoot);
         CanonicalJson.WriteCanonical(requestPath, request);
         SchemaValidation.ValidateDefinition(
             requestPath,
@@ -218,9 +292,22 @@ public static class HarnessSelfTest
                 context.Protocol.ExecutionContract.StandardErrorByteLimit,
                 timeout ?? TimeSpan.FromSeconds(5),
                 cancellationToken,
-                control).ConfigureAwait(false);
+                control,
+                auditTemporaryRoot: auditTemporaryRoot).ConfigureAwait(false);
+            if (temporaryDiskObserver is not null
+                && execution.TemporaryDiskHighWater is not null)
+            {
+                execution = execution with
+                {
+                    TemporaryDiskHighWater = temporaryDiskObserver.Complete(
+                        execution.TemporaryDiskHighWater)
+                };
+            }
             var after = RepositoryObserver.Capture(repository, allowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
+            var auditTemporaryFinalBytes = Directory
+                .EnumerateFiles(auditTemporaryRoot, "*", SearchOption.AllDirectories)
+                .Sum(path => new FileInfo(path).Length);
             SubjectResponse? response = null;
             if (File.Exists(responsePath))
             {
@@ -236,16 +323,19 @@ public static class HarnessSelfTest
                     context.Protocol.ExecutionContract.ResponseByteLimit,
                     requireCanonical: true);
             }
-            return new FakeRun(execution, response, delta);
+            return new FakeRun(execution, response, delta, auditTemporaryFinalBytes);
         }
         finally
         {
+            temporaryDiskObserver?.Dispose();
             File.Delete(requestPath);
             File.Delete(responsePath);
             if (Directory.Exists(controlRoot))
             {
                 Directory.Delete(controlRoot, recursive: true);
             }
+            Directory.Delete(auditTemporaryRoot, recursive: true);
+            Directory.Delete(stagingRoot, recursive: true);
         }
     }
 
@@ -291,5 +381,6 @@ public static class HarnessSelfTest
     private sealed record FakeRun(
         ProcessExecutionResult Execution,
         SubjectResponse? Response,
-        RepositoryDelta Delta);
+        RepositoryDelta Delta,
+        long AuditTemporaryFinalBytes);
 }

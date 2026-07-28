@@ -12,6 +12,7 @@ public sealed record ProtocolManifest(
     TaxonomyDefinition Taxonomies,
     ExecutionContract ExecutionContract,
     PublicSafetyPolicy PublicSafety,
+    ArtifactIdentity NetworkEvidenceProfile,
     IReadOnlyList<string> RequiredValidators);
 
 public sealed record BaselineIdentity(
@@ -61,10 +62,42 @@ public sealed record ExecutionContract(
     string ProcessObserverClaim);
 
 public sealed record PublicSafetyPolicy(
-    string NetworkClaim,
+    string NetworkClaimSetId,
+    IReadOnlyList<NetworkClaimDefinition> NetworkClaimSetMembers,
     IReadOnlyList<string> ProhibitedClaims,
     IReadOnlyList<string> PublicArtifactAllowlist,
     IReadOnlyList<string> StableDiagnosticCodes);
+
+public sealed record NetworkClaimDefinition(
+    string ClaimId,
+    string Text);
+
+public sealed record NetworkEvidenceProfileManifest(
+    string FormatVersion,
+    string ProfileId,
+    string ClaimSetId,
+    IReadOnlyList<NetworkEvidenceMethodDefinition> Methods,
+    string RecorderActivationRecord,
+    IReadOnlyList<string> CoveredSourceIndirections);
+
+public sealed record NetworkEvidenceMethodDefinition(
+    string MethodId,
+    int MethodVersion,
+    string CoverageLimitationId);
+
+public sealed record NetworkEvidenceObservation(
+    string ProfileId,
+    string ClaimSetId,
+    IReadOnlyList<NetworkEvidenceMethodResult> Methods);
+
+public sealed record NetworkEvidenceMethodResult(
+    string MethodId,
+    int MethodVersion,
+    string InputIdentity,
+    string CoverageLimitationId,
+    string Status,
+    string ObservationCode,
+    string? CauseClass);
 
 public sealed record VectorCatalog(
     string FormatVersion,
@@ -205,16 +238,41 @@ public sealed record ProcessExecutionResult(
     bool ObservationComplete,
     IReadOnlyList<ObservedProcess> ObservedProcesses,
     string? KillRequestOutcome = null,
-    string? FinalPlatformTerminationStatus = null);
+    string? FinalPlatformTerminationStatus = null,
+    string? NativeTerminationKind = null,
+    long? NativeTerminationCode = null,
+    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null);
 
-public sealed record ControlExecutionResult(bool Completed, string? Outcome);
+public sealed record ControlExecutionResult(
+    bool Completed,
+    string? Outcome,
+    NativeTerminationEvidence? NativeTermination = null,
+    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null);
+
+public sealed record NativeTerminationEvidence(
+    string Kind,
+    int? ManagedExitCode,
+    long? Code,
+    string KillRequestOutcome,
+    bool CausalMatch);
+
+public sealed record TemporaryDiskHighWaterEvidence(
+    string Quantity,
+    string GovernedRootsIdentity,
+    string IntervalIdentity,
+    long TemporaryWorkBytes,
+    long OutputStagingBytes,
+    long TotalBytes,
+    bool ObserverComplete,
+    bool RetentionBreach);
 
 public sealed record SubjectControl(
     string ControlRoot,
     string GateName,
     string Action,
     TimeSpan GateTimeout,
-    TimeSpan ActionDelay = default);
+    TimeSpan ActionDelay = default,
+    Func<TemporaryDiskHighWaterEvidence>? MeasureTemporaryDisk = null);
 
 public sealed record ExecutionSubjectManifest(
     string FormatVersion,
@@ -229,6 +287,8 @@ public sealed record ExecutionSubjectManifest(
 public sealed record SubjectSourceConfiguration(
     string SourceConfigurationId,
     string HostRevision,
+    string DeclaredOperationInventoryId,
+    IReadOnlyList<string> DeclaredNetworkDependentOperations,
     IReadOnlyList<string> SourceRoots,
     IReadOnlyList<ArtifactIdentity> SourceAndBuildInputs,
     ArtifactIdentity FailureRegistry,
@@ -303,6 +363,7 @@ public sealed record RepositoryDelta(
 public sealed record CellEvidence(
     string FormatVersion,
     string BundleId,
+    string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
     string SubjectManifestSha256,
@@ -368,11 +429,15 @@ public sealed record ProcessObservation(
     long StandardErrorByteCount = 0,
     string? KillRequestOutcome = null,
     string? FinalPlatformTerminationStatus = null,
-    long? AuditTemporaryCreatedOrChangedBytes = null);
+    string? NativeTerminationKind = null,
+    long? NativeTerminationCode = null,
+    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null,
+    NetworkEvidenceObservation? NetworkEvidence = null);
 
 public sealed record AggregateEvidence(
     string FormatVersion,
     string BundleId,
+    string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
     ValidationAttemptIdentity ValidationAttempt,
@@ -384,6 +449,7 @@ public sealed record AggregateEvidence(
 public sealed record EvidencePublicationRecord(
     string FormatVersion,
     string BundleId,
+    string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
     ValidationAttemptIdentity ValidationAttempt,
@@ -398,6 +464,7 @@ public sealed record CellAggregate(
 public sealed record IncompleteEvidence(
     string FormatVersion,
     string BundleId,
+    string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
     ValidationAttemptIdentity ValidationAttempt,

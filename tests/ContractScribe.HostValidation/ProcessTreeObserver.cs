@@ -438,6 +438,13 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
 
     private static bool HasDisappeared(Process process)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            // The external-termination path reserves child-status consumption for
+            // NativeTerminationObserver.waitpid. A managed HasExited probe here could
+            // consume that status before the causal observer records the raw value.
+            return !Directory.Exists($"/proc/{process.Id}");
+        }
         try
         {
             if (process.HasExited)
@@ -450,7 +457,7 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
             return true;
         }
 
-        return OperatingSystem.IsLinux() && !Directory.Exists($"/proc/{process.Id}");
+        return false;
     }
 
     private static string SanitizeImageName(string name)

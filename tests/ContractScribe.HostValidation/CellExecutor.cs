@@ -46,6 +46,7 @@ public static class CellExecutor
         var evidence = new CellEvidence(
             "contractscribe-m1-host-validation-cell-evidence-v1",
             context.Lock.BundleId,
+            NetworkClaimSetRegistry.ClaimSetId,
             review.ReviewId,
             manifest.SourceConfiguration.SourceConfigurationId,
             CanonicalJson.Sha256File(subjectManifestPath),
@@ -82,6 +83,9 @@ public static class CellExecutor
             || manifest.SourceConfiguration.ContractBaseline.Sha256 != context.Protocol.Baseline.ContractManifestSha256
             || manifest.SourceConfiguration.Workflow.Sha256 != manifest.ValidationAttempt.WorkflowRevision
             || manifest.ValidationAttempt.Workflow != manifest.SourceConfiguration.Workflow.Path
+            || manifest.SourceConfiguration.DeclaredOperationInventoryId
+                != BundleValidator.ComputeDeclaredOperationInventoryId(
+                    manifest.SourceConfiguration.DeclaredNetworkDependentOperations)
             || manifest.SourceConfiguration.SourceConfigurationId
                 != BundleValidator.ComputeSourceConfigurationId(manifest.SourceConfiguration))
         {
@@ -330,52 +334,56 @@ public static class CellExecutor
             throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
         }
 
-        var requestPath = Path.Join(tempRoot, "request.json");
-        var responsePath = Path.Join(tempRoot, "response.json");
-        var networkOperationLogPath =
-            vector.VectorId == "network.no-contractscribe-initiated-operation"
-                ? Path.Join(tempRoot, "network-operations.jsonl")
-                : null;
-        if (networkOperationLogPath is not null)
-        {
-            using var recorder = new FileStream(
-                networkOperationLogPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete);
-            recorder.Flush(flushToDisk: true);
-        }
-        var transitionLogPath = RunSemantics.RequiresTransitionLog(vector.VectorId)
-            ? Path.Join(tempRoot, "transition-events.jsonl")
-            : null;
-        var control = CreateControl(vector, tempRoot, context.Protocol.ExecutionContract.SubjectTimeoutSeconds);
-        var request = new SubjectRequest(
-            "contractscribe-m1-host-validation-subject-request-v1",
-            "production-host",
-            vector.VectorId,
-            runId,
-            repositoryRoot,
-            responsePath,
-            control?.ControlRoot,
-            control is null ? [] : [control.GateName],
-            control?.Action ?? "continue",
-            networkOperationLogPath,
-            transitionLogPath,
-            auditTemporaryRoot);
-        CanonicalJson.WriteCanonical(requestPath, request);
-        SchemaValidation.ValidateDefinition(
-            requestPath,
-            RepositoryPaths.ResolveConfined(
-                context.Root,
-                "schemas/validation/m1-host-validation-subject-v1.schema.json"),
-            "subjectRequest",
-            requireCanonical: true);
-
+        TemporaryDiskHighWaterObserver? temporaryDiskObserver = null;
         try
         {
-            var auditTemporaryBefore = RepositoryObserver.Capture(
-                auditTemporaryRoot,
-                []);
+            if (vector.VectorId == "bounds.temporary-disk")
+            {
+                if (resultPath is null)
+                {
+                    throw new ProtocolException("HV242_TEMPORARY_DISK_CONTRACT");
+                }
+                temporaryDiskObserver = new TemporaryDiskHighWaterObserver(
+                    auditTemporaryRoot,
+                    Path.GetDirectoryName(resultPath)!);
+            }
+            var requestPath = Path.Join(tempRoot, "request.json");
+            var responsePath = Path.Join(tempRoot, "response.json");
+            var networkOperationLogPath =
+                vector.VectorId == "network.no-contractscribe-initiated-operation"
+                    ? Path.Join(tempRoot, "network-operations.jsonl")
+                    : null;
+            var transitionLogPath = RunSemantics.RequiresTransitionLog(vector.VectorId)
+                ? Path.Join(tempRoot, "transition-events.jsonl")
+                : null;
+            var control = CreateControl(
+                vector,
+                tempRoot,
+                context.Protocol.ExecutionContract.SubjectTimeoutSeconds,
+                temporaryDiskObserver is null
+                    ? null
+                    : temporaryDiskObserver.CaptureGate);
+            var request = new SubjectRequest(
+                "contractscribe-m1-host-validation-subject-request-v1",
+                "production-host",
+                vector.VectorId,
+                runId,
+                repositoryRoot,
+                responsePath,
+                control?.ControlRoot,
+                control is null ? [] : [control.GateName],
+                control?.Action ?? "continue",
+                networkOperationLogPath,
+                transitionLogPath,
+                auditTemporaryRoot);
+            CanonicalJson.WriteCanonical(requestPath, request);
+            SchemaValidation.ValidateDefinition(
+                requestPath,
+                RepositoryPaths.ResolveConfined(
+                    context.Root,
+                    "schemas/validation/m1-host-validation-subject-v1.schema.json"),
+                "subjectRequest",
+                requireCanonical: true);
             var (executable, arguments) = BuildInvocation(
                 context.Root,
                 repositoryRoot,
@@ -399,15 +407,31 @@ public static class CellExecutor
                 control,
                 fixture.ProcessIdentityRegistry,
                 auditTemporaryRoot).ConfigureAwait(false);
+            if (temporaryDiskObserver is not null
+                && execution.TemporaryDiskHighWater is not null)
+            {
+                execution = execution with
+                {
+                    TemporaryDiskHighWater = temporaryDiskObserver.Complete(
+                        execution.TemporaryDiskHighWater)
+                };
+            }
             var after = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
-            var auditTemporaryDelta = RepositoryObserver.Compare(
-                auditTemporaryBefore,
-                RepositoryObserver.Capture(auditTemporaryRoot, []));
-            var auditTemporaryBytes = checked(
-                auditTemporaryDelta.ProtectedCreatedOrChangedBytes
-                + auditTemporaryDelta.OtherCreatedOrChangedBytes
-                + auditTemporaryDelta.AllowedDesignTimeCreatedOrChangedBytes);
+            var networkOperationRecorderState = ObserveNetworkOperationLog(
+                networkOperationLogPath,
+                context.NetworkEvidenceProfile.RecorderActivationRecord);
+            var networkEvidence = vector.VectorId
+                    == "network.no-contractscribe-initiated-operation"
+                ? NetworkEvidenceEvaluator.Evaluate(
+                    context,
+                    source,
+                    cell.Materialization,
+                    networkOperationRecorderState,
+                    execution.ObservationComplete,
+                    execution.ObservedProcesses,
+                    delta)
+                : null;
             var diagnostics = ValidateStreams(execution);
             SubjectResponse? response = null;
             if (File.Exists(responsePath))
@@ -457,13 +481,16 @@ public static class CellExecutor
             process = process with
             {
                 ObservedControlOutcome = execution.ControlOutcome,
-                NetworkOperationRecorderState = ObserveNetworkOperationLog(networkOperationLogPath),
+                NetworkOperationRecorderState = networkOperationRecorderState,
                 TransitionEvents = ObserveTransitionLog(transitionLogPath),
                 StandardOutputByteCount = execution.StandardOutput.LongLength,
                 StandardErrorByteCount = execution.StandardError.LongLength,
                 KillRequestOutcome = execution.KillRequestOutcome,
                 FinalPlatformTerminationStatus = execution.FinalPlatformTerminationStatus,
-                AuditTemporaryCreatedOrChangedBytes = auditTemporaryBytes
+                NativeTerminationKind = execution.NativeTerminationKind,
+                NativeTerminationCode = execution.NativeTerminationCode,
+                TemporaryDiskHighWater = execution.TemporaryDiskHighWater,
+                NetworkEvidence = networkEvidence
             };
             var provisional = new RunEvidence(
                 vector.VectorId,
@@ -497,6 +524,7 @@ public static class CellExecutor
         }
         finally
         {
+            temporaryDiskObserver?.Dispose();
             try
             {
                 Directory.Delete(tempRoot, recursive: true);
@@ -525,7 +553,9 @@ public static class CellExecutor
         }
     }
 
-    private static string? ObserveNetworkOperationLog(string? path)
+    public static string? ObserveNetworkOperationLog(
+        string? path,
+        string activationRecord)
     {
         if (path is null)
         {
@@ -535,7 +565,24 @@ public static class CellExecutor
         {
             return "missing";
         }
-        return new FileInfo(path).Length == 0 ? "empty" : "operation-observed";
+        try
+        {
+            var lines = File.ReadAllLines(path, new UTF8Encoding(false, true));
+            if (lines.Length == 0
+                || lines[0] != activationRecord
+                || lines.Any(string.IsNullOrWhiteSpace))
+            {
+                return "missing";
+            }
+            return lines.Length == 1 ? "empty" : "operation-observed";
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or DecoderFallbackException)
+        {
+            return "missing";
+        }
     }
 
     public static IReadOnlyList<string>? ObserveTransitionLog(string? path)
@@ -643,7 +690,11 @@ public static class CellExecutor
             [reasonCode]);
     }
 
-    private static SubjectControl? CreateControl(VectorDefinition vector, string tempRoot, int timeoutSeconds) =>
+    private static SubjectControl? CreateControl(
+        VectorDefinition vector,
+        string tempRoot,
+        int timeoutSeconds,
+        Func<TemporaryDiskHighWaterEvidence>? measureTemporaryDisk) =>
         vector.VectorId switch
         {
             "cancellation.before-commit" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),
@@ -653,6 +704,12 @@ public static class CellExecutor
             "publication.kill-before-commit" => new(Path.Join(tempRoot, "control"), "publication-before-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
             "publication.kill-after-commit" => new(Path.Join(tempRoot, "control"), "publication-after-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
             "bounds.forced-termination" => new(Path.Join(tempRoot, "control"), "forced-termination", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
+            "bounds.temporary-disk" => new(
+                Path.Join(tempRoot, "control"),
+                "temporary-disk-high-water",
+                "measure-temporary-disk",
+                TimeSpan.FromSeconds(timeoutSeconds),
+                MeasureTemporaryDisk: measureTemporaryDisk),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"

@@ -5,6 +5,7 @@
   "required": [
     "formatVersion",
     "bundleId",
+    "networkClaimSetId",
     "reviewId",
     "sourceConfigurationId",
     "validationAttempt",
@@ -18,6 +19,9 @@
     "bundleId": {
       "type": "string",
       "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+    },
+    "networkClaimSetId": {
+      "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
     },
     "reviewId": {
       "type": "string",

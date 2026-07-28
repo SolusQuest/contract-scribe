@@ -306,6 +306,13 @@ public static class Program
         var requestPath = Required(options, "--request");
         var behavior = Required(options, "--behavior");
         var request = CanonicalJson.DeserializeStrict<SubjectRequest>(requestPath, 64 * 1024, requireCanonical: true);
+        if (request.NetworkOperationLogPath is not null)
+        {
+            File.WriteAllText(
+                request.NetworkOperationLogPath,
+                "{\"formatVersion\":\"contractscribe-network-operation-recorder-v1\",\"state\":\"active\"}\n",
+                new UTF8Encoding(false));
+        }
         var response = new SubjectResponse(
             "contractscribe-m1-host-validation-subject-response-v1",
             request.VectorId,
@@ -372,6 +379,24 @@ public static class Program
                 CanonicalJson.WriteCanonical(request.ResponsePath, response);
                 return 0;
             case "temporary-over-limit":
+                var temporaryPath = Path.Join(Path.GetTempPath(), "synthetic-temporary.bin");
+                File.WriteAllBytes(temporaryPath, new byte[8 * 1024]);
+                await ReachGateAsync(request).ConfigureAwait(false);
+                File.Delete(temporaryPath);
+                CanonicalJson.WriteCanonical(request.ResponsePath, response);
+                return 0;
+            case "temporary-cleanup-before-gate":
+                var earlyCleanupPath = Path.Join(
+                    Path.GetTempPath(),
+                    "synthetic-early-cleanup.bin");
+                File.WriteAllBytes(earlyCleanupPath, new byte[8 * 1024]);
+                await Task.Delay(100).ConfigureAwait(false);
+                File.Delete(earlyCleanupPath);
+                await Task.Delay(100).ConfigureAwait(false);
+                await ReachGateAsync(request).ConfigureAwait(false);
+                CanonicalJson.WriteCanonical(request.ResponsePath, response);
+                return 0;
+            case "temporary-final-write":
                 File.WriteAllBytes(
                     Path.Join(Path.GetTempPath(), "synthetic-temporary.bin"),
                     new byte[8 * 1024]);
@@ -404,7 +429,7 @@ public static class Program
                 return 0;
             case "controlled-kill-race":
                 await ReachGateAsync(request).ConfigureAwait(false);
-                return 0;
+                return 137;
             case "hang":
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
                 return 0;

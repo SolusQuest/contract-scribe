@@ -13,10 +13,22 @@
       "continue",
       "cancel",
       "external-kill",
+      "measure-temporary-disk",
       "release-late-completion",
       "observe"
     ],
     "shellAllowed": false
+  },
+  "networkOperationRecorderContract": {
+    "activationRecord": "{\"formatVersion\":\"contractscribe-network-operation-recorder-v1\",\"state\":\"active\"}",
+    "formatVersion": "contractscribe-network-operation-recorder-v1",
+    "harnessOwnedPath": true,
+    "productOwnedSeamsRequired": true
+  },
+  "temporaryDiskRetentionContract": {
+    "gate": "temporary-disk-high-water",
+    "retainUntilRelease": true,
+    "cleanupBeforeGateAllowed": false
   },
   "processContract": {
     "requestArgument": "--request",

@@ -80,38 +80,62 @@ public static class SubjectProcessRunner
             ? Task.FromResult(new ControlExecutionResult(true, null))
             : ApplyControlAsync(process, processObserver, control, cancellationToken);
         var timedOut = false;
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(timeout);
-        try
+        ControlExecutionResult controlResult;
+        int? exitCode;
+        NativeTerminationEvidence? nativeTermination = null;
+        if (control?.Action == "external-kill")
         {
-            await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+            try
+            {
+                controlResult = await controlTask.ConfigureAwait(false);
+                nativeTermination = controlResult.NativeTermination;
+            }
+            catch (OperationCanceledException)
+            {
+                _ = NativeTerminationObserver.TerminateTreeAndCapture(
+                    process,
+                    processObserver.Snapshot());
+                throw;
+            }
+            exitCode = nativeTermination?.ManagedExitCode;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        else
         {
-            timedOut = true;
-            _ = TryKill(process);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            _ = TryKill(process);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            throw;
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(timeout);
+            try
+            {
+                await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                timedOut = true;
+                _ = TryKill(process);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _ = TryKill(process);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+            controlResult = await controlTask.ConfigureAwait(false);
+            exitCode = process.ExitCode;
         }
 
         var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
-        var controlResult = await controlTask.ConfigureAwait(false);
-        if (!controlResult.Completed)
+        if (!controlResult.Completed && control?.Action != "external-kill")
         {
             _ = TryKill(process);
         }
-        var platformTermination = ClassifyTermination(process.ExitCode);
+        var platformTermination = ClassifyTermination(exitCode, nativeTermination);
         var confirmedExternalKill = control?.Action == "external-kill"
-            && controlResult.Outcome == "issued"
-            && IsForcedTerminationCompatible(process.ExitCode);
+            && controlResult.Completed
+            && nativeTermination?.KillRequestOutcome == "issued"
+            && nativeTermination.CausalMatch;
         var observedControlOutcome = control?.Action == "external-kill"
-            && controlResult.Outcome == "issued"
+            && nativeTermination?.KillRequestOutcome == "issued"
                 ? confirmedExternalKill
                     ? "issued-and-observed"
                     : "issued-but-not-observed"
@@ -120,7 +144,7 @@ public static class SubjectProcessRunner
             ? "external-kill"
             : platformTermination;
         return new ProcessExecutionResult(
-            process.ExitCode,
+            exitCode,
             "started",
             termination,
             stdout.Bytes,
@@ -134,8 +158,11 @@ public static class SubjectProcessRunner
             observedControlOutcome,
             processObserver.ObservationComplete,
             processObserver.Snapshot(),
-            control?.Action == "external-kill" ? controlResult.Outcome : null,
-            platformTermination);
+            control?.Action == "external-kill" ? nativeTermination?.KillRequestOutcome : null,
+            platformTermination,
+            nativeTermination?.Kind,
+            nativeTermination?.Code,
+            controlResult.TemporaryDiskHighWater);
     }
 
     private static ProcessExecutionResult StartFailure(string processStart) =>
@@ -166,9 +193,22 @@ public static class SubjectProcessRunner
         var deadline = DateTime.UtcNow + control.GateTimeout;
         while (!File.Exists(reachedPath))
         {
-            if (process.HasExited || DateTime.UtcNow >= deadline)
+            var exited = control.Action == "external-kill"
+                ? !NativeTerminationObserver.IsAliveNonReaping(process.Id)
+                : process.HasExited;
+            if (exited || DateTime.UtcNow >= deadline)
             {
-                return new(false, process.HasExited ? "already-exited" : "gate-timeout");
+                if (control.Action == "external-kill")
+                {
+                    var native = NativeTerminationObserver.TerminateTreeAndCapture(
+                        process,
+                        processObserver.Snapshot());
+                    return new(
+                        false,
+                        exited ? "already-exited" : "gate-timeout",
+                        native);
+                }
+                return new(false, exited ? "already-exited" : "gate-timeout");
             }
             await Task.Delay(10, cancellationToken).ConfigureAwait(false);
         }
@@ -184,8 +224,21 @@ public static class SubjectProcessRunner
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
                 return new(true, "requested");
             case "external-kill":
-                var killOutcome = TryKill(process);
-                return new(killOutcome == "issued", killOutcome);
+                var generation = processObserver.CompletedSampleGeneration;
+                if (!await processObserver.WaitForSampleAfterAsync(
+                        generation,
+                        control.GateTimeout,
+                        cancellationToken).ConfigureAwait(false))
+                {
+                    var incompleteNative = NativeTerminationObserver.TerminateTreeAndCapture(
+                        process,
+                        processObserver.Snapshot());
+                    return new(false, "post-gate-sample-missing", incompleteNative);
+                }
+                var native = NativeTerminationObserver.TerminateTreeAndCapture(
+                    process,
+                    processObserver.Snapshot());
+                return new(native.KillRequestOutcome == "issued", native.KillRequestOutcome, native);
             case "release-late-completion":
                 File.WriteAllText(Path.Join(control.ControlRoot, "cancel.requested"), string.Empty);
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
@@ -201,6 +254,14 @@ public static class SubjectProcessRunner
                 }
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
                 return new(true, "observed");
+            case "measure-temporary-disk":
+                if (control.MeasureTemporaryDisk is null)
+                {
+                    return new(false, "unsupported-control");
+                }
+                var measurement = control.MeasureTemporaryDisk();
+                File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
+                return new(true, "observed", TemporaryDiskHighWater: measurement);
             default:
                 return new(false, "unsupported-control");
         }
@@ -249,8 +310,18 @@ public static class SubjectProcessRunner
         }
     }
 
-    private static string ClassifyTermination(int exitCode)
+    private static string ClassifyTermination(
+        int? exitCode,
+        NativeTerminationEvidence? nativeTermination)
     {
+        if (nativeTermination?.Kind == "unix-signal")
+        {
+            return nativeTermination.Code == 6 ? "abort" : "fatal-runtime-termination";
+        }
+        if (exitCode is null)
+        {
+            return "crash";
+        }
         var unsigned = unchecked((uint)exitCode);
         return unsigned switch
         {
@@ -259,20 +330,8 @@ public static class SubjectProcessRunner
             0xC00000FD => "stack-overflow",
             0x40000015 => "abort",
             _ when exitCode is 134 or 6 => "abort",
-            _ when exitCode is 137 or 9 => "fatal-runtime-termination",
             _ => "crash"
         };
-    }
-
-    private static bool IsForcedTerminationCompatible(int exitCode)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var status = unchecked((uint)exitCode);
-            return status is 0xffffffff or 0xc000013a
-                || status is >= 0xc0000000 and <= 0xcfffffff;
-        }
-        return exitCode is 9 or 137;
     }
 
     private static string TryKill(Process process)

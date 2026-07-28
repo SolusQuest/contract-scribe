@@ -42,7 +42,21 @@ public static partial class PublicSafetyScanner
 
     public static void EnsureNoUnsupportedClaims(string text)
     {
-        foreach (var line in text.Split('\n'))
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var claimBlock = NetworkClaimSetRegistry.RenderProtocolBlock();
+        var firstBlock = normalized.IndexOf(claimBlock, StringComparison.Ordinal);
+        if (firstBlock < 0
+            || normalized.IndexOf(
+                claimBlock,
+                firstBlock + claimBlock.Length,
+                StringComparison.Ordinal) >= 0
+            || NetworkClaimSetRegistry.Members.Any(member =>
+                CountOccurrences(normalized, member.Text) != 1))
+        {
+            throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
+        }
+
+        foreach (var line in normalized.Split('\n'))
         {
             if (RepositoryBuildCannotAccessSecrets().IsMatch(line)
                 || NetworkCapabilityAssertion().IsMatch(line)
@@ -61,6 +75,18 @@ public static partial class PublicSafetyScanner
                 throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
             }
         }
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+        return count;
     }
 
     public static void SelfTestMachinePaths()
@@ -107,6 +133,7 @@ public static partial class PublicSafetyScanner
         {
             Expect("HV119_PUBLIC_CREDENTIAL_MARKER", () => EnsureSafeText(marker));
         }
+        EnsureSafeText("temporary-disk-high-water-gate");
     }
 
     private static void Expect(string code, Action action)
@@ -125,7 +152,7 @@ public static partial class PublicSafetyScanner
     [GeneratedRegex(@"(?i)(?<![a-z0-9:/])(?:[a-z]:[\\/](?![\\/])|\\\\[^\\\s]+\\[^\\\s]+|/(?!/)(?:[a-z0-9._-]+/)*(?:[a-z0-9._-]+))")]
     private static partial Regex MachinePath();
 
-    [GeneratedRegex(@"(?i)(?:authorization\s*:\s*bearer\s+\S+|(?:password|access[_-]?token|api[_-]?key|client[_-]?secret)\s*[=:]\s*\S+|(?:ghp|github_pat|sk)-[a-z0-9_-]{12,})")]
+    [GeneratedRegex(@"(?i)(?:authorization\s*:\s*bearer\s+\S+|(?:password|access[_-]?token|api[_-]?key|client[_-]?secret)\s*[=:]\s*\S+|(?<![a-z0-9])(?:ghp|github_pat|sk)-[a-z0-9_-]{12,})")]
     private static partial Regex CredentialMarker();
 
     [GeneratedRegex(@"(?i)-----begin [a-z ]+private key-----")]
@@ -148,7 +175,7 @@ public static partial class PublicSafetyScanner
     private static partial Regex NetworkCapabilityAssertion();
 
     [GeneratedRegex(
-        @"(?i)\b(?:internet|network|connectivity|outbound|external\s+connections?|egress)\b.{0,32}\b(?:is|are|was|were|remains?)\s+(?:disabled|unavailable|impossible|blocked|prevented|denied|absent)\b|\b(?:has|have|with)\s+no\s+(?:internet|network|external)?\s*(?:access|connectivity|connections?)\b|\b(?:no|without)\s+(?:internet|network|external)\s+(?:access|connectivity|connections?)\b|\b(?:runtime|host|validator|validation|contractscribe|tool|ci)\b.{0,24}\b(?:is|runs?)\s+air[- ]?gapped\b")]
+        @"(?i)\b(?:internet|network|connectivity|outbound|external\s+connections?|egress)\b.{0,32}\b(?:is|are|was|were|remains?)\s+(?:disabled|unavailable|impossible|blocked|prevented|denied|absent|disconnected)\b|\b(?:has|have|with)\s+no\s+(?:internet|network|external)?\s*(?:access|connectivity|connections?)\b|\b(?:no|without)\s+(?:internet|network|external)\s+(?:access|connectivity|connections?)\b|\b(?:runtime|host|validator|validation|contractscribe|tool|ci)\b.{0,24}\b(?:is|runs?|remains?)\s+(?:air[- ]?gapped|disconnected)\b")]
     private static partial Regex PositiveNetworkAvailabilityClaim();
 
     [GeneratedRegex(

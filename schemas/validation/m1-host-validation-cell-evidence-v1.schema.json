@@ -5,6 +5,7 @@
   "required": [
     "formatVersion",
     "bundleId",
+    "networkClaimSetId",
     "reviewId",
     "sourceConfigurationId",
     "subjectManifestSha256",
@@ -19,6 +20,9 @@
     },
     "bundleId": {
       "$ref": "#/$defs/bundleId"
+    },
+    "networkClaimSetId": {
+      "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
     },
     "reviewId": {
       "$ref": "#/$defs/reviewId"
@@ -644,7 +648,10 @@
         "standardErrorByteCount",
         "killRequestOutcome",
         "finalPlatformTerminationStatus",
-        "auditTemporaryCreatedOrChangedBytes"
+        "nativeTerminationKind",
+        "nativeTerminationCode",
+        "temporaryDiskHighWater",
+        "networkEvidence"
       ],
       "properties": {
         "exitCode": {
@@ -698,6 +705,7 @@
           "enum": [
             "cancel",
             "external-kill",
+            "measure-temporary-disk",
             "observe",
             "release-late-completion",
             null
@@ -800,12 +808,168 @@
             null
           ]
         },
-        "auditTemporaryCreatedOrChangedBytes": {
+        "nativeTerminationKind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "windows-terminate-process",
+            "unix-signal",
+            "unix-exit",
+            "unix-wait-status",
+            "unsupported",
+            null
+          ]
+        },
+        "nativeTerminationCode": {
           "type": [
             "integer",
             "null"
           ],
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "temporaryDiskHighWater": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "quantity",
+                "governedRootsIdentity",
+                "intervalIdentity",
+                "temporaryWorkBytes",
+                "outputStagingBytes",
+                "totalBytes",
+                "observerComplete",
+                "retentionBreach"
+              ],
+              "properties": {
+                "quantity": {
+                  "const": "peak-concurrent-logical-file-bytes"
+                },
+                "governedRootsIdentity": {
+                  "const": "contractscribe-temporary-work-and-output-staging.v1"
+                },
+                "intervalIdentity": {
+                  "const": "pre-subject-to-temporary-disk-high-water.v1"
+                },
+                "temporaryWorkBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputStagingBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "totalBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "observerComplete": {
+                  "type": "boolean"
+                },
+                "retentionBreach": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "networkEvidence": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "profileId",
+                "claimSetId",
+                "methods"
+              ],
+              "properties": {
+                "profileId": {
+                  "const": "m1.bounded-exact-revision-network-conformance.v1"
+                },
+                "claimSetId": {
+                  "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
+                },
+                "methods": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "methodId",
+                      "methodVersion",
+                      "inputIdentity",
+                      "coverageLimitationId",
+                      "status",
+                      "observationCode",
+                      "causeClass"
+                    ],
+                    "properties": {
+                      "methodId": {
+                        "enum": [
+                          "declared-dependency-and-operation-inventory",
+                          "bounded-source-and-managed-metadata-regression-scan",
+                          "test-operation-recorder",
+                          "restore-runtime-download-process-artifact-observer"
+                        ]
+                      },
+                      "methodVersion": {
+                        "const": 1
+                      },
+                      "inputIdentity": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+                      },
+                      "coverageLimitationId": {
+                        "enum": [
+                          "declared-operations-and-protected-dependencies.v1",
+                          "explicit-source-metadata-route-regressions.v1",
+                          "product-owned-operation-seams.v1",
+                          "synchronized-process-and-protected-artifact-observation.v1"
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "complete",
+                          "finding",
+                          "incomplete"
+                        ]
+                      },
+                      "observationCode": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+                      },
+                      "causeClass": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "protected-input-invalidated",
+                          "protocol-failure",
+                          "subject-nonconformance",
+                          "environment-or-infrastructure-incomplete",
+                          null
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "additionalProperties": false

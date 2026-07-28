@@ -319,9 +319,11 @@ public sealed class M1HostValidationProtocolTests
             PublicSafetyScanner.EnsureSafeText(
                 string.Concat("Authorization:", " Bearer synthetic-value")));
         Assert.Equal("HV119_PUBLIC_CREDENTIAL_MARKER", bearer.Code);
+        var exactClaimBlock = NetworkClaimSetRegistry.RenderProtocolBlock();
+        PublicSafetyScanner.EnsureNoUnsupportedClaims(exactClaimBlock);
         var unsupportedClaim = Assert.Throws<ProtocolException>(() =>
             PublicSafetyScanner.EnsureNoUnsupportedClaims(
-                "The harness guarantees network isolation for this run."));
+                $"{exactClaimBlock}\nThe harness guarantees network isolation for this run."));
         Assert.Equal("HV199_PUBLIC_UNSUPPORTED_CLAIM", unsupportedClaim.Code);
         foreach (var claim in new[]
         {
@@ -340,18 +342,146 @@ public sealed class M1HostValidationProtocolTests
             "The audit cannot access the network.",
             "Outbound connections are impossible.",
             "Internet access is disabled.",
-            "The runtime is air-gapped."
+            "The runtime is air-gapped.",
+            "The runtime is disconnected from the Internet."
         })
         {
             Assert.Equal(
                 "HV199_PUBLIC_UNSUPPORTED_CLAIM",
                 Assert.Throws<ProtocolException>(() =>
-                    PublicSafetyScanner.EnsureNoUnsupportedClaims(claim)).Code);
+                    PublicSafetyScanner.EnsureNoUnsupportedClaims(
+                        $"{exactClaimBlock}\n{claim}")).Code);
         }
-        PublicSafetyScanner.EnsureNoUnsupportedClaims(
-            "This protocol does not claim network isolation and is not an egress sandbox.");
-        PublicSafetyScanner.EnsureNoUnsupportedClaims(
-            "This protocol does not block outbound access.");
+        foreach (var mutation in new[]
+                 {
+                     context.Protocol.PublicSafety with
+                     {
+                         NetworkClaimSetMembers =
+                             context.Protocol.PublicSafety.NetworkClaimSetMembers.Skip(1).ToArray()
+                     },
+                     context.Protocol.PublicSafety with
+                     {
+                         NetworkClaimSetMembers =
+                             context.Protocol.PublicSafety.NetworkClaimSetMembers
+                                 .Append(context.Protocol.PublicSafety.NetworkClaimSetMembers[0])
+                                 .ToArray()
+                     },
+                     context.Protocol.PublicSafety with
+                     {
+                         NetworkClaimSetMembers =
+                             context.Protocol.PublicSafety.NetworkClaimSetMembers.Reverse().ToArray()
+                     },
+                     context.Protocol.PublicSafety with
+                     {
+                         NetworkClaimSetMembers =
+                         [
+                             context.Protocol.PublicSafety.NetworkClaimSetMembers[0] with
+                             {
+                                 Text = "The runtime is disconnected from the Internet."
+                             },
+                             .. context.Protocol.PublicSafety.NetworkClaimSetMembers.Skip(1)
+                         ]
+                     }
+                 })
+        {
+            Assert.Equal(
+                "HV131_PUBLIC_SAFETY_POLICY",
+                Assert.Throws<ProtocolException>(() =>
+                    NetworkClaimSetRegistry.Validate(mutation)).Code);
+        }
+        var cleanNetworkMethods = context.NetworkEvidenceProfile.Methods
+            .Select(method => new NetworkEvidenceMethodResult(
+                method.MethodId,
+                method.MethodVersion,
+                "input.0000000000000000000000000000000000000000000000000000000000000000",
+                method.CoverageLimitationId,
+                "complete",
+                "network.method-clean",
+                null))
+            .ToArray();
+        var cleanNetwork = new NetworkEvidenceObservation(
+            context.NetworkEvidenceProfile.ProfileId,
+            NetworkClaimSetRegistry.ClaimSetId,
+            cleanNetworkMethods);
+        Assert.Equal(
+            "matched",
+            NetworkEvidenceEvaluator.Classify(
+                context.NetworkEvidenceProfile,
+                cleanNetwork).Verdict);
+        foreach (var (status, cause, expectedVerdict) in new[]
+                 {
+                     ("finding", "subject-nonconformance", "subject-nonconformance"),
+                     ("incomplete", "subject-nonconformance", "subject-nonconformance"),
+                     ("incomplete", "protocol-failure", "protocol-invalid-observation"),
+                     ("incomplete", "environment-or-infrastructure-incomplete", "vector-infrastructure-incomplete")
+                 })
+        {
+            var methods = cleanNetworkMethods.ToArray();
+            methods[0] = methods[0] with
+            {
+                Status = status,
+                ObservationCode = "network.synthetic-nonclean",
+                CauseClass = cause
+            };
+            Assert.Equal(
+                expectedVerdict,
+                NetworkEvidenceEvaluator.Classify(
+                    context.NetworkEvidenceProfile,
+                    cleanNetwork with { Methods = methods }).Verdict);
+        }
+        var protectedMethods = cleanNetworkMethods.ToArray();
+        protectedMethods[1] = protectedMethods[1] with
+        {
+            Status = "incomplete",
+            ObservationCode = "network.synthetic-protected-input-drift",
+            CauseClass = "protected-input-invalidated"
+        };
+        Assert.Equal(
+            "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED",
+            Assert.Throws<ProtocolException>(() =>
+                NetworkEvidenceEvaluator.Classify(
+                    context.NetworkEvidenceProfile,
+                    cleanNetwork with { Methods = protectedMethods })).Code);
+        var reorderedMethods = cleanNetworkMethods.Reverse().ToArray();
+        Assert.Equal(
+            "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED",
+            Assert.Throws<ProtocolException>(() =>
+                NetworkEvidenceEvaluator.Classify(
+                    context.NetworkEvidenceProfile,
+                    cleanNetwork with { Methods = reorderedMethods })).Code);
+        var wrongVersionMethods = cleanNetworkMethods.ToArray();
+        wrongVersionMethods[0] = wrongVersionMethods[0] with { MethodVersion = 2 };
+        Assert.Equal(
+            "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED",
+            Assert.Throws<ProtocolException>(() =>
+                NetworkEvidenceEvaluator.Classify(
+                    context.NetworkEvidenceProfile,
+                    cleanNetwork with { Methods = wrongVersionMethods })).Code);
+        var wrongCauseMethods = cleanNetworkMethods.ToArray();
+        wrongCauseMethods[0] = wrongCauseMethods[0] with
+        {
+            Status = "finding",
+            ObservationCode = "network.synthetic-invalid-cause",
+            CauseClass = "protocol-failure"
+        };
+        Assert.Equal(
+            "protocol-invalid-observation",
+            NetworkEvidenceEvaluator.Classify(
+                context.NetworkEvidenceProfile,
+                cleanNetwork with { Methods = wrongCauseMethods }).Verdict);
+        var wrongInputMethods = cleanNetworkMethods.ToArray();
+        wrongInputMethods[1] = wrongInputMethods[1] with
+        {
+            InputIdentity =
+                "closure.1111111111111111111111111111111111111111111111111111111111111111"
+        };
+        Assert.Equal(
+            "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED",
+            Assert.Throws<ProtocolException>(() =>
+                NetworkEvidenceEvaluator.Classify(
+                    context.NetworkEvidenceProfile,
+                    cleanNetwork with { Methods = wrongInputMethods },
+                    cleanNetworkMethods.Select(method => method.InputIdentity).ToArray())).Code);
         foreach (var source in new[]
                  {
                      "using System.Net.Http;",
@@ -360,7 +490,12 @@ public sealed class M1HostValidationProtocolTests
                      "var socket = new System.Net.Sockets.Socket(default, default, default);",
                      "var type = Type.GetType(\"System.Net.Http.HttpClient, System.Net.Http\");",
                      "var client = Activator.CreateInstance(type!);",
-                     "client!.GetType().GetMethod(\"GetAsync\")!.Invoke(client, null);",
+                      "client!.GetType().GetMethod(\"GetAsync\")!.Invoke(client, null);",
+                      "var type = typeof(object).Assembly.GetType(name);",
+                      "var methods = type!.GetMethods();",
+                      "var constructors = type!.GetConstructors();",
+                      "var callback = methods[0].CreateDelegate(delegateType);",
+                      "var compiled = expression.Compile();",
                      "var assembly = Assembly.LoadFrom(path);",
                      "var library = NativeLibrary.Load(path);",
                      "[DllImport(\"native\")] static extern void Send();",
@@ -417,6 +552,206 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_NetworkRecorderRequiresSubjectActivationHandshake()
+    {
+        var context = BundleValidator.Validate(Root);
+        var activationRecord =
+            context.NetworkEvidenceProfile.RecorderActivationRecord;
+        var temp = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-hv-network-recorder-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            Assert.Equal(
+                "missing",
+                CellExecutor.ObserveNetworkOperationLog(temp, activationRecord));
+            File.WriteAllText(temp, string.Empty, new UTF8Encoding(false));
+            Assert.Equal(
+                "missing",
+                CellExecutor.ObserveNetworkOperationLog(temp, activationRecord));
+            File.WriteAllText(temp, "{\"state\":\"active\"}\n", new UTF8Encoding(false));
+            Assert.Equal(
+                "missing",
+                CellExecutor.ObserveNetworkOperationLog(temp, activationRecord));
+            File.WriteAllText(temp, $"{activationRecord}\n", new UTF8Encoding(false));
+            Assert.Equal(
+                "empty",
+                CellExecutor.ObserveNetworkOperationLog(temp, activationRecord));
+            File.AppendAllText(
+                temp,
+                "{\"operation\":\"provider\"}\n",
+                new UTF8Encoding(false));
+            Assert.Equal(
+                "operation-observed",
+                CellExecutor.ObserveNetworkOperationLog(temp, activationRecord));
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_NetworkEvidenceIsRecomputedBeforeAcceptance()
+    {
+        var context = BundleValidator.Validate(Root);
+        var subject = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
+            Path.Join(FixtureRoot, "execution-subject.template.json"),
+            4 * 1024 * 1024);
+        var cell = subject.Cells[0];
+        var vector = context.Vectors.Vectors.Single(item =>
+            item.VectorId == "network.no-contractscribe-initiated-operation");
+        var fixture = cell.Fixtures.Single(item => item.VectorId == vector.VectorId) with
+        {
+            CapabilityAvailable = true,
+            BlockedReasonCode = null
+        };
+        var repositoryDelta = new RepositoryDelta([], [], [], [], [], [], [], [], []);
+        var actualEvidence = NetworkEvidenceEvaluator.Evaluate(
+            context,
+            subject.SourceConfiguration,
+            cell.Materialization,
+            "operation-observed",
+            true,
+            [],
+            repositoryDelta);
+        var fabricatedCleanEvidence = actualEvidence with
+        {
+            Methods = actualEvidence.Methods.Select(method =>
+                method.MethodId == "test-operation-recorder"
+                    ? method with
+                    {
+                        Status = "complete",
+                        ObservationCode = "network.operation-recorder-empty",
+                        CauseClass = null
+                    }
+                    : method).ToArray()
+        };
+        var process = new ProcessObservation(
+            1,
+            "started",
+            "crash",
+            false,
+            true,
+            true,
+            "process-observation",
+            "observe",
+            true,
+            "observed",
+            NetworkOperationRecorderState: "operation-observed",
+            NetworkEvidence: fabricatedCleanEvidence);
+        var run = new RunEvidence(
+            vector.VectorId,
+            "run-1",
+            "matched",
+            vector.ExpectedObservation,
+            vector.ExpectedObservation,
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedEnforcementClass,
+            null,
+            process,
+            null,
+            null,
+            repositoryDelta,
+            [],
+            []);
+
+        var derived = RunSemantics.Derive(
+            context,
+            vector,
+            run,
+            fixture,
+            subject.SourceConfiguration,
+            cell.Materialization);
+
+        Assert.Equal("protocol-invalid-observation", derived.Verdict);
+        Assert.Equal("network.evidence-observation-mismatch", derived.Observation);
+        Assert.Equal(["HV247_NETWORK_EVIDENCE_PROTOCOL_FAILURE"], derived.DiagnosticCodes);
+    }
+
+    [Fact]
+    public void HostValidation_NetworkClaimSchemasFailClosed()
+    {
+        _ = BundleValidator.Validate(Root);
+        foreach (var schemaName in new[]
+                 {
+                     "m1-host-validation-cell-evidence-v1.schema.json",
+                     "m1-host-validation-aggregate-evidence-v1.schema.json",
+                     "m1-host-validation-incomplete-evidence-v1.schema.json",
+                     "m1-host-validation-publication-record-v1.schema.json"
+                 })
+        {
+            var schema = JsonNode.Parse(File.ReadAllText(
+                Path.Join(Root, "schemas", "validation", schemaName)))!.AsObject();
+            Assert.Contains(
+                schema["required"]!.AsArray(),
+                item => item!.GetValue<string>() == "networkClaimSetId");
+            Assert.Equal(
+                NetworkClaimSetRegistry.ClaimSetId,
+                schema["properties"]!["networkClaimSetId"]!["const"]!.GetValue<string>());
+            Assert.True(schema["additionalProperties"]!.GetValue<bool>() is false);
+        }
+
+        var temp = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-hv-network-claim-schema-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var protocolPath = Path.Join(FixtureRoot, "protocol.json");
+            var protocolSchema = Path.Join(
+                Root,
+                "schemas",
+                "validation",
+                "m1-host-validation-protocol-v1.schema.json");
+            var protocol = JsonNode.Parse(File.ReadAllText(protocolPath))!.AsObject();
+            var mutations = new Action<JsonObject>[]
+            {
+                root => root["publicSafety"]!.AsObject().Remove("networkClaimSetId"),
+                root => root["publicSafety"]!["networkClaimSetId"] = "m1.synthetic-claim-set.v1",
+                root => root["publicSafety"]!["networkClaimSetMembers"]!.AsArray().RemoveAt(0),
+                root =>
+                {
+                    var members = root["publicSafety"]!["networkClaimSetMembers"]!.AsArray();
+                    members.Add(members[0]!.DeepClone());
+                },
+                root => root["publicSafety"]!["networkClaimSetMembers"]!.AsArray().Add(
+                    new JsonObject
+                    {
+                        ["claimId"] = "m1.synthetic-additional-claim.v1",
+                        ["text"] = "Synthetic additional claim."
+                    }),
+                root =>
+                {
+                    var members = root["publicSafety"]!["networkClaimSetMembers"]!.AsArray();
+                    var first = members[0]!.DeepClone();
+                    members[0] = members[1]!.DeepClone();
+                    members[1] = first;
+                },
+                root => root["publicSafety"]!["networkClaimSetMembers"]![0]!["text"] =
+                    "The runtime is disconnected from the Internet.",
+                root => root["publicSafety"]!.AsObject()["networkClaimProse"] =
+                    "The runtime is disconnected from the Internet."
+            };
+            foreach (var (mutation, index) in mutations.Select((item, index) => (item, index)))
+            {
+                var mutated = protocol.DeepClone().AsObject();
+                mutation(mutated);
+                var path = Path.Join(temp, $"protocol-mutation-{index}.json");
+                File.WriteAllText(path, mutated.ToJsonString(), new UTF8Encoding(false));
+                Assert.Equal(
+                    "HV111_SCHEMA_REJECTED",
+                    Assert.Throws<ProtocolException>(() =>
+                        SchemaValidation.Validate(path, protocolSchema)).Code);
+            }
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HostValidation_TransitiveManagedNetworkDependencyCannotBeOmitted()
     {
         var temp = Path.Join(Root, "TestResults", $"host-validation-network-{Guid.NewGuid():N}");
@@ -449,6 +784,8 @@ public sealed class M1HostValidationProtocolTests
             var source = new SubjectSourceConfiguration(
                 $"source.{new string('1', 64)}",
                 new string('2', 40),
+                $"operations.{new string('3', 64)}",
+                [],
                 [],
                 [],
                 entryIdentity,
@@ -785,7 +1122,15 @@ public sealed class M1HostValidationProtocolTests
                 false,
                 true,
                 true,
-                AuditTemporaryCreatedOrChangedBytes: 31),
+                TemporaryDiskHighWater: new TemporaryDiskHighWaterEvidence(
+                    "peak-concurrent-logical-file-bytes",
+                    "contractscribe-temporary-work-and-output-staging.v1",
+                    "pre-subject-to-temporary-disk-high-water.v1",
+                    31,
+                    11,
+                    42,
+                    true,
+                    false)),
             null,
             null,
             new RepositoryDelta([], [], [], [], [], [], [], [], [],
@@ -801,9 +1146,115 @@ public sealed class M1HostValidationProtocolTests
                     {
                         Process = run.Process with
                         {
-                            AuditTemporaryCreatedOrChangedBytes = null
+                            TemporaryDiskHighWater = null
                         }
                     })).Code);
+    }
+
+    [Fact]
+    public void HostValidation_TemporaryDiskRetentionAndObserverFailuresCannotPass()
+    {
+        var context = BundleValidator.Validate(Root);
+        var subject = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
+            Path.Join(FixtureRoot, "execution-subject.template.json"),
+            4 * 1024 * 1024);
+        var cell = subject.Cells[0];
+        var vector = context.Vectors.Vectors.Single(item =>
+            item.VectorId == "bounds.temporary-disk");
+        var fixture = cell.Fixtures.Single(item => item.VectorId == vector.VectorId) with
+        {
+            CapabilityAvailable = true,
+            BlockedReasonCode = null
+        };
+        var process = new ProcessObservation(
+            0,
+            "started",
+            "normal",
+            false,
+            true,
+            true,
+            "temporary-disk-high-water",
+            "measure-temporary-disk",
+            false,
+            "observed",
+            TemporaryDiskHighWater: new TemporaryDiskHighWaterEvidence(
+                "peak-concurrent-logical-file-bytes",
+                "contractscribe-temporary-work-and-output-staging.v1",
+                "pre-subject-to-temporary-disk-high-water.v1",
+                8192,
+                0,
+                8192,
+                true,
+                false));
+        var run = new RunEvidence(
+            vector.VectorId,
+            "run-1",
+            "matched",
+            vector.ExpectedObservation,
+            vector.ExpectedObservation,
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedEnforcementClass,
+            null,
+            process,
+            null,
+            null,
+            new RepositoryDelta([], [], [], [], [], [], [], [], []),
+            [],
+            []);
+
+        var retention = RunSemantics.Derive(
+            context,
+            vector,
+            run with
+            {
+                Process = process with
+                {
+                    TemporaryDiskHighWater =
+                        process.TemporaryDiskHighWater! with { RetentionBreach = true }
+                }
+            },
+            fixture,
+            subject.SourceConfiguration,
+            cell.Materialization);
+        Assert.Equal("subject-nonconformance", retention.Verdict);
+        Assert.Equal("bounds.temporary-disk-retention-breach", retention.Observation);
+
+        var incomplete = RunSemantics.Derive(
+            context,
+            vector,
+            run with
+            {
+                Process = process with
+                {
+                    TemporaryDiskHighWater =
+                        process.TemporaryDiskHighWater! with { ObserverComplete = false }
+                }
+            },
+            fixture,
+            subject.SourceConfiguration,
+            cell.Materialization);
+        Assert.Equal("vector-infrastructure-incomplete", incomplete.Verdict);
+        Assert.Equal("bounds.temporary-disk-observer-incomplete", incomplete.Observation);
+
+        var missingGate = RunSemantics.Derive(
+            context,
+            vector,
+            run with
+            {
+                Process = process with
+                {
+                    ControlCompleted = false,
+                    ObservedControlOutcome = "gate-timeout",
+                    TemporaryDiskHighWater = null
+                }
+            },
+            fixture,
+            subject.SourceConfiguration,
+            cell.Materialization);
+        Assert.Equal("subject-nonconformance", missingGate.Verdict);
+        Assert.Equal(
+            "bounds.temporary-disk-retention-contract-missing",
+            missingGate.Observation);
     }
 
     [Fact]
@@ -842,7 +1293,7 @@ public sealed class M1HostValidationProtocolTests
                     "--request",
                     requestPath,
                     "--behavior",
-                    "temporary-over-limit"
+                    "temporary-final-write"
                 ],
                 root,
                 16 * 1024,
@@ -908,6 +1359,8 @@ public sealed class M1HostValidationProtocolTests
             var source = new SubjectSourceConfiguration(
                 $"source.{new string('1', 64)}",
                 new string('2', 40),
+                $"operations.{new string('3', 64)}",
+                [],
                 [],
                 [],
                 identity,
@@ -1641,6 +2094,8 @@ public sealed class M1HostValidationProtocolTests
         var source = new SubjectSourceConfiguration(
             $"source.{sha}",
             new string('1', 40),
+            $"operations.{new string('2', 64)}",
+            [],
             ["src"],
             [artifact],
             failureRegistry,
@@ -2030,6 +2485,7 @@ public sealed class M1HostValidationProtocolTests
                     var incomplete = new IncompleteEvidence(
                         "contractscribe-m1-host-validation-incomplete-evidence-v1",
                         context.Lock.BundleId,
+                        NetworkClaimSetRegistry.ClaimSetId,
                         review.ReviewId,
                         subject.SourceConfiguration.SourceConfigurationId,
                         subject.ValidationAttempt,
@@ -2215,6 +2671,7 @@ public sealed class M1HostValidationProtocolTests
         new(
             "contractscribe-m1-host-validation-aggregate-evidence-v1",
             baseline.BundleId,
+            NetworkClaimSetRegistry.ClaimSetId,
             baseline.ReviewId,
             baseline.SourceConfigurationId,
             baseline.ValidationAttempt,
@@ -2284,6 +2741,8 @@ public sealed class M1HostValidationProtocolTests
         var source = new SubjectSourceConfiguration(
             $"source.{sha}",
             commit,
+            $"operations.{new string('2', 64)}",
+            [],
             ["src/ContractScribe.Core"],
             [artifact],
             failureRegistry,
@@ -2405,6 +2864,7 @@ public sealed class M1HostValidationProtocolTests
         var evidence = new CellEvidence(
             "contractscribe-m1-host-validation-cell-evidence-v1",
             context.Lock.BundleId,
+            NetworkClaimSetRegistry.ClaimSetId,
             $"review.{sha}",
             source.SourceConfigurationId,
             sha,

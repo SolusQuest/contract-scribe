@@ -26,6 +26,7 @@ public static class IncompleteEvidenceWriter
             var evidence = new IncompleteEvidence(
                 "contractscribe-m1-host-validation-incomplete-evidence-v1",
                 context.Lock.BundleId,
+                NetworkClaimSetRegistry.ClaimSetId,
                 review.ReviewId,
                 subject.SourceConfiguration.SourceConfigurationId,
                 subject.ValidationAttempt,
@@ -52,7 +53,8 @@ public static class IncompleteEvidenceWriter
             "HV134_ARTIFACT_HASH_MISMATCH" or
             "HV165_PROTECTED_INPUT_DRIFT" or
             "HV180_FIXTURE_IDENTITY_MISMATCH" or
-            "HV187_SUBJECT_ARTIFACT_DRIFT" => "protected-input-invalidated",
+            "HV187_SUBJECT_ARTIFACT_DRIFT" or
+            "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED" => "protected-input-invalidated",
             "HV998_CANCELLED" => "harness-or-ci-cancelled",
             _ => "protocol-failure"
         };

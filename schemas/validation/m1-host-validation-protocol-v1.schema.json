@@ -12,6 +12,7 @@
     "taxonomies",
     "executionContract",
     "publicSafety",
+    "networkEvidenceProfile",
     "requiredValidators"
   ],
   "properties": {
@@ -263,14 +264,31 @@
     "publicSafety": {
       "type": "object",
       "required": [
-        "networkClaim",
+        "networkClaimSetId",
+        "networkClaimSetMembers",
         "prohibitedClaims",
         "publicArtifactAllowlist",
         "stableDiagnosticCodes"
       ],
       "properties": {
-        "networkClaim": {
-          "const": "no-declared-network-dependency-and-no-contractscribe-initiated-network-operation"
+        "networkClaimSetId": {
+          "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
+        },
+        "networkClaimSetMembers": {
+          "const": [
+            {
+              "claimId": "m1.no-declared-network-operation.no-contractscribe-initiation.v1",
+              "text": "The deterministic audit declares no network-dependent operation, and ContractScribe initiates no provider, GitHub, update, telemetry, restore, runtime-download, or other declared network-dependent operation."
+            },
+            {
+              "claimId": "m1.exact-revision-bounded-network-conformance.v1",
+              "text": "The recorded evidence is bounded to one exact reviewed production revision and the frozen checks."
+            },
+            {
+              "claimId": "m1.no-egress-sandbox-or-adversarial-completeness.v1",
+              "text": "The recorded evidence does not establish egress isolation, sandboxing, capability security, secret isolation from repository-controlled build logic, whole-program non-reachability, or the absence of every possible network path in arbitrary or adversarial .NET code. Repository-controlled MSBuild targets, analyzers, generators, and SDK logic execute as trusted input with caller privileges and are outside this ContractScribe behavior claim."
+            }
+          ]
         },
         "prohibitedClaims": {
           "const": [
@@ -301,6 +319,23 @@
       },
       "additionalProperties": false
     },
+    "networkEvidenceProfile": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "tests/fixtures/m1-host-validation/v1/network-evidence-profile.json"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
     "requiredValidators": {
       "const": [
         "bundle.identity",
@@ -312,10 +347,13 @@
         "evidence.public-safety",
         "evidence.review-binding",
         "evidence.incomplete-retention",
+        "evidence.network-bounded-profile",
         "execution.stream-boundary",
         "execution.vector-runner",
         "observer.process-tree",
         "observer.repository-delta",
+        "observer.temporary-disk-high-water",
+        "observer.native-termination-cause",
         "project.boundary",
         "subject.materialization",
         "validation.attempt-identity"

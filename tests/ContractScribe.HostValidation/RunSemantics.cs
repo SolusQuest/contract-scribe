@@ -32,6 +32,25 @@ public static class RunSemantics
         {
             throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
         }
+        if (vector.VectorId != "network.no-contractscribe-initiated-operation"
+            && (run.Process.NetworkEvidence is not null
+                || run.Process.NetworkOperationRecorderState is not null))
+        {
+            return new DerivedRun(
+                "network.evidence-unexpected",
+                vector.ExpectedEnforcementClass,
+                "protocol-invalid-observation",
+                ["HV247_NETWORK_EVIDENCE_PROTOCOL_FAILURE"]);
+        }
+        if (vector.VectorId != "bounds.temporary-disk"
+            && run.Process.TemporaryDiskHighWater is not null)
+        {
+            return new DerivedRun(
+                "bounds.temporary-disk-observation-unexpected",
+                vector.ExpectedEnforcementClass,
+                "protocol-invalid-observation",
+                ["HV242_TEMPORARY_DISK_CONTRACT"]);
+        }
         if (!fixture.CapabilityAvailable)
         {
             return new DerivedRun(
@@ -39,6 +58,94 @@ public static class RunSemantics
                 vector.ExpectedEnforcementClass,
                 "vector-environment-blocked",
                 [fixture.BlockedReasonCode!]);
+        }
+        if (vector.VectorId == "bounds.temporary-disk")
+        {
+            if (run.Process.TemporaryDiskHighWater is null)
+            {
+                return run.Process.ObservedControlOutcome is "gate-timeout" or "already-exited"
+                    ? new DerivedRun(
+                        "bounds.temporary-disk-retention-contract-missing",
+                        vector.ExpectedEnforcementClass,
+                        "subject-nonconformance",
+                        [])
+                    : new DerivedRun(
+                        "bounds.temporary-disk-observer-defect",
+                        vector.ExpectedEnforcementClass,
+                        "protocol-invalid-observation",
+                        ["HV242_TEMPORARY_DISK_CONTRACT"]);
+            }
+            if (!run.Process.TemporaryDiskHighWater.ObserverComplete)
+            {
+                return new DerivedRun(
+                    "bounds.temporary-disk-observer-incomplete",
+                    vector.ExpectedEnforcementClass,
+                    "vector-infrastructure-incomplete",
+                    ["HV243_TEMPORARY_DISK_OBSERVER_INCOMPLETE"]);
+            }
+            if (run.Process.TemporaryDiskHighWater.Quantity
+                    != "peak-concurrent-logical-file-bytes"
+                || run.Process.TemporaryDiskHighWater.GovernedRootsIdentity
+                    != "contractscribe-temporary-work-and-output-staging.v1"
+                || run.Process.TemporaryDiskHighWater.IntervalIdentity
+                    != "pre-subject-to-temporary-disk-high-water.v1"
+                || run.Process.TemporaryDiskHighWater.TotalBytes != checked(
+                    run.Process.TemporaryDiskHighWater.TemporaryWorkBytes
+                    + run.Process.TemporaryDiskHighWater.OutputStagingBytes))
+            {
+                return new DerivedRun(
+                    "bounds.temporary-disk-observer-defect",
+                    vector.ExpectedEnforcementClass,
+                    "protocol-invalid-observation",
+                    ["HV242_TEMPORARY_DISK_CONTRACT"]);
+            }
+            if (run.Process.TemporaryDiskHighWater.RetentionBreach)
+            {
+                return new DerivedRun(
+                    "bounds.temporary-disk-retention-breach",
+                    vector.ExpectedEnforcementClass,
+                    "subject-nonconformance",
+                []);
+            }
+        }
+        if (vector.VectorId == "network.no-contractscribe-initiated-operation")
+        {
+            var exactMaterialization = materialization
+                ?? throw new ProtocolException(
+                    "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED");
+            var disposition = NetworkEvidenceEvaluator.Classify(
+                context.NetworkEvidenceProfile,
+                run.Process.NetworkEvidence,
+                NetworkEvidenceEvaluator.ExpectedInputIdentities(
+                    source,
+                    exactMaterialization));
+            var expectedEvidence = NetworkEvidenceEvaluator.Evaluate(
+                context,
+                source,
+                exactMaterialization,
+                run.Process.NetworkOperationRecorderState,
+                run.Process.ObservationComplete,
+                run.ObservedProcesses,
+                run.RepositoryDelta);
+            if (run.Process.NetworkEvidence is null
+                || !CanonicalJson.SerializeCanonical(run.Process.NetworkEvidence)
+                    .AsSpan()
+                    .SequenceEqual(CanonicalJson.SerializeCanonical(expectedEvidence)))
+            {
+                return new DerivedRun(
+                    "network.evidence-observation-mismatch",
+                    vector.ExpectedEnforcementClass,
+                    "protocol-invalid-observation",
+                    ["HV247_NETWORK_EVIDENCE_PROTOCOL_FAILURE"]);
+            }
+            if (disposition.Verdict != "matched")
+            {
+                return new DerivedRun(
+                    disposition.ObservationCode,
+                    vector.ExpectedEnforcementClass,
+                    disposition.Verdict,
+                    disposition.DiagnosticCodes);
+            }
         }
 
         var diagnostics = run.DiagnosticCodes.ToHashSet(StringComparer.Ordinal);
@@ -120,6 +227,7 @@ public static class RunSemantics
             or "cancellation.terminal-precedence"
             or "publication.kill-before-commit"
             or "publication.kill-after-commit"
+            or "bounds.temporary-disk"
             or "bounds.forced-termination"
             || RequiresSynchronizedTree(vectorId);
 
@@ -140,6 +248,9 @@ public static class RunSemantics
             "publication.kill-before-commit" => ("publication-before-commit", "external-kill"),
             "publication.kill-after-commit" => ("publication-after-commit", "external-kill"),
             "bounds.forced-termination" => ("forced-termination", "external-kill"),
+            "bounds.temporary-disk" => (
+                "temporary-disk-high-water",
+                "measure-temporary-disk"),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"
@@ -478,19 +589,6 @@ public static class RunSemantics
                 return "process.contractscribe-worker-observed";
             }
         }
-        if (vector.VectorId == "network.no-contractscribe-initiated-operation"
-            && (run.Process.NetworkOperationRecorderState != "empty"
-                || run.ObservedProcesses.Any(process =>
-                    process.Role is "contractscribe-worker"
-                        or "restore-or-runtime-download"
-                        or "unknown-descendant")
-                || NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
-                    context.Root,
-                    source,
-                    materialization)))
-        {
-            return "network.contractscribe-initiated-operation-observed";
-        }
         if (vector.VectorId == "toolchain.owned-subprocesses"
             && run.ObservedProcesses.Any(process =>
                 process.Role is "contractscribe-worker"
@@ -528,6 +626,7 @@ public static class RunSemantics
             "publication.kill-after-commit" => "publication.committed-result-missing",
             "bounds.forced-termination" when run.Process.ProcessTermination == "external-kill"
                 && run.Process.ObservedControlOutcome == "issued-and-observed"
+                && HasExactCausalNativeTermination(run.Process)
                 && !resultExists => "bounds.forced-termination-external",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
@@ -626,10 +725,23 @@ public static class RunSemantics
     }
 
     public static long MeasureTemporaryDiskBytes(RunEvidence run) =>
-        checked(
-            run.RepositoryDelta.AllowedDesignTimeCreatedOrChangedBytes
-            + (run.Process.AuditTemporaryCreatedOrChangedBytes
-                ?? throw new ProtocolException("HV239_MEASURED_BOUND_FACTS")));
+        run.Process.TemporaryDiskHighWater?.TotalBytes
+            ?? throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
+
+    public static bool HasExactCausalNativeTermination(ProcessObservation process)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return process.NativeTerminationKind == "windows-terminate-process"
+                && process.NativeTerminationCode == NativeTerminationObserver.WindowsTerminationSentinel;
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            return process.NativeTerminationKind == "unix-signal"
+                && process.NativeTerminationCode == NativeTerminationObserver.UnixSigKill;
+        }
+        return false;
+    }
 
     public static long MeasureCanonicalDiagnosticBytes(
         IReadOnlyList<NormalizedDiagnosticFact> diagnostics) =>

@@ -25,6 +25,8 @@
         "requestSchema",
         "responseSchema",
         "controlContract",
+        "networkOperationRecorderContract",
+        "temporaryDiskRetentionContract",
         "processContract"
       ],
       "properties": {
@@ -76,11 +78,56 @@
                 "continue",
                 "cancel",
                 "external-kill",
+                "measure-temporary-disk",
                 "release-late-completion",
                 "observe"
               ]
             },
             "shellAllowed": {
+              "const": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "networkOperationRecorderContract": {
+          "type": "object",
+          "required": [
+            "formatVersion",
+            "activationRecord",
+            "harnessOwnedPath",
+            "productOwnedSeamsRequired"
+          ],
+          "properties": {
+            "activationRecord": {
+              "const": "{\"formatVersion\":\"contractscribe-network-operation-recorder-v1\",\"state\":\"active\"}"
+            },
+            "formatVersion": {
+              "const": "contractscribe-network-operation-recorder-v1"
+            },
+            "harnessOwnedPath": {
+              "const": true
+            },
+            "productOwnedSeamsRequired": {
+              "const": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "temporaryDiskRetentionContract": {
+          "type": "object",
+          "required": [
+            "gate",
+            "retainUntilRelease",
+            "cleanupBeforeGateAllowed"
+          ],
+          "properties": {
+            "gate": {
+              "const": "temporary-disk-high-water"
+            },
+            "retainUntilRelease": {
+              "const": true
+            },
+            "cleanupBeforeGateAllowed": {
               "const": false
             }
           },
@@ -214,6 +261,8 @@
       "required": [
         "sourceConfigurationId",
         "hostRevision",
+        "declaredOperationInventoryId",
+        "declaredNetworkDependentOperations",
         "sourceRoots",
         "sourceAndBuildInputs",
         "failureRegistry",
@@ -231,6 +280,26 @@
         },
         "hostRevision": {
           "$ref": "#/$defs/commit"
+        },
+        "declaredOperationInventoryId": {
+          "type": "string",
+          "pattern": "^operations\\.[0-9a-f]{64}$"
+        },
+        "declaredNetworkDependentOperations": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "provider",
+              "github",
+              "update",
+              "telemetry",
+              "restore",
+              "runtime-download",
+              "other-network-dependent"
+            ]
+          }
         },
         "sourceRoots": {
           "type": "array",
@@ -742,9 +811,10 @@
               "after-commit",
           "late-completion",
           "publication-before-commit",
-          "publication-after-commit",
-          "forced-termination",
-          "process-observation"
+              "publication-after-commit",
+              "forced-termination",
+              "process-observation",
+              "temporary-disk-high-water"
             ]
           }
         },
@@ -753,6 +823,7 @@
             "continue",
             "cancel",
             "external-kill",
+            "measure-temporary-disk",
             "release-late-completion",
             "observe"
           ]

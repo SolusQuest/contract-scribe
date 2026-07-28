@@ -18,10 +18,13 @@ public static class StaticValidatorRegistry
             "evidence.public-safety",
             "evidence.review-binding",
             "evidence.incomplete-retention",
+            "evidence.network-bounded-profile",
             "execution.stream-boundary",
             "execution.vector-runner",
             "observer.process-tree",
             "observer.repository-delta",
+            "observer.temporary-disk-high-water",
+            "observer.native-termination-cause",
             "project.boundary",
             "subject.materialization",
             "validation.attempt-identity"

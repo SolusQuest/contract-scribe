@@ -10,6 +10,7 @@ public sealed record BundleContext(
     string Root,
     ProtocolManifest Protocol,
     VectorCatalog Vectors,
+    NetworkEvidenceProfileManifest NetworkEvidenceProfile,
     ArtifactLock Lock);
 
 public static class BundleValidator
@@ -21,6 +22,8 @@ public static class BundleValidator
     public const string ProtectedInputsRelativePath = "tests/fixtures/m1-host-validation/v1/protected-inputs.json";
     public const string LockRelativePath = "tests/fixtures/m1-host-validation/v1/artifact-lock.json";
     public const string ReviewRelativePath = "tests/fixtures/m1-host-validation/v1/independent-review.json";
+    public const string NetworkEvidenceProfileRelativePath =
+        "tests/fixtures/m1-host-validation/v1/network-evidence-profile.json";
 
     private const int ManifestLimit = 4 * 1024 * 1024;
 
@@ -45,9 +48,27 @@ public static class BundleValidator
 
         var protocol = CanonicalJson.DeserializeStrict<ProtocolManifest>(protocolPath, ManifestLimit);
         var vectors = CanonicalJson.DeserializeStrict<VectorCatalog>(vectorsPath, ManifestLimit);
+        var networkProfilePath = RepositoryPaths.ResolveConfined(
+            root,
+            NetworkEvidenceProfileRelativePath);
+        SchemaValidation.Validate(
+            networkProfilePath,
+            RepositoryPaths.ResolveConfined(
+                root,
+                "schemas/validation/m1-host-validation-network-evidence-profile-v1.schema.json"));
+        var networkProfile = CanonicalJson.DeserializeStrict<NetworkEvidenceProfileManifest>(
+            networkProfilePath,
+            ManifestLimit);
         var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(lockPath, ManifestLimit, requireCanonical: true);
 
         ValidateProtocolSemantics(root, protocol, vectors);
+        if (protocol.NetworkEvidenceProfile.Path != NetworkEvidenceProfileRelativePath
+            || protocol.NetworkEvidenceProfile.Sha256
+                != CanonicalJson.Sha256File(networkProfilePath)
+            || networkProfile.ClaimSetId != NetworkClaimSetRegistry.ClaimSetId)
+        {
+            throw new ProtocolException("HV245_NETWORK_EVIDENCE_PROFILE");
+        }
         StaticValidatorRegistry.ValidateRegistry(protocol.RequiredValidators, vectors.Vectors);
         FrozenExecutorCommandRegistry.ValidateCatalog(vectors.Vectors);
         ValidateLock(root, protocol, artifactLock);
@@ -68,7 +89,7 @@ public static class BundleValidator
                 artifactLock.BundleId);
         }
 
-        return new BundleContext(root, protocol, vectors, artifactLock);
+        return new BundleContext(root, protocol, vectors, networkProfile, artifactLock);
     }
 
     public static ArtifactLock CreateLock(string root)
@@ -148,6 +169,8 @@ public static class BundleValidator
         var identity = new
         {
             source.HostRevision,
+            source.DeclaredOperationInventoryId,
+            source.DeclaredNetworkDependentOperations,
             source.SourceRoots,
             source.SourceAndBuildInputs,
             source.FailureRegistry,
@@ -160,6 +183,10 @@ public static class BundleValidator
         };
         return $"source.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(identity))}";
     }
+
+    public static string ComputeDeclaredOperationInventoryId(
+        IReadOnlyList<string> operations) =>
+        $"operations.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(operations))}";
 
     public static string ComputeReviewId(ReviewRecord review)
     {
@@ -576,12 +603,11 @@ public static class BundleValidator
             "untrusted-msbuild-sandboxed",
             "transient-writes-prevented"
         };
-        if (!protocol.PublicSafety.ProhibitedClaims.SequenceEqual(expected, StringComparer.Ordinal)
-            || protocol.PublicSafety.NetworkClaim
-                != "no-declared-network-dependency-and-no-contractscribe-initiated-network-operation")
+        if (!protocol.PublicSafety.ProhibitedClaims.SequenceEqual(expected, StringComparer.Ordinal))
         {
             throw new ProtocolException("HV201_PUBLIC_CLAIM_POLICY");
         }
+        NetworkClaimSetRegistry.Validate(protocol.PublicSafety);
 
         PublicSafetyScanner.EnsureNoUnsupportedClaims(File.ReadAllText(
             RepositoryPaths.ResolveConfined(root, "docs/20_architecture/validation/m1-host-validation-protocol.md")));
