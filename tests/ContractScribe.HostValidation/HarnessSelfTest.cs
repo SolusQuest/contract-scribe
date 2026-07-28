@@ -337,6 +337,14 @@ public static class HarnessSelfTest
             TestRootStatusSessionOrdering(
                 rootIdentity,
                 changedRootIdentity);
+            TestLinuxTerminationPreflight(
+                rootIdentity,
+                changedRootIdentity);
+            if (OperatingSystem.IsLinux())
+            {
+                await TestLinuxPipeDeadlineAsync(
+                    cancellationToken).ConfigureAwait(false);
+            }
             var issued = new NativeTerminationEvidence(
                 OperatingSystem.IsWindows()
                     ? "windows-terminate-process"
@@ -431,7 +439,7 @@ public static class HarnessSelfTest
                     identityReads++;
                     return (
                         true,
-                        identityReads == 1
+                        identityReads <= 2
                             ? rootIdentity.StartIdentity
                             : changedRootIdentity.StartIdentity);
                 },
@@ -458,6 +466,7 @@ public static class HarnessSelfTest
             Ensure(
                 trace.SequenceEqual(
                     [
+                        $"read:{rootIdentity.ProcessId}",
                         $"open:{rootIdentity.ProcessId}",
                         $"read:{rootIdentity.ProcessId}",
                         $"wait:{rootIdentity.ProcessId}"
@@ -509,6 +518,133 @@ public static class HarnessSelfTest
             expiredCalls == 0
             && expiredSession.StatusOwnerCount == 0,
             "HV965_SELF_TEST_EXPIRED_ROOT_SESSION");
+    }
+
+    private static void TestLinuxTerminationPreflight(
+        ProcessInstanceIdentity rootIdentity,
+        ProcessInstanceIdentity changedRootIdentity)
+    {
+        var rootIdentityReads = 0;
+        var rootSignalCalls = 0;
+        var descendantOperations = 0;
+        var targetValidationCalls = 0;
+        using var waiterRelease = new ManualResetEventSlim(false);
+        var rootOperations =
+            new NativeTerminationObserver.RootStatusOperations(
+                _ => (51, 0),
+                _ =>
+                {
+                    rootIdentityReads++;
+                    return (
+                        true,
+                        rootIdentityReads <= 2
+                            ? rootIdentity.StartIdentity
+                            : changedRootIdentity.StartIdentity);
+                },
+                (processId, armed) =>
+                {
+                    armed();
+                    waiterRelease.Wait();
+                    return new(processId, 0, 0);
+                },
+                _ =>
+                {
+                    rootSignalCalls++;
+                    return (0, 0);
+                },
+                _ => { });
+        using var session =
+            NativeTerminationObserver.CreateRootStatusSessionForSelfTest(
+                rootIdentity.ProcessId,
+                MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                rootOperations);
+        try
+        {
+            var replacementDescendant =
+                new ProcessTerminationTarget(
+                    new ProcessInstanceIdentity(201, 3001),
+                    changedRootIdentity.ProcessId,
+                    1);
+            var descendantOperationsAdapter =
+                new NativeTerminationObserver.LinuxTerminationOperations(
+                    _ =>
+                    {
+                        descendantOperations++;
+                        return (61, 0);
+                    },
+                    _ =>
+                    {
+                        descendantOperations++;
+                        return (true, replacementDescendant.Identity.StartIdentity);
+                    },
+                    _ =>
+                    {
+                        descendantOperations++;
+                        return (0, 0);
+                    },
+                    (_, _, _) =>
+                    {
+                        descendantOperations++;
+                        return true;
+                    },
+                    _ => descendantOperations++);
+            var outcome =
+                NativeTerminationObserver.TerminateLinuxForSelfTest(
+                    session,
+                    new(
+                        rootIdentity,
+                        [replacementDescendant],
+                        true),
+                    _ =>
+                    {
+                        targetValidationCalls++;
+                        return true;
+                    },
+                    MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                    CancellationToken.None,
+                    descendantOperationsAdapter);
+            Ensure(
+                outcome.KillRequestOutcome == "indeterminate"
+                && !outcome.CausalMatch
+                && rootSignalCalls == 0
+                && descendantOperations == 0
+                && targetValidationCalls == 0
+                && NativeTerminationObserver.LastDiagnosticCode
+                    == "HV936_LINUX_ROOT_IDENTITY",
+                "HV967_SELF_TEST_ROOT_PREFLIGHT_REUSE");
+        }
+        finally
+        {
+            waiterRelease.Set();
+            _ = session.CaptureWait(
+                "already-exited",
+                causalMatch: false,
+                MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                TimeSpan.Zero,
+                CancellationToken.None);
+        }
+    }
+
+    private static async Task TestLinuxPipeDeadlineAsync(
+        CancellationToken cancellationToken)
+    {
+        using var heldPipe =
+            LinuxSubjectProcess.CreateHeldPipeForSelfTest();
+        var timeout = TimeSpan.FromMilliseconds(150);
+        var clock = Stopwatch.StartNew();
+        var complete =
+            await SubjectProcessRunner
+                .ReadCompletesBeforeDeadlineForSelfTestAsync(
+                    heldPipe.Reader,
+                    timeout,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        clock.Stop();
+        Ensure(
+            !complete
+            && heldPipe.WriterOpen
+            && clock.Elapsed < timeout + TimeSpan.FromSeconds(1),
+            "HV968_SELF_TEST_NONBLOCKING_PIPE_DEADLINE");
     }
 
     private static void EnsureSuccessfulSubject(FakeRun run, string fallbackCode)

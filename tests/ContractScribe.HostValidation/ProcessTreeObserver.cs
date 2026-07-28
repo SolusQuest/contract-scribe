@@ -23,15 +23,33 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
 
     public ProcessTreeObserver(
         Process subjectProcess,
-        IReadOnlyList<ProcessIdentityRule> identityRegistry)
+        IReadOnlyList<ProcessIdentityRule> identityRegistry,
+        ProcessInstanceIdentity? authoritativeSubjectIdentity = null)
     {
         subjectProcessId = subjectProcess.Id;
         this.identityRegistry = identityRegistry;
+        subjectIdentity = authoritativeSubjectIdentity
+            ?? new(subjectProcessId, 0);
+        if (authoritativeSubjectIdentity is not null
+            && authoritativeSubjectIdentity.ProcessId != subjectProcessId)
+        {
+            MarkIncomplete("HV948_PROCESS_TREE_ROOT_IDENTITY_CHANGED");
+            sampler = SampleAsync(cancellation.Token);
+            return;
+        }
         try
         {
-            subjectIdentity = new(
+            var currentIdentity = new ProcessInstanceIdentity(
                 subjectProcessId,
                 GetStartIdentity(subjectProcess));
+            if (authoritativeSubjectIdentity is not null
+                && currentIdentity != authoritativeSubjectIdentity)
+            {
+                MarkIncomplete("HV948_PROCESS_TREE_ROOT_IDENTITY_CHANGED");
+                sampler = SampleAsync(cancellation.Token);
+                return;
+            }
+            subjectIdentity = currentIdentity;
             observed[subjectProcessId] = new ObservedProcess(
                 subjectProcessId,
                 GetParentProcessId(subjectProcess),
@@ -50,7 +68,8 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 or OverflowException)
         {
             MarkIncomplete("HV947_PROCESS_TREE_ROOT_IDENTITY_UNAVAILABLE");
-            subjectIdentity = new(subjectProcessId, 0);
+            subjectIdentity = authoritativeSubjectIdentity
+                ?? new(subjectProcessId, 0);
         }
         sampler = SampleAsync(cancellation.Token);
     }

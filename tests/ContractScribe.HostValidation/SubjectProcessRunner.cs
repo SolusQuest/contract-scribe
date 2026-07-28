@@ -104,7 +104,8 @@ public static class SubjectProcessRunner
                 control?.Action == "external-kill");
         await using var processObserver = new ProcessTreeObserver(
             process,
-            processIdentityRegistry ?? []);
+            processIdentityRegistry ?? [],
+            rootStatusSession.OpenedIdentity);
         using var streamDeadlineSource =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         streamDeadlineSource.CancelAfter(executionDeadline.Remaining);
@@ -516,6 +517,23 @@ public static class SubjectProcessRunner
             return (captured.ToArray(), overflow, false);
         }
         return (captured.ToArray(), overflow, true);
+    }
+
+    internal static async Task<bool> ReadCompletesBeforeDeadlineForSelfTestAsync(
+        Stream stream,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var deadlineSource =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+        deadlineSource.CancelAfter(timeout);
+        var result = await ReadBoundedAsync(
+            stream,
+            1024,
+            deadlineSource.Token,
+            cancellationToken).ConfigureAwait(false);
+        return result.Complete;
     }
 
     private static bool IsValidUtf8(byte[] bytes)

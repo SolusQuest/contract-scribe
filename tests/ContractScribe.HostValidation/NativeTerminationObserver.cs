@@ -103,12 +103,12 @@ public static class NativeTerminationObserver
         if (OperatingSystem.IsLinux())
         {
             return TerminateLinux(
-                rootProcess.Id,
                 rootSession,
                 terminationPlan,
                 validateCurrentTarget,
                 deadline,
-                cancellationToken);
+                cancellationToken,
+                LinuxTerminationOperations.Native);
         }
         return new("unsupported", null, null, "unsupported", false);
     }
@@ -351,18 +351,27 @@ public static class NativeTerminationObserver
     }
 
     private static NativeTerminationEvidence TerminateLinux(
-        int rootProcessId,
         RootStatusSession rootSession,
         ProcessTerminationPlan terminationPlan,
         Func<ProcessTerminationTarget, bool> validateCurrentTarget,
         MonotonicDeadline deadline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LinuxTerminationOperations operations)
     {
+        if (!rootSession.IsTerminationPlanRootAuthorized(
+                terminationPlan.Root))
+        {
+            LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
+            return rootSession.TerminateRoot(
+                terminationPlan.Root,
+                "indeterminate",
+                deadline,
+                cancellationToken);
+        }
+
         var descendantFailure = terminationPlan.Complete
-            && terminationPlan.Root.ProcessId == rootProcessId
-            && terminationPlan.Root.StartIdentity != 0
-                ? null
-                : "indeterminate";
+            ? null
+            : "indeterminate";
         if (descendantFailure is not null)
         {
             LastDiagnosticCode = "HV934_LINUX_TERMINATION_PLAN_INCOMPLETE";
@@ -370,12 +379,12 @@ public static class NativeTerminationObserver
         foreach (var descendant in terminationPlan.Descendants
                      .OrderByDescending(target => target.Depth))
         {
-            var processFileDescriptor = PidFdOpen(
-                descendant.Identity.ProcessId,
-                0);
+            var opened = operations.OpenPidFd(
+                descendant.Identity.ProcessId);
+            var processFileDescriptor = opened.Descriptor;
             if (processFileDescriptor < 0)
             {
-                var error = Marshal.GetLastPInvokeError();
+                var error = opened.Error;
                 if (error != Esrch)
                 {
                     descendantFailure = MergeFailure(
@@ -386,11 +395,11 @@ public static class NativeTerminationObserver
             }
             try
             {
-                if (!TryReadLinuxStartIdentity(
-                        descendant.Identity.ProcessId,
-                        out var startIdentity))
+                var currentIdentity = operations.ReadStartIdentity(
+                    descendant.Identity.ProcessId);
+                if (!currentIdentity.Success)
                 {
-                    if (!PollLinuxExit(
+                    if (!operations.PollExit(
                             processFileDescriptor,
                             MonotonicDeadline.Start(TimeSpan.Zero),
                             cancellationToken))
@@ -401,7 +410,8 @@ public static class NativeTerminationObserver
                     }
                     continue;
                 }
-                if (startIdentity != descendant.Identity.StartIdentity)
+                if (currentIdentity.StartIdentity
+                    != descendant.Identity.StartIdentity)
                 {
                     descendantFailure = MergeFailure(
                         descendantFailure,
@@ -415,13 +425,11 @@ public static class NativeTerminationObserver
                         "indeterminate");
                     continue;
                 }
-                if (PidFdSendSignal(
-                        processFileDescriptor,
-                        UnixSigKill,
-                        IntPtr.Zero,
-                        0) != 0)
+                var signal = operations.SendSignal(
+                    processFileDescriptor);
+                if (signal.Result != 0)
                 {
-                    var error = Marshal.GetLastPInvokeError();
+                    var error = signal.Error;
                     if (error != Esrch)
                     {
                         descendantFailure = MergeFailure(
@@ -430,7 +438,7 @@ public static class NativeTerminationObserver
                     }
                     continue;
                 }
-                if (!PollLinuxExit(
+                if (!operations.PollExit(
                         processFileDescriptor,
                         deadline,
                         cancellationToken))
@@ -442,7 +450,7 @@ public static class NativeTerminationObserver
             }
             finally
             {
-                _ = Close(processFileDescriptor);
+                operations.Close(processFileDescriptor);
             }
         }
 
@@ -452,6 +460,21 @@ public static class NativeTerminationObserver
             deadline,
             cancellationToken);
     }
+
+    internal static NativeTerminationEvidence TerminateLinuxForSelfTest(
+        RootStatusSession rootSession,
+        ProcessTerminationPlan terminationPlan,
+        Func<ProcessTerminationTarget, bool> validateCurrentTarget,
+        MonotonicDeadline deadline,
+        CancellationToken cancellationToken,
+        LinuxTerminationOperations operations) =>
+        TerminateLinux(
+            rootSession,
+            terminationPlan,
+            validateCurrentTarget,
+            deadline,
+            cancellationToken,
+            operations);
 
     private static NativeTerminationEvidence CaptureLinuxStatus(
         int rawStatus,
@@ -733,6 +756,15 @@ public static class NativeTerminationObserver
                 return;
             }
 
+            var identityBeforeOpen =
+                operations.ReadStartIdentity(rootProcessId);
+            if (!identityBeforeOpen.Success)
+            {
+                LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
+                initializationOutcome = "indeterminate";
+                return;
+            }
+
             var opened = operations.OpenPidFd(rootProcessId);
             rootFileDescriptor = opened.Descriptor;
             if (rootFileDescriptor < 0)
@@ -745,8 +777,11 @@ public static class NativeTerminationObserver
                         : "indeterminate";
                 return;
             }
-            var initialIdentity = operations.ReadStartIdentity(rootProcessId);
-            if (!initialIdentity.Success)
+            var identityAfterOpen =
+                operations.ReadStartIdentity(rootProcessId);
+            if (!identityAfterOpen.Success
+                || identityBeforeOpen.StartIdentity
+                    != identityAfterOpen.StartIdentity)
             {
                 LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
                 initializationOutcome = "indeterminate";
@@ -754,7 +789,7 @@ public static class NativeTerminationObserver
             }
             openedIdentity = new(
                 rootProcessId,
-                initialIdentity.StartIdentity);
+                identityBeforeOpen.StartIdentity);
 
             var waiterArmed = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -781,6 +816,25 @@ public static class NativeTerminationObserver
         internal bool WaiterCompleted => waiterTask?.IsCompleted == true;
 
         internal int StatusOwnerCount => waiterTask is null ? 0 : 1;
+
+        internal ProcessInstanceIdentity? OpenedIdentity => openedIdentity;
+
+        internal bool IsTerminationPlanRootAuthorized(
+            ProcessInstanceIdentity plannedIdentity)
+        {
+            if (waiterTask is null
+                || openedIdentity is null
+                || rootFileDescriptor < 0
+                || plannedIdentity != openedIdentity)
+            {
+                return false;
+            }
+            var current = operations.ReadStartIdentity(rootProcessId);
+            return current.Success
+                && openedIdentity == new ProcessInstanceIdentity(
+                    rootProcessId,
+                    current.StartIdentity);
+        }
 
         internal NativeTerminationEvidence CaptureWait(
             string requestOutcome,
@@ -932,6 +986,43 @@ public static class NativeTerminationObserver
                     result,
                     result == 0 ? 0 : Marshal.GetLastPInvokeError());
             },
+            descriptor => _ = NativeTerminationObserver.Close(descriptor));
+    }
+
+    internal sealed record LinuxTerminationOperations(
+        Func<int, (int Descriptor, int Error)> OpenPidFd,
+        Func<int, (bool Success, long StartIdentity)> ReadStartIdentity,
+        Func<int, (int Result, int Error)> SendSignal,
+        Func<int, MonotonicDeadline, CancellationToken, bool> PollExit,
+        Action<int> Close)
+    {
+        internal static LinuxTerminationOperations Native { get; } = new(
+            processId =>
+            {
+                var descriptor = PidFdOpen(processId, 0);
+                return (
+                    descriptor,
+                    descriptor < 0 ? Marshal.GetLastPInvokeError() : 0);
+            },
+            processId =>
+            {
+                var success = TryReadLinuxStartIdentity(
+                    processId,
+                    out var startIdentity);
+                return (success, startIdentity);
+            },
+            descriptor =>
+            {
+                var result = PidFdSendSignal(
+                    descriptor,
+                    UnixSigKill,
+                    IntPtr.Zero,
+                    0);
+                return (
+                    result,
+                    result == 0 ? 0 : Marshal.GetLastPInvokeError());
+            },
+            PollLinuxExit,
             descriptor => _ = NativeTerminationObserver.Close(descriptor));
     }
 
