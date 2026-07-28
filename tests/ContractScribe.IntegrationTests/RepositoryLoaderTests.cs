@@ -1048,6 +1048,106 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task ProtectsTargetAddedAdditionalFileConsumedByGenerator()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(withGenerator: true);
+        var inputPath = Path.Combine(fixture.Root, "App", "obj", "DynamicGeneratorInput.txt");
+        await File.WriteAllTextAsync(inputPath, "initial");
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var projectText = await File.ReadAllTextAsync(projectPath);
+        await File.WriteAllTextAsync(
+            projectPath,
+            projectText.Replace(
+                "</Project>",
+                """
+                <Target Name="AddDynamicAdditionalFile" BeforeTargets="CoreCompile">
+                  <ItemGroup><AdditionalFiles Include="obj/DynamicGeneratorInput.txt" /></ItemGroup>
+                </Target>
+                </Project>
+                """,
+                StringComparison.Ordinal));
+
+        var baseline = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        Assert.Equal(RepositoryLoadStatus.Success, baseline.Status);
+        await using (var session = Assert.IsType<LoadedRepositorySession>(baseline.Session))
+        {
+            Assert.Contains(session.GeneratedSources, fact =>
+                fact.SourceText.Contains("FixtureDynamicAdditional", StringComparison.Ordinal)
+                && fact.SourceText.Contains("\"initial\"", StringComparison.Ordinal));
+        }
+
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                File.WriteAllText(inputPath, "changed");
+            }
+        });
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task ProtectsTargetAddedAnalyzerConfigConsumedByGenerator()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(withGenerator: true);
+        var configPath = Path.Combine(fixture.Root, "App", "obj", "Dynamic.globalconfig");
+        await File.WriteAllTextAsync(
+            configPath,
+            """
+            is_global = true
+            contract_scribe_dynamic_option = initial
+            """);
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var projectText = await File.ReadAllTextAsync(projectPath);
+        await File.WriteAllTextAsync(
+            projectPath,
+            projectText.Replace(
+                "</Project>",
+                """
+                <Target Name="AddDynamicAnalyzerConfig" BeforeTargets="CoreCompile">
+                  <ItemGroup><EditorConfigFiles Include="obj/Dynamic.globalconfig" /></ItemGroup>
+                </Target>
+                </Project>
+                """,
+                StringComparison.Ordinal));
+
+        var baseline = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        Assert.Equal(RepositoryLoadStatus.Success, baseline.Status);
+        await using (var session = Assert.IsType<LoadedRepositorySession>(baseline.Session))
+        {
+            Assert.Contains(session.GeneratedSources, fact =>
+                fact.SourceText.Contains("FixtureDynamicAnalyzerConfig", StringComparison.Ordinal)
+                && fact.SourceText.Contains("\"initial\"", StringComparison.Ordinal));
+        }
+
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage == LoaderStage.WorkspaceLoad)
+            {
+                File.WriteAllText(
+                    configPath,
+                    """
+                    is_global = true
+                    contract_scribe_dynamic_option = changed
+                    """);
+            }
+        });
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
     public async Task RejectsUnloadableSolutionProjectWithAStableGraphFact()
     {
         await using var fixture = await LoaderFixture.CreateAsync();

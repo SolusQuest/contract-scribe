@@ -64,5 +64,41 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                         $$"""public static class FixtureSelfAware { public const string Value = "{{value}}"; }""",
                         Encoding.UTF8));
             });
+
+        var dynamicAdditionalValues = context.AdditionalTextsProvider
+            .Where(static text =>
+                string.Equals(
+                    Path.GetFileName(text.Path),
+                    "DynamicGeneratorInput.txt",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(static (text, cancellationToken) =>
+                text.GetText(cancellationToken)?.ToString() ?? string.Empty);
+        context.RegisterSourceOutput(dynamicAdditionalValues, static (output, value) =>
+            output.AddSource(
+                "Fixture.DynamicAdditional.g.cs",
+                SourceText.From(
+                    $$"""public static class FixtureDynamicAdditional { public const string Value = "{{value}}"; }""",
+                    Encoding.UTF8)));
+
+        var dynamicAnalyzerConfigValues = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "contract_scribe_dynamic_option",
+                    out var value)
+                    ? value
+                    : null);
+        context.RegisterSourceOutput(dynamicAnalyzerConfigValues, static (output, value) =>
+        {
+            if (value is null)
+            {
+                return;
+            }
+
+            output.AddSource(
+                "Fixture.DynamicAnalyzerConfig.g.cs",
+                SourceText.From(
+                    $$"""public static class FixtureDynamicAnalyzerConfig { public const string Value = "{{value}}"; }""",
+                    Encoding.UTF8));
+        });
     }
 }

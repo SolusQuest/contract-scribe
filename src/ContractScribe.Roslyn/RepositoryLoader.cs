@@ -349,7 +349,9 @@ internal static class PostRegistrationLoader
                     ?? throw LoaderException.Compilation("compilation.unavailable");
                 var workspaceSourceTrees = await ValidateWorkspaceSourcesAsync(
                     paths,
+                    node,
                     project,
+                    toolchain,
                     pathResolver,
                     state,
                     cancellationToken);
@@ -599,6 +601,7 @@ internal static class PostRegistrationLoader
             RequireSourceInputsContained(paths.PhysicalRoot, project);
             var protectedPaths = ProtectedPaths(paths, projectPath, project, pathResolver);
             var allowedRoots = AllowedOutputRoots(paths.PhysicalRoot, project, pathResolver);
+            var allowedExternalSemanticRoots = AllowedExternalSemanticRoots(paths.PhysicalRoot, project);
             state.AddPolicy(
                 protectedPaths.Concat(referenceResolutions.SelectMany(
                     reference => ProtectionIdentities(paths, reference, pathResolver))),
@@ -611,7 +614,8 @@ internal static class PostRegistrationLoader
                 rootSet.Contains(projectPath),
                 references,
                 protectedPaths,
-                allowedRoots);
+                allowedRoots,
+                allowedExternalSemanticRoots);
             collection.UnloadProject(project);
             foreach (var reference in references.Reverse())
             {
@@ -624,7 +628,9 @@ internal static class PostRegistrationLoader
 
     private static async Task<IReadOnlySet<SyntaxTree>> ValidateWorkspaceSourcesAsync(
         ResolvedRepositoryPaths paths,
+        EvaluatedProject node,
         RoslynProject project,
+        RegisteredToolchain toolchain,
         RepositoryPathResolver resolver,
         LoaderExecutionState state,
         CancellationToken cancellationToken)
@@ -649,7 +655,55 @@ internal static class PostRegistrationLoader
             trees.Add(tree);
         }
 
+        foreach (var document in project.AdditionalDocuments.Concat(project.AnalyzerConfigDocuments))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ProtectWorkspaceSemanticInput(
+                paths,
+                node,
+                toolchain,
+                document.FilePath,
+                resolver,
+                state);
+        }
+
         return trees;
+    }
+
+    private static void ProtectWorkspaceSemanticInput(
+        ResolvedRepositoryPaths paths,
+        EvaluatedProject node,
+        RegisteredToolchain toolchain,
+        string? documentPath,
+        RepositoryPathResolver resolver,
+        LoaderExecutionState state)
+    {
+        if (string.IsNullOrWhiteSpace(documentPath)
+            || !Path.IsPathFullyQualified(documentPath))
+        {
+            throw LoaderException.Graph("graph.source-outside-root");
+        }
+
+        var fullPath = Path.GetFullPath(documentPath);
+        if (IsContained(paths.PhysicalRoot, fullPath))
+        {
+            var resolution = resolver.ResolveSource(paths.PhysicalRoot, fullPath);
+            state.AddPolicy(
+                ProtectionIdentities(paths, resolution, resolver)
+                    .Append(resolver.RelativeIdentity(paths.PhysicalRoot, fullPath)),
+                []);
+            return;
+        }
+
+        var externalRoot = node.AllowedExternalSemanticRoots
+            .Append(toolchain.MsbuildPath)
+            .FirstOrDefault(root => IsContained(root, fullPath));
+        if (externalRoot is null)
+        {
+            throw LoaderException.Graph("graph.source-outside-root");
+        }
+
+        _ = resolver.ResolveSemantic(externalRoot, fullPath);
     }
 
     private static void RequireSourceInputsContained(
@@ -725,6 +779,50 @@ internal static class PostRegistrationLoader
             .Distinct(PathComparer())
             .Order(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static IReadOnlyList<string> AllowedExternalSemanticRoots(
+        string repositoryRoot,
+        MsBuildProject project)
+    {
+        var projectDirectory = Path.GetDirectoryName(project.FullPath)!;
+        return new[]
+            {
+                "NuGetPackageRoot",
+                "NuGetPackageFolders",
+                "MSBuildToolsPath",
+                "MSBuildSDKsPath",
+                "RoslynTargetsPath",
+                "NETCoreSdkDir",
+            }
+            .SelectMany(name => project.GetPropertyValue(name)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(value => TryGetFullPath(projectDirectory, value))
+            .Where(path => path is not null
+                && Directory.Exists(path)
+                && !IsContained(repositoryRoot, path))
+            .Select(path => path!)
+            .Distinct(PathComparer())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string? TryGetFullPath(string baseDirectory, string path)
+    {
+        try
+        {
+            return Path.GetFullPath(
+                Path.IsPathFullyQualified(path)
+                    ? path
+                    : Path.Combine(baseDirectory, path));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or NotSupportedException
+                or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     private static string ObserveTargetFramework(RoslynProject project)
@@ -1003,7 +1101,8 @@ internal sealed record EvaluatedProject(
     bool IsRoot,
     IReadOnlyList<string> References,
     IReadOnlyList<string> ProtectedPaths,
-    IReadOnlyList<string> AllowedOutputRoots);
+    IReadOnlyList<string> AllowedOutputRoots,
+    IReadOnlyList<string> AllowedExternalSemanticRoots);
 
 internal sealed record PostRegistrationResult(
     LoadedRepositorySession Session,
