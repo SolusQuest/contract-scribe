@@ -24,7 +24,8 @@ public static partial class NetworkOperationSourceScanner
                 File.ReadAllText(RepositoryPaths.ResolveConfined(root, input.Path)));
             if (ForbiddenNamespace().IsMatch(text)
                 || ForbiddenType().IsMatch(text)
-                || ForbiddenFactory().IsMatch(text))
+                || ForbiddenFactory().IsMatch(text)
+                || ForbiddenIndirection().IsMatch(text))
             {
                 return true;
             }
@@ -55,7 +56,8 @@ public static partial class NetworkOperationSourceScanner
         var executableSource = StripCommentsAndLiterals(sourceText);
         if (ForbiddenNamespace().IsMatch(executableSource)
             || ForbiddenType().IsMatch(executableSource)
-            || ForbiddenFactory().IsMatch(executableSource))
+            || ForbiddenFactory().IsMatch(executableSource)
+            || ForbiddenIndirection().IsMatch(executableSource))
         {
             throw new ProtocolException("HV232_NETWORK_OPERATION_SOURCE");
         }
@@ -73,6 +75,21 @@ public static partial class NetworkOperationSourceScanner
         @"\b(?:ConnectAsync|GetHostAddressesAsync|GetHostEntryAsync|SendAsync|GetAsync|PostAsync|OpenReadAsync|CreateConnection)\s*\(")]
     private static partial Regex ForbiddenFactory();
 
+    [GeneratedRegex(
+        @"(?ix)
+        \bType\s*\.\s*GetType\s*\(
+        |\bActivator\s*\.\s*CreateInstance\s*\(
+        |\.\s*GetMethod\s*\(
+        |\.\s*Invoke\s*\(
+        |\bAssembly\s*\.\s*Load(?:From|File)?\s*\(
+        |\bAssemblyLoadContext\b
+        |\bNativeLibrary\b
+        |\b(?:DllImport|LibraryImport)\s*\(
+        |\bMarshal\s*\.\s*GetDelegateForFunctionPointer\s*\(
+        |\bdelegate\s*\*\s*unmanaged\b
+        |\bdynamic\b")]
+    private static partial Regex ForbiddenIndirection();
+
     private static bool HasForbiddenMemberReference(string assemblyPath)
     {
         using var stream = File.OpenRead(assemblyPath);
@@ -82,23 +99,84 @@ public static partial class NetworkOperationSourceScanner
             return false;
         }
         var metadata = peReader.GetMetadataReader();
+        foreach (var handle in metadata.MethodDefinitions)
+        {
+            if ((metadata.GetMethodDefinition(handle).Attributes
+                    & System.Reflection.MethodAttributes.PinvokeImpl) != 0)
+            {
+                return true;
+            }
+        }
         foreach (var handle in metadata.MemberReferences)
         {
             var member = metadata.GetMemberReference(handle);
-            string? @namespace = member.Parent.Kind switch
+            var (typeNamespace, typeName) = member.Parent.Kind switch
             {
-                HandleKind.TypeReference => metadata.GetString(
-                    metadata.GetTypeReference((TypeReferenceHandle)member.Parent).Namespace),
-                HandleKind.TypeDefinition => metadata.GetString(
-                    metadata.GetTypeDefinition((TypeDefinitionHandle)member.Parent).Namespace),
-                _ => null
+                HandleKind.TypeReference => GetTypeIdentity(
+                    metadata,
+                    (TypeReferenceHandle)member.Parent),
+                HandleKind.TypeDefinition => GetTypeIdentity(
+                    metadata,
+                    (TypeDefinitionHandle)member.Parent),
+                _ => (null, null)
             };
-            if (@namespace?.StartsWith("System.Net", StringComparison.Ordinal) == true)
+            var memberName = metadata.GetString(member.Name);
+            if (typeNamespace?.StartsWith("System.Net", StringComparison.Ordinal) == true
+                || IsForbiddenIndirection(typeNamespace, typeName, memberName))
+            {
+                return true;
+            }
+        }
+        foreach (var handle in metadata.TypeReferences)
+        {
+            var (typeNamespace, typeName) = GetTypeIdentity(metadata, handle);
+            if (typeNamespace is "System.Runtime.Loader" or "Microsoft.CSharp.RuntimeBinder"
+                || typeNamespace == "System.Runtime.InteropServices"
+                    && typeName is "NativeLibrary")
             {
                 return true;
             }
         }
         return false;
+    }
+
+    private static (string? Namespace, string? Name) GetTypeIdentity(
+        MetadataReader metadata,
+        TypeReferenceHandle handle)
+    {
+        var type = metadata.GetTypeReference(handle);
+        return (metadata.GetString(type.Namespace), metadata.GetString(type.Name));
+    }
+
+    private static (string? Namespace, string? Name) GetTypeIdentity(
+        MetadataReader metadata,
+        TypeDefinitionHandle handle)
+    {
+        var type = metadata.GetTypeDefinition(handle);
+        return (metadata.GetString(type.Namespace), metadata.GetString(type.Name));
+    }
+
+    private static bool IsForbiddenIndirection(
+        string? typeNamespace,
+        string? typeName,
+        string memberName)
+    {
+        return typeNamespace == "System"
+                && typeName == "Type"
+                && memberName is "GetType" or "GetMethod"
+            || typeNamespace == "System"
+                && typeName == "Activator"
+                && memberName == "CreateInstance"
+            || typeNamespace == "System.Reflection"
+                && typeName == "Assembly"
+                && memberName.StartsWith("Load", StringComparison.Ordinal)
+            || typeNamespace == "System.Reflection"
+                && typeName is "MethodBase" or "MethodInfo"
+                && memberName == "Invoke"
+            || typeNamespace == "System.Runtime.InteropServices"
+                && typeName is "NativeLibrary" or "Marshal"
+                && memberName is "Load" or "TryLoad" or "GetExport"
+                    or "GetDelegateForFunctionPointer";
     }
 
     private static IReadOnlySet<string> BuildManagedClosure(IEnumerable<string> roots)

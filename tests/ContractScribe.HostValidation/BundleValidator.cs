@@ -514,9 +514,7 @@ public static class BundleValidator
             .Select(element => element.Attribute("Include")?.Value)
             .Where(value => value is not null)
             .ToArray();
-        if (!harnessReferences.SequenceEqual(
-                ["../ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj"],
-                StringComparer.Ordinal)
+        if (harnessReferences.Length != 0
             || !harnessPackages.SequenceEqual(["JsonSchema.Net"], StringComparer.Ordinal))
         {
             throw new ProtocolException("HV143_HARNESS_DEPENDENCY_BOUNDARY");

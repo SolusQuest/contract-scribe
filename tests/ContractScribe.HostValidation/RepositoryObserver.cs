@@ -58,8 +58,15 @@ public static class RepositoryObserver
                         var info = (attributes & FileAttributes.Directory) != 0
                             ? (FileSystemInfo)new DirectoryInfo(path)
                             : new FileInfo(path);
+                        var target = info.LinkTarget ?? "unresolved";
+                        var resolvedTarget = info.ResolveLinkTarget(returnFinalTarget: false);
+                        if (resolvedTarget is not null && resolvedTarget.Exists)
+                        {
+                            target = NormalizeRelative(
+                                Path.GetRelativePath(fullRoot, resolvedTarget.FullName));
+                        }
                         var marker = CanonicalJson.Sha256(Encoding.UTF8.GetBytes(
-                            $"reparse\0{info.LinkTarget ?? "unresolved"}"));
+                            $"reparse\0{target}"));
                         AddIdentity(
                             relative,
                             marker,

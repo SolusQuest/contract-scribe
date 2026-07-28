@@ -641,7 +641,10 @@
         "networkOperationRecorderState",
         "transitionEvents",
         "standardOutputByteCount",
-        "standardErrorByteCount"
+        "standardErrorByteCount",
+        "killRequestOutcome",
+        "finalPlatformTerminationStatus",
+        "auditTemporaryCreatedOrChangedBytes"
       ],
       "properties": {
         "exitCode": {
@@ -713,6 +716,7 @@
             "released",
             "observed",
             "issued-and-observed",
+            "issued-but-not-observed",
             "already-exited",
             "permission-failure",
             "unsupported",
@@ -763,6 +767,44 @@
         },
         "standardErrorByteCount": {
           "type": "integer",
+          "minimum": 0
+        },
+        "killRequestOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "issued",
+            "already-exited",
+            "permission-failure",
+            "unsupported",
+            "indeterminate",
+            null
+          ]
+        },
+        "finalPlatformTerminationStatus": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started",
+            null
+          ]
+        },
+        "auditTemporaryCreatedOrChangedBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0
         }
       },

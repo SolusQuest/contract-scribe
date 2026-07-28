@@ -17,7 +17,8 @@ public static class SubjectProcessRunner
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
         SubjectControl? control = null,
-        IReadOnlyList<ProcessIdentityRule>? processIdentityRegistry = null)
+        IReadOnlyList<ProcessIdentityRule>? processIdentityRegistry = null,
+        string? auditTemporaryRoot = null)
     {
         var startInfo = new ProcessStartInfo(executable)
         {
@@ -32,6 +33,13 @@ public static class SubjectProcessRunner
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+        if (auditTemporaryRoot is not null)
+        {
+            Directory.CreateDirectory(auditTemporaryRoot);
+            startInfo.Environment["TMP"] = auditTemporaryRoot;
+            startInfo.Environment["TEMP"] = auditTemporaryRoot;
+            startInfo.Environment["TMPDIR"] = auditTemporaryRoot;
         }
 
         using var process = new Process { StartInfo = startInfo };
@@ -98,11 +106,19 @@ public static class SubjectProcessRunner
         {
             _ = TryKill(process);
         }
+        var platformTermination = ClassifyTermination(process.ExitCode);
         var confirmedExternalKill = control?.Action == "external-kill"
-            && controlResult.Outcome == "issued-and-observed";
+            && controlResult.Outcome == "issued"
+            && IsForcedTerminationCompatible(process.ExitCode);
+        var observedControlOutcome = control?.Action == "external-kill"
+            && controlResult.Outcome == "issued"
+                ? confirmedExternalKill
+                    ? "issued-and-observed"
+                    : "issued-but-not-observed"
+                : controlResult.Outcome;
         var termination = timedOut || confirmedExternalKill
             ? "external-kill"
-            : ClassifyTermination(process.ExitCode);
+            : platformTermination;
         return new ProcessExecutionResult(
             process.ExitCode,
             "started",
@@ -115,9 +131,11 @@ public static class SubjectProcessRunner
             IsValidUtf8(stderr.Bytes),
             timedOut,
             controlResult.Completed,
-            controlResult.Outcome,
+            observedControlOutcome,
             processObserver.ObservationComplete,
-            processObserver.Snapshot());
+            processObserver.Snapshot(),
+            control?.Action == "external-kill" ? controlResult.Outcome : null,
+            platformTermination);
     }
 
     private static ProcessExecutionResult StartFailure(string processStart) =>
@@ -167,9 +185,7 @@ public static class SubjectProcessRunner
                 return new(true, "requested");
             case "external-kill":
                 var killOutcome = TryKill(process);
-                return new(
-                    killOutcome == "issued",
-                    killOutcome == "issued" ? "issued-and-observed" : killOutcome);
+                return new(killOutcome == "issued", killOutcome);
             case "release-late-completion":
                 File.WriteAllText(Path.Join(control.ControlRoot, "cancel.requested"), string.Empty);
                 File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
@@ -246,6 +262,17 @@ public static class SubjectProcessRunner
             _ when exitCode is 137 or 9 => "fatal-runtime-termination",
             _ => "crash"
         };
+    }
+
+    private static bool IsForcedTerminationCompatible(int exitCode)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var status = unchecked((uint)exitCode);
+            return status is 0xffffffff or 0xc000013a
+                || status is >= 0xc0000000 and <= 0xcfffffff;
+        }
+        return exitCode is 9 or 137;
     }
 
     private static string TryKill(Process process)

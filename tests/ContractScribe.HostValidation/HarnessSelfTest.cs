@@ -143,13 +143,17 @@ public static class HarnessSelfTest
             Ensure(
                 killed.Execution.ControlCompleted
                 && killed.Execution.ProcessTermination == "external-kill"
+                && killed.Execution.KillRequestOutcome == "issued"
+                && killed.Execution.FinalPlatformTerminationStatus is not "normal"
                 && killed.Response is null,
                 "HV919_SELF_TEST_CONTROL_KILL");
 
             var killRace = await RunFakeAsync(context, temp, "controlled-kill-race", "run-1", cancellationToken).ConfigureAwait(false);
             Ensure(
                 killRace.Execution.ProcessTermination != "external-kill"
-                && killRace.Execution.ControlOutcome != "issued-and-observed",
+                && killRace.Execution.ControlOutcome != "issued-and-observed"
+                && (killRace.Execution.KillRequestOutcome != "issued"
+                    || killRace.Execution.FinalPlatformTerminationStatus == "normal"),
                 "HV926_SELF_TEST_KILL_RACE");
         }
         finally

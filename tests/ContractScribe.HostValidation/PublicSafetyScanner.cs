@@ -144,7 +144,7 @@ public static partial class PublicSafetyScanner
     private static partial Regex RepositoryBuildCannotAccessSecrets();
 
     [GeneratedRegex(
-        @"(?i)\b(?:contractscribe|host|validator|validation|tool)\b.{0,40}\b(?:cannot|can't|does\s+not)\b.{0,40}\b(?:reach|access|connect)\b.{0,20}\b(?:the\s+)?(?:internet|network|external)\b|\b(?:contractscribe|host|validator|validation|tool)\b.{0,24}\bhas\s+no\s+external\s+connectivity\b|\b(?:outbound|egress)\s+(?:connections?|traffic|access)\b.{0,24}\b(?:is|are)\s+(?:impossible|unavailable|disabled)\b")]
+        @"(?i)\b(?:contractscribe|host|validator|validation|tool|runtime|audit|execution)\b.{0,40}\b(?:cannot|can't|does\s+not)\b.{0,40}\b(?:reach|access|connect)\b.{0,20}\b(?:the\s+)?(?:internet|network|external)\b|\b(?:contractscribe|host|validator|validation|tool|runtime|audit|execution)\b.{0,24}\bhas\s+no\s+external\s+connectivity\b|\b(?:outbound|egress)\s+(?:connections?|traffic|access)\b.{0,24}\b(?:is|are)\s+(?:impossible|unavailable|disabled)\b")]
     private static partial Regex NetworkCapabilityAssertion();
 
     [GeneratedRegex(

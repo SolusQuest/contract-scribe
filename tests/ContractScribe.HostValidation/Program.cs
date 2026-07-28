@@ -371,6 +371,12 @@ public static class Program
                 Console.Error.Write("synthetic-stderr");
                 CanonicalJson.WriteCanonical(request.ResponsePath, response);
                 return 0;
+            case "temporary-over-limit":
+                File.WriteAllBytes(
+                    Path.Join(Path.GetTempPath(), "synthetic-temporary.bin"),
+                    new byte[8 * 1024]);
+                CanonicalJson.WriteCanonical(request.ResponsePath, response);
+                return 0;
             case "exception-before-response":
                 throw new ProtocolException("HV921_SYNTHETIC_PRE_RESPONSE");
             case "exception-after-response":

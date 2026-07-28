@@ -1,4 +1,3 @@
-using ContractScribe.ContractBaselineProbe;
 using System.Text;
 using System.Text.Json;
 
@@ -315,6 +314,8 @@ public static class CellExecutor
         var repositoryRoot = RepositoryPaths.ResolveConfined(context.Root, fixture.RepositoryRoot);
         var tempRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-run-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
+        var auditTemporaryRoot = Path.Join(tempRoot, "subject-temporary");
+        Directory.CreateDirectory(auditTemporaryRoot);
         var resultPath = fixture.ResultPath is null
             ? null
             : ResolveFixturePath(repositoryRoot, fixture.ResultPath, mustExist: false);
@@ -335,6 +336,15 @@ public static class CellExecutor
             vector.VectorId == "network.no-contractscribe-initiated-operation"
                 ? Path.Join(tempRoot, "network-operations.jsonl")
                 : null;
+        if (networkOperationLogPath is not null)
+        {
+            using var recorder = new FileStream(
+                networkOperationLogPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            recorder.Flush(flushToDisk: true);
+        }
         var transitionLogPath = RunSemantics.RequiresTransitionLog(vector.VectorId)
             ? Path.Join(tempRoot, "transition-events.jsonl")
             : null;
@@ -350,7 +360,8 @@ public static class CellExecutor
             control is null ? [] : [control.GateName],
             control?.Action ?? "continue",
             networkOperationLogPath,
-            transitionLogPath);
+            transitionLogPath,
+            auditTemporaryRoot);
         CanonicalJson.WriteCanonical(requestPath, request);
         SchemaValidation.ValidateDefinition(
             requestPath,
@@ -362,6 +373,9 @@ public static class CellExecutor
 
         try
         {
+            var auditTemporaryBefore = RepositoryObserver.Capture(
+                auditTemporaryRoot,
+                []);
             var (executable, arguments) = BuildInvocation(
                 context.Root,
                 repositoryRoot,
@@ -383,9 +397,17 @@ public static class CellExecutor
                 TimeSpan.FromSeconds(context.Protocol.ExecutionContract.SubjectTimeoutSeconds),
                 cancellationToken,
                 control,
-                fixture.ProcessIdentityRegistry).ConfigureAwait(false);
+                fixture.ProcessIdentityRegistry,
+                auditTemporaryRoot).ConfigureAwait(false);
             var after = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
             var delta = RepositoryObserver.Compare(before, after);
+            var auditTemporaryDelta = RepositoryObserver.Compare(
+                auditTemporaryBefore,
+                RepositoryObserver.Capture(auditTemporaryRoot, []));
+            var auditTemporaryBytes = checked(
+                auditTemporaryDelta.ProtectedCreatedOrChangedBytes
+                + auditTemporaryDelta.OtherCreatedOrChangedBytes
+                + auditTemporaryDelta.AllowedDesignTimeCreatedOrChangedBytes);
             var diagnostics = ValidateStreams(execution);
             SubjectResponse? response = null;
             if (File.Exists(responsePath))
@@ -438,7 +460,10 @@ public static class CellExecutor
                 NetworkOperationRecorderState = ObserveNetworkOperationLog(networkOperationLogPath),
                 TransitionEvents = ObserveTransitionLog(transitionLogPath),
                 StandardOutputByteCount = execution.StandardOutput.LongLength,
-                StandardErrorByteCount = execution.StandardError.LongLength
+                StandardErrorByteCount = execution.StandardError.LongLength,
+                KillRequestOutcome = execution.KillRequestOutcome,
+                FinalPlatformTerminationStatus = execution.FinalPlatformTerminationStatus,
+                AuditTemporaryCreatedOrChangedBytes = auditTemporaryBytes
             };
             var provisional = new RunEvidence(
                 vector.VectorId,
@@ -513,7 +538,7 @@ public static class CellExecutor
         return new FileInfo(path).Length == 0 ? "empty" : "operation-observed";
     }
 
-    private static IReadOnlyList<string>? ObserveTransitionLog(string? path)
+    public static IReadOnlyList<string>? ObserveTransitionLog(string? path)
     {
         if (path is null)
         {
@@ -526,28 +551,18 @@ public static class CellExecutor
         try
         {
             return File.ReadAllLines(path, new UTF8Encoding(false, true))
-                .Select(line =>
+                .Select((line, index) =>
                 {
                     using var document = JsonDocument.Parse(line);
                     var root = document.RootElement;
                     if (root.EnumerateObject().Select(property => property.Name)
                             .SequenceEqual(["sequence", "event"], StringComparer.Ordinal)
-                        && root.GetProperty("sequence").GetInt32() > 0
+                        && root.GetProperty("sequence").GetInt32() == index + 1
                         && !string.IsNullOrWhiteSpace(root.GetProperty("event").GetString()))
                     {
-                        return (Sequence: root.GetProperty("sequence").GetInt32(),
-                            Event: root.GetProperty("event").GetString()!);
+                        return root.GetProperty("event").GetString()!;
                     }
                     throw new ProtocolException("HV245_TRANSITION_LOG_INVALID");
-                })
-                .OrderBy(item => item.Sequence)
-                .Select((item, index) =>
-                {
-                    if (item.Sequence != index + 1)
-                    {
-                        throw new ProtocolException("HV245_TRANSITION_LOG_INVALID");
-                    }
-                    return item.Event;
                 })
                 .ToArray();
         }
@@ -849,7 +864,7 @@ public static class CellExecutor
         byte[] canonicalBytes;
         try
         {
-            canonicalBytes = AuditResultCanonicalizer.Canonicalize(rootElement);
+            canonicalBytes = AuditResultV1Canonicalizer.Canonicalize(rootElement);
         }
         catch (Exception exception) when (exception is FormatException or InvalidOperationException)
         {

@@ -691,7 +691,8 @@
         "synchronizationGates",
         "controlAction",
         "networkOperationLogPath",
-        "transitionLogPath"
+        "transitionLogPath",
+        "auditTemporaryRoot"
       ],
       "properties": {
         "formatVersion": {
@@ -765,6 +766,14 @@
           "maxLength": 1024
         },
         "transitionLogPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "auditTemporaryRoot": {
           "type": [
             "string",
             "null"

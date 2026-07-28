@@ -124,7 +124,8 @@ public sealed record SubjectRequest(
     IReadOnlyList<string> SynchronizationGates,
     string ControlAction,
     string? NetworkOperationLogPath = null,
-    string? TransitionLogPath = null);
+    string? TransitionLogPath = null,
+    string? AuditTemporaryRoot = null);
 
 public sealed record SubjectResponse(
     string FormatVersion,
@@ -202,7 +203,9 @@ public sealed record ProcessExecutionResult(
     bool ControlCompleted,
     string? ControlOutcome,
     bool ObservationComplete,
-    IReadOnlyList<ObservedProcess> ObservedProcesses);
+    IReadOnlyList<ObservedProcess> ObservedProcesses,
+    string? KillRequestOutcome = null,
+    string? FinalPlatformTerminationStatus = null);
 
 public sealed record ControlExecutionResult(bool Completed, string? Outcome);
 
@@ -362,7 +365,10 @@ public sealed record ProcessObservation(
     string? NetworkOperationRecorderState = null,
     IReadOnlyList<string>? TransitionEvents = null,
     long StandardOutputByteCount = 0,
-    long StandardErrorByteCount = 0);
+    long StandardErrorByteCount = 0,
+    string? KillRequestOutcome = null,
+    string? FinalPlatformTerminationStatus = null,
+    long? AuditTemporaryCreatedOrChangedBytes = null);
 
 public sealed record AggregateEvidence(
     string FormatVersion,

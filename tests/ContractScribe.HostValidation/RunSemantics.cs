@@ -264,13 +264,13 @@ public static class RunSemantics
         {
             "bounds.temporary-disk" => new Dictionary<string, long>(StringComparer.Ordinal)
             {
-                ["temporary-disk-bytes"] =
-                    run.RepositoryDelta.AllowedDesignTimeCreatedOrChangedBytes
+                ["temporary-disk-bytes"] = MeasureTemporaryDiskBytes(run)
             },
             "diagnostics.bounded-sanitized" => new Dictionary<string, long>(StringComparer.Ordinal)
             {
                 ["diagnostic-count"] = facts.NormalizedDiagnosticFacts.Count,
-                ["diagnostic-utf8-bytes"] = run.Process.StandardErrorByteCount
+                ["diagnostic-utf8-bytes"] =
+                    MeasureCanonicalDiagnosticBytes(facts.NormalizedDiagnosticFacts)
             },
             "toolchain.owned-subprocesses" => new Dictionary<string, long>(StringComparer.Ordinal)
             {
@@ -279,6 +279,33 @@ public static class RunSemantics
             },
             _ => null
         };
+        ValidateMeasuredBounds(root, source, facts, requiredMeasurements);
+
+        if (vector.VectorId == "support.multi-targeting")
+        {
+            if (facts.LoaderFact is not
+                {
+                    Code: "loader.unsupported.multi-targeting",
+                    Disposition: "whole-input-rejected",
+                    SelectedOrDefaultTargetFramework: false,
+                    PartialResultProduced: false
+                })
+            {
+                throw new ProtocolException("HV241_LOADER_FACTS");
+            }
+        }
+        else if (facts.LoaderFact is not null)
+        {
+            throw new ProtocolException("HV241_LOADER_FACTS");
+        }
+    }
+
+    public static void ValidateMeasuredBounds(
+        string root,
+        SubjectSourceConfiguration source,
+        HostObservationFacts facts,
+        IReadOnlyDictionary<string, long>? requiredMeasurements)
+    {
         if (requiredMeasurements is not null)
         {
             using var bounds = CanonicalJson.ReadStrict(
@@ -319,24 +346,6 @@ public static class RunSemantics
         else if (facts.MeasuredBounds.Count != 0)
         {
             throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
-        }
-
-        if (vector.VectorId == "support.multi-targeting")
-        {
-            if (facts.LoaderFact is not
-                {
-                    Code: "loader.unsupported.multi-targeting",
-                    Disposition: "whole-input-rejected",
-                    SelectedOrDefaultTargetFramework: false,
-                    PartialResultProduced: false
-                })
-            {
-                throw new ProtocolException("HV241_LOADER_FACTS");
-            }
-        }
-        else if (facts.LoaderFact is not null)
-        {
-            throw new ProtocolException("HV241_LOADER_FACTS");
         }
     }
 
@@ -551,25 +560,21 @@ public static class RunSemantics
                 "audit.outcome.skipped",
                 StringComparer.Ordinal) == true =>
                 "audit.outcome.skipped",
-            "cancellation.late-completion" when HasOrderedEvents(
-                run.Process.TransitionEvents,
-                "terminal-commit-cancelled",
-                "late-terminal-attempt-rejected") =>
+            "cancellation.late-completion" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
                 "terminal.late-completion-rejected",
-            "cancellation.terminal-precedence" when HasOrderedEvents(
-                run.Process.TransitionEvents,
-                "terminal-commit-cancelled",
-                "competing-terminal-attempt-rejected") =>
+            "cancellation.terminal-precedence" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
                 "terminal.precedence-closed",
-            "publication.stale-invalidation" when HasOrderedEvents(
-                run.Process.TransitionEvents,
-                "invalidation-completed",
-                "failure-prone-stage-entered") =>
+            "publication.stale-invalidation" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
                 "publication.stale-invalidated-at-start",
-            "publication.same-directory-atomic" when HasOrderedEvents(
-                run.Process.TransitionEvents,
-                "staging-created-in-destination",
-                "atomic-rename-committed") =>
+            "publication.same-directory-atomic" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
                 "publication.same-directory-atomic-rename",
             "determinism.fresh-process-canonical" when result is not null =>
                 "determinism.byte-identical",
@@ -596,28 +601,37 @@ public static class RunSemantics
         };
     }
 
-    private static bool HasOrderedEvents(
-        IReadOnlyList<string>? events,
-        params string[] required)
+    public static bool HasExactTransitionTrace(
+        string vectorId,
+        IReadOnlyList<string>? events)
     {
         if (events is null)
         {
             return false;
         }
-        var position = -1;
-        foreach (var expected in required)
+        string[] expected = vectorId switch
         {
-            position = events
-                .Select((value, index) => (value, index))
-                .Where(item => item.index > position && item.value == expected)
-                .Select(item => item.index)
-                .DefaultIfEmpty(-1)
-                .First();
-            if (position < 0)
-            {
-                return false;
-            }
-        }
-        return true;
+            "cancellation.late-completion" =>
+                ["terminal-commit-cancelled", "late-terminal-attempt-rejected"],
+            "cancellation.terminal-precedence" =>
+                ["terminal-commit-cancelled", "competing-terminal-attempt-rejected"],
+            "publication.stale-invalidation" =>
+                ["invalidation-completed", "failure-prone-stage-entered"],
+            "publication.same-directory-atomic" =>
+                ["staging-created-in-destination", "atomic-rename-committed"],
+            _ => []
+        };
+        return expected.Length != 0
+            && events.SequenceEqual(expected, StringComparer.Ordinal);
     }
+
+    public static long MeasureTemporaryDiskBytes(RunEvidence run) =>
+        checked(
+            run.RepositoryDelta.AllowedDesignTimeCreatedOrChangedBytes
+            + (run.Process.AuditTemporaryCreatedOrChangedBytes
+                ?? throw new ProtocolException("HV239_MEASURED_BOUND_FACTS")));
+
+    public static long MeasureCanonicalDiagnosticBytes(
+        IReadOnlyList<NormalizedDiagnosticFact> diagnostics) =>
+        CanonicalJson.SerializeCanonical(diagnostics).LongLength;
 }

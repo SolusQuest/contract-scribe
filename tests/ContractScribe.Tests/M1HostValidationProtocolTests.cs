@@ -187,6 +187,13 @@ public sealed class M1HostValidationProtocolTests
             var observed = CellExecutor.ObserveCanonicalResult(Root, temp, "result.json");
             Assert.NotNull(observed.Commitment);
             Assert.True(observed.Commitment.Canonical);
+            using (var goldenDocument = JsonDocument.Parse(File.ReadAllBytes(golden)))
+            {
+                Assert.Equal(
+                    ContractScribe.ContractBaselineProbe.AuditResultCanonicalizer.Canonicalize(
+                        goldenDocument.RootElement),
+                    AuditResultV1Canonicalizer.Canonicalize(goldenDocument.RootElement));
+            }
 
             var source = JsonNode.Parse(File.ReadAllText(golden))!.AsObject();
             var alphabetic = new JsonObject
@@ -329,6 +336,8 @@ public sealed class M1HostValidationProtocolTests
             "Outbound network traffic is blocked.",
             "ContractScribe cannot reach the Internet.",
             "The validator has no external connectivity.",
+            "The runtime cannot connect to the Internet.",
+            "The audit cannot access the network.",
             "Outbound connections are impossible.",
             "Internet access is disabled.",
             "The runtime is air-gapped."
@@ -348,7 +357,14 @@ public sealed class M1HostValidationProtocolTests
                      "using System.Net.Http;",
                      "var client = new HttpClient();",
                      "await Dns.GetHostEntryAsync(\"example.invalid\");",
-                     "var socket = new System.Net.Sockets.Socket(default, default, default);"
+                     "var socket = new System.Net.Sockets.Socket(default, default, default);",
+                     "var type = Type.GetType(\"System.Net.Http.HttpClient, System.Net.Http\");",
+                     "var client = Activator.CreateInstance(type!);",
+                     "client!.GetType().GetMethod(\"GetAsync\")!.Invoke(client, null);",
+                     "var assembly = Assembly.LoadFrom(path);",
+                     "var library = NativeLibrary.Load(path);",
+                     "[DllImport(\"native\")] static extern void Send();",
+                     "dynamic client = CreateClient();"
                  })
         {
             Assert.Equal(
@@ -368,7 +384,12 @@ public sealed class M1HostValidationProtocolTests
         {
             "support.sln",
             "support.multi-targeting",
-            "failure.runtime-load-before-entry"
+            "failure.runtime-load-before-entry",
+            "failure.permission-before-entry",
+            "path.symlink-escape",
+            "path.junction-reparse-escape",
+            "publication.same-directory-atomic",
+            "publication.cross-volume-rejected"
         };
         var temp = Path.Join(Path.GetTempPath(), $"contractscribe-hv-fixture-recipes-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
@@ -390,6 +411,7 @@ public sealed class M1HostValidationProtocolTests
         }
         finally
         {
+            FixtureRecipeRegistry.RemoveProvisionedReparsePoints(temp);
             Directory.Delete(temp, recursive: true);
         }
     }
@@ -458,6 +480,59 @@ public sealed class M1HostValidationProtocolTests
                 Root,
                 source,
                 materialization with { BuiltArtifacts = [entryIdentity, helperIdentity] }));
+
+            foreach (var (assemblyName, sourceText) in new[]
+                     {
+                         (
+                             "Acme.ReflectionBypass",
+                             """
+                             using System;
+                             public static class ReflectionBypass
+                             {
+                                 public static object? Run()
+                                 {
+                                     var name = "System.Net.Http." + "HttpClient, System.Net.Http";
+                                     var type = Type.GetType(name);
+                                     return Activator.CreateInstance(type!);
+                                 }
+                             }
+                             """),
+                         (
+                             "Acme.DynamicLoadBypass",
+                             """
+                             using System.Reflection;
+                             public static class DynamicLoadBypass
+                             {
+                                 public static Assembly Run(string path) => Assembly.LoadFrom(path);
+                             }
+                             """),
+                         (
+                             "Acme.NativeBypass",
+                             """
+                             using System.Runtime.InteropServices;
+                             public static class NativeBypass
+                             {
+                                 [DllImport("synthetic-native")]
+                                 public static extern int Connect();
+                             }
+                             """)
+                     })
+            {
+                var bypassPath = Path.Join(temp, $"{assemblyName}.dll");
+                EmitAssembly(
+                    bypassPath,
+                    assemblyName,
+                    sourceText,
+                    references);
+                var bypassIdentity = new ArtifactIdentity(
+                    RepositoryPaths.ToRepositoryRelative(Root, bypassPath),
+                    CanonicalJson.Sha256File(bypassPath));
+                Assert.True(
+                    NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                        Root,
+                        source,
+                        materialization with { BuiltArtifacts = [bypassIdentity] }));
+            }
         }
         finally
         {
@@ -631,6 +706,278 @@ public sealed class M1HostValidationProtocolTests
                     transitionFixture,
                     source,
                     materialization).Observation);
+            Assert.True(RunSemantics.HasExactTransitionTrace(
+                transition.VectorId,
+                [
+                    "terminal-commit-cancelled",
+                    "competing-terminal-attempt-rejected"
+                ]));
+            Assert.False(RunSemantics.HasExactTransitionTrace(
+                transition.VectorId,
+                [
+                    "terminal-commit-cancelled",
+                    "terminal-commit-cancelled",
+                    "competing-terminal-attempt-rejected"
+                ]));
+            Assert.False(RunSemantics.HasExactTransitionTrace(
+                transition.VectorId,
+                [
+                    "competing-terminal-attempt-rejected",
+                    "terminal-commit-cancelled"
+                ]));
+            Assert.False(RunSemantics.HasExactTransitionTrace(
+                "publication.same-directory-atomic",
+                [
+                    "atomic-rename-committed",
+                    "staging-created-in-destination"
+                ]));
+            Assert.False(RunSemantics.HasExactTransitionTrace(
+                "publication.same-directory-atomic",
+                [
+                    "staging-created-in-destination",
+                    "atomic-rename-committed",
+                    "late-terminal-attempt-rejected"
+                ]));
+            var reorderedLog = Path.Join(temp, "reordered-transition.jsonl");
+            File.WriteAllText(
+                reorderedLog,
+                """
+                {"sequence":2,"event":"competing-terminal-attempt-rejected"}
+                {"sequence":1,"event":"terminal-commit-cancelled"}
+
+                """,
+                new UTF8Encoding(false));
+            Assert.Equal(
+                "HV245_TRANSITION_LOG_INVALID",
+                Assert.Throws<ProtocolException>(() =>
+                    CellExecutor.ObserveTransitionLog(reorderedLog)).Code);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_BoundMeasurementsComeFromHarnessObservedSurfaces()
+    {
+        var diagnostics = new[]
+        {
+            new NormalizedDiagnosticFact("host.synthetic", "audit")
+        };
+        Assert.Equal(
+            CanonicalJson.SerializeCanonical(diagnostics).LongLength,
+            RunSemantics.MeasureCanonicalDiagnosticBytes(diagnostics));
+
+        var run = new RunEvidence(
+            "bounds.temporary-disk",
+            "run-1",
+            "matched",
+            "bounds.temporary-disk-within-limit",
+            "bounds.temporary-disk-within-limit",
+            "internally-enforceable",
+            "internally-enforceable",
+            null,
+            new ProcessObservation(
+                0,
+                "started",
+                "normal",
+                false,
+                true,
+                true,
+                AuditTemporaryCreatedOrChangedBytes: 31),
+            null,
+            null,
+            new RepositoryDelta([], [], [], [], [], [], [], [], [],
+                AllowedDesignTimeCreatedOrChangedBytes: 11),
+            [],
+            []);
+        Assert.Equal(42, RunSemantics.MeasureTemporaryDiskBytes(run));
+        Assert.Equal(
+            "HV239_MEASURED_BOUND_FACTS",
+            Assert.Throws<ProtocolException>(() =>
+                RunSemantics.MeasureTemporaryDiskBytes(
+                    run with
+                    {
+                        Process = run.Process with
+                        {
+                            AuditTemporaryCreatedOrChangedBytes = null
+                        }
+                    })).Code);
+    }
+
+    [Fact]
+    public async Task HostValidation_SystemTemporaryWritesAreRedirectedIntoTheAuditRoot()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-hv-temp-observation-{Guid.NewGuid():N}");
+        var auditRoot = Path.Join(root, "audit");
+        Directory.CreateDirectory(auditRoot);
+        try
+        {
+            var requestPath = Path.Join(root, "request.json");
+            var responsePath = Path.Join(root, "response.json");
+            CanonicalJson.WriteCanonical(
+                requestPath,
+                new SubjectRequest(
+                    "contractscribe-m1-host-validation-subject-request-v1",
+                    "self-test",
+                    "self-test.temporary-over-limit",
+                    "run-1",
+                    root,
+                    responsePath,
+                    null,
+                    [],
+                    "continue",
+                    null,
+                    null,
+                    auditRoot));
+            var before = RepositoryObserver.Capture(auditRoot);
+            var execution = await SubjectProcessRunner.RunAsync(
+                "dotnet",
+                [
+                    typeof(BundleValidator).Assembly.Location,
+                    "fake-subject",
+                    "--request",
+                    requestPath,
+                    "--behavior",
+                    "temporary-over-limit"
+                ],
+                root,
+                16 * 1024,
+                16 * 1024,
+                TimeSpan.FromSeconds(10),
+                auditTemporaryRoot: auditRoot);
+            var delta = RepositoryObserver.Compare(
+                before,
+                RepositoryObserver.Capture(auditRoot));
+            Assert.Equal(0, execution.ExitCode);
+            Assert.Equal(8 * 1024, delta.OtherCreatedOrChangedBytes);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_SubjectReportedLowerBoundsCannotOverrideHarnessMeasurements()
+    {
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            $"host-validation-bound-observation-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var boundsPath = Path.Join(temp, "bounds.json");
+            CanonicalJson.WriteCanonical(
+                boundsPath,
+                new
+                {
+                    entries = new[]
+                    {
+                        new
+                        {
+                            name = "diagnostic-count",
+                            unit = "count",
+                            limit = 100L,
+                            enforcementClass = "internally-enforceable"
+                        },
+                        new
+                        {
+                            name = "diagnostic-utf8-bytes",
+                            unit = "bytes",
+                            limit = 65536L,
+                            enforcementClass = "internally-enforceable"
+                        },
+                        new
+                        {
+                            name = "temporary-disk-bytes",
+                            unit = "bytes",
+                            limit = 1048576L,
+                            enforcementClass = "internally-enforceable"
+                        }
+                    },
+                    formatVersion = "contractscribe-m1-host-calibrated-bounds-v1"
+                });
+            var identity = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, boundsPath),
+                CanonicalJson.Sha256File(boundsPath));
+            var source = new SubjectSourceConfiguration(
+                $"source.{new string('1', 64)}",
+                new string('2', 40),
+                [],
+                [],
+                identity,
+                identity,
+                identity,
+                identity,
+                identity,
+                identity,
+                identity);
+            var facts = new HostObservationFacts(
+                source.SourceConfigurationId,
+                source.HostRevision,
+                identity.Sha256,
+                identity.Sha256,
+                identity.Sha256,
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                [new NormalizedDiagnosticFact("host.synthetic", "audit")],
+                new OutputCommitFact("not-committed", null),
+                [
+                    new MeasuredBoundFact(
+                        "diagnostic-count",
+                        "count",
+                        0,
+                        100,
+                        "internally-enforceable"),
+                    new MeasuredBoundFact(
+                        "diagnostic-utf8-bytes",
+                        "bytes",
+                        0,
+                        65536,
+                        "internally-enforceable")
+                ]);
+            Assert.Equal(
+                "HV239_MEASURED_BOUND_FACTS",
+                Assert.Throws<ProtocolException>(() =>
+                    RunSemantics.ValidateMeasuredBounds(
+                        Root,
+                        source,
+                        facts,
+                        new Dictionary<string, long>(StringComparer.Ordinal)
+                        {
+                            ["diagnostic-count"] = 1,
+                            ["diagnostic-utf8-bytes"] =
+                                RunSemantics.MeasureCanonicalDiagnosticBytes(
+                                    facts.NormalizedDiagnosticFacts)
+                        })).Code);
+            Assert.Equal(
+                "HV239_MEASURED_BOUND_FACTS",
+                Assert.Throws<ProtocolException>(() =>
+                    RunSemantics.ValidateMeasuredBounds(
+                        Root,
+                        source,
+                        facts with
+                        {
+                            MeasuredBounds =
+                            [
+                                new MeasuredBoundFact(
+                                    "temporary-disk-bytes",
+                                    "bytes",
+                                    1,
+                                    1048576,
+                                    "internally-enforceable")
+                            ]
+                        },
+                        new Dictionary<string, long>(StringComparer.Ordinal)
+                        {
+                            ["temporary-disk-bytes"] = 8192
+                        })).Code);
         }
         finally
         {
