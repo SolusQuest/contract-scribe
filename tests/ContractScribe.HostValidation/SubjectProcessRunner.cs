@@ -154,6 +154,10 @@ public static class SubjectProcessRunner
             }
             await Task.Delay(10, cancellationToken).ConfigureAwait(false);
         }
+        if (control.ActionDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(control.ActionDelay, cancellationToken).ConfigureAwait(false);
+        }
 
         switch (control.Action)
         {

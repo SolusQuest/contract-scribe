@@ -210,7 +210,8 @@ public sealed record SubjectControl(
     string ControlRoot,
     string GateName,
     string Action,
-    TimeSpan GateTimeout);
+    TimeSpan GateTimeout,
+    TimeSpan ActionDelay = default);
 
 public sealed record ExecutionSubjectManifest(
     string FormatVersion,

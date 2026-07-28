@@ -172,7 +172,13 @@ public static class HarnessSelfTest
         SubjectControl? control = behavior switch
         {
             "controlled-cancel" => new(controlRoot, "before-commit", "cancel", TimeSpan.FromSeconds(5)),
-            "controlled-kill" or "controlled-kill-race" => new(controlRoot, "publication-before-commit", "external-kill", TimeSpan.FromSeconds(5)),
+            "controlled-kill" => new(controlRoot, "publication-before-commit", "external-kill", TimeSpan.FromSeconds(5)),
+            "controlled-kill-race" => new(
+                controlRoot,
+                "publication-before-commit",
+                "external-kill",
+                TimeSpan.FromSeconds(5),
+                TimeSpan.FromMilliseconds(100)),
             _ => null
         };
         var request = new SubjectRequest(
