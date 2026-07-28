@@ -116,13 +116,13 @@ public static class RepositoryObserver
         IDictionary<string, string> otherFiles,
         IDictionary<string, string> allowedDesignTimeFiles)
     {
-        if (allowedRoots.Any(root => (relative + "/").StartsWith(root, StringComparison.Ordinal)))
-        {
-            allowedDesignTimeFiles.Add(relative, identity);
-        }
-        else if (IsProtected(relative))
+        if (IsProtected(relative))
         {
             protectedFiles.Add(relative, identity);
+        }
+        else if (allowedRoots.Any(root => (relative + "/").StartsWith(root, StringComparison.Ordinal)))
+        {
+            allowedDesignTimeFiles.Add(relative, identity);
         }
         else
         {

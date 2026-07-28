@@ -206,10 +206,19 @@ public static class CellExecutor
                 {
                     throw new ProtocolException("HV179_FIXTURE_CAPABILITY_STATE");
                 }
+                FrozenFixtureRegistry.Validate(
+                    cell.Materialization.CellId,
+                    vector,
+                    fixture);
                 var identityRegistry = fixture.ProcessIdentityRegistry ?? [];
                 if (fixture.CapabilityAvailable && fixture.ProcessIdentityRegistry is null
                     || identityRegistry.Select(rule => rule.FingerprintSha256)
-                        .Distinct(StringComparer.Ordinal).Count() != identityRegistry.Count)
+                        .Distinct(StringComparer.Ordinal).Count() != identityRegistry.Count
+                    || identityRegistry.Any(rule =>
+                        rule.ArtifactKind is not (
+                            "production-subject"
+                            or "fixture-helper"
+                            or "selected-toolchain")))
                 {
                     throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
                 }
@@ -262,20 +271,11 @@ public static class CellExecutor
                 {
                     throw new ProtocolException("HV222_CANONICAL_RESULT_PATH_REQUIRED");
                 }
-                var expectedExternalCause = fixture.VectorId switch
-                {
-                    "failure.out-of-memory" => "out-of-memory",
-                    "failure.stack-overflow" => "stack-overflow",
-                    "failure.abort" => "abort",
-                    _ => null
-                };
-                if (fixture.CapabilityAvailable && fixture.ExternalCause != expectedExternalCause)
-                {
-                    throw new ProtocolException("HV195_EXTERNAL_CAUSE_MISMATCH");
-                }
                 if (fixture.ResultPath is not null)
                 {
-                    _ = ResolveFixturePath(repositoryRoot, fixture.ResultPath, mustExist: false);
+                    EnsureFixtureResultPathSafe(
+                        repositoryRoot,
+                        ResolveFixturePath(repositoryRoot, fixture.ResultPath, mustExist: false));
                 }
             }
         }
@@ -309,14 +309,22 @@ public static class CellExecutor
         }
 
         var repositoryRoot = RepositoryPaths.ResolveConfined(context.Root, fixture.RepositoryRoot);
+        var tempRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-run-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var resultPath = fixture.ResultPath is null
+            ? null
+            : ResolveFixturePath(repositoryRoot, fixture.ResultPath, mustExist: false);
+        if (resultPath is not null)
+        {
+            EnsureFixtureResultPathSafe(repositoryRoot, resultPath);
+        }
+        PrepareResultPrestate(resultPath, fixture.ResultPrestate);
         var before = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
         if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(before))
         {
             throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
         }
 
-        var tempRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-run-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempRoot);
         var requestPath = Path.Join(tempRoot, "request.json");
         var responsePath = Path.Join(tempRoot, "response.json");
         var control = CreateControl(vector, tempRoot, context.Protocol.ExecutionContract.SubjectTimeoutSeconds);
@@ -353,7 +361,10 @@ public static class CellExecutor
             var execution = await SubjectProcessRunner.RunAsync(
                 executable,
                 arguments,
-                repositoryRoot,
+                fixture.RunWorkingDirectories.Single(item => item.RunId == runId).Mode
+                    == "system-temp"
+                    ? tempRoot
+                    : repositoryRoot,
                 context.Protocol.ExecutionContract.StandardOutputByteLimit,
                 context.Protocol.ExecutionContract.StandardErrorByteLimit,
                 TimeSpan.FromSeconds(context.Protocol.ExecutionContract.SubjectTimeoutSeconds),
@@ -428,7 +439,8 @@ public static class CellExecutor
                 vector,
                 provisional,
                 fixture,
-                source);
+                source,
+                cell.Materialization);
             return provisional with
             {
                 Verdict = derived.Verdict,
@@ -447,6 +459,51 @@ public static class CellExecutor
             {
                 // Evidence records the run outcome; temporary workspace cleanup is best-effort.
             }
+        }
+    }
+
+    private static void PrepareResultPrestate(string? resultPath, string prestate)
+    {
+        if (resultPath is null)
+        {
+            return;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        if (File.Exists(resultPath))
+        {
+            File.Delete(resultPath);
+        }
+        if (prestate == "stale-invalid")
+        {
+            File.WriteAllText(resultPath, "stale-invalid\n");
+        }
+    }
+
+    private static void EnsureFixtureResultPathSafe(string repositoryRoot, string resultPath)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+        var current = new FileInfo(resultPath) as FileSystemInfo;
+        while (current is not null
+            && !string.Equals(
+                Path.TrimEndingDirectorySeparator(current.FullName),
+                root,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (current.Exists
+                && (current.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ProtocolException("HV188_FIXTURE_PATH_INVALID");
+            }
+            current = current switch
+            {
+                FileInfo file => file.Directory,
+                DirectoryInfo directory => directory.Parent,
+                _ => null
+            };
+        }
+        if (current is null)
+        {
+            throw new ProtocolException("HV188_FIXTURE_PATH_INVALID");
         }
     }
 
@@ -501,6 +558,7 @@ public static class CellExecutor
             "cancellation.terminal-precedence" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),
             "publication.kill-before-commit" => new(Path.Join(tempRoot, "control"), "publication-before-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
             "publication.kill-after-commit" => new(Path.Join(tempRoot, "control"), "publication-after-commit", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
+            "bounds.forced-termination" => new(Path.Join(tempRoot, "control"), "forced-termination", "external-kill", TimeSpan.FromSeconds(timeoutSeconds)),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"
@@ -778,9 +836,84 @@ public static class CellExecutor
         {
             throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
         }
+
+        var builtArtifactHashes = cell.Materialization.BuiltArtifacts
+            .Select(artifact => artifact.Sha256)
+            .ToHashSet(StringComparer.Ordinal);
+        var fixtureArtifactHashes = cell.Fixtures
+            .SelectMany(fixture => fixture.ArrangementInputs)
+            .Select(artifact => artifact.Sha256)
+            .ToHashSet(StringComparer.Ordinal);
+        var selectedToolchainHashes = ObserveSelectedToolchainHashes();
+        foreach (var rule in cell.Fixtures.SelectMany(fixture =>
+                     fixture.ProcessIdentityRegistry ?? []))
+        {
+            var bound = rule.ArtifactKind switch
+            {
+                "production-subject" => builtArtifactHashes.Contains(rule.EntryPointSha256),
+                "fixture-helper" => fixtureArtifactHashes.Contains(rule.EntryPointSha256),
+                "selected-toolchain" => selectedToolchainHashes.Contains(rule.EntryPointSha256),
+                _ => false
+            };
+            if (!bound)
+            {
+                throw new ProtocolException("HV233_PROCESS_IDENTITY_UNBOUND");
+            }
+        }
+    }
+
+    private static IReadOnlySet<string> ObserveSelectedToolchainHashes()
+    {
+        var hashes = new HashSet<string>(StringComparer.Ordinal);
+        if (Environment.ProcessPath is { } processPath && File.Exists(processPath))
+        {
+            hashes.Add(CanonicalJson.Sha256File(processPath));
+        }
+
+        var info = ObserveToolOutput("dotnet", ["--info"]);
+        var basePath = info
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.StartsWith("Base Path:", StringComparison.OrdinalIgnoreCase)
+                ? line["Base Path:".Length..].Trim()
+                : null)
+            .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+        if (basePath is null || !Path.IsPathFullyQualified(basePath))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+
+        foreach (var relative in new[]
+                 {
+                     "MSBuild.dll",
+                     "Roslyn/bincore/csc.dll",
+                     "Roslyn/bincore/vbc.dll",
+                     "Roslyn/bincore/VBCSCompiler.dll"
+                 })
+        {
+            var path = Path.Join(basePath, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(path))
+            {
+                hashes.Add(CanonicalJson.Sha256File(path));
+            }
+        }
+        return hashes;
     }
 
     private static string ObserveToolVersion(string executable, IReadOnlyList<string> arguments)
+    {
+        var output = ObserveToolOutput(executable, arguments);
+        var value = output.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+        return value;
+    }
+
+    private static string ObserveToolOutput(string executable, IReadOnlyList<string> arguments)
     {
         var startInfo = new System.Diagnostics.ProcessStartInfo(executable)
         {
@@ -798,15 +931,11 @@ public static class CellExecutor
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();
-        var value = output.Split(
-                ['\r', '\n'],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .LastOrDefault();
-        if (process.ExitCode != 0 || error.Length > 4096 || string.IsNullOrWhiteSpace(value))
+        if (process.ExitCode != 0 || error.Length > 4096 || output.Length > 64 * 1024)
         {
             throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
         }
-        return value;
+        return output;
     }
 
     private static List<string> ValidateStreams(ProcessExecutionResult execution)

@@ -164,7 +164,11 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 .ToArray();
             if (matches.Length == 1)
             {
-                return ClassifyProtectedCommand(imageName, entryPointPath, commandArguments);
+                return ClassifyProtectedCommand(
+                    imageName,
+                    entryPointPath,
+                    commandArguments,
+                    matches[0]);
             }
         }
 
@@ -177,28 +181,37 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
     private static string ClassifyProtectedCommand(
         string imageName,
         string entryPointPath,
-        IReadOnlyList<string> commandArguments)
+        IReadOnlyList<string> commandArguments,
+        ProcessIdentityRule rule)
     {
+        if (CanonicalJson.Sha256File(entryPointPath) != rule.EntryPointSha256)
+        {
+            return "unknown-descendant";
+        }
         if (IsRestoreOrRuntimeDownload(commandArguments))
         {
             return "restore-or-runtime-download";
         }
 
         var entryPointName = Path.GetFileName(entryPointPath);
-        if (imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
+        if (rule.ArtifactKind is "production-subject" or "fixture-helper"
+            && (imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
             || entryPointName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase))
+            )
         {
             return "contractscribe-worker";
         }
 
-        return entryPointName.ToLowerInvariant() switch
-        {
-            "msbuild" or "msbuild.exe" or "msbuild.dll"
-                or "vbcscompiler" or "vbcscompiler.exe" or "vbcscompiler.dll"
-                or "csc" or "csc.exe" or "csc.dll"
-                or "vbc" or "vbc.exe" or "vbc.dll" => "toolchain-owned",
-            _ => "unknown-descendant"
-        };
+        return rule.ArtifactKind == "selected-toolchain"
+            ? entryPointName.ToLowerInvariant() switch
+            {
+                "msbuild" or "msbuild.exe" or "msbuild.dll"
+                    or "vbcscompiler" or "vbcscompiler.exe" or "vbcscompiler.dll"
+                    or "csc" or "csc.exe" or "csc.dll"
+                    or "vbc" or "vbc.exe" or "vbc.dll" => "toolchain-owned",
+                _ => "unknown-descendant"
+            }
+            : "unknown-descendant";
     }
 
     private static bool IsRestoreOrRuntimeDownload(IReadOnlyList<string> arguments) =>

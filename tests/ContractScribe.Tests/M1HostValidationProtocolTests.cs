@@ -46,6 +46,26 @@ public sealed class M1HostValidationProtocolTests
         Assert.True(determinism.FreshProcessPerInvocation);
         Assert.Equal(new[] { "run-1", "run-2" }, determinism.RunIds);
         Assert.True(determinism.CrossCellEquality);
+
+        var template = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
+            Path.Join(FixtureRoot, "execution-subject.template.json"),
+            4 * 1024 * 1024);
+        foreach (var cell in template.Cells)
+        {
+            foreach (var fixture in cell.Fixtures)
+            {
+                FrozenFixtureRegistry.Validate(
+                    cell.Materialization.CellId,
+                    context.Vectors.Vectors.Single(vector =>
+                        vector.VectorId == fixture.VectorId),
+                    fixture);
+            }
+        }
+        var workingFixture = template.Cells[0].Fixtures.Single(fixture =>
+            fixture.VectorId == "path.working-directory-independent");
+        Assert.Equal(
+            ["repository-root", "system-temp"],
+            workingFixture.RunWorkingDirectories.Select(item => item.Mode));
     }
 
     [Fact]
@@ -63,6 +83,15 @@ public sealed class M1HostValidationProtocolTests
         Assert.Equal("trusted-observed", vectors["support.generator"].SupportDisposition);
         Assert.Equal("trusted-observed", vectors["support.custom-target"].SupportDisposition);
         Assert.Equal("deferred-owned", vectors["support.multi-targeting"].SupportDisposition);
+        Assert.Equal(
+            "support.multi-targeting-rejected-no-partial-result",
+            vectors["support.multi-targeting"].ExpectedObservation);
+        Assert.DoesNotContain(
+            "canonical-bytes",
+            vectors["support.multi-targeting"].ObserverRequirements);
+        Assert.Equal(
+            ("forced-termination", "external-kill"),
+            RunSemantics.ExpectedControl("bounds.forced-termination"));
         Assert.Equal(
             new[] { "compliant", "violation", "skipped" },
             context.Protocol.Taxonomies.AuditOutcome);
@@ -152,6 +181,15 @@ public sealed class M1HostValidationProtocolTests
             Assert.Equal(new[] { "Sample.cs" }, delta.ProtectedChanged);
             Assert.Equal(new[] { "obj/design-time.marker" }, delta.AllowedDesignTimeCreated);
             Assert.True(RepositoryObserver.HasProtectedMutation(delta));
+
+            Directory.CreateDirectory(Path.Join(temp, "src"));
+            File.WriteAllText(
+                Path.Join(temp, "src", "Hidden.cs"),
+                "class Hidden { }\n",
+                new UTF8Encoding(false));
+            var broadAllowlist = RepositoryObserver.Capture(temp, ["src"]);
+            Assert.Contains("src/Hidden.cs", broadAllowlist.ProtectedFiles.Keys);
+            Assert.DoesNotContain("src/Hidden.cs", broadAllowlist.AllowedDesignTimeFiles.Keys);
         }
         finally
         {
@@ -237,7 +275,10 @@ public sealed class M1HostValidationProtocolTests
             "This validation is fully offline and sandboxed.",
             "The host blocks all outbound connections.",
             "Validation prevents outbound access.",
-            "Outbound network traffic is blocked."
+            "Outbound network traffic is blocked.",
+            "ContractScribe cannot reach the Internet.",
+            "The validator has no external connectivity.",
+            "Outbound connections are impossible."
         })
         {
             Assert.Equal(
@@ -249,6 +290,19 @@ public sealed class M1HostValidationProtocolTests
             "This protocol does not claim network isolation and is not an egress sandbox.");
         PublicSafetyScanner.EnsureNoUnsupportedClaims(
             "This protocol does not block outbound access.");
+        foreach (var source in new[]
+                 {
+                     "using System.Net.Http;",
+                     "var client = new HttpClient();",
+                     "await Dns.GetHostEntryAsync(\"example.invalid\");",
+                     "var socket = new System.Net.Sockets.Socket(default, default, default);"
+                 })
+        {
+            Assert.Equal(
+                "HV232_NETWORK_OPERATION_SOURCE",
+                Assert.Throws<ProtocolException>(() =>
+                    NetworkOperationSourceScanner.ValidateSyntheticSource(source)).Code);
+        }
     }
 
     [Fact]
@@ -313,6 +367,8 @@ public sealed class M1HostValidationProtocolTests
             [],
             "bounded-polling",
             null,
+            "absent",
+            [new RunWorkingDirectory("run-1", "repository-root")],
             null,
             []);
         Assert.Equal(
@@ -397,6 +453,37 @@ public sealed class M1HostValidationProtocolTests
             root["results"]![0]!["classification"]!["parentSymbolRef"]!["documentationCommentId"]
                 = "M:AuditFixtures.NotApplicableWidget.Run");
 
+        var optionalAbsentPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "optional-absent.json");
+        AssertInvalidTaxonomyMutation(optionalAbsentPath, root =>
+            root["results"]![0]!["classification"]!["parentSymbolRef"]!["documentationCommentId"]
+                = "M:AuditFixtures.Widget.#ctor");
+        AssertInvalidTaxonomyMutation(componentPath, root =>
+            root["results"]![0]!["evidenceBundle"]!["omissionReason"]
+                = "evidence.omission.source-unavailable");
+
+        var policyAgreePath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "policy-agree.json");
+        AssertInvalidTaxonomyMutation(policyAgreePath, root =>
+        {
+            var contributions = root["results"]![0]!["policyContributions"]!.AsArray();
+            var first = contributions[0]!.DeepClone();
+            contributions[0] = contributions[1]!.DeepClone();
+            contributions[1] = first;
+        });
+
         var unknownPath = Path.Join(
             Root,
             "tests",
@@ -427,6 +514,31 @@ public sealed class M1HostValidationProtocolTests
             '2');
 
         ValidateWithReplacement(context, subject, evidence, run);
+        Assert.Equal(
+            "HV210_SUBJECT_OUTCOME_ILLEGAL",
+            Assert.Throws<ProtocolException>(() =>
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    evidence,
+                    run with
+                    {
+                        Subject = run.Subject! with
+                        {
+                            ArtifactState = "published"
+                        }
+                    })).Code);
+        Assert.Equal(
+            "HV235_HOST_FACTS_MISSING",
+            Assert.Throws<ProtocolException>(() =>
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    evidence,
+                    run with
+                    {
+                        Subject = run.Subject! with { HostFacts = null }
+                    })).Code);
         foreach (var replacement in new[]
         {
             run.Subject! with { FailureCode = "host.unknown-code" },
@@ -511,20 +623,21 @@ public sealed class M1HostValidationProtocolTests
             "dotnet",
             entryPoint,
             ["build"]);
+        var entryPointSha256 = CanonicalJson.Sha256File(entryPoint);
         Assert.Equal(
             "contractscribe-worker",
             ProcessTreeObserver.ClassifyIdentity(
                 "dotnet",
                 entryPoint,
                 ["build"],
-                [new ProcessIdentityRule(fingerprint)]));
+                [new ProcessIdentityRule(fingerprint, "production-subject", entryPointSha256)]));
         Assert.Equal(
             "contractscribe-worker",
             ProcessTreeObserver.ClassifyIdentity(
                 "dotnet",
                 entryPoint,
                 ["restore"],
-                [new ProcessIdentityRule(fingerprint)]));
+                [new ProcessIdentityRule(fingerprint, "production-subject", entryPointSha256)]));
         var restoreFingerprint = ProcessTreeObserver.ComputeIdentityFingerprint(
             "dotnet",
             entryPoint,
@@ -535,7 +648,10 @@ public sealed class M1HostValidationProtocolTests
                 "dotnet",
                 entryPoint,
                 ["restore"],
-                [new ProcessIdentityRule(restoreFingerprint)]));
+                [new ProcessIdentityRule(
+                    restoreFingerprint,
+                    "production-subject",
+                    entryPointSha256)]));
 
         var toolchainRoot = Path.Join(Path.GetTempPath(), $"contractscribe-toolchain-{Guid.NewGuid():N}");
         Directory.CreateDirectory(toolchainRoot);
@@ -548,12 +664,15 @@ public sealed class M1HostValidationProtocolTests
                 toolchainEntryPoint,
                 ["build"]);
             Assert.Equal(
-                "toolchain-owned",
+                "unknown-descendant",
                 ProcessTreeObserver.ClassifyIdentity(
                     "dotnet",
                     toolchainEntryPoint,
                     ["build"],
-                    [new ProcessIdentityRule(toolchainFingerprint)]));
+                    [new ProcessIdentityRule(
+                        toolchainFingerprint,
+                        "fixture-helper",
+                        CanonicalJson.Sha256File(toolchainEntryPoint))]));
         }
         finally
         {
@@ -785,6 +904,8 @@ public sealed class M1HostValidationProtocolTests
             [],
             "bounded-polling",
             null,
+            "absent",
+            [new RunWorkingDirectory("run-1", "repository-root")],
             null);
 
         CellExecutor.ValidateExecutorArrangement(
@@ -873,6 +994,8 @@ public sealed class M1HostValidationProtocolTests
                 [],
                 "bounded-polling",
                 null,
+                "absent",
+                [new RunWorkingDirectory("run-1", "repository-root")],
                 null);
             var run = new RunEvidence(
                 vectorId,
@@ -1338,7 +1461,8 @@ public sealed class M1HostValidationProtocolTests
             CapabilityAvailable = true,
             BlockedReasonCode = null
         };
-        var hasResult = vectorId == "determinism.fresh-process-canonical";
+        var isFailure = vectorId == "failure.invalid-input";
+        var hasResult = !isFailure;
         var commitment = hasResult
             ? new CanonicalResultCommitment(
                 new string(digestCharacter, 64),
@@ -1354,7 +1478,23 @@ public sealed class M1HostValidationProtocolTests
                 "profile.external-api",
                 ["audit.outcome.compliant"])
             : null;
-        var isFailure = vectorId == "failure.invalid-input";
+        var materialization = subjectManifest.Cells[0].Materialization;
+        var hostFacts = new HostObservationFacts(
+            subjectManifest.SourceConfiguration.SourceConfigurationId,
+            subjectManifest.SourceConfiguration.HostRevision,
+            subjectManifest.SourceConfiguration.ContractBaseline.Sha256,
+            subjectManifest.SourceConfiguration.FailureRegistry.Sha256,
+            subjectManifest.SourceConfiguration.CalibratedBounds.Sha256,
+            materialization.SelectedSdk,
+            materialization.SelectedRuntime,
+            materialization.SelectedMsbuild,
+            isFailure
+                ? [new NormalizedDiagnosticFact("host.invalid-input", "input")]
+                : [],
+            new OutputCommitFact(
+                isFailure ? "not-committed" : "committed",
+                commitment?.Sha256),
+            []);
         var subject = new SubjectResponse(
             "contractscribe-m1-host-validation-subject-response-v1",
             vectorId,
@@ -1370,7 +1510,8 @@ public sealed class M1HostValidationProtocolTests
             isFailure ? "absent" : "published",
             vector.ExpectedEnforcementClass,
             vector.ExpectedObservation,
-            commitment);
+            commitment,
+            hostFacts);
         return new RunEvidence(
             vectorId,
             runId,
@@ -1509,6 +1650,9 @@ public sealed class M1HostValidationProtocolTests
                 [],
                 "bounded-polling",
                 null,
+                "absent",
+                vector.RunIds.Select(runId =>
+                    new RunWorkingDirectory(runId, "repository-root")).ToArray(),
                 null))
             .ToArray();
         var executionCell = new ExecutionCell(

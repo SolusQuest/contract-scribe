@@ -587,7 +587,7 @@
       "invocationCount": 1,
       "freshProcessPerInvocation": true,
       "runIds": ["run-1"],
-      "equalityFields": ["subject.observationCode"],
+      "equalityFields": ["subject.executionOutcome", "subject.terminalState", "subject.artifactState"],
       "crossCellEquality": true,
       "fixture": "diagnostics.over-limit",
       "expectedObservation": "diagnostics.bounded-sanitized",
@@ -998,10 +998,10 @@
       "equalityFields": ["subject.observationCode"],
       "crossCellEquality": true,
       "fixture": "entry.multi-targeting",
-      "expectedObservation": "support.multi-targeting-owned-disposition",
+      "expectedObservation": "support.multi-targeting-rejected-no-partial-result",
       "expectedEnforcementClass": "internally-enforceable",
       "supportDisposition": "deferred-owned",
-      "observerRequirements": ["canonical-bytes", "subject-response"],
+      "observerRequirements": ["artifact-state", "filesystem-delta", "subject-response"],
       "protectedInputClasses": ["fixture", "host-source", "toolchain"]
     }
   ]

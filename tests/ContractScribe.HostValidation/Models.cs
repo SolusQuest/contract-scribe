@@ -139,7 +139,8 @@ public sealed record SubjectResponse(
     string ArtifactState,
     string EnforcementClass,
     string ObservationCode,
-    CanonicalResultCommitment? CanonicalResult);
+    CanonicalResultCommitment? CanonicalResult,
+    HostObservationFacts? HostFacts = null);
 
 public sealed record CanonicalResultCommitment(
     string Sha256,
@@ -153,6 +154,30 @@ public sealed record ObservedAuditResultFacts(
     int TaxonomyRegistryVersion,
     string TargetProfile,
     IReadOnlyList<string> AuditOutcomes);
+
+public sealed record HostObservationFacts(
+    string SourceConfigurationId,
+    string HostRevision,
+    string ContractBaselineSha256,
+    string FailureRegistrySha256,
+    string CalibratedBoundsSha256,
+    string SelectedSdk,
+    string SelectedRuntime,
+    string SelectedMsbuild,
+    IReadOnlyList<NormalizedDiagnosticFact> NormalizedDiagnosticFacts,
+    OutputCommitFact OutputCommit,
+    IReadOnlyList<MeasuredBoundFact> MeasuredBounds);
+
+public sealed record NormalizedDiagnosticFact(string Code, string Stage);
+
+public sealed record OutputCommitFact(string Status, string? Sha256);
+
+public sealed record MeasuredBoundFact(
+    string Name,
+    string Unit,
+    long Measured,
+    long Threshold,
+    string EnforcementClass);
 
 public sealed record ProcessExecutionResult(
     int? ExitCode,
@@ -219,10 +244,17 @@ public sealed record FixtureRealization(
     IReadOnlyList<string> AllowedDesignTimeRoots,
     string ProcessObservationMode,
     string? ResultPath,
+    string ResultPrestate,
+    IReadOnlyList<RunWorkingDirectory> RunWorkingDirectories,
     string? ExternalCause,
     IReadOnlyList<ProcessIdentityRule>? ProcessIdentityRegistry = null);
 
-public sealed record ProcessIdentityRule(string FingerprintSha256);
+public sealed record RunWorkingDirectory(string RunId, string Mode);
+
+public sealed record ProcessIdentityRule(
+    string FingerprintSha256,
+    string ArtifactKind,
+    string EntryPointSha256);
 
 public sealed record ObservedProcess(
     int ProcessId,

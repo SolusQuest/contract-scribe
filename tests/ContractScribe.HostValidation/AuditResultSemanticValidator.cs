@@ -14,16 +14,27 @@ public static class AuditResultSemanticValidator
         {
             var results = document.GetProperty("results").EnumerateArray().ToArray();
             Require(results.Length > 0);
+            Require(results.Select(ResultSortKey).SequenceEqual(
+                results.Select(ResultSortKey).Order(StringComparer.Ordinal),
+                StringComparer.Ordinal));
+            var targetKinds = results
+                .Select(result => result.GetProperty("classification"))
+                .Where(classification =>
+                    classification.GetProperty("recordType").GetString() == "TargetClassification")
+                .ToDictionary(
+                    classification => classification.GetProperty("symbolRef").GetRawText(),
+                    classification => classification.GetProperty("primaryKind").GetString(),
+                    StringComparer.Ordinal);
             var subjects = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
             {
                 var classification = result.GetProperty("classification");
-                ValidateClassification(root, classification);
+                ValidateClassification(root, classification, targetKinds);
                 Require(subjects.Add(SubjectKey(classification)));
                 ValidatePolicy(result, classification);
                 ValidateEvidence(root, result);
                 ValidateEvidenceAuthority(root, result, classification);
-                ValidateOutcome(result, classification);
+                ValidateOutcome(root, result, classification);
             }
         }
         catch (ProtocolException)
@@ -40,7 +51,10 @@ public static class AuditResultSemanticValidator
         }
     }
 
-    private static void ValidateClassification(string root, JsonElement classification)
+    private static void ValidateClassification(
+        string root,
+        JsonElement classification,
+        IReadOnlyDictionary<string, string?> targetKinds)
     {
         var recordType = classification.GetProperty("recordType").GetString();
         var definition = recordType switch
@@ -85,7 +99,7 @@ public static class AuditResultSemanticValidator
         }
         if (classifiedEntry is JsonElement entry)
         {
-            ValidateClassificationConstraints(classification, entry, support, origin);
+            ValidateClassificationConstraints(classification, entry, support, origin, targetKinds);
         }
         if (support == "support.supported")
         {
@@ -124,6 +138,7 @@ public static class AuditResultSemanticValidator
         var contributions = result.GetProperty("policyContributions").EnumerateArray().ToArray();
         var keys = new HashSet<string>(StringComparer.Ordinal);
         var expectations = new HashSet<string>(StringComparer.Ordinal);
+        var orderedKeys = new List<string>(contributions.Length);
         foreach (var contribution in contributions)
         {
             var project = contribution.GetProperty("projectPath").GetString();
@@ -132,16 +147,20 @@ public static class AuditResultSemanticValidator
             if (contribution.TryGetProperty("sourcePath", out var source))
             {
                 Require(IsRepositoryPath(source.GetString()));
-                key = $"{project}\0source\0{source.GetString()}";
+                key = $"0\0{project}\0{source.GetString()}";
             }
             else
             {
                 var generated = contribution.GetProperty("generatedOutput");
-                key = $"{project}\0generated\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
+                key = $"1\0{project}\0{generated.GetProperty("producerKind").GetString()}\0{generated.GetProperty("producerId").GetString()}\0{generated.GetProperty("outputId").GetString()}";
             }
             Require(keys.Add(key));
+            orderedKeys.Add(key);
             expectations.Add(contribution.GetProperty("policyExpectation").GetString()!);
         }
+        Require(orderedKeys.SequenceEqual(
+            orderedKeys.Order(StringComparer.Ordinal),
+            StringComparer.Ordinal));
 
         var supported = classification.GetProperty("supportStatus").GetString() == "support.supported";
         var expectedResolution = !supported || contributions.Length == 0
@@ -173,6 +192,12 @@ public static class AuditResultSemanticValidator
                 "schemas/audit-result/v1.schema.json"),
             "evidenceBundle");
         var items = bundle.GetProperty("items").EnumerateArray().ToArray();
+        Require(items
+            .Select(item => item.GetProperty("evidenceId").GetString())
+            .SequenceEqual(
+                items.Select(item => item.GetProperty("evidenceId").GetString())
+                    .Order(StringComparer.Ordinal),
+                StringComparer.Ordinal));
         var byId = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         long totalBytes = 0;
         foreach (var item in items)
@@ -202,6 +227,7 @@ public static class AuditResultSemanticValidator
             .Select(value => value.GetString()!)
             .ToArray();
         Require(referenced.Distinct(StringComparer.Ordinal).Count() == referenced.Length);
+        Require(referenced.SequenceEqual(referenced.Order(StringComparer.Ordinal), StringComparer.Ordinal));
         Require(referenced.All(id => byId.TryGetValue(id, out var item)
             && !item.GetProperty("isTruncated").GetBoolean()));
 
@@ -225,57 +251,90 @@ public static class AuditResultSemanticValidator
         }
     }
 
-    private static void ValidateOutcome(JsonElement result, JsonElement classification)
+    private static void ValidateOutcome(
+        string root,
+        JsonElement result,
+        JsonElement classification)
     {
         var contributions = result.GetProperty("policyContributions").EnumerateArray().ToArray();
-        var expectations = contributions
-            .Select(item => item.GetProperty("policyExpectation").GetString())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var observation = result.GetProperty("documentationObservation").ValueKind == JsonValueKind.Null
-            ? null
-            : result.GetProperty("documentationObservation").GetString();
-        var bundleStatus = result.GetProperty("evidenceBundle")
-            .GetProperty("availabilityStatus").GetString();
-        var derivedReason = classification.GetProperty("supportStatus").GetString() != "support.supported"
+        var reason = result.GetProperty("reasonCode").GetString();
+        using var registry = CanonicalJson.ReadStrict(
+            RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.registry.json"),
+            1024 * 1024);
+        var reasonEntry = registry.RootElement.GetProperty("sections").GetProperty("reasons")
+            .EnumerateArray()
+            .SingleOrDefault(entry => entry.GetProperty("id").GetString() == reason);
+        Require(reasonEntry.ValueKind == JsonValueKind.Object);
+        var legal = reasonEntry.GetProperty("legal");
+        var expectedOutcome = reasonEntry.GetProperty("outcome").GetString();
+        Require(expectedOutcome is not null);
+        Require(result.GetProperty("auditOutcome").GetString() == expectedOutcome);
+        Require(ContainsNullable(
+            legal.GetProperty("policyExpectation"),
+            result.GetProperty("policyExpectation")));
+        Require(ContainsNullable(
+            legal.GetProperty("documentationObservation"),
+            result.GetProperty("documentationObservation")));
+        Require(legal.GetProperty("policyResolution").EnumerateArray()
+            .Any(value => value.GetString() == result.GetProperty("policyResolution").GetString()));
+        var bundle = result.GetProperty("evidenceBundle");
+        Require(legal.GetProperty("bundleStatus").EnumerateArray()
+            .Any(value => value.GetString() == bundle.GetProperty("availabilityStatus").GetString()));
+        var contributionCount = legal.GetProperty("contributionCount");
+        Require(contributionCount.ValueKind == JsonValueKind.Number
+            ? contributions.Length == contributionCount.GetInt32()
+            : contributionCount.GetString() switch
+            {
+                "any" => true,
+                "at-least-1" => contributions.Length >= 1,
+                "at-least-2" => contributions.Length >= 2,
+                _ => false
+            });
+        var evidenceIds = result.GetProperty("evidenceIds");
+        Require((evidenceIds.GetArrayLength() > 0)
+            == legal.GetProperty("requiresEvidence").GetBoolean());
+
+        var support = classification.GetProperty("supportStatus").GetString();
+        var expectedPrimaryReason = support != "support.supported"
             ? "audit.reason.classification-skipped"
-            : expectations.Length > 1
+            : result.GetProperty("policyResolution").GetString() == "conflict"
                 ? "audit.reason.policy-conflict"
                 : contributions.Length == 0
                     ? "audit.reason.policy-unavailable"
-                    : observation == "documentation.unavailable" && bundleStatus == "evidence.bundle.partial"
-                        ? "audit.reason.evidence-incomplete"
-                        : observation == "documentation.unavailable"
-                            ? "audit.reason.documentation-unavailable"
-                            : (expectations.Single(), observation) switch
-                            {
-                                ("required", "documentation.present") => "audit.reason.required-present",
-                                ("required", "documentation.absent") => "audit.reason.required-absent",
-                                ("optional", "documentation.present") => "audit.reason.optional-present",
-                                ("optional", "documentation.absent") => "audit.reason.optional-absent",
-                                ("forbidden", "documentation.present") => "audit.reason.forbidden-present",
-                                ("forbidden", "documentation.absent") => "audit.reason.forbidden-absent",
-                                _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
-                            };
-        var reason = result.GetProperty("reasonCode").GetString();
-        Require(reason == derivedReason
-            || reason == "audit.reason.documentation-unavailable.malformed-xml"
-                && derivedReason == "audit.reason.documentation-unavailable");
-        var expectedOutcome = reason switch
+                    : result.GetProperty("documentationObservation").GetString()
+                        == "documentation.unavailable"
+                        ? bundle.GetProperty("availabilityStatus").GetString() switch
+                        {
+                            "evidence.bundle.partial" => "audit.reason.evidence-incomplete",
+                            "evidence.bundle.complete" =>
+                                "audit.reason.documentation-unavailable.malformed-xml",
+                            _ => "audit.reason.documentation-unavailable"
+                        }
+                        : reason;
+        Require(reason == expectedPrimaryReason);
+
+        var status = bundle.GetProperty("availabilityStatus").GetString();
+        var omission = bundle.TryGetProperty("omissionReason", out var omissionValue)
+            ? omissionValue.GetString()
+            : null;
+        Require(status switch
         {
-            "audit.reason.required-absent" or "audit.reason.forbidden-present" =>
-                "audit.outcome.violation",
-            "audit.reason.required-present"
-                or "audit.reason.optional-present"
-                or "audit.reason.optional-absent"
-                or "audit.reason.forbidden-absent" => "audit.outcome.compliant",
-            _ => "audit.outcome.skipped"
-        };
-        Require(result.GetProperty("auditOutcome").GetString() == expectedOutcome);
+            "evidence.bundle.complete" => omission is null,
+            "evidence.bundle.partial" => omission == "evidence.omission.budget-exhausted",
+            "evidence.bundle.unavailable" => reason switch
+            {
+                "audit.reason.classification-skipped" or "audit.reason.policy-conflict"
+                    or "audit.reason.policy-unavailable" =>
+                    omission == "evidence.omission.not-provided",
+                "audit.reason.documentation-unavailable" =>
+                    omission == "evidence.omission.source-unavailable",
+                _ => false
+            },
+            _ => false
+        });
         if (expectedOutcome is "audit.outcome.compliant" or "audit.outcome.violation")
         {
-            Require(result.GetProperty("evidenceIds").GetArrayLength() > 0);
-            Require(bundleStatus == "evidence.bundle.complete");
+            Require(status == "evidence.bundle.complete");
         }
     }
 
@@ -311,8 +370,13 @@ public static class AuditResultSemanticValidator
             "observationSubject");
 
         var declarations = authority.GetProperty("declarations").EnumerateArray()
-            .OrderBy(item => item.GetProperty("declarationId").GetString(), StringComparer.Ordinal)
             .ToArray();
+        Require(declarations
+            .Select(item => item.GetProperty("declarationId").GetString())
+            .SequenceEqual(
+                declarations.Select(item => item.GetProperty("declarationId").GetString())
+                    .Order(StringComparer.Ordinal),
+                StringComparer.Ordinal));
         var declarationDigest = ComputeDeclarationDigest(declarations);
         Require(authority.GetProperty("declarationSetId").GetString()
                 == $"dset.{declarationDigest}"
@@ -531,7 +595,8 @@ public static class AuditResultSemanticValidator
         JsonElement classification,
         JsonElement entry,
         string? support,
-        string? origin)
+        string? origin,
+        IReadOnlyDictionary<string, string?> targetKinds)
     {
         ValidateAllowedSupportStatus(entry, support);
         if (entry.TryGetProperty("requiredOrigin", out var requiredOrigin))
@@ -556,11 +621,13 @@ public static class AuditResultSemanticValidator
                 == (support == "support.unsupported"));
             if (entry.TryGetProperty("parentKinds", out var parentKinds))
             {
-                var documentationId = classification
-                    .GetProperty("parentSymbolRef")
-                    .GetProperty("documentationCommentId")
-                    .GetString();
-                var possibleParentKinds = PossibleParentKinds(documentationId);
+                var parentRef = classification.GetProperty("parentSymbolRef").GetRawText();
+                var possibleParentKinds = targetKinds.TryGetValue(parentRef, out var exactParentKind)
+                    ? new HashSet<string?>([exactParentKind], StringComparer.Ordinal)
+                    : ParseParentKinds(classification
+                        .GetProperty("parentSymbolRef")
+                        .GetProperty("documentationCommentId")
+                        .GetString());
                 Require(parentKinds.EnumerateArray()
                     .Select(value => value.GetString())
                     .Any(possibleParentKinds.Contains));
@@ -576,12 +643,25 @@ public static class AuditResultSemanticValidator
         }
     }
 
-    private static IReadOnlySet<string?> PossibleParentKinds(string? documentationId)
+    private static IReadOnlySet<string?> ParseParentKinds(string? documentationId)
     {
-        if (string.IsNullOrWhiteSpace(documentationId) || documentationId.Length < 2
+        if (string.IsNullOrWhiteSpace(documentationId) || documentationId.Length < 3
             || documentationId[1] != ':')
         {
             throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS");
+        }
+        if (documentationId[0] == 'M')
+        {
+            var member = documentationId[(documentationId.LastIndexOf('.') + 1)..];
+            return member.StartsWith("#ctor", StringComparison.Ordinal)
+                    || member.StartsWith("#cctor", StringComparison.Ordinal)
+                ? new HashSet<string?>(["symbol.member.constructor"], StringComparer.Ordinal)
+                : member.StartsWith("op_Implicit", StringComparison.Ordinal)
+                    || member.StartsWith("op_Explicit", StringComparison.Ordinal)
+                    ? new HashSet<string?>(["symbol.member.conversion"], StringComparer.Ordinal)
+                    : member.StartsWith("op_", StringComparison.Ordinal)
+                        ? new HashSet<string?>(["symbol.member.operator"], StringComparer.Ordinal)
+                        : new HashSet<string?>(["symbol.member.method"], StringComparer.Ordinal);
         }
         return documentationId[0] switch
         {
@@ -592,16 +672,9 @@ public static class AuditResultSemanticValidator
                 "symbol.type.enum",
                 "symbol.type.delegate"
             ], StringComparer.Ordinal),
-            'M' => new HashSet<string?>([
-                "symbol.member.constructor",
-                "symbol.member.method",
-                "symbol.member.operator",
-                "symbol.member.conversion"
-            ], StringComparer.Ordinal),
-            'P' => new HashSet<string?>([
-                "symbol.member.property",
-                "symbol.member.indexer"
-            ], StringComparer.Ordinal),
+            'P' when documentationId.Contains('(', StringComparison.Ordinal) =>
+                new HashSet<string?>(["symbol.member.indexer"], StringComparer.Ordinal),
+            'P' => new HashSet<string?>(["symbol.member.property"], StringComparer.Ordinal),
             'F' => new HashSet<string?>([
                 "symbol.member.field",
                 "symbol.member.enum-member"
@@ -648,6 +721,26 @@ public static class AuditResultSemanticValidator
                 $"unresolved\0{classification.GetProperty("compilationContextRef").GetString()}\0{classification.GetProperty("candidateLocator").GetRawText()}",
             _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
         };
+
+    private static string ResultSortKey(JsonElement result)
+    {
+        var classification = result.GetProperty("classification");
+        var prefix = classification.GetProperty("recordType").GetString() switch
+        {
+            "TargetClassification" => "0",
+            "ComponentClassification" => "1",
+            "UnresolvedClassification" => "2",
+            _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
+        };
+        return $"{prefix}\0{SubjectKey(classification)}";
+    }
+
+    private static bool ContainsNullable(JsonElement values, JsonElement actual) =>
+        values.EnumerateArray().Any(value =>
+            value.ValueKind == JsonValueKind.Null && actual.ValueKind == JsonValueKind.Null
+            || value.ValueKind == JsonValueKind.String
+                && actual.ValueKind == JsonValueKind.String
+                && value.GetString() == actual.GetString());
 
     private static bool IsRepositoryPath(string? value) =>
         !string.IsNullOrWhiteSpace(value)

@@ -69,7 +69,8 @@ public static class EvidenceValidator
                 vector,
                 run,
                 fixture,
-                subject.SourceConfiguration);
+                subject.SourceConfiguration,
+                executionCell.Materialization);
             if (run.ObservedObservation != derived.Observation
                 || run.ObservedEnforcementClass != derived.EnforcementClass
                 || run.Verdict != derived.Verdict

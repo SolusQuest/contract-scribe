@@ -13,7 +13,8 @@ public static class RunSemantics
         VectorDefinition vector,
         RunEvidence run,
         FixtureRealization? fixture,
-        SubjectSourceConfiguration source)
+        SubjectSourceConfiguration source,
+        CellMaterialization? materialization = null)
     {
         if (run.VectorId != vector.VectorId
             || run.ExpectedObservation != vector.ExpectedObservation
@@ -65,7 +66,7 @@ public static class RunSemantics
         }
         if (run.Subject is not null)
         {
-            ValidateSubjectResponse(context, vector, run, source);
+            ValidateSubjectResponse(context, vector, run, source, materialization);
         }
         else if (run.Process.ProcessStart == "started"
             && vector.ExecutorKind == "production-host"
@@ -74,7 +75,13 @@ public static class RunSemantics
             diagnostics.Add("HV208_SUBJECT_RESPONSE_MISSING");
         }
 
-        var observation = DeriveObservation(vector, run, fixture);
+        var observation = DeriveObservation(
+            context,
+            vector,
+            run,
+            fixture,
+            source,
+            materialization);
         var enforcement = run.Subject?.EnforcementClass
             ?? (vector.ExpectedEnforcementClass == "caller-or-os-enforced"
                 ? "caller-or-os-enforced"
@@ -107,6 +114,7 @@ public static class RunSemantics
             or "cancellation.terminal-precedence"
             or "publication.kill-before-commit"
             or "publication.kill-after-commit"
+            or "bounds.forced-termination"
             || RequiresSynchronizedTree(vectorId);
 
     public static (string Gate, string Action)? ExpectedControl(string vectorId) =>
@@ -118,6 +126,7 @@ public static class RunSemantics
             "cancellation.terminal-precedence" => ("before-commit", "cancel"),
             "publication.kill-before-commit" => ("publication-before-commit", "external-kill"),
             "publication.kill-after-commit" => ("publication-after-commit", "external-kill"),
+            "bounds.forced-termination" => ("forced-termination", "external-kill"),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"
@@ -142,7 +151,8 @@ public static class RunSemantics
         BundleContext context,
         VectorDefinition vector,
         RunEvidence run,
-        SubjectSourceConfiguration source)
+        SubjectSourceConfiguration source,
+        CellMaterialization? materialization)
     {
         var subject = run.Subject!;
         if (subject.VectorId != run.VectorId
@@ -180,6 +190,8 @@ public static class RunSemantics
         {
             throw new ProtocolException("HV210_SUBJECT_OUTCOME_ILLEGAL");
         }
+        ValidateOutcomeLegality(vector, run, subject);
+        ValidateHostFacts(context.Root, vector, run, source, materialization, subject);
         if (run.ObservedAuditResult is not null
             && subject.AuditOutcome is not null
             && !run.ObservedAuditResult.AuditOutcomes.Contains(
@@ -187,6 +199,149 @@ public static class RunSemantics
                 StringComparer.Ordinal))
         {
             throw new ProtocolException("HV209_SUBJECT_OBSERVER_CONTRADICTION");
+        }
+    }
+
+    private static void ValidateHostFacts(
+        string root,
+        VectorDefinition vector,
+        RunEvidence run,
+        SubjectSourceConfiguration source,
+        CellMaterialization? materialization,
+        SubjectResponse subject)
+    {
+        var facts = subject.HostFacts
+            ?? throw new ProtocolException("HV235_HOST_FACTS_MISSING");
+        if (facts.SourceConfigurationId != source.SourceConfigurationId
+            || facts.HostRevision != source.HostRevision
+            || facts.ContractBaselineSha256 != source.ContractBaseline.Sha256
+            || facts.FailureRegistrySha256 != source.FailureRegistry.Sha256
+            || facts.CalibratedBoundsSha256 != source.CalibratedBounds.Sha256
+            || materialization is not null
+                && (facts.SelectedSdk != materialization.SelectedSdk
+                    || facts.SelectedRuntime != materialization.SelectedRuntime
+                    || facts.SelectedMsbuild != materialization.SelectedMsbuild))
+        {
+            throw new ProtocolException("HV236_HOST_PROVENANCE_MISMATCH");
+        }
+
+        var handledFailure = subject.ExecutionOutcome is not null
+            && subject.ExecutionOutcome != "succeeded";
+        if (handledFailure
+            ? facts.NormalizedDiagnosticFacts.Count != 1
+                || facts.NormalizedDiagnosticFacts[0].Code != subject.FailureCode
+                || facts.NormalizedDiagnosticFacts[0].Stage != subject.FailureStage
+            : facts.NormalizedDiagnosticFacts.Count != 0)
+        {
+            throw new ProtocolException("HV237_HOST_DIAGNOSTIC_FACTS");
+        }
+
+        var expectedCommitStatus = subject.ArtifactState switch
+        {
+            "published" => "committed",
+            "staged" => "staged",
+            _ => "not-committed"
+        };
+        if (facts.OutputCommit.Status != expectedCommitStatus
+            || expectedCommitStatus == "committed"
+                && facts.OutputCommit.Sha256 != run.ObservedCanonicalResult?.Sha256
+            || expectedCommitStatus != "committed" && facts.OutputCommit.Sha256 is not null)
+        {
+            throw new ProtocolException("HV238_OUTPUT_COMMIT_FACTS");
+        }
+
+        if (vector.VectorId == "bounds.temporary-disk")
+        {
+            using var bounds = CanonicalJson.ReadStrict(
+                RepositoryPaths.ResolveConfined(root, source.CalibratedBounds.Path),
+                1024 * 1024,
+                requireCanonical: true);
+            var expected = bounds.RootElement.GetProperty("entries").EnumerateArray()
+                .Single(entry => entry.GetProperty("name").GetString() == "temporary-disk-bytes");
+            var observed = facts.MeasuredBounds.SingleOrDefault(item =>
+                item.Name == "temporary-disk-bytes");
+            if (observed is null
+                || facts.MeasuredBounds.Count != 1
+                || observed.Unit != expected.GetProperty("unit").GetString()
+                || observed.Threshold != expected.GetProperty("limit").GetInt64()
+                || observed.EnforcementClass != expected.GetProperty("enforcementClass").GetString()
+                || observed.Measured < 0
+                || observed.Measured > observed.Threshold)
+            {
+                throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
+            }
+        }
+        else if (facts.MeasuredBounds.Count != 0)
+        {
+            throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
+        }
+    }
+
+    private static void ValidateOutcomeLegality(
+        VectorDefinition vector,
+        RunEvidence run,
+        SubjectResponse subject)
+    {
+        var hasResult = run.ObservedCanonicalResult is not null;
+        var processStarted = run.Process.ProcessStart == "started";
+        var handledFailure = subject.ExecutionOutcome is
+            "invalid-input"
+            or "environment-unavailable"
+            or "load-failure"
+            or "audit-error"
+            or "cancelled"
+            or "timeout";
+        var committedSuccess = subject.ExecutionOutcome == "succeeded";
+        var postCommitTermination = vector.VectorId is
+            "publication.kill-after-commit"
+            or "cancellation.after-commit";
+
+        if (!processStarted)
+        {
+            RequireLegal(
+                subject.ExecutionOutcome is null
+                && subject.AuditOutcome is null
+                && subject.TerminalState == "not-entered"
+                && subject.ArtifactState is "absent" or "invalidated"
+                && !hasResult);
+            return;
+        }
+
+        if (handledFailure)
+        {
+            RequireLegal(
+                subject.AuditOutcome is null
+                && subject.TerminalState == "committed"
+                && subject.ArtifactState is "absent" or "invalidated"
+                && !hasResult
+                && run.Process.ProcessTermination == "normal");
+            return;
+        }
+
+        if (committedSuccess)
+        {
+            RequireLegal(
+                subject.AuditOutcome is "compliant" or "violation" or "skipped"
+                && subject.TerminalState == "committed"
+                && subject.ArtifactState == "published"
+                && hasResult
+                && (run.Process.ProcessTermination == "normal" || postCommitTermination));
+            return;
+        }
+
+        RequireLegal(
+            subject.ExecutionOutcome is null
+            && subject.AuditOutcome is null
+            && subject.TerminalState is "not-entered" or "pending"
+            && subject.ArtifactState is "absent" or "invalidated" or "staged"
+            && !hasResult);
+    }
+
+    private static void RequireLegal(bool condition)
+    {
+        if (!condition)
+        {
+            throw new ProtocolException("HV210_SUBJECT_OUTCOME_ILLEGAL");
         }
     }
 
@@ -216,9 +371,12 @@ public static class RunSemantics
     }
 
     private static string DeriveObservation(
+        BundleContext context,
         VectorDefinition vector,
         RunEvidence run,
-        FixtureRealization fixture)
+        FixtureRealization fixture,
+        SubjectSourceConfiguration source,
+        CellMaterialization? materialization)
     {
         var delta = run.RepositoryDelta;
         if (RepositoryObserver.HasProtectedMutation(delta))
@@ -254,10 +412,14 @@ public static class RunSemantics
             }
         }
         if (vector.VectorId == "network.no-contractscribe-initiated-operation"
-            && run.ObservedProcesses.Any(process =>
-                process.Role is "contractscribe-worker"
-                    or "restore-or-runtime-download"
-                    or "unknown-descendant"))
+            && (run.ObservedProcesses.Any(process =>
+                    process.Role is "contractscribe-worker"
+                        or "restore-or-runtime-download"
+                        or "unknown-descendant")
+                || NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                    context.Root,
+                    source,
+                    materialization)))
         {
             return "network.contractscribe-initiated-operation-observed";
         }
@@ -296,6 +458,8 @@ public static class RunSemantics
             "publication.kill-before-commit" => "publication.kill-left-valid-result",
             "publication.kill-after-commit" when resultExists => "publication.committed-result-remains-valid",
             "publication.kill-after-commit" => "publication.committed-result-missing",
+            "bounds.forced-termination" when run.Process.ProcessTermination == "external-kill"
+                && !resultExists => "bounds.forced-termination-external",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
     }
@@ -333,8 +497,16 @@ public static class RunSemantics
                 "path.working-directory-independent",
             "support.generator" when result is not null =>
                 "support.generator-generated-facts",
-            "support.multi-targeting" when result is not null =>
-                "support.multi-targeting-owned-disposition",
+            "support.multi-targeting" when result is null
+                && run.Subject is
+                {
+                    ExecutionOutcome: "load-failure",
+                    FailureStage: "load",
+                    FailureCode: "loader.unsupported.multi-targeting",
+                    AuditOutcome: null,
+                    ArtifactState: "absent"
+                } =>
+                "support.multi-targeting-rejected-no-partial-result",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
     }

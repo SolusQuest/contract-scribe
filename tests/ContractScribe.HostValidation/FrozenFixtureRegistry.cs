@@ -1,0 +1,49 @@
+namespace ContractScribe.HostValidation;
+
+public static class FrozenFixtureRegistry
+{
+    public const string ResultPath = "TestResults/audit-result.json";
+
+    public static void Validate(
+        string cellId,
+        VectorDefinition vector,
+        FixtureRealization fixture)
+    {
+        var expectedRoot = $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vector.VectorId}";
+        var expectedObservationMode = RunSemantics.RequiresSynchronizedTree(vector.VectorId)
+            ? "synchronized-tree"
+            : "bounded-polling";
+        var requiresResultPath = vector.ObserverRequirements.Contains(
+                "canonical-bytes",
+                StringComparer.Ordinal)
+            || vector.ObserverRequirements.Contains("artifact-state", StringComparer.Ordinal);
+        var expectedPrestate = vector.VectorId == "publication.stale-invalidation"
+            ? "stale-invalid"
+            : "absent";
+        var expectedWorkingDirectories = vector.RunIds
+            .Select(runId => new RunWorkingDirectory(
+                runId,
+                vector.VectorId == "path.working-directory-independent" && runId == "run-2"
+                    ? "system-temp"
+                    : "repository-root"))
+            .ToArray();
+        var expectedExternalCause = vector.VectorId switch
+        {
+            "failure.out-of-memory" => "out-of-memory",
+            "failure.stack-overflow" => "stack-overflow",
+            "failure.abort" => "abort",
+            _ => null
+        };
+
+        if (fixture.RepositoryRoot != expectedRoot
+            || !fixture.AllowedDesignTimeRoots.SequenceEqual(["obj"], StringComparer.Ordinal)
+            || fixture.ProcessObservationMode != expectedObservationMode
+            || fixture.ResultPath != (requiresResultPath ? ResultPath : null)
+            || fixture.ResultPrestate != expectedPrestate
+            || fixture.ExternalCause != expectedExternalCause
+            || !fixture.RunWorkingDirectories.SequenceEqual(expectedWorkingDirectories))
+        {
+            throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+        }
+    }
+}
