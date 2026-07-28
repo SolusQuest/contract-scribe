@@ -222,18 +222,16 @@ public static class SubjectProcessRunner
             {
                 return new(false, "unsupported-control");
             }
-            File.WriteAllText(
-                Path.Join(control.ControlRoot, $"{control.GateName}.release"),
-                string.Empty);
             var naturalExit =
                 await NativeTerminationObserver.WaitForNaturalExitAsync(
                     process,
-                    control.GateTimeout,
+                    () => File.WriteAllText(
+                        Path.Join(
+                            control.ControlRoot,
+                            $"{control.GateName}.release"),
+                        string.Empty),
                     cancellationToken).ConfigureAwait(false);
-            if (naturalExit is not null)
-            {
-                return new(false, naturalExit.KillRequestOutcome, naturalExit);
-            }
+            return new(false, naturalExit.KillRequestOutcome, naturalExit);
         }
 
         switch (control.Action)

@@ -12,8 +12,6 @@ public static class NativeTerminationObserver
     private const int Esrch = 3;
     private const int Eintr = 4;
     private const int Eperm = 1;
-    private const int Echild = 10;
-    private const int WnoHang = 1;
     private const uint ProcessTerminate = 0x0001;
     private const uint Synchronize = 0x00100000;
     private const uint ProcessQueryLimitedInformation = 0x1000;
@@ -65,59 +63,25 @@ public static class NativeTerminationObserver
         return new("unsupported", null, null, "unsupported", false);
     }
 
-    public static async Task<NativeTerminationEvidence?> WaitForNaturalExitAsync(
+    public static async Task<NativeTerminationEvidence> WaitForNaturalExitAsync(
         Process rootProcess,
-        TimeSpan timeout,
+        Action release,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                if (WaitForSingleObject(rootProcess.SafeHandle, 0) == WaitObject0)
-                {
-                    return CaptureWindowsExit(
-                        rootProcess.SafeHandle,
-                        "already-exited",
-                        false);
-                }
-            }
-            else if (OperatingSystem.IsLinux())
-            {
-                int waitResult;
-                int rawStatus;
-                do
-                {
-                    waitResult = WaitPid(rootProcess.Id, out rawStatus, WnoHang);
-                }
-                while (waitResult < 0
-                    && Marshal.GetLastPInvokeError() == Eintr);
-                if (waitResult == rootProcess.Id)
-                {
-                    return CaptureLinuxStatus(
-                        rawStatus,
-                        "already-exited",
-                        causalMatch: false);
-                }
-                if (waitResult < 0)
-                {
-                    var error = Marshal.GetLastPInvokeError();
-                    return new(
-                        "unix-wait-status",
-                        null,
-                        null,
-                        error == Echild ? "already-exited" : "indeterminate",
-                        false);
-                }
-            }
-            else if (!IsAliveNonReaping(rootProcess.Id))
-            {
-                return new("unsupported", null, null, "already-exited", false);
-            }
-            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
-        }
-        return null;
+        var exit = rootProcess.WaitForExitAsync(cancellationToken);
+        release();
+        await exit.ConfigureAwait(false);
+        return OperatingSystem.IsWindows()
+            ? CaptureWindowsExit(
+                rootProcess.SafeHandle,
+                "already-exited",
+                false)
+            : new(
+                "unsupported",
+                rootProcess.ExitCode,
+                rootProcess.ExitCode,
+                "already-exited",
+                false);
     }
 
     private static NativeTerminationEvidence TerminateWindows(

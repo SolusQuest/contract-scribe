@@ -190,7 +190,7 @@ public static class HarnessSelfTest
                 && killRace.Execution.NativeTerminationKind
                     == (OperatingSystem.IsWindows()
                         ? "windows-terminate-process"
-                        : "unix-exit")
+                        : "unsupported")
                 && killRace.Execution.NativeTerminationCode == 137,
                 "HV926_SELF_TEST_KILL_RACE");
             Ensure(
