@@ -506,12 +506,17 @@ public static class BundleValidator
         var harnessProject = XDocument.Load(RepositoryPaths.ResolveConfined(
             root,
             "tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj"));
-        var harnessReferences = harnessProject.Descendants("ProjectReference").ToArray();
+        var harnessReferences = harnessProject.Descendants("ProjectReference")
+            .Select(element => element.Attribute("Include")?.Value?.Replace('\\', '/'))
+            .Where(value => value is not null)
+            .ToArray();
         var harnessPackages = harnessProject.Descendants("PackageReference")
             .Select(element => element.Attribute("Include")?.Value)
             .Where(value => value is not null)
             .ToArray();
-        if (harnessReferences.Length != 0
+        if (!harnessReferences.SequenceEqual(
+                ["../ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj"],
+                StringComparer.Ordinal)
             || !harnessPackages.SequenceEqual(["JsonSchema.Net"], StringComparer.Ordinal))
         {
             throw new ProtocolException("HV143_HARNESS_DEPENDENCY_BOUNDARY");

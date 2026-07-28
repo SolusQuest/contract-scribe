@@ -58,8 +58,14 @@ public static class RunSemantics
         {
             diagnostics.Add("HV224_CONTROL_GATE_INCOMPLETE");
         }
+        if (expectedControl?.Action == "external-kill"
+            && run.Process.ObservedControlOutcome != "issued-and-observed")
+        {
+            diagnostics.Add("HV240_EXTERNAL_KILL_UNCONFIRMED");
+        }
         if (vector.ExecutorKind == "production-host"
             && vector.ObserverRequirements.Contains("canonical-bytes", StringComparer.Ordinal)
+            && vector.VectorId != "support.multi-targeting"
             && (run.ObservedCanonicalResult is null || run.ObservedAuditResult is null))
         {
             diagnostics.Add("HV223_AUDIT_RESULT_INVALID");
@@ -116,6 +122,13 @@ public static class RunSemantics
             or "publication.kill-after-commit"
             or "bounds.forced-termination"
             || RequiresSynchronizedTree(vectorId);
+
+    public static bool RequiresTransitionLog(string vectorId) =>
+        vectorId is
+            "cancellation.late-completion"
+            or "cancellation.terminal-precedence"
+            or "publication.stale-invalidation"
+            or "publication.same-directory-atomic";
 
     public static (string Gate, string Action)? ExpectedControl(string vectorId) =>
         vectorId switch
@@ -183,10 +196,7 @@ public static class RunSemantics
             || run.Process.ProcessStart != "started" && subject.ExecutionOutcome is not null
             || run.Process.ProcessTermination != "normal"
                 && subject.ExecutionOutcome == "succeeded"
-                && (subject.ArtifactState != "published"
-                    || vector.VectorId is not (
-                        "publication.kill-after-commit"
-                        or "cancellation.after-commit")))
+                && subject.ArtifactState != "published")
         {
             throw new ProtocolException("HV210_SUBJECT_OUTCOME_ILLEGAL");
         }
@@ -250,23 +260,58 @@ public static class RunSemantics
             throw new ProtocolException("HV238_OUTPUT_COMMIT_FACTS");
         }
 
-        if (vector.VectorId == "bounds.temporary-disk")
+        var requiredMeasurements = vector.VectorId switch
+        {
+            "bounds.temporary-disk" => new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["temporary-disk-bytes"] =
+                    run.RepositoryDelta.AllowedDesignTimeCreatedOrChangedBytes
+            },
+            "diagnostics.bounded-sanitized" => new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["diagnostic-count"] = facts.NormalizedDiagnosticFacts.Count,
+                ["diagnostic-utf8-bytes"] = run.Process.StandardErrorByteCount
+            },
+            "toolchain.owned-subprocesses" => new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["toolchain-subprocess-count"] =
+                    run.ObservedProcesses.Count(process => process.Role == "toolchain-owned")
+            },
+            _ => null
+        };
+        if (requiredMeasurements is not null)
         {
             using var bounds = CanonicalJson.ReadStrict(
                 RepositoryPaths.ResolveConfined(root, source.CalibratedBounds.Path),
                 1024 * 1024,
                 requireCanonical: true);
-            var expected = bounds.RootElement.GetProperty("entries").EnumerateArray()
-                .Single(entry => entry.GetProperty("name").GetString() == "temporary-disk-bytes");
-            var observed = facts.MeasuredBounds.SingleOrDefault(item =>
-                item.Name == "temporary-disk-bytes");
-            if (observed is null
-                || facts.MeasuredBounds.Count != 1
-                || observed.Unit != expected.GetProperty("unit").GetString()
-                || observed.Threshold != expected.GetProperty("limit").GetInt64()
-                || observed.EnforcementClass != expected.GetProperty("enforcementClass").GetString()
-                || observed.Measured < 0
-                || observed.Measured > observed.Threshold)
+            var expectedEntries = bounds.RootElement.GetProperty("entries").EnumerateArray()
+                .Where(entry => requiredMeasurements.ContainsKey(entry.GetProperty("name").GetString()!))
+                .ToDictionary(
+                    entry => entry.GetProperty("name").GetString()!,
+                    entry => entry.Clone(),
+                    StringComparer.Ordinal);
+            if (facts.MeasuredBounds.Select(item => item.Name)
+                    .Distinct(StringComparer.Ordinal).Count() != facts.MeasuredBounds.Count)
+            {
+                throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
+            }
+            var observedEntries = facts.MeasuredBounds.ToDictionary(item => item.Name, StringComparer.Ordinal);
+            if (expectedEntries.Count != requiredMeasurements.Count
+                || observedEntries.Count != requiredMeasurements.Count
+                || !expectedEntries.Keys.Order(StringComparer.Ordinal)
+                    .SequenceEqual(observedEntries.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal)
+                || requiredMeasurements.Any(pair =>
+                {
+                    var expected = expectedEntries[pair.Key];
+                    var observed = observedEntries[pair.Key];
+                    return observed.Unit != expected.GetProperty("unit").GetString()
+                        || observed.Threshold != expected.GetProperty("limit").GetInt64()
+                        || observed.EnforcementClass != expected.GetProperty("enforcementClass").GetString()
+                        || observed.Measured != pair.Value
+                        || observed.Measured < 0
+                        || observed.Measured > observed.Threshold;
+                }))
             {
                 throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
             }
@@ -274,6 +319,24 @@ public static class RunSemantics
         else if (facts.MeasuredBounds.Count != 0)
         {
             throw new ProtocolException("HV239_MEASURED_BOUND_FACTS");
+        }
+
+        if (vector.VectorId == "support.multi-targeting")
+        {
+            if (facts.LoaderFact is not
+                {
+                    Code: "loader.unsupported.multi-targeting",
+                    Disposition: "whole-input-rejected",
+                    SelectedOrDefaultTargetFramework: false,
+                    PartialResultProduced: false
+                })
+            {
+                throw new ProtocolException("HV241_LOADER_FACTS");
+            }
+        }
+        else if (facts.LoaderFact is not null)
+        {
+            throw new ProtocolException("HV241_LOADER_FACTS");
         }
     }
 
@@ -292,9 +355,6 @@ public static class RunSemantics
             or "cancelled"
             or "timeout";
         var committedSuccess = subject.ExecutionOutcome == "succeeded";
-        var postCommitTermination = vector.VectorId is
-            "publication.kill-after-commit"
-            or "cancellation.after-commit";
 
         if (!processStarted)
         {
@@ -313,8 +373,7 @@ public static class RunSemantics
                 subject.AuditOutcome is null
                 && subject.TerminalState == "committed"
                 && subject.ArtifactState is "absent" or "invalidated"
-                && !hasResult
-                && run.Process.ProcessTermination == "normal");
+                && !hasResult);
             return;
         }
 
@@ -324,8 +383,7 @@ public static class RunSemantics
                 subject.AuditOutcome is "compliant" or "violation" or "skipped"
                 && subject.TerminalState == "committed"
                 && subject.ArtifactState == "published"
-                && hasResult
-                && (run.Process.ProcessTermination == "normal" || postCommitTermination));
+                && hasResult);
             return;
         }
 
@@ -412,7 +470,8 @@ public static class RunSemantics
             }
         }
         if (vector.VectorId == "network.no-contractscribe-initiated-operation"
-            && (run.ObservedProcesses.Any(process =>
+            && (run.Process.NetworkOperationRecorderState != "empty"
+                || run.ObservedProcesses.Any(process =>
                     process.Role is "contractscribe-worker"
                         or "restore-or-runtime-download"
                         or "unknown-descendant")
@@ -459,6 +518,7 @@ public static class RunSemantics
             "publication.kill-after-commit" when resultExists => "publication.committed-result-remains-valid",
             "publication.kill-after-commit" => "publication.committed-result-missing",
             "bounds.forced-termination" when run.Process.ProcessTermination == "external-kill"
+                && run.Process.ObservedControlOutcome == "issued-and-observed"
                 && !resultExists => "bounds.forced-termination-external",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
@@ -488,9 +548,29 @@ public static class RunSemantics
                 && run.Subject?.ExecutionOutcome == "succeeded" =>
                 "audit.outcome.violation-success",
             "contracts.outcome-skipped" when result?.AuditOutcomes.Contains(
-                    "audit.outcome.skipped",
-                    StringComparer.Ordinal) == true =>
                 "audit.outcome.skipped",
+                StringComparer.Ordinal) == true =>
+                "audit.outcome.skipped",
+            "cancellation.late-completion" when HasOrderedEvents(
+                run.Process.TransitionEvents,
+                "terminal-commit-cancelled",
+                "late-terminal-attempt-rejected") =>
+                "terminal.late-completion-rejected",
+            "cancellation.terminal-precedence" when HasOrderedEvents(
+                run.Process.TransitionEvents,
+                "terminal-commit-cancelled",
+                "competing-terminal-attempt-rejected") =>
+                "terminal.precedence-closed",
+            "publication.stale-invalidation" when HasOrderedEvents(
+                run.Process.TransitionEvents,
+                "invalidation-completed",
+                "failure-prone-stage-entered") =>
+                "publication.stale-invalidated-at-start",
+            "publication.same-directory-atomic" when HasOrderedEvents(
+                run.Process.TransitionEvents,
+                "staging-created-in-destination",
+                "atomic-rename-committed") =>
+                "publication.same-directory-atomic-rename",
             "determinism.fresh-process-canonical" when result is not null =>
                 "determinism.byte-identical",
             "path.working-directory-independent" when result is not null =>
@@ -501,13 +581,43 @@ public static class RunSemantics
                 && run.Subject is
                 {
                     ExecutionOutcome: "load-failure",
-                    FailureStage: "load",
-                    FailureCode: "loader.unsupported.multi-targeting",
                     AuditOutcome: null,
                     ArtifactState: "absent"
+                }
+                && run.Subject.HostFacts?.LoaderFact is
+                {
+                    Code: "loader.unsupported.multi-targeting",
+                    Disposition: "whole-input-rejected",
+                    SelectedOrDefaultTargetFramework: false,
+                    PartialResultProduced: false
                 } =>
                 "support.multi-targeting-rejected-no-partial-result",
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
+    }
+
+    private static bool HasOrderedEvents(
+        IReadOnlyList<string>? events,
+        params string[] required)
+    {
+        if (events is null)
+        {
+            return false;
+        }
+        var position = -1;
+        foreach (var expected in required)
+        {
+            position = events
+                .Select((value, index) => (value, index))
+                .Where(item => item.index > position && item.value == expected)
+                .Select(item => item.index)
+                .DefaultIfEmpty(-1)
+                .First();
+            if (position < 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }

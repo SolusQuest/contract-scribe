@@ -10,6 +10,7 @@
 
 # Test results and coverage
 TestResults/
+tests/fixtures/m1-host-validation/runtime/
 coverage/
 
 .tmp/

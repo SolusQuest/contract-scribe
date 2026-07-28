@@ -689,7 +689,9 @@
         "responsePath",
         "controlRoot",
         "synchronizationGates",
-        "controlAction"
+        "controlAction",
+        "networkOperationLogPath",
+        "transitionLogPath"
       ],
       "properties": {
         "formatVersion": {
@@ -737,10 +739,11 @@
             "enum": [
               "before-commit",
               "after-commit",
-              "late-completion",
-              "publication-before-commit",
-              "publication-after-commit",
-              "process-observation"
+          "late-completion",
+          "publication-before-commit",
+          "publication-after-commit",
+          "forced-termination",
+          "process-observation"
             ]
           }
         },
@@ -752,6 +755,22 @@
             "release-late-completion",
             "observe"
           ]
+        },
+        "networkOperationLogPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "transitionLogPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1024
         }
       },
       "additionalProperties": false
@@ -1019,7 +1038,8 @@
         "selectedMsbuild",
         "normalizedDiagnosticFacts",
         "outputCommit",
-        "measuredBounds"
+        "measuredBounds",
+        "loaderFact"
       ],
       "properties": {
         "sourceConfigurationId": {
@@ -1063,6 +1083,16 @@
           "items": {
             "$ref": "#/$defs/measuredBoundFact"
           }
+        },
+        "loaderFact": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/loaderObservationFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1149,6 +1179,30 @@
             "observable-only",
             "not-enforceable-selected-topology"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "loaderObservationFact": {
+      "type": "object",
+      "required": [
+        "code",
+        "disposition",
+        "selectedOrDefaultTargetFramework",
+        "partialResultProduced"
+      ],
+      "properties": {
+        "code": {
+          "const": "loader.unsupported.multi-targeting"
+        },
+        "disposition": {
+          "const": "whole-input-rejected"
+        },
+        "selectedOrDefaultTargetFramework": {
+          "type": "boolean"
+        },
+        "partialResultProduced": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

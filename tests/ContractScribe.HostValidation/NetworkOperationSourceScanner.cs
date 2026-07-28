@@ -1,5 +1,6 @@
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ContractScribe.HostValidation;
@@ -19,7 +20,8 @@ public static partial class NetworkOperationSourceScanner
                 continue;
             }
 
-            var text = File.ReadAllText(RepositoryPaths.ResolveConfined(root, input.Path));
+            var text = StripCommentsAndLiterals(
+                File.ReadAllText(RepositoryPaths.ResolveConfined(root, input.Path)));
             if (ForbiddenNamespace().IsMatch(text)
                 || ForbiddenType().IsMatch(text)
                 || ForbiddenFactory().IsMatch(text))
@@ -28,17 +30,32 @@ public static partial class NetworkOperationSourceScanner
             }
         }
 
-        return materialization?.BuiltArtifacts.Any(artifact =>
-            artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-            && HasForbiddenMemberReference(
-                RepositoryPaths.ResolveConfined(root, artifact.Path))) == true;
+        if (materialization is null)
+        {
+            return false;
+        }
+        var declared = materialization.BuiltArtifacts
+            .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(
+                artifact => Path.GetFullPath(RepositoryPaths.ResolveConfined(root, artifact.Path)),
+                artifact => artifact.Sha256,
+                OperatingSystem.IsWindows()
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal);
+        var closure = BuildManagedClosure(declared.Keys);
+        if (closure.Any(path => !declared.ContainsKey(path)))
+        {
+            throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+        }
+        return closure.Any(HasForbiddenMemberReference);
     }
 
     public static void ValidateSyntheticSource(string sourceText)
     {
-        if (ForbiddenNamespace().IsMatch(sourceText)
-            || ForbiddenType().IsMatch(sourceText)
-            || ForbiddenFactory().IsMatch(sourceText))
+        var executableSource = StripCommentsAndLiterals(sourceText);
+        if (ForbiddenNamespace().IsMatch(executableSource)
+            || ForbiddenType().IsMatch(executableSource)
+            || ForbiddenFactory().IsMatch(executableSource))
         {
             throw new ProtocolException("HV232_NETWORK_OPERATION_SOURCE");
         }
@@ -82,5 +99,125 @@ public static partial class NetworkOperationSourceScanner
             }
         }
         return false;
+    }
+
+    private static IReadOnlySet<string> BuildManagedClosure(IEnumerable<string> roots)
+    {
+        var rootArray = roots.ToArray();
+        var directories = rootArray.Select(Path.GetDirectoryName)
+            .Where(path => path is not null)
+            .Distinct(OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal)
+            .ToArray();
+        var candidates = directories
+            .SelectMany(directory => Directory.EnumerateFiles(directory!, "*.dll", SearchOption.AllDirectories))
+            .Select(Path.GetFullPath)
+            .ToDictionary(
+                GetAssemblySimpleName,
+                path => path,
+                StringComparer.OrdinalIgnoreCase);
+        var closure = new HashSet<string>(
+            OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        var pending = new Stack<string>(rootArray);
+        while (pending.TryPop(out var path))
+        {
+            if (!closure.Add(path))
+            {
+                continue;
+            }
+            foreach (var reference in GetAssemblyReferences(path))
+            {
+                if (candidates.TryGetValue(reference, out var dependency))
+                {
+                    pending.Push(dependency);
+                }
+            }
+        }
+        return closure;
+    }
+
+    private static string GetAssemblySimpleName(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        if (!peReader.HasMetadata)
+        {
+            return Path.GetFileNameWithoutExtension(assemblyPath);
+        }
+        var metadata = peReader.GetMetadataReader();
+        return metadata.IsAssembly
+            ? metadata.GetString(metadata.GetAssemblyDefinition().Name)
+            : Path.GetFileNameWithoutExtension(assemblyPath);
+    }
+
+    private static IEnumerable<string> GetAssemblyReferences(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        if (!peReader.HasMetadata)
+        {
+            return [];
+        }
+        var metadata = peReader.GetMetadataReader();
+        return metadata.AssemblyReferences
+            .Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+            .ToArray();
+    }
+
+    private static string StripCommentsAndLiterals(string source)
+    {
+        var builder = new StringBuilder(source.Length);
+        var state = 0;
+        for (var index = 0; index < source.Length; index++)
+        {
+            var current = source[index];
+            var next = index + 1 < source.Length ? source[index + 1] : '\0';
+            if (state == 0 && current == '/' && next == '/')
+            {
+                state = 1;
+                builder.Append("  ");
+                index++;
+            }
+            else if (state == 0 && current == '/' && next == '*')
+            {
+                state = 2;
+                builder.Append("  ");
+                index++;
+            }
+            else if (state == 0 && current is '"' or '\'')
+            {
+                state = current == '"' ? 3 : 4;
+                builder.Append(' ');
+            }
+            else if (state == 1 && current is '\r' or '\n'
+                || state == 2 && current == '*' && next == '/')
+            {
+                state = 0;
+                builder.Append(current);
+                if (current == '*')
+                {
+                    builder.Append(' ');
+                    index++;
+                }
+            }
+            else if (state is 3 or 4 && current == '\\')
+            {
+                builder.Append("  ");
+                index++;
+            }
+            else if (state == 3 && current == '"' || state == 4 && current == '\'')
+            {
+                state = 0;
+                builder.Append(' ');
+            }
+            else
+            {
+                builder.Append(state == 0 ? current : current is '\r' or '\n' ? current : ' ');
+            }
+        }
+        return builder.ToString();
     }
 }

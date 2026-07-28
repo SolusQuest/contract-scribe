@@ -71,6 +71,37 @@ public static class Program
                     Console.WriteLine($"HV000_DRY_RUN {cellId} {runCount}");
                     return 0;
                 }
+            case "provision-fixtures":
+                {
+                    var root = Required(options, "--root");
+                    var subjectPath = Required(options, "--subject-manifest");
+                    var context = BundleValidator.Validate(root);
+                    var subject = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
+                        subjectPath,
+                        4 * 1024 * 1024,
+                        requireCanonical: true);
+                    foreach (var cell in subject.Cells)
+                    {
+                        foreach (var fixture in cell.Fixtures)
+                        {
+                            var vector = context.Vectors.Vectors.Single(candidate =>
+                                candidate.VectorId == fixture.VectorId);
+                            var expectedRoot =
+                                $"tests/fixtures/m1-host-validation/runtime/{cell.Materialization.CellId}/{vector.VectorId}";
+                            if (fixture.RepositoryRoot != expectedRoot)
+                            {
+                                throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+                            }
+                            FixtureRecipeRegistry.Provision(
+                                RepositoryPaths.ResolveConfined(root, expectedRoot, mustExist: false),
+                                cell.Materialization.CellId,
+                                vector);
+                            Console.WriteLine(
+                                $"HV000_FIXTURE {cell.Materialization.CellId} {vector.VectorId} {FixtureRecipeRegistry.ExpectedRepositoryIdentity(cell.Materialization.CellId, vector)}");
+                        }
+                    }
+                    return 0;
+                }
             case "run-cell":
                 {
                     var root = Required(options, "--root");
@@ -364,6 +395,9 @@ public static class Program
             case "controlled-kill":
                 await ReachGateAsync(request).ConfigureAwait(false);
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                return 0;
+            case "controlled-kill-race":
+                await ReachGateAsync(request).ConfigureAwait(false);
                 return 0;
             case "hang":
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);

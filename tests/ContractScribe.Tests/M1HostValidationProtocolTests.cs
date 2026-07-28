@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.HostValidation;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
@@ -165,6 +167,52 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_AuditResultObservationUsesTheNormativeCanonicalizer()
+    {
+        var temp = Path.Join(Path.GetTempPath(), $"contractscribe-hv-audit-result-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var golden = Path.Join(
+                Root,
+                "tests",
+                "fixtures",
+                "audit-result",
+                "v1",
+                "golden",
+                "required-present.canonical.json");
+            var resultPath = Path.Join(temp, "result.json");
+            File.Copy(golden, resultPath);
+
+            var observed = CellExecutor.ObserveCanonicalResult(Root, temp, "result.json");
+            Assert.NotNull(observed.Commitment);
+            Assert.True(observed.Commitment.Canonical);
+
+            var source = JsonNode.Parse(File.ReadAllText(golden))!.AsObject();
+            var alphabetic = new JsonObject
+            {
+                ["auditResultVersion"] = source["auditResultVersion"]!.DeepClone(),
+                ["policyConfigurationVersion"] = source["policyConfigurationVersion"]!.DeepClone(),
+                ["results"] = source["results"]!.DeepClone(),
+                ["targetProfile"] = source["targetProfile"]!.DeepClone(),
+                ["taxonomyRegistryVersion"] = source["taxonomyRegistryVersion"]!.DeepClone()
+            };
+            File.WriteAllText(
+                resultPath,
+                alphabetic.ToJsonString() + "\n",
+                new UTF8Encoding(false));
+            Assert.Equal(
+                "HV106_NONCANONICAL_JSON",
+                Assert.Throws<ProtocolException>(() =>
+                    CellExecutor.ObserveCanonicalResult(Root, temp, "result.json")).Code);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HostValidation_RepositoryObserverSeparatesProtectedAndDesignTimeWrites()
     {
         var temp = Path.Join(Path.GetTempPath(), $"contractscribe-hv-observer-{Guid.NewGuid():N}");
@@ -180,6 +228,9 @@ public sealed class M1HostValidationProtocolTests
 
             Assert.Equal(new[] { "Sample.cs" }, delta.ProtectedChanged);
             Assert.Equal(new[] { "obj/design-time.marker" }, delta.AllowedDesignTimeCreated);
+            Assert.Equal(
+                Encoding.UTF8.GetByteCount("synthetic\n"),
+                delta.AllowedDesignTimeCreatedOrChangedBytes);
             Assert.True(RepositoryObserver.HasProtectedMutation(delta));
 
             Directory.CreateDirectory(Path.Join(temp, "src"));
@@ -278,7 +329,9 @@ public sealed class M1HostValidationProtocolTests
             "Outbound network traffic is blocked.",
             "ContractScribe cannot reach the Internet.",
             "The validator has no external connectivity.",
-            "Outbound connections are impossible."
+            "Outbound connections are impossible.",
+            "Internet access is disabled.",
+            "The runtime is air-gapped."
         })
         {
             Assert.Equal(
@@ -302,6 +355,286 @@ public sealed class M1HostValidationProtocolTests
                 "HV232_NETWORK_OPERATION_SOURCE",
                 Assert.Throws<ProtocolException>(() =>
                     NetworkOperationSourceScanner.ValidateSyntheticSource(source)).Code);
+        }
+        NetworkOperationSourceScanner.ValidateSyntheticSource(
+            "// HttpClient in a comment is not an operation.\nvar text = \"System.Net.Http\";");
+    }
+
+    [Fact]
+    public void HostValidation_FixtureRecipesFreezeMaterializedBytes()
+    {
+        var context = BundleValidator.Validate(Root);
+        var representatives = new[]
+        {
+            "support.sln",
+            "support.multi-targeting",
+            "failure.runtime-load-before-entry"
+        };
+        var temp = Path.Join(Path.GetTempPath(), $"contractscribe-hv-fixture-recipes-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            foreach (var cellId in context.Protocol.RequiredCells.Select(cell => cell.CellId))
+            {
+                foreach (var vectorId in representatives)
+                {
+                    var vector = context.Vectors.Vectors.Single(item => item.VectorId == vectorId);
+                    var fixtureRoot = Path.Join(temp, cellId, vectorId);
+                    FixtureRecipeRegistry.Provision(fixtureRoot, cellId, vector);
+                    Assert.Equal(
+                        FixtureRecipeRegistry.ExpectedRepositoryIdentity(cellId, vector),
+                        CellExecutor.ComputeRepositoryIdentity(
+                            RepositoryObserver.Capture(fixtureRoot, ["obj"])));
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_TransitiveManagedNetworkDependencyCannotBeOmitted()
+    {
+        var temp = Path.Join(Root, "TestResults", $"host-validation-network-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+                .Split(Path.PathSeparator)
+                .Select(path => MetadataReference.CreateFromFile(path))
+                .ToArray();
+            var helperPath = Path.Join(temp, "Acme.Networking.dll");
+            EmitAssembly(
+                helperPath,
+                "Acme.Networking",
+                "using System.Net.Http; public static class Client { public static object Send() => new HttpClient(); }",
+                references);
+            var entryPath = Path.Join(temp, "Production.Entry.dll");
+            EmitAssembly(
+                entryPath,
+                "Production.Entry",
+                "public static class Entry { public static object Run() => Client.Send(); }",
+                references.Append(MetadataReference.CreateFromFile(helperPath)));
+
+            var entryIdentity = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, entryPath),
+                CanonicalJson.Sha256File(entryPath));
+            var helperIdentity = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, helperPath),
+                CanonicalJson.Sha256File(helperPath));
+            var source = new SubjectSourceConfiguration(
+                $"source.{new string('1', 64)}",
+                new string('2', 40),
+                [],
+                [],
+                entryIdentity,
+                entryIdentity,
+                entryIdentity,
+                entryIdentity,
+                entryIdentity,
+                entryIdentity,
+                entryIdentity);
+            var materialization = new CellMaterialization(
+                "ubuntu-x64",
+                "job",
+                "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+                "image",
+                "linux-x64",
+                "x64",
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                [entryIdentity]);
+            Assert.Equal(
+                "HV244_PRODUCTION_DEPENDENCY_CLOSURE",
+                Assert.Throws<ProtocolException>(() =>
+                    NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                        Root,
+                        source,
+                        materialization)).Code);
+            Assert.True(NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                Root,
+                source,
+                materialization with { BuiltArtifacts = [entryIdentity, helperIdentity] }));
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_TransitionAndLoaderFactsDriveTheOracle()
+    {
+        var context = BundleValidator.Validate(Root);
+        var (manifest, _) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var temp = Path.Join(Root, "TestResults", $"host-validation-facts-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var registryPath = Path.Join(temp, "host-failures.json");
+            CanonicalJson.WriteCanonical(
+                registryPath,
+                new
+                {
+                    entries = new[]
+                    {
+                        new
+                        {
+                            code = "host.cancelled",
+                            executionOutcome = "cancelled",
+                            stage = "audit",
+                            terminalState = "committed-non-success"
+                        },
+                        new
+                        {
+                            code = "host.multi-targeting-unsupported",
+                            executionOutcome = "load-failure",
+                            stage = "workspace-load",
+                            terminalState = "committed-non-success"
+                        }
+                    },
+                    formatVersion = "contractscribe-host-failure-registry-v1",
+                    registryVersion = 1
+                });
+            var registry = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, registryPath),
+                CanonicalJson.Sha256File(registryPath));
+            var source = manifest.SourceConfiguration with { FailureRegistry = registry };
+            var materialization = manifest.Cells[0].Materialization;
+
+            var multi = context.Vectors.Vectors.Single(vector =>
+                vector.VectorId == "support.multi-targeting");
+            var multiFixture = manifest.Cells[0].Fixtures.Single(item =>
+                item.VectorId == multi.VectorId) with
+            {
+                CapabilityAvailable = true,
+                BlockedReasonCode = null
+            };
+            var multiFacts = new HostObservationFacts(
+                source.SourceConfigurationId,
+                source.HostRevision,
+                source.ContractBaseline.Sha256,
+                registry.Sha256,
+                source.CalibratedBounds.Sha256,
+                materialization.SelectedSdk,
+                materialization.SelectedRuntime,
+                materialization.SelectedMsbuild,
+                [new NormalizedDiagnosticFact(
+                    "host.multi-targeting-unsupported",
+                    "workspace-load")],
+                new OutputCommitFact("not-committed", null),
+                [],
+                new LoaderObservationFact(
+                    "loader.unsupported.multi-targeting",
+                    "whole-input-rejected",
+                    false,
+                    false));
+            var multiResponse = new SubjectResponse(
+                "contractscribe-m1-host-validation-subject-response-v1",
+                multi.VectorId,
+                "run-1",
+                "started",
+                "normal",
+                null,
+                "load-failure",
+                registry.Sha256,
+                "host.multi-targeting-unsupported",
+                "workspace-load",
+                "committed",
+                "absent",
+                multi.ExpectedEnforcementClass,
+                "untrusted-subject-claim",
+                null,
+                multiFacts);
+            var multiRun = new RunEvidence(
+                multi.VectorId,
+                "run-1",
+                "matched",
+                multi.ExpectedObservation,
+                "unvalidated",
+                multi.ExpectedEnforcementClass,
+                multi.ExpectedEnforcementClass,
+                multiResponse,
+                new ProcessObservation(0, "started", "normal", false, true, true),
+                null,
+                null,
+                new RepositoryDelta([], [], [], [], [], [], [], [], []),
+                [new ObservedProcess(1, 0, "subject-runtime", "dotnet")],
+                []);
+            Assert.Equal(
+                multi.ExpectedObservation,
+                RunSemantics.Derive(
+                    context,
+                    multi,
+                    multiRun,
+                    multiFixture,
+                    source,
+                    materialization).Observation);
+
+            var transition = context.Vectors.Vectors.Single(vector =>
+                vector.VectorId == "cancellation.terminal-precedence");
+            var transitionFixture = manifest.Cells[0].Fixtures.Single(item =>
+                item.VectorId == transition.VectorId) with
+            {
+                CapabilityAvailable = true,
+                BlockedReasonCode = null
+            };
+            var transitionFacts = multiFacts with
+            {
+                NormalizedDiagnosticFacts =
+                [
+                    new NormalizedDiagnosticFact("host.cancelled", "audit")
+                ],
+                LoaderFact = null
+            };
+            var transitionResponse = multiResponse with
+            {
+                VectorId = transition.VectorId,
+                ProcessTermination = "crash",
+                ExecutionOutcome = "cancelled",
+                FailureCode = "host.cancelled",
+                FailureStage = "audit",
+                HostFacts = transitionFacts
+            };
+            var transitionRun = multiRun with
+            {
+                VectorId = transition.VectorId,
+                ExpectedObservation = transition.ExpectedObservation,
+                ExpectedEnforcementClass = transition.ExpectedEnforcementClass,
+                Subject = transitionResponse,
+                Process = new ProcessObservation(
+                    1,
+                    "started",
+                    "crash",
+                    false,
+                    true,
+                    true,
+                    "before-commit",
+                    "cancel",
+                    false,
+                    "requested",
+                    null,
+                    [
+                        "terminal-commit-cancelled",
+                        "competing-terminal-attempt-rejected"
+                    ])
+            };
+            Assert.Equal(
+                transition.ExpectedObservation,
+                RunSemantics.Derive(
+                    context,
+                    transition,
+                    transitionRun,
+                    transitionFixture,
+                    source,
+                    materialization).Observation);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
         }
     }
 
@@ -1735,5 +2068,22 @@ public sealed class M1HostValidationProtocolTests
                 .ToArray(),
             "environment-or-infrastructure-incomplete");
         return (subject, evidence);
+    }
+
+    private static void EmitAssembly(
+        string path,
+        string assemblyName,
+        string source,
+        IEnumerable<MetadataReference> references)
+    {
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            [CSharpSyntaxTree.ParseText(source)],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var result = compilation.Emit(path);
+        Assert.True(
+            result.Success,
+            string.Join(Environment.NewLine, result.Diagnostics.Select(item => item.ToString())));
     }
 }

@@ -423,7 +423,10 @@
         "otherChanged",
         "allowedDesignTimeCreated",
         "allowedDesignTimeDeleted",
-        "allowedDesignTimeChanged"
+        "allowedDesignTimeChanged",
+        "protectedCreatedOrChangedBytes",
+        "otherCreatedOrChangedBytes",
+        "allowedDesignTimeCreatedOrChangedBytes"
       ],
       "properties": {
         "protectedCreated": {
@@ -452,6 +455,18 @@
         },
         "allowedDesignTimeDeleted": {
           "$ref": "#/$defs/pathArray"
+        },
+        "protectedCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "otherCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowedDesignTimeCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -621,7 +636,12 @@
         "observationComplete",
         "observedGateName",
         "observedControlAction",
-        "postGateSampleObserved"
+        "postGateSampleObserved",
+        "observedControlOutcome",
+        "networkOperationRecorderState",
+        "transitionEvents",
+        "standardOutputByteCount",
+        "standardErrorByteCount"
       ],
       "properties": {
         "exitCode": {
@@ -682,6 +702,68 @@
         },
         "postGateSampleObserved": {
           "type": "boolean"
+        },
+        "observedControlOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "requested",
+            "released",
+            "observed",
+            "issued-and-observed",
+            "already-exited",
+            "permission-failure",
+            "unsupported",
+            "indeterminate",
+            "gate-timeout",
+            "post-gate-sample-missing",
+            "unsupported-control",
+            null
+          ]
+        },
+        "networkOperationRecorderState": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "empty",
+            "missing",
+            "operation-observed",
+            null
+          ]
+        },
+        "transitionEvents": {
+          "oneOf": [
+            {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "enum": [
+                  "invalidation-completed",
+                  "failure-prone-stage-entered",
+                  "staging-created-in-destination",
+                  "atomic-rename-committed",
+                  "terminal-commit-cancelled",
+                  "competing-terminal-attempt-rejected",
+                  "late-terminal-attempt-rejected"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "standardOutputByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "standardErrorByteCount": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false

@@ -15,8 +15,7 @@ public static class AuditResultSemanticValidator
             var results = document.GetProperty("results").EnumerateArray().ToArray();
             Require(results.Length > 0);
             Require(results.Select(ResultSortKey).SequenceEqual(
-                results.Select(ResultSortKey).Order(StringComparer.Ordinal),
-                StringComparer.Ordinal));
+                results.Select(ResultSortKey).Order()));
             var targetKinds = results
                 .Select(result => result.GetProperty("classification"))
                 .Where(classification =>
@@ -722,17 +721,127 @@ public static class AuditResultSemanticValidator
             _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
         };
 
-    private static string ResultSortKey(JsonElement result)
+    private static ResultOrderKey ResultSortKey(JsonElement result)
     {
         var classification = result.GetProperty("classification");
-        var prefix = classification.GetProperty("recordType").GetString() switch
+        return classification.GetProperty("recordType").GetString() switch
         {
-            "TargetClassification" => "0",
-            "ComponentClassification" => "1",
-            "UnresolvedClassification" => "2",
+            "TargetClassification" => new(
+                0,
+                classification.GetProperty("symbolRef").GetProperty("compilationContextRef").GetString()!,
+                0,
+                classification.GetProperty("symbolRef").GetProperty("documentationCommentId").GetString()!,
+                string.Empty,
+                string.Empty,
+                false,
+                0,
+                0),
+            "ComponentClassification" => new(
+                1,
+                classification.GetProperty("parentSymbolRef").GetProperty("compilationContextRef").GetString()!,
+                0,
+                classification.GetProperty("parentSymbolRef").GetProperty("documentationCommentId").GetString()!,
+                classification.GetProperty("componentKind").GetString()!,
+                classification.GetProperty("identity").GetString()!,
+                false,
+                0,
+                0),
+            "UnresolvedClassification" => UnresolvedResultSortKey(classification),
             _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
         };
-        return $"{prefix}\0{SubjectKey(classification)}";
+    }
+
+    private static ResultOrderKey UnresolvedResultSortKey(JsonElement classification)
+    {
+        var context = classification.GetProperty("compilationContextRef").GetString()!;
+        var locator = classification.GetProperty("candidateLocator");
+        if (locator.TryGetProperty("repository", out var repository))
+        {
+            return LocatorKey(context, 0, NormalizeRepositoryPath(repository.GetProperty("path").GetString()!), string.Empty, repository);
+        }
+        if (locator.TryGetProperty("generatedSource", out var generatedSource))
+        {
+            return LocatorKey(
+                context,
+                1,
+                generatedSource.GetProperty("generatorId").GetString()!,
+                generatedSource.GetProperty("hintNameId").GetString()!,
+                generatedSource);
+        }
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated))
+        {
+            return LocatorKey(
+                context,
+                2,
+                toolGenerated.GetProperty("producerId").GetString()!,
+                toolGenerated.GetProperty("outputId").GetString()!,
+                toolGenerated);
+        }
+        return new(
+            2,
+            context,
+            3,
+            locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!,
+            string.Empty,
+            string.Empty,
+            false,
+            0,
+            0);
+    }
+
+    private static ResultOrderKey LocatorKey(
+        string context,
+        int variantRank,
+        string field1,
+        string field2,
+        JsonElement locator)
+    {
+        var hasSpan = locator.TryGetProperty("span", out var span);
+        return new(
+            2,
+            context,
+            variantRank,
+            field1,
+            field2,
+            string.Empty,
+            hasSpan,
+            hasSpan ? span.GetProperty("start").GetInt32() : 0,
+            hasSpan ? span.GetProperty("end").GetInt32() : 0);
+    }
+
+    private static string NormalizeRepositoryPath(string value) =>
+        string.Join('/', value.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
+
+    private readonly record struct ResultOrderKey(
+        int TypeRank,
+        string Primary,
+        int VariantRank,
+        string Field1,
+        string Field2,
+        string Field3,
+        bool HasSpan,
+        int Start,
+        int End) : IComparable<ResultOrderKey>
+    {
+        public int CompareTo(ResultOrderKey other)
+        {
+            var comparison = TypeRank.CompareTo(other.TypeRank);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(Primary, other.Primary);
+            if (comparison != 0) return comparison;
+            comparison = VariantRank.CompareTo(other.VariantRank);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(Field1, other.Field1);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(Field2, other.Field2);
+            if (comparison != 0) return comparison;
+            comparison = string.CompareOrdinal(Field3, other.Field3);
+            if (comparison != 0) return comparison;
+            comparison = HasSpan.CompareTo(other.HasSpan);
+            if (comparison != 0) return comparison;
+            comparison = Start.CompareTo(other.Start);
+            return comparison != 0 ? comparison : End.CompareTo(other.End);
+        }
     }
 
     private static bool ContainsNullable(JsonElement values, JsonElement actual) =>

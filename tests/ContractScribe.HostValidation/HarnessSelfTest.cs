@@ -145,6 +145,12 @@ public static class HarnessSelfTest
                 && killed.Execution.ProcessTermination == "external-kill"
                 && killed.Response is null,
                 "HV919_SELF_TEST_CONTROL_KILL");
+
+            var killRace = await RunFakeAsync(context, temp, "controlled-kill-race", "run-1", cancellationToken).ConfigureAwait(false);
+            Ensure(
+                killRace.Execution.ProcessTermination != "external-kill"
+                && killRace.Execution.ControlOutcome != "issued-and-observed",
+                "HV926_SELF_TEST_KILL_RACE");
         }
         finally
         {
@@ -166,7 +172,7 @@ public static class HarnessSelfTest
         SubjectControl? control = behavior switch
         {
             "controlled-cancel" => new(controlRoot, "before-commit", "cancel", TimeSpan.FromSeconds(5)),
-            "controlled-kill" => new(controlRoot, "publication-before-commit", "external-kill", TimeSpan.FromSeconds(5)),
+            "controlled-kill" or "controlled-kill-race" => new(controlRoot, "publication-before-commit", "external-kill", TimeSpan.FromSeconds(5)),
             _ => null
         };
         var request = new SubjectRequest(

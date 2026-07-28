@@ -36,6 +36,9 @@ public static class FrozenFixtureRegistry
         };
 
         if (fixture.RepositoryRoot != expectedRoot
+            || fixture.CapabilityAvailable
+                && fixture.RepositoryIdentitySha256
+                    != FixtureRecipeRegistry.ExpectedRepositoryIdentity(cellId, vector)
             || !fixture.AllowedDesignTimeRoots.SequenceEqual(["obj"], StringComparer.Ordinal)
             || fixture.ProcessObservationMode != expectedObservationMode
             || fixture.ResultPath != (requiresResultPath ? ResultPath : null)

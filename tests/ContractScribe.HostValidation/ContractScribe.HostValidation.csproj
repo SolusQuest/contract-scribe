@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
+    <ProjectReference Include="..\ContractScribe.ContractBaselineProbe\ContractScribe.ContractBaselineProbe.csproj" />
   </ItemGroup>
 </Project>

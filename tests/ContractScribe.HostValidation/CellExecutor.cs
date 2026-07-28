@@ -1,3 +1,7 @@
+using ContractScribe.ContractBaselineProbe;
+using System.Text;
+using System.Text.Json;
+
 namespace ContractScribe.HostValidation;
 
 public static class CellExecutor
@@ -327,6 +331,13 @@ public static class CellExecutor
 
         var requestPath = Path.Join(tempRoot, "request.json");
         var responsePath = Path.Join(tempRoot, "response.json");
+        var networkOperationLogPath =
+            vector.VectorId == "network.no-contractscribe-initiated-operation"
+                ? Path.Join(tempRoot, "network-operations.jsonl")
+                : null;
+        var transitionLogPath = RunSemantics.RequiresTransitionLog(vector.VectorId)
+            ? Path.Join(tempRoot, "transition-events.jsonl")
+            : null;
         var control = CreateControl(vector, tempRoot, context.Protocol.ExecutionContract.SubjectTimeoutSeconds);
         var request = new SubjectRequest(
             "contractscribe-m1-host-validation-subject-request-v1",
@@ -337,7 +348,9 @@ public static class CellExecutor
             responsePath,
             control?.ControlRoot,
             control is null ? [] : [control.GateName],
-            control?.Action ?? "continue");
+            control?.Action ?? "continue",
+            networkOperationLogPath,
+            transitionLogPath);
         CanonicalJson.WriteCanonical(requestPath, request);
         SchemaValidation.ValidateDefinition(
             requestPath,
@@ -419,6 +432,14 @@ public static class CellExecutor
                 execution.ControlCompleted ? control?.GateName : null,
                 execution.ControlCompleted ? control?.Action : null,
                 execution.ControlCompleted && control?.Action == "observe");
+            process = process with
+            {
+                ObservedControlOutcome = execution.ControlOutcome,
+                NetworkOperationRecorderState = ObserveNetworkOperationLog(networkOperationLogPath),
+                TransitionEvents = ObserveTransitionLog(transitionLogPath),
+                StandardOutputByteCount = execution.StandardOutput.LongLength,
+                StandardErrorByteCount = execution.StandardError.LongLength
+            };
             var provisional = new RunEvidence(
                 vector.VectorId,
                 runId,
@@ -476,6 +497,64 @@ public static class CellExecutor
         if (prestate == "stale-invalid")
         {
             File.WriteAllText(resultPath, "stale-invalid\n");
+        }
+    }
+
+    private static string? ObserveNetworkOperationLog(string? path)
+    {
+        if (path is null)
+        {
+            return null;
+        }
+        if (!File.Exists(path))
+        {
+            return "missing";
+        }
+        return new FileInfo(path).Length == 0 ? "empty" : "operation-observed";
+    }
+
+    private static IReadOnlyList<string>? ObserveTransitionLog(string? path)
+    {
+        if (path is null)
+        {
+            return null;
+        }
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+        try
+        {
+            return File.ReadAllLines(path, new UTF8Encoding(false, true))
+                .Select(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    if (root.EnumerateObject().Select(property => property.Name)
+                            .SequenceEqual(["sequence", "event"], StringComparer.Ordinal)
+                        && root.GetProperty("sequence").GetInt32() > 0
+                        && !string.IsNullOrWhiteSpace(root.GetProperty("event").GetString()))
+                    {
+                        return (Sequence: root.GetProperty("sequence").GetInt32(),
+                            Event: root.GetProperty("event").GetString()!);
+                    }
+                    throw new ProtocolException("HV245_TRANSITION_LOG_INVALID");
+                })
+                .OrderBy(item => item.Sequence)
+                .Select((item, index) =>
+                {
+                    if (item.Sequence != index + 1)
+                    {
+                        throw new ProtocolException("HV245_TRANSITION_LOG_INVALID");
+                    }
+                    return item.Event;
+                })
+                .ToArray();
+        }
+        catch (Exception exception) when (
+            exception is IOException or DecoderFallbackException or JsonException)
+        {
+            throw new ProtocolException("HV245_TRANSITION_LOG_INVALID", exception);
         }
     }
 
@@ -743,7 +822,7 @@ public static class CellExecutor
         }
     }
 
-    private static (CanonicalResultCommitment? Commitment, ObservedAuditResultFacts? Facts) ObserveCanonicalResult(
+    public static (CanonicalResultCommitment? Commitment, ObservedAuditResultFacts? Facts) ObserveCanonicalResult(
         string root,
         string repositoryRoot,
         string? resultPath)
@@ -761,12 +840,25 @@ public static class CellExecutor
         using var document = CanonicalJson.ReadStrict(
             fullPath,
             4 * 1024 * 1024,
-            requireCanonical: true);
+            requireCanonical: false);
         SchemaValidation.Validate(
             fullPath,
             RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
-            requireCanonical: true);
+            requireCanonical: false);
         var rootElement = document.RootElement;
+        byte[] canonicalBytes;
+        try
+        {
+            canonicalBytes = AuditResultCanonicalizer.Canonicalize(rootElement);
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidOperationException)
+        {
+            throw new ProtocolException("HV223_AUDIT_RESULT_INVALID", exception);
+        }
+        if (!bytes.AsSpan().SequenceEqual(canonicalBytes))
+        {
+            throw new ProtocolException("HV106_NONCANONICAL_JSON");
+        }
         AuditResultSemanticValidator.Validate(root, rootElement);
         var facts = new ObservedAuditResultFacts(
             rootElement.GetProperty("auditResultVersion").GetInt32(),

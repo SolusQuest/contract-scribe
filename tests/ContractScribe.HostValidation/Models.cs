@@ -122,7 +122,9 @@ public sealed record SubjectRequest(
     string ResponsePath,
     string? ControlRoot,
     IReadOnlyList<string> SynchronizationGates,
-    string ControlAction);
+    string ControlAction,
+    string? NetworkOperationLogPath = null,
+    string? TransitionLogPath = null);
 
 public sealed record SubjectResponse(
     string FormatVersion,
@@ -166,11 +168,18 @@ public sealed record HostObservationFacts(
     string SelectedMsbuild,
     IReadOnlyList<NormalizedDiagnosticFact> NormalizedDiagnosticFacts,
     OutputCommitFact OutputCommit,
-    IReadOnlyList<MeasuredBoundFact> MeasuredBounds);
+    IReadOnlyList<MeasuredBoundFact> MeasuredBounds,
+    LoaderObservationFact? LoaderFact = null);
 
 public sealed record NormalizedDiagnosticFact(string Code, string Stage);
 
 public sealed record OutputCommitFact(string Status, string? Sha256);
+
+public sealed record LoaderObservationFact(
+    string Code,
+    string Disposition,
+    bool SelectedOrDefaultTargetFramework,
+    bool PartialResultProduced);
 
 public sealed record MeasuredBoundFact(
     string Name,
@@ -191,8 +200,11 @@ public sealed record ProcessExecutionResult(
     bool StandardErrorValidUtf8,
     bool TimedOut,
     bool ControlCompleted,
+    string? ControlOutcome,
     bool ObservationComplete,
     IReadOnlyList<ObservedProcess> ObservedProcesses);
+
+public sealed record ControlExecutionResult(bool Completed, string? Outcome);
 
 public sealed record SubjectControl(
     string ControlRoot,
@@ -265,7 +277,10 @@ public sealed record ObservedProcess(
 public sealed record RepositorySnapshot(
     IReadOnlyDictionary<string, string> ProtectedFiles,
     IReadOnlyDictionary<string, string> OtherFiles,
-    IReadOnlyDictionary<string, string> AllowedDesignTimeFiles);
+    IReadOnlyDictionary<string, string> AllowedDesignTimeFiles,
+    IReadOnlyDictionary<string, long>? ProtectedByteCounts = null,
+    IReadOnlyDictionary<string, long>? OtherByteCounts = null,
+    IReadOnlyDictionary<string, long>? AllowedDesignTimeByteCounts = null);
 
 public sealed record RepositoryDelta(
     IReadOnlyList<string> ProtectedCreated,
@@ -276,7 +291,10 @@ public sealed record RepositoryDelta(
     IReadOnlyList<string> OtherChanged,
     IReadOnlyList<string> AllowedDesignTimeCreated,
     IReadOnlyList<string> AllowedDesignTimeDeleted,
-    IReadOnlyList<string> AllowedDesignTimeChanged);
+    IReadOnlyList<string> AllowedDesignTimeChanged,
+    long ProtectedCreatedOrChangedBytes = 0,
+    long OtherCreatedOrChangedBytes = 0,
+    long AllowedDesignTimeCreatedOrChangedBytes = 0);
 
 public sealed record CellEvidence(
     string FormatVersion,
@@ -338,7 +356,12 @@ public sealed record ProcessObservation(
     bool ObservationComplete,
     string? ObservedGateName = null,
     string? ObservedControlAction = null,
-    bool PostGateSampleObserved = false);
+    bool PostGateSampleObserved = false,
+    string? ObservedControlOutcome = null,
+    string? NetworkOperationRecorderState = null,
+    IReadOnlyList<string>? TransitionEvents = null,
+    long StandardOutputByteCount = 0,
+    long StandardErrorByteCount = 0);
 
 public sealed record AggregateEvidence(
     string FormatVersion,

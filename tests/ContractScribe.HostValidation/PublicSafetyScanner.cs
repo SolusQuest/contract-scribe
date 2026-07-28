@@ -45,7 +45,9 @@ public static partial class PublicSafetyScanner
         foreach (var line in text.Split('\n'))
         {
             if (RepositoryBuildCannotAccessSecrets().IsMatch(line)
-                || NetworkCapabilityAssertion().IsMatch(line))
+                || NetworkCapabilityAssertion().IsMatch(line)
+                || PositiveNetworkAvailabilityClaim().IsMatch(line)
+                    && !ExplicitNetworkLimitation().IsMatch(line))
             {
                 throw new ProtocolException("HV199_PUBLIC_UNSUPPORTED_CLAIM");
             }
@@ -144,4 +146,12 @@ public static partial class PublicSafetyScanner
     [GeneratedRegex(
         @"(?i)\b(?:contractscribe|host|validator|validation|tool)\b.{0,40}\b(?:cannot|can't|does\s+not)\b.{0,40}\b(?:reach|access|connect)\b.{0,20}\b(?:the\s+)?(?:internet|network|external)\b|\b(?:contractscribe|host|validator|validation|tool)\b.{0,24}\bhas\s+no\s+external\s+connectivity\b|\b(?:outbound|egress)\s+(?:connections?|traffic|access)\b.{0,24}\b(?:is|are)\s+(?:impossible|unavailable|disabled)\b")]
     private static partial Regex NetworkCapabilityAssertion();
+
+    [GeneratedRegex(
+        @"(?i)\b(?:internet|network|connectivity|outbound|external\s+connections?|egress)\b.{0,32}\b(?:is|are|was|were|remains?)\s+(?:disabled|unavailable|impossible|blocked|prevented|denied|absent)\b|\b(?:has|have|with)\s+no\s+(?:internet|network|external)?\s*(?:access|connectivity|connections?)\b|\b(?:no|without)\s+(?:internet|network|external)\s+(?:access|connectivity|connections?)\b|\b(?:runtime|host|validator|validation|contractscribe|tool|ci)\b.{0,24}\b(?:is|runs?)\s+air[- ]?gapped\b")]
+    private static partial Regex PositiveNetworkAvailabilityClaim();
+
+    [GeneratedRegex(
+        @"(?i)\b(?:does\s+not|do\s+not|cannot)\s+(?:claim|guarantee|provide|enforce)\b|\bnot\s+(?:an?\s+)?(?:egress|network).{0,16}\bclaim\b|\bno\s+declared\s+network(?:-dependent)?\s+(?:dependency|operation)\b|\bcontractscribe\s+initiates\s+no\b")]
+    private static partial Regex ExplicitNetworkLimitation();
 }

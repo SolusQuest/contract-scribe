@@ -5,7 +5,7 @@ namespace ContractScribe.HostValidation;
 public static class RepositoryObserver
 {
     private static readonly HashSet<string> ProtectedExtensions = new(
-        [".cs", ".csproj", ".props", ".targets", ".sln", ".slnx", ".slnf"],
+        [".cs", ".csproj", ".fs", ".fsproj", ".vb", ".vbproj", ".props", ".targets", ".sln", ".slnx", ".slnf"],
         StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> ProtectedNames = new(
@@ -29,6 +29,9 @@ public static class RepositoryObserver
         var protectedFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var otherFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var allowedDesignTimeFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var protectedBytes = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        var otherBytes = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        var allowedDesignTimeBytes = new SortedDictionary<string, long>(StringComparer.Ordinal);
         var allowedRoots = (allowedDesignTimeRoots ?? [])
             .Select(path => NormalizeRelative(path).TrimEnd('/') + "/")
             .ToArray();
@@ -57,7 +60,17 @@ public static class RepositoryObserver
                             : new FileInfo(path);
                         var marker = CanonicalJson.Sha256(Encoding.UTF8.GetBytes(
                             $"reparse\0{info.LinkTarget ?? "unresolved"}"));
-                        AddIdentity(relative, marker, allowedRoots, protectedFiles, otherFiles, allowedDesignTimeFiles);
+                        AddIdentity(
+                            relative,
+                            marker,
+                            0,
+                            allowedRoots,
+                            protectedFiles,
+                            otherFiles,
+                            allowedDesignTimeFiles,
+                            protectedBytes,
+                            otherBytes,
+                            allowedDesignTimeBytes);
                         continue;
                     }
                     if ((attributes & FileAttributes.Directory) != 0)
@@ -69,10 +82,14 @@ public static class RepositoryObserver
                     AddIdentity(
                         relative,
                         CanonicalJson.Sha256File(path),
+                        new FileInfo(path).Length,
                         allowedRoots,
                         protectedFiles,
                         otherFiles,
-                        allowedDesignTimeFiles);
+                        allowedDesignTimeFiles,
+                        protectedBytes,
+                        otherBytes,
+                        allowedDesignTimeBytes);
                 }
             }
         }
@@ -81,7 +98,13 @@ public static class RepositoryObserver
             throw new ProtocolException("HV149_OBSERVER_SNAPSHOT_FAILED", exception);
         }
 
-        return new RepositorySnapshot(protectedFiles, otherFiles, allowedDesignTimeFiles);
+        return new RepositorySnapshot(
+            protectedFiles,
+            otherFiles,
+            allowedDesignTimeFiles,
+            protectedBytes,
+            otherBytes,
+            allowedDesignTimeBytes);
     }
 
     public static RepositoryDelta Compare(RepositorySnapshot before, RepositorySnapshot after) =>
@@ -94,7 +117,13 @@ public static class RepositoryObserver
             Changed(before.OtherFiles, after.OtherFiles),
             Created(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles),
             Deleted(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles),
-            Changed(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles));
+            Changed(before.AllowedDesignTimeFiles, after.AllowedDesignTimeFiles),
+            CreatedOrChangedBytes(before.ProtectedFiles, after.ProtectedFiles, after.ProtectedByteCounts),
+            CreatedOrChangedBytes(before.OtherFiles, after.OtherFiles, after.OtherByteCounts),
+            CreatedOrChangedBytes(
+                before.AllowedDesignTimeFiles,
+                after.AllowedDesignTimeFiles,
+                after.AllowedDesignTimeByteCounts));
 
     public static bool HasProtectedMutation(RepositoryDelta delta) =>
         delta.ProtectedCreated.Count != 0
@@ -111,22 +140,29 @@ public static class RepositoryObserver
     private static void AddIdentity(
         string relative,
         string identity,
+        long byteCount,
         IReadOnlyList<string> allowedRoots,
         IDictionary<string, string> protectedFiles,
         IDictionary<string, string> otherFiles,
-        IDictionary<string, string> allowedDesignTimeFiles)
+        IDictionary<string, string> allowedDesignTimeFiles,
+        IDictionary<string, long> protectedBytes,
+        IDictionary<string, long> otherBytes,
+        IDictionary<string, long> allowedDesignTimeBytes)
     {
         if (IsProtected(relative))
         {
             protectedFiles.Add(relative, identity);
+            protectedBytes.Add(relative, byteCount);
         }
         else if (allowedRoots.Any(root => (relative + "/").StartsWith(root, StringComparison.Ordinal)))
         {
             allowedDesignTimeFiles.Add(relative, identity);
+            allowedDesignTimeBytes.Add(relative, byteCount);
         }
         else
         {
             otherFiles.Add(relative, identity);
+            otherBytes.Add(relative, byteCount);
         }
     }
 
@@ -158,4 +194,18 @@ public static class RepositoryObserver
             .Where(path => before[path] != after[path])
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    private static long CreatedOrChangedBytes(
+        IReadOnlyDictionary<string, string> before,
+        IReadOnlyDictionary<string, string> after,
+        IReadOnlyDictionary<string, long>? afterBytes)
+    {
+        if (afterBytes is null)
+        {
+            return 0;
+        }
+        return after
+            .Where(pair => !before.TryGetValue(pair.Key, out var prior) || prior != pair.Value)
+            .Sum(pair => afterBytes[pair.Key]);
+    }
 }

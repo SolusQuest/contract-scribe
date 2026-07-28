@@ -81,9 +81,12 @@ public static class SchemaValidation
         using var schemaDocument = CanonicalJson.ReadStrict(schemaPath, 2 * 1024 * 1024);
         try
         {
-            return JsonSchema.FromText(schemaDocument.RootElement.GetRawText());
+            var root = JsonNode.Parse(schemaDocument.RootElement.GetRawText())!.AsObject();
+            _ = root.Remove("$id");
+            return JsonSchema.FromText(root.ToJsonString());
         }
-        catch (Exception exception) when (exception is JsonException or JsonSchemaException)
+        catch (Exception exception) when (
+            exception is JsonException or JsonSchemaException or InvalidOperationException)
         {
             throw new ProtocolException("HV110_SCHEMA_INVALID", exception);
         }

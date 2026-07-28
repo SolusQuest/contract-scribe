@@ -30,6 +30,7 @@
     "tests/ContractScribe.HostValidation/CellExecutor.cs",
     "tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj",
     "tests/ContractScribe.HostValidation/EvidenceValidator.cs",
+    "tests/ContractScribe.HostValidation/FixtureRecipeRegistry.cs",
     "tests/ContractScribe.HostValidation/FrozenExecutorCommandRegistry.cs",
     "tests/ContractScribe.HostValidation/FrozenFixtureRegistry.cs",
     "tests/ContractScribe.HostValidation/HarnessSelfTest.cs",
