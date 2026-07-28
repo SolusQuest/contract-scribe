@@ -192,6 +192,7 @@ internal sealed class LinuxSubjectProcess : IDisposable
         while (WaitPid(processId, out _, 0) < 0
                && Marshal.GetLastPInvokeError() == 4)
         {
+            // Retry only when waitpid was interrupted before it consumed status.
         }
     }
 
