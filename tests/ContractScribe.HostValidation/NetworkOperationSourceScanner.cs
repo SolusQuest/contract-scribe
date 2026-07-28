@@ -128,12 +128,11 @@ public static partial class NetworkOperationSourceScanner
             {
                 continue;
             }
-            foreach (var reference in GetAssemblyReferences(path))
+            foreach (var dependency in GetAssemblyReferences(path)
+                         .Where(candidates.ContainsKey)
+                         .Select(reference => candidates[reference]))
             {
-                if (candidates.TryGetValue(reference, out var dependency))
-                {
-                    pending.Push(dependency);
-                }
+                pending.Push(dependency);
             }
         }
         return closure;
