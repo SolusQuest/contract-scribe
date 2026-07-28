@@ -1,9 +1,17 @@
+using System.Text;
+using System.Text.Json;
+using System.Xml;
+
 namespace ContractScribe.HostValidation;
 
 public sealed record NetworkEvidenceDisposition(
     string ObservationCode,
     string Verdict,
     IReadOnlyList<string> DiagnosticCodes);
+
+public sealed record NetworkScanFailureDisposition(
+    string ObservationCode,
+    string CauseClass);
 
 public static class NetworkEvidenceEvaluator
 {
@@ -20,7 +28,11 @@ public static class NetworkEvidenceEvaluator
         var inputIdentities = ExpectedInputIdentities(source, materialization);
         var results = new[]
         {
-            EvaluateDeclaredInventory(definitions[0], source, inputIdentities[0]),
+            EvaluateDeclaredInventory(
+                definitions[0],
+                context.Root,
+                source,
+                inputIdentities[0]),
             EvaluateBoundedScan(
                 definitions[1],
                 context.Root,
@@ -164,7 +176,8 @@ public static class NetworkEvidenceEvaluator
             $"inventory.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(new
             {
                 source.SourceConfigurationId,
-                source.DeclaredOperationInventoryId
+                source.DeclaredOperationInventoryId,
+                DeclaredNetworkOperationInventoryEvaluator.EvaluatorId
             }))}",
             closureIdentity,
             $"recorder.{source.SourceConfigurationId[7..]}",
@@ -174,18 +187,76 @@ public static class NetworkEvidenceEvaluator
 
     private static NetworkEvidenceMethodResult EvaluateDeclaredInventory(
         NetworkEvidenceMethodDefinition definition,
+        string root,
         SubjectSourceConfiguration source,
         string inputIdentity)
     {
-        var finding = source.DeclaredNetworkDependentOperations.Count != 0;
-        return Result(
-            definition,
-            inputIdentity,
-            finding ? "finding" : "complete",
-            finding
-                ? "network.declared-operation-observed"
-                : "network.declared-operation-inventory-clean",
-            finding ? "subject-nonconformance" : null);
+        try
+        {
+            var finding =
+                DeclaredNetworkOperationInventoryEvaluator.HasDeclaredNetworkOperation(
+                    root,
+                    source);
+            return Result(
+                definition,
+                inputIdentity,
+                finding ? "finding" : "complete",
+                finding
+                    ? "network.declared-operation-observed"
+                    : "network.declared-operation-inventory-clean",
+                finding ? "subject-nonconformance" : null);
+        }
+        catch (ProtocolException exception) when (
+            exception.Code == "HV246_NETWORK_PROTECTED_INPUT_INVALIDATED")
+        {
+            return Result(
+                definition,
+                inputIdentity,
+                "incomplete",
+                "network.declared-inventory-input-invalidated",
+                "protected-input-invalidated");
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return Result(
+                definition,
+                inputIdentity,
+                "incomplete",
+                "network.declared-inventory-input-invalidated",
+                "protected-input-invalidated");
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+                or XmlException
+                or DecoderFallbackException)
+        {
+            return Result(
+                definition,
+                inputIdentity,
+                "incomplete",
+                "network.declared-inventory-invalid",
+                "subject-nonconformance");
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return Result(
+                definition,
+                inputIdentity,
+                "incomplete",
+                "network.declared-inventory-observer-incomplete",
+                "environment-or-infrastructure-incomplete");
+        }
+        catch (ProtocolException)
+        {
+            return Result(
+                definition,
+                inputIdentity,
+                "incomplete",
+                "network.declared-inventory-evaluator-failed",
+                "protocol-failure");
+        }
     }
 
     private static NetworkEvidenceMethodResult EvaluateBoundedScan(
@@ -210,29 +281,123 @@ public static class NetworkEvidenceEvaluator
                     : "network.bounded-source-and-metadata-clean",
                 finding ? "subject-nonconformance" : null);
         }
-        catch (ProtocolException exception) when (
-            exception.Code == "HV244_PRODUCTION_DEPENDENCY_CLOSURE")
-        {
-            return Result(
-                definition,
-                inputIdentity,
-                "incomplete",
-                "network.source-or-dependency-closure-invalidated",
-                "protected-input-invalidated");
-        }
         catch (Exception exception) when (
             exception is IOException
                 or UnauthorizedAccessException
                 or BadImageFormatException
                 or ProtocolException)
         {
+            var protectedInputState = DetermineProtectedInputState(
+                root,
+                source,
+                materialization);
+            var disposition = ClassifyBoundedScanFailure(
+                exception,
+                protectedInputState);
             return Result(
                 definition,
                 inputIdentity,
                 "incomplete",
-                "network.checked-in-scanner-failed",
+                disposition.ObservationCode,
+                disposition.CauseClass);
+        }
+    }
+
+    public static NetworkScanFailureDisposition ClassifyBoundedScanFailure(
+        Exception exception,
+        string protectedInputState)
+    {
+        if (protectedInputState == "invalidated")
+        {
+            return new(
+                "network.source-or-build-input-invalidated",
+                "protected-input-invalidated");
+        }
+        if (protectedInputState == "inaccessible"
+            || exception is IOException or UnauthorizedAccessException)
+        {
+            return new(
+                "network.source-or-build-input-inaccessible",
+                "environment-or-infrastructure-incomplete");
+        }
+        if (protectedInputState != "current")
+        {
+            return new(
+                "network.checked-in-scanner-state-invalid",
                 "protocol-failure");
         }
+        if (exception is BadImageFormatException
+            || exception is ProtocolException
+            {
+                Code: "HV244_PRODUCTION_DEPENDENCY_CLOSURE"
+            })
+        {
+            return new(
+                "network.production-managed-input-invalid",
+                "subject-nonconformance");
+        }
+        return new(
+            "network.checked-in-scanner-failed",
+            "protocol-failure");
+    }
+
+    private static string DetermineProtectedInputState(
+        string root,
+        SubjectSourceConfiguration source,
+        CellMaterialization materialization)
+    {
+        var identities = source.SourceAndBuildInputs
+            .Concat(
+            [
+                source.FailureRegistry,
+                source.CalibratedBounds,
+                source.BuildRecipe,
+                source.CommandContract,
+                source.ContractBaseline,
+                source.EnvironmentPolicy,
+                source.Workflow
+            ])
+            .Concat(materialization.BuiltArtifacts)
+            .GroupBy(identity => identity.Path, StringComparer.Ordinal)
+            .ToArray();
+        if (identities.Any(group =>
+                group.Select(identity => identity.Sha256)
+                    .Distinct(StringComparer.Ordinal).Count() != 1))
+        {
+            return "invalidated";
+        }
+        foreach (var identity in identities.Select(group => group.First()))
+        {
+            try
+            {
+                var path = RepositoryPaths.ResolveConfined(
+                    root,
+                    identity.Path,
+                    mustExist: false);
+                if (!File.Exists(path))
+                {
+                    return "invalidated";
+                }
+                var bytes = File.ReadAllBytes(path);
+                if (CanonicalJson.Sha256(bytes) != identity.Sha256)
+                {
+                    return "invalidated";
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return "inaccessible";
+            }
+            catch (IOException)
+            {
+                return "inaccessible";
+            }
+            catch (ProtocolException)
+            {
+                return "invalidated";
+            }
+        }
+        return "current";
     }
 
     private static NetworkEvidenceMethodResult EvaluateRecorder(

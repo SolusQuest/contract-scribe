@@ -85,7 +85,7 @@ public static class CellExecutor
             || manifest.ValidationAttempt.Workflow != manifest.SourceConfiguration.Workflow.Path
             || manifest.SourceConfiguration.DeclaredOperationInventoryId
                 != BundleValidator.ComputeDeclaredOperationInventoryId(
-                    manifest.SourceConfiguration.DeclaredNetworkDependentOperations)
+                    manifest.SourceConfiguration)
             || manifest.SourceConfiguration.SourceConfigurationId
                 != BundleValidator.ComputeSourceConfigurationId(manifest.SourceConfiguration))
         {

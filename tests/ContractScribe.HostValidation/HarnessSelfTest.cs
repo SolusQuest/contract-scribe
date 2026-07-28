@@ -194,7 +194,13 @@ public static class HarnessSelfTest
                 && !NativeTerminationObserver.IsSignaled(137 << 8)
                 && NativeTerminationObserver.IsSignaled(NativeTerminationObserver.UnixSigKill)
                 && NativeTerminationObserver.TermSignal(NativeTerminationObserver.UnixSigKill)
-                    == NativeTerminationObserver.UnixSigKill,
+                    == NativeTerminationObserver.UnixSigKill
+                && NativeTerminationObserver.IsExitedProcStat(
+                    "42 (subject) Z 1 2 3")
+                && NativeTerminationObserver.IsExitedProcStat(
+                    "42 (subject with ) marker) X 1 2 3")
+                && !NativeTerminationObserver.IsExitedProcStat(
+                    "42 (subject) R 1 2 3"),
                 "HV927_SELF_TEST_NATIVE_WAIT_STATUS");
         }
         finally
@@ -247,7 +253,7 @@ public static class HarnessSelfTest
                 "publication-before-commit",
                 "external-kill",
                 TimeSpan.FromSeconds(5),
-                TimeSpan.FromMilliseconds(100)),
+                WaitForExitBeforeAction: true),
             "temporary-over-limit" or "temporary-cleanup-before-gate" => new(
                 controlRoot,
                 "temporary-disk-high-water",

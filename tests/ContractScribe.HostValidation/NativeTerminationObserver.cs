@@ -33,6 +33,10 @@ public static class NativeTerminationObserver
             return WaitForSingleObject(handle, 0) == WaitTimeout;
         }
 
+        if (OperatingSystem.IsLinux() && IsLinuxExitedNonReaping(processId))
+        {
+            return false;
+        }
         var result = Kill(processId, 0);
         if (result == 0)
         {
@@ -255,6 +259,33 @@ public static class NativeTerminationObserver
     }
 
     internal static int TermSignal(int rawStatus) => rawStatus & 0x7f;
+
+    private static bool IsLinuxExitedNonReaping(int processId)
+    {
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{processId}/stat");
+            return IsExitedProcStat(stat);
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsExitedProcStat(string stat)
+    {
+        var commandEnd = stat.LastIndexOf(')');
+        return commandEnd >= 0
+            && commandEnd + 2 < stat.Length
+            && stat[commandEnd + 2] is 'Z' or 'X';
+    }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

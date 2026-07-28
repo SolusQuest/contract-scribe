@@ -482,6 +482,26 @@ public sealed class M1HostValidationProtocolTests
                     context.NetworkEvidenceProfile,
                     cleanNetwork with { Methods = wrongInputMethods },
                     cleanNetworkMethods.Select(method => method.InputIdentity).ToArray())).Code);
+        Assert.Equal(
+            "protected-input-invalidated",
+            NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
+                new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE"),
+                "invalidated").CauseClass);
+        Assert.Equal(
+            "environment-or-infrastructure-incomplete",
+            NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
+                new IOException("synthetic observer failure"),
+                "current").CauseClass);
+        Assert.Equal(
+            "subject-nonconformance",
+            NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
+                new BadImageFormatException("synthetic subject artifact"),
+                "current").CauseClass);
+        Assert.Equal(
+            "protocol-failure",
+            NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
+                new ProtocolException("HV247_NETWORK_EVIDENCE_PROTOCOL_FAILURE"),
+                "current").CauseClass);
         foreach (var source in new[]
                  {
                      "using System.Net.Http;",
@@ -509,6 +529,128 @@ public sealed class M1HostValidationProtocolTests
         }
         NetworkOperationSourceScanner.ValidateSyntheticSource(
             "// HttpClient in a comment is not an operation.\nvar text = \"System.Net.Http\";");
+    }
+
+    [Fact]
+    public void HostValidation_DeclaredNetworkInventoryIsDerivedFromExactInputs()
+    {
+        foreach (var (inputClass, text) in new[]
+                 {
+                     (
+                         "project-package",
+                         "<Project><ItemGroup><PackageReference Include=\"Octokit\" /></ItemGroup></Project>"),
+                     (
+                         "configuration-json",
+                         "{\"networkOperations\":[\"provider\"]}"),
+                     (
+                         "configuration-xml",
+                         "<configuration><telemetryEnabled>true</telemetryEnabled></configuration>"),
+                     (
+                         "configuration-text",
+                         "runtimeDownloadEnabled: true"),
+                     (
+                         "command-contract",
+                         "{\"arguments\":[\"--provider=openai\"]}"),
+                     (
+                         "environment-policy",
+                         "ContractScribe initiates provider requests over the network."),
+                     (
+                         "workflow",
+                         "steps:\n  - run: dotnet ContractScribe.dll audit --provider=openai")
+                 })
+        {
+            Assert.True(
+                DeclaredNetworkOperationInventoryEvaluator.HasSyntheticDeclaration(
+                    inputClass,
+                    text));
+        }
+        Assert.False(
+            DeclaredNetworkOperationInventoryEvaluator.HasSyntheticDeclaration(
+                "environment-policy",
+                "ContractScribe does not call the model provider or GitHub API."));
+        Assert.False(
+            DeclaredNetworkOperationInventoryEvaluator.HasSyntheticDeclaration(
+                "workflow",
+                "steps:\n  - run: dotnet restore ContractScribe.slnx\n  - uses: actions/download-artifact@v4"));
+
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            $"host-validation-declared-inventory-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var projectPath = Path.Join(temp, "Host.csproj");
+            var configurationPath = Path.Join(temp, "host.json");
+            var commandPath = Path.Join(temp, "command.json");
+            var policyPath = Path.Join(temp, "policy.md");
+            var workflowPath = Path.Join(temp, "workflow.yml");
+            File.WriteAllText(
+                projectPath,
+                "<Project><ItemGroup><PackageReference Include=\"JsonSchema.Net\" /></ItemGroup></Project>",
+                new UTF8Encoding(false));
+            File.WriteAllText(configurationPath, "{}", new UTF8Encoding(false));
+            File.WriteAllText(commandPath, "{\"arguments\":[]}", new UTF8Encoding(false));
+            File.WriteAllText(
+                policyPath,
+                "ContractScribe does not call the model provider or GitHub API.",
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                workflowPath,
+                "steps:\n  - run: dotnet restore ContractScribe.slnx\n",
+                new UTF8Encoding(false));
+            ArtifactIdentity Identity(string path) => new(
+                RepositoryPaths.ToRepositoryRelative(Root, path),
+                CanonicalJson.Sha256File(path));
+            var project = Identity(projectPath);
+            var configuration = Identity(configurationPath);
+            var command = Identity(commandPath);
+            var policy = Identity(policyPath);
+            var workflow = Identity(workflowPath);
+            var source = new SubjectSourceConfiguration(
+                $"source.{new string('1', 64)}",
+                new string('2', 40),
+                $"operations.{new string('3', 64)}",
+                [],
+                [project, configuration],
+                configuration,
+                configuration,
+                project,
+                command,
+                configuration,
+                policy,
+                workflow);
+            var cleanInventoryId =
+                BundleValidator.ComputeDeclaredOperationInventoryId(source);
+            Assert.False(
+                DeclaredNetworkOperationInventoryEvaluator.HasDeclaredNetworkOperation(
+                    Root,
+                    source));
+
+            File.WriteAllText(
+                configurationPath,
+                "{\"networkOperations\":[\"provider\"]}",
+                new UTF8Encoding(false));
+            var changedConfiguration = Identity(configurationPath);
+            var changed = source with
+            {
+                SourceAndBuildInputs = [project, changedConfiguration],
+                FailureRegistry = changedConfiguration,
+                CalibratedBounds = changedConfiguration,
+                ContractBaseline = changedConfiguration
+            };
+            Assert.NotEqual(
+                cleanInventoryId,
+                BundleValidator.ComputeDeclaredOperationInventoryId(changed));
+            Assert.True(
+                DeclaredNetworkOperationInventoryEvaluator.HasDeclaredNetworkOperation(
+                    Root,
+                    changed));
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
     }
 
     [Fact]
@@ -617,15 +759,12 @@ public sealed class M1HostValidationProtocolTests
             repositoryDelta);
         var fabricatedCleanEvidence = actualEvidence with
         {
-            Methods = actualEvidence.Methods.Select(method =>
-                method.MethodId == "test-operation-recorder"
-                    ? method with
-                    {
-                        Status = "complete",
-                        ObservationCode = "network.operation-recorder-empty",
-                        CauseClass = null
-                    }
-                    : method).ToArray()
+            Methods = actualEvidence.Methods.Select(method => method with
+            {
+                Status = "complete",
+                ObservationCode = $"network.synthetic-{method.MethodId}-clean",
+                CauseClass = null
+            }).ToArray()
         };
         var process = new ProcessObservation(
             1,
@@ -762,13 +901,17 @@ public sealed class M1HostValidationProtocolTests
                 .Split(Path.PathSeparator)
                 .Select(path => MetadataReference.CreateFromFile(path))
                 .ToArray();
-            var helperPath = Path.Join(temp, "Acme.Networking.dll");
+            var helperDirectory = Path.Join(temp, "dependency");
+            var entryDirectory = Path.Join(temp, "entry");
+            Directory.CreateDirectory(helperDirectory);
+            Directory.CreateDirectory(entryDirectory);
+            var helperPath = Path.Join(helperDirectory, "Acme.Networking.dll");
             EmitAssembly(
                 helperPath,
                 "Acme.Networking",
                 "using System.Net.Http; public static class Client { public static object Send() => new HttpClient(); }",
                 references);
-            var entryPath = Path.Join(temp, "Production.Entry.dll");
+            var entryPath = Path.Join(entryDirectory, "Production.Entry.dll");
             EmitAssembly(
                 entryPath,
                 "Production.Entry",
@@ -785,7 +928,6 @@ public sealed class M1HostValidationProtocolTests
                 $"source.{new string('1', 64)}",
                 new string('2', 40),
                 $"operations.{new string('3', 64)}",
-                [],
                 [],
                 [],
                 entryIdentity,
@@ -1255,6 +1397,50 @@ public sealed class M1HostValidationProtocolTests
         Assert.Equal(
             "bounds.temporary-disk-retention-contract-missing",
             missingGate.Observation);
+
+        var observerRoot = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-hv-observer-{Guid.NewGuid():N}");
+        var temporaryRoot = Path.Join(observerRoot, "temporary");
+        var stagingRoot = Path.Join(observerRoot, "staging");
+        Directory.CreateDirectory(temporaryRoot);
+        Directory.CreateDirectory(stagingRoot);
+        try
+        {
+            var stalePath = Path.Join(stagingRoot, "stale.json");
+            File.WriteAllText(stalePath, "stale", new UTF8Encoding(false));
+            Assert.Equal(
+                "HV242_TEMPORARY_DISK_CONTRACT",
+                Assert.Throws<ProtocolException>(() =>
+                    new TemporaryDiskHighWaterObserver(
+                        temporaryRoot,
+                        stagingRoot)).Code);
+            File.Delete(stalePath);
+
+            using var observer = new TemporaryDiskHighWaterObserver(
+                temporaryRoot,
+                stagingRoot);
+            var shrinkingPath = Path.Join(temporaryRoot, "shrinking.bin");
+            File.WriteAllBytes(shrinkingPath, new byte[8 * 1024]);
+            observer.Synchronize();
+            using (var stream = new FileStream(
+                       shrinkingPath,
+                       FileMode.Open,
+                       FileAccess.Write,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.SetLength(1024);
+                stream.Flush(flushToDisk: true);
+            }
+            var shrinkEvidence = observer.CaptureGate();
+            Assert.True(shrinkEvidence.ObserverComplete);
+            Assert.True(shrinkEvidence.RetentionBreach);
+            Assert.Equal(8 * 1024, shrinkEvidence.TotalBytes);
+        }
+        finally
+        {
+            Directory.Delete(observerRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -1360,7 +1546,6 @@ public sealed class M1HostValidationProtocolTests
                 $"source.{new string('1', 64)}",
                 new string('2', 40),
                 $"operations.{new string('3', 64)}",
-                [],
                 [],
                 [],
                 identity,
@@ -2095,7 +2280,6 @@ public sealed class M1HostValidationProtocolTests
             $"source.{sha}",
             new string('1', 40),
             $"operations.{new string('2', 64)}",
-            [],
             ["src"],
             [artifact],
             failureRegistry,
@@ -2742,7 +2926,6 @@ public sealed class M1HostValidationProtocolTests
             $"source.{sha}",
             commit,
             $"operations.{new string('2', 64)}",
-            [],
             ["src/ContractScribe.Core"],
             [artifact],
             failureRegistry,

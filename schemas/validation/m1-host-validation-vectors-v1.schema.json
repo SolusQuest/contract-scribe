@@ -153,10 +153,15 @@
               "artifact-state",
               "bounded-source-metadata-scan",
               "canonical-bytes",
+              "delete-shrink-rename-retention-breach",
               "declared-operation-inventory",
+              "empty-governed-prestate",
+              "exact-built-artifact-source-metadata-scan",
               "filesystem-delta",
+              "independently-derived-declared-operation-inventory",
               "known-prestate",
               "logical-file-byte-snapshot",
+              "peak-current-logical-file-byte-tracking",
               "process-tree",
               "public-streams",
               "restore-runtime-download-process-artifact-observer",
@@ -164,7 +169,8 @@
               "selected-toolchain",
               "subject-response",
               "temporary-disk-high-water-gate",
-              "test-operation-recorder"
+              "test-operation-recorder",
+              "watcher-sentinel-drain"
             ]
           }
         },
@@ -175,6 +181,7 @@
           "items": {
             "enum": [
               "build-input",
+              "command-contract",
               "contract",
               "coverage-manifest",
               "environment-policy",
@@ -183,6 +190,7 @@
               "package",
               "protocol",
               "runner-image",
+              "selected-runtime",
               "temporary-disk-contract",
               "toolchain",
               "workflow"

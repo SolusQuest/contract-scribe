@@ -170,7 +170,6 @@ public static class BundleValidator
         {
             source.HostRevision,
             source.DeclaredOperationInventoryId,
-            source.DeclaredNetworkDependentOperations,
             source.SourceRoots,
             source.SourceAndBuildInputs,
             source.FailureRegistry,
@@ -185,8 +184,8 @@ public static class BundleValidator
     }
 
     public static string ComputeDeclaredOperationInventoryId(
-        IReadOnlyList<string> operations) =>
-        $"operations.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(operations))}";
+        SubjectSourceConfiguration source) =>
+        DeclaredNetworkOperationInventoryEvaluator.ComputeInventoryId(source);
 
     public static string ComputeReviewId(ReviewRecord review)
     {

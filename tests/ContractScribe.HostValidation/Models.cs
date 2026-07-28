@@ -272,6 +272,7 @@ public sealed record SubjectControl(
     string Action,
     TimeSpan GateTimeout,
     TimeSpan ActionDelay = default,
+    bool WaitForExitBeforeAction = false,
     Func<TemporaryDiskHighWaterEvidence>? MeasureTemporaryDisk = null);
 
 public sealed record ExecutionSubjectManifest(
@@ -288,7 +289,6 @@ public sealed record SubjectSourceConfiguration(
     string SourceConfigurationId,
     string HostRevision,
     string DeclaredOperationInventoryId,
-    IReadOnlyList<string> DeclaredNetworkDependentOperations,
     IReadOnlyList<string> SourceRoots,
     IReadOnlyList<ArtifactIdentity> SourceAndBuildInputs,
     ArtifactIdentity FailureRegistry,

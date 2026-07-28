@@ -262,7 +262,6 @@
         "sourceConfigurationId",
         "hostRevision",
         "declaredOperationInventoryId",
-        "declaredNetworkDependentOperations",
         "sourceRoots",
         "sourceAndBuildInputs",
         "failureRegistry",
@@ -284,22 +283,6 @@
         "declaredOperationInventoryId": {
           "type": "string",
           "pattern": "^operations\\.[0-9a-f]{64}$"
-        },
-        "declaredNetworkDependentOperations": {
-          "type": "array",
-          "maxItems": 7,
-          "uniqueItems": true,
-          "items": {
-            "enum": [
-              "provider",
-              "github",
-              "update",
-              "telemetry",
-              "restore",
-              "runtime-download",
-              "other-network-dependent"
-            ]
-          }
         },
         "sourceRoots": {
           "type": "array",

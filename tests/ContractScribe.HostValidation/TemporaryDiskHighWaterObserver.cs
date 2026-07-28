@@ -2,15 +2,23 @@ namespace ContractScribe.HostValidation;
 
 public sealed class TemporaryDiskHighWaterObserver : IDisposable
 {
+    private const string BarrierPrefix = ".contractscribe-hv-observer-barrier-";
+
     private readonly object sync = new();
     private readonly string temporaryWorkRoot;
     private readonly string outputStagingRoot;
-    private readonly IReadOnlyDictionary<string, long> before;
-    private readonly Dictionary<string, long> observedLengths;
+    private readonly Dictionary<string, long> currentLengths = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ManualResetEventSlim> barrierAcknowledgements =
+        new(StringComparer.Ordinal);
     private readonly FileSystemWatcher[] watchers;
     private bool observerComplete = true;
     private bool retentionBreach;
-    private bool gateCaptured;
+    private bool observationClosed;
+    private long currentTemporaryBytes;
+    private long currentStagingBytes;
+    private long peakTemporaryBytes;
+    private long peakStagingBytes;
+    private long peakTotalBytes;
 
     public TemporaryDiskHighWaterObserver(
         string temporaryWorkRoot,
@@ -20,8 +28,11 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         this.outputStagingRoot = Path.GetFullPath(outputStagingRoot);
         Directory.CreateDirectory(this.temporaryWorkRoot);
         Directory.CreateDirectory(this.outputStagingRoot);
-        before = CaptureLengths();
-        observedLengths = new Dictionary<string, long>(before, StringComparer.Ordinal);
+        var prestate = CaptureLengths();
+        if (prestate.Count != 0)
+        {
+            throw new ProtocolException("HV242_TEMPORARY_DISK_CONTRACT");
+        }
         watchers =
         [
             CreateWatcher(this.temporaryWorkRoot, "temporary-work"),
@@ -31,21 +42,66 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
 
     public TemporaryDiskHighWaterEvidence CaptureGate()
     {
+        Synchronize();
         lock (sync)
         {
-            var current = CaptureLengths();
-            var temporaryBytes = MeasureChangedBytes(current, before, "temporary-work/");
-            var stagingBytes = MeasureChangedBytes(current, before, "output-staging/");
-            gateCaptured = true;
+            observationClosed = true;
             return new(
                 "peak-concurrent-logical-file-bytes",
                 "contractscribe-temporary-work-and-output-staging.v1",
                 "pre-subject-to-temporary-disk-high-water.v1",
-                temporaryBytes,
-                stagingBytes,
-                checked(temporaryBytes + stagingBytes),
+                peakTemporaryBytes,
+                peakStagingBytes,
+                peakTotalBytes,
                 observerComplete,
                 retentionBreach);
+        }
+    }
+
+    public void Synchronize()
+    {
+        lock (sync)
+        {
+            if (observationClosed)
+            {
+                throw new InvalidOperationException("The observation interval is closed.");
+            }
+        }
+
+        var barriers = new List<BarrierRegistration>(2);
+        TryCreateBarrier(barriers, "temporary-work", temporaryWorkRoot);
+        TryCreateBarrier(barriers, "output-staging", outputStagingRoot);
+        foreach (var barrier in barriers)
+        {
+            if (!barrier.Acknowledgement.Wait(TimeSpan.FromSeconds(10)))
+            {
+                lock (sync)
+                {
+                    observerComplete = false;
+                }
+            }
+        }
+
+        lock (sync)
+        {
+            Reconcile(CaptureLengths());
+        }
+        foreach (var barrier in barriers)
+        {
+            try
+            {
+                File.Delete(barrier.Path);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or NotSupportedException)
+            {
+                lock (sync)
+                {
+                    observerComplete = false;
+                }
+            }
         }
     }
 
@@ -69,6 +125,10 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             watcher.EnableRaisingEvents = false;
             watcher.Dispose();
         }
+        foreach (var acknowledgement in barrierAcknowledgements.Values)
+        {
+            acknowledgement.Dispose();
+        }
     }
 
     private FileSystemWatcher CreateWatcher(string root, string role)
@@ -76,6 +136,7 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         var watcher = new FileSystemWatcher(root)
         {
             IncludeSubdirectories = true,
+            InternalBufferSize = 64 * 1024,
             NotifyFilter = NotifyFilters.FileName
                 | NotifyFilters.DirectoryName
                 | NotifyFilters.Size
@@ -104,7 +165,17 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
     {
         lock (sync)
         {
-            if (gateCaptured || Directory.Exists(fullPath))
+            if (observationClosed)
+            {
+                return;
+            }
+            var key = ToKey(role, root, fullPath);
+            if (barrierAcknowledgements.TryGetValue(key, out var acknowledgement))
+            {
+                acknowledgement.Set();
+                return;
+            }
+            if (Directory.Exists(fullPath))
             {
                 return;
             }
@@ -112,16 +183,11 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             {
                 if (!File.Exists(fullPath))
                 {
+                    retentionBreach = true;
                     return;
                 }
-                var key = ToKey(role, root, fullPath);
                 var length = new FileInfo(fullPath).Length;
-                if (observedLengths.TryGetValue(key, out var previous)
-                    && length < previous)
-                {
-                    retentionBreach = true;
-                }
-                observedLengths[key] = length;
+                UpdateLength(key, length);
             }
             catch (Exception exception) when (
                 exception is IOException
@@ -137,15 +203,17 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
     {
         lock (sync)
         {
-            if (gateCaptured)
+            if (observationClosed)
             {
                 return;
             }
             var key = ToKey(role, root, fullPath);
-            if (observedLengths.ContainsKey(key))
+            if (barrierAcknowledgements.ContainsKey(key))
             {
-                retentionBreach = true;
+                return;
             }
+            retentionBreach = true;
+            RemoveLength(key);
         }
     }
 
@@ -168,7 +236,7 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         }
     }
 
-    private static void CaptureRoot(
+    private void CaptureRoot(
         Dictionary<string, long> result,
         string role,
         string root)
@@ -181,26 +249,129 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         };
         foreach (var path in Directory.EnumerateFiles(root, "*", options))
         {
-            result[ToKey(role, root, path)] = new FileInfo(path).Length;
+            var key = ToKey(role, root, path);
+            if (!barrierAcknowledgements.ContainsKey(key))
+            {
+                result[key] = new FileInfo(path).Length;
+            }
         }
     }
 
-    private static long MeasureChangedBytes(
-        IReadOnlyDictionary<string, long> current,
-        IReadOnlyDictionary<string, long> baseline,
-        string prefix)
+    private void TryCreateBarrier(
+        ICollection<BarrierRegistration> barriers,
+        string role,
+        string root)
     {
-        long total = 0;
-        foreach (var pair in current.Where(pair => pair.Key.StartsWith(prefix, StringComparison.Ordinal)))
+        try
         {
-            if (!baseline.TryGetValue(pair.Key, out var original) || original != pair.Value)
+            barriers.Add(CreateBarrier(role, root));
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException)
+        {
+            lock (sync)
             {
-                total = checked(total + pair.Value);
+                observerComplete = false;
             }
         }
-        return total;
+    }
+
+    private BarrierRegistration CreateBarrier(string role, string root)
+    {
+        var path = Path.Join(root, $"{BarrierPrefix}{Guid.NewGuid():N}");
+        var key = ToKey(role, root, path);
+        var acknowledgement = new ManualResetEventSlim(false);
+        lock (sync)
+        {
+            barrierAcknowledgements.Add(key, acknowledgement);
+        }
+        using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        stream.WriteByte(0);
+        stream.Flush(flushToDisk: true);
+        return new(path, acknowledgement);
+    }
+
+    private void Reconcile(IReadOnlyDictionary<string, long> current)
+    {
+        foreach (var missing in currentLengths.Keys
+                     .Where(key => !current.ContainsKey(key))
+                     .ToArray())
+        {
+            retentionBreach = true;
+            RemoveLength(missing);
+        }
+        foreach (var pair in current)
+        {
+            UpdateLength(pair.Key, pair.Value);
+        }
+    }
+
+    private void UpdateLength(string key, long length)
+    {
+        var previous = currentLengths.GetValueOrDefault(key);
+        if (currentLengths.ContainsKey(key) && length < previous)
+        {
+            retentionBreach = true;
+        }
+        currentLengths[key] = length;
+        if (key.StartsWith("temporary-work/", StringComparison.Ordinal))
+        {
+            currentTemporaryBytes = checked(currentTemporaryBytes - previous + length);
+        }
+        else if (key.StartsWith("output-staging/", StringComparison.Ordinal))
+        {
+            currentStagingBytes = checked(currentStagingBytes - previous + length);
+        }
+        else
+        {
+            observerComplete = false;
+            return;
+        }
+        UpdatePeak();
+    }
+
+    private void RemoveLength(string key)
+    {
+        if (!currentLengths.Remove(key, out var previous))
+        {
+            return;
+        }
+        if (key.StartsWith("temporary-work/", StringComparison.Ordinal))
+        {
+            currentTemporaryBytes = checked(currentTemporaryBytes - previous);
+        }
+        else if (key.StartsWith("output-staging/", StringComparison.Ordinal))
+        {
+            currentStagingBytes = checked(currentStagingBytes - previous);
+        }
+        else
+        {
+            observerComplete = false;
+        }
+    }
+
+    private void UpdatePeak()
+    {
+        var total = checked(currentTemporaryBytes + currentStagingBytes);
+        if (total <= peakTotalBytes)
+        {
+            return;
+        }
+        peakTemporaryBytes = currentTemporaryBytes;
+        peakStagingBytes = currentStagingBytes;
+        peakTotalBytes = total;
     }
 
     private static string ToKey(string role, string root, string fullPath) =>
         $"{role}/{Path.GetRelativePath(root, fullPath).Replace('\\', '/')}";
+
+    private sealed record BarrierRegistration(
+        string Path,
+        ManualResetEventSlim Acknowledgement);
 }

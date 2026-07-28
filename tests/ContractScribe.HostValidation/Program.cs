@@ -390,9 +390,7 @@ public static class Program
                     Path.GetTempPath(),
                     "synthetic-early-cleanup.bin");
                 File.WriteAllBytes(earlyCleanupPath, new byte[8 * 1024]);
-                await Task.Delay(100).ConfigureAwait(false);
                 File.Delete(earlyCleanupPath);
-                await Task.Delay(100).ConfigureAwait(false);
                 await ReachGateAsync(request).ConfigureAwait(false);
                 CanonicalJson.WriteCanonical(request.ResponsePath, response);
                 return 0;

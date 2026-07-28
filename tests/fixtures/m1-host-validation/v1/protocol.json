@@ -31,6 +31,7 @@
     "tests/ContractScribe.HostValidation/CanonicalJson.cs",
     "tests/ContractScribe.HostValidation/CellExecutor.cs",
     "tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj",
+    "tests/ContractScribe.HostValidation/DeclaredNetworkOperationInventoryEvaluator.cs",
     "tests/ContractScribe.HostValidation/EvidenceValidator.cs",
     "tests/ContractScribe.HostValidation/FixtureRecipeRegistry.cs",
     "tests/ContractScribe.HostValidation/FrozenExecutorCommandRegistry.cs",

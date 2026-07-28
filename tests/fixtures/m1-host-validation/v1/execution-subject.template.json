@@ -7,8 +7,7 @@
   "sourceConfiguration": {
     "sourceConfigurationId": "source.0000000000000000000000000000000000000000000000000000000000000000",
     "hostRevision": "0000000000000000000000000000000000000000",
-    "declaredOperationInventoryId": "operations.4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "declaredNetworkDependentOperations": [],
+    "declaredOperationInventoryId": "operations.0000000000000000000000000000000000000000000000000000000000000000",
     "sourceRoots": [
       "ContractScribe.slnx",
       "Directory.Build.props",
@@ -1134,7 +1133,7 @@
             "obj"
           ],
           "processObservationMode": "bounded-polling",
-          "resultPath": null,
+          "resultPath": "TestResults/audit-result.json",
           "resultPrestate": "absent",
           "runWorkingDirectories": [
             {
@@ -2495,7 +2494,7 @@
             "obj"
           ],
           "processObservationMode": "bounded-polling",
-          "resultPath": null,
+          "resultPath": "TestResults/audit-result.json",
           "resultPrestate": "absent",
           "runWorkingDirectories": [
             {

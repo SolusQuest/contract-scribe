@@ -37,17 +37,10 @@ public static partial class NetworkOperationSourceScanner
         }
         var declared = materialization.BuiltArtifacts
             .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            .ToDictionary(
-                artifact => Path.GetFullPath(RepositoryPaths.ResolveConfined(root, artifact.Path)),
-                artifact => artifact.Sha256,
-                OperatingSystem.IsWindows()
-                    ? StringComparer.OrdinalIgnoreCase
-                    : StringComparer.Ordinal);
-        var closure = BuildManagedClosure(declared.Keys);
-        if (closure.Any(path => !declared.ContainsKey(path)))
-        {
-            throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
-        }
+            .Select(artifact => Path.GetFullPath(
+                RepositoryPaths.ResolveConfined(root, artifact.Path)))
+            .ToArray();
+        var closure = BuildManagedClosure(declared);
         return closure.Any(HasForbiddenMemberReference);
     }
 
@@ -100,7 +93,8 @@ public static partial class NetworkOperationSourceScanner
         using var peReader = new PEReader(stream);
         if (!peReader.HasMetadata)
         {
-            return false;
+            throw new BadImageFormatException(
+                "A declared managed artifact does not contain metadata.");
         }
         var metadata = peReader.GetMetadataReader();
         foreach (var handle in metadata.MethodDefinitions)
@@ -197,33 +191,27 @@ public static partial class NetworkOperationSourceScanner
         var pathComparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
-        var declaredRoots = rootArray.ToHashSet(pathComparer);
-        var directories = rootArray.Select(Path.GetDirectoryName)
-            .Where(path => path is not null)
-            .Distinct(pathComparer)
-            .ToArray();
-        var candidates = directories
-            .SelectMany(directory => Directory.EnumerateFiles(directory!, "*.dll", SearchOption.AllDirectories))
-            .Select(Path.GetFullPath)
+        if (rootArray.Distinct(pathComparer).Count() != rootArray.Length)
+        {
+            throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+        }
+        var candidateByName = rootArray
             .GroupBy(
                 GetAssemblySimpleName,
-                StringComparer.OrdinalIgnoreCase);
-        var candidateByName = candidates.ToDictionary(
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
             group => group.Key,
             group =>
             {
-                var declaredCandidates = group
-                    .Where(declaredRoots.Contains)
-                    .Order(StringComparer.Ordinal)
-                    .ToArray();
-                if (declaredCandidates.Length > 1)
+                var candidates = group.Order(StringComparer.Ordinal).ToArray();
+                if (candidates.Length != 1)
                 {
                     throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
                 }
-                return declaredCandidates.SingleOrDefault()
-                    ?? group.Order(StringComparer.Ordinal).First();
+                return candidates[0];
             },
             StringComparer.OrdinalIgnoreCase);
+        var frameworkAssemblyNames = TrustedPlatformAssemblyNames();
         var closure = new HashSet<string>(
             pathComparer);
         var pending = new Stack<string>(rootArray);
@@ -233,14 +221,33 @@ public static partial class NetworkOperationSourceScanner
             {
                 continue;
             }
-            foreach (var dependency in GetAssemblyReferences(path)
-                         .Where(candidateByName.ContainsKey)
-                         .Select(reference => candidateByName[reference]))
+            foreach (var reference in GetAssemblyReferences(path))
             {
-                pending.Push(dependency);
+                if (candidateByName.TryGetValue(reference, out var dependency))
+                {
+                    pending.Push(dependency);
+                }
+                else if (!frameworkAssemblyNames.Contains(reference))
+                {
+                    throw new ProtocolException(
+                        "HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+                }
             }
         }
         return closure;
+    }
+
+    private static IReadOnlySet<string> TrustedPlatformAssemblyNames()
+    {
+        if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is not string paths)
+        {
+            throw new ProtocolException(
+                "HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+        }
+        return paths
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => Path.GetFileNameWithoutExtension(path)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string GetAssemblySimpleName(string assemblyPath)
@@ -249,7 +256,8 @@ public static partial class NetworkOperationSourceScanner
         using var peReader = new PEReader(stream);
         if (!peReader.HasMetadata)
         {
-            return Path.GetFileNameWithoutExtension(assemblyPath);
+            throw new BadImageFormatException(
+                "A declared managed artifact does not contain metadata.");
         }
         var metadata = peReader.GetMetadataReader();
         return metadata.IsAssembly
@@ -263,7 +271,8 @@ public static partial class NetworkOperationSourceScanner
         using var peReader = new PEReader(stream);
         if (!peReader.HasMetadata)
         {
-            return [];
+            throw new BadImageFormatException(
+                "A declared managed artifact does not contain metadata.");
         }
         var metadata = peReader.GetMetadataReader();
         return metadata.AssemblyReferences

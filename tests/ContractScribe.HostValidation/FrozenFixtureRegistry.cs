@@ -16,7 +16,8 @@ public static class FrozenFixtureRegistry
         var requiresResultPath = vector.ObserverRequirements.Contains(
                 "canonical-bytes",
                 StringComparer.Ordinal)
-            || vector.ObserverRequirements.Contains("artifact-state", StringComparer.Ordinal);
+            || vector.ObserverRequirements.Contains("artifact-state", StringComparer.Ordinal)
+            || vector.VectorId == "bounds.temporary-disk";
         var expectedPrestate = vector.VectorId == "publication.stale-invalidation"
             ? "stale-invalid"
             : "absent";

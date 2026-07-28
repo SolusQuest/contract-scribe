@@ -730,17 +730,20 @@
       "expectedEnforcementClass": "observable-only",
       "supportDisposition": "required",
       "observerRequirements": [
-        "declared-operation-inventory",
-        "bounded-source-metadata-scan",
+        "independently-derived-declared-operation-inventory",
+        "exact-built-artifact-source-metadata-scan",
         "test-operation-recorder",
         "restore-runtime-download-process-artifact-observer"
       ],
       "protectedInputClasses": [
         "build-input",
+        "command-contract",
         "coverage-manifest",
+        "environment-policy",
         "host-source",
         "package",
         "protocol",
+        "selected-runtime",
         "workflow"
       ]
     },
@@ -827,10 +830,11 @@
       "expectedEnforcementClass": "internally-enforceable",
       "supportDisposition": "deferred-owned",
       "observerRequirements": [
-        "known-prestate",
+        "empty-governed-prestate",
         "temporary-disk-high-water-gate",
-        "logical-file-byte-snapshot",
-        "retention-breach-observer",
+        "watcher-sentinel-drain",
+        "peak-current-logical-file-byte-tracking",
+        "delete-shrink-rename-retention-breach",
         "subject-response"
       ],
       "protectedInputClasses": [

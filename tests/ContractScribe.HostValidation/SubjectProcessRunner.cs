@@ -216,6 +216,19 @@ public static class SubjectProcessRunner
         {
             await Task.Delay(control.ActionDelay, cancellationToken).ConfigureAwait(false);
         }
+        if (control.WaitForExitBeforeAction)
+        {
+            if (control.Action != "external-kill")
+            {
+                return new(false, "unsupported-control");
+            }
+            var exitDeadline = DateTime.UtcNow + control.GateTimeout;
+            while (NativeTerminationObserver.IsAliveNonReaping(process.Id)
+                && DateTime.UtcNow < exitDeadline)
+            {
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         switch (control.Action)
         {
