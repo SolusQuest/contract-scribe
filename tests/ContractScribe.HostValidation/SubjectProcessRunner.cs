@@ -9,6 +9,9 @@ public static class SubjectProcessRunner
     internal static string LastObservationDiagnosticCode { get; private set; } =
         "HV944_OBSERVATION_NOT_RUN";
 
+    internal static string LastExternalLaunchStrategy { get; private set; } =
+        "HV966_EXTERNAL_LAUNCH_NOT_RUN";
+
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static async Task<ProcessExecutionResult> RunAsync(
@@ -45,34 +48,50 @@ public static class SubjectProcessRunner
             startInfo.Environment["TMPDIR"] = auditTemporaryRoot;
         }
 
-        using var process = new Process { StartInfo = startInfo };
+        Process? process = null;
+        LinuxSubjectProcess? linuxSubject = null;
+        Stream? standardOutput = null;
+        Stream? standardError = null;
         try
         {
-            if (!process.Start())
+            if (OperatingSystem.IsLinux()
+                && control?.Action == "external-kill")
             {
-                return StartFailure("launch-failure");
+                linuxSubject = LinuxSubjectProcess.Start(startInfo);
+                process = linuxSubject.Process;
+                standardOutput = linuxSubject.StandardOutput;
+                standardError = linuxSubject.StandardError;
+                LastExternalLaunchStrategy =
+                    "linux-native-unregistered-child";
+            }
+            else
+            {
+                process = new Process { StartInfo = startInfo };
+                if (!process.Start())
+                {
+                    process.Dispose();
+                    return StartFailure("launch-failure");
+                }
+                standardOutput = process.StandardOutput.BaseStream;
+                standardError = process.StandardError.BaseStream;
             }
         }
-        catch (Win32Exception exception) when (exception.NativeErrorCode is 5 or 13)
+        catch (Exception exception) when (
+            TryClassifyStartFailure(exception, out var processStart))
         {
-            return StartFailure("permission-failure");
+            process?.Dispose();
+            linuxSubject?.Dispose();
+            return StartFailure(processStart);
         }
-        catch (Win32Exception exception) when (exception.NativeErrorCode is 8 or 193 or 216)
+        if (process is null
+            || standardOutput is null
+            || standardError is null)
         {
-            return StartFailure("runtime-load-failure");
+            throw new InvalidOperationException(
+                "The subject launch completed without process streams.");
         }
-        catch (Win32Exception)
-        {
-            return StartFailure("launch-failure");
-        }
-        catch (FileNotFoundException)
-        {
-            return StartFailure("launch-failure");
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return StartFailure("permission-failure");
-        }
+        using var processScope = process;
+        using var linuxSubjectScope = linuxSubject;
 
         var executionDeadline = MonotonicDeadline.Start(timeout);
         var cleanupReserve = control?.Action == "external-kill"
@@ -90,12 +109,12 @@ public static class SubjectProcessRunner
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         streamDeadlineSource.CancelAfter(executionDeadline.Remaining);
         var stdoutTask = ReadBoundedAsync(
-            process.StandardOutput.BaseStream,
+            standardOutput,
             standardOutputLimit,
             streamDeadlineSource.Token,
             cancellationToken);
         var stderrTask = ReadBoundedAsync(
-            process.StandardError.BaseStream,
+            standardError,
             standardErrorLimit,
             streamDeadlineSource.Token,
             cancellationToken);
@@ -234,6 +253,22 @@ public static class SubjectProcessRunner
             null,
             true,
             []);
+
+    private static bool TryClassifyStartFailure(
+        Exception exception,
+        out string processStart)
+    {
+        processStart = exception switch
+        {
+            Win32Exception { NativeErrorCode: 5 or 13 }
+                or UnauthorizedAccessException => "permission-failure",
+            Win32Exception { NativeErrorCode: 8 or 12 or 193 or 216 } =>
+                "runtime-load-failure",
+            Win32Exception or FileNotFoundException => "launch-failure",
+            _ => string.Empty
+        };
+        return processStart.Length > 0;
+    }
 
     private static async Task<ControlExecutionResult> ApplyControlAsync(
         Process process,

@@ -403,6 +403,8 @@ public static class HarnessSelfTest
         Ensure(
             NativeTerminationObserver.LastRootStatusOwnerCount == 1
             && NativeTerminationObserver.LastRootStatusWaitCompleted
+            && SubjectProcessRunner.LastExternalLaunchStrategy
+                == "linux-native-unregistered-child"
             && NativeTerminationObserver.LastDiagnosticCode
                 != "HV939_LINUX_ROOT_STATUS_ALREADY_REAPED",
             code);

@@ -38,6 +38,7 @@
     "tests/ContractScribe.HostValidation/FrozenFixtureRegistry.cs",
     "tests/ContractScribe.HostValidation/HarnessSelfTest.cs",
     "tests/ContractScribe.HostValidation/IncompleteEvidenceWriter.cs",
+    "tests/ContractScribe.HostValidation/LinuxSubjectProcess.cs",
     "tests/ContractScribe.HostValidation/Models.cs",
     "tests/ContractScribe.HostValidation/MonotonicDeadline.cs",
     "tests/ContractScribe.HostValidation/NativeTerminationObserver.cs",
