@@ -479,29 +479,9 @@ public static class EvidenceValidator
 
     private static void EnsureEquality(VectorDefinition vector, IReadOnlyList<RunEvidence> runs)
     {
-        foreach (var field in vector.EqualityFields)
+        foreach (var values in vector.EqualityFields.Select(field =>
+            runs.Select(run => EqualityValue(field, run)).ToArray()))
         {
-            var values = runs.Select(run => field switch
-            {
-                "observedObservation" => run.ObservedObservation,
-                "subject.observationCode" => run.Subject?.ObservationCode ?? run.ObservedObservation,
-                "subject.canonicalResultSha256" => run.ObservedCanonicalResult?.Sha256,
-                "observedAuditResult.targetProfile" => run.ObservedAuditResult?.TargetProfile,
-                "observedAuditResult.auditOutcomes" => run.ObservedAuditResult is null
-                    ? null
-                    : string.Join("\0", run.ObservedAuditResult.AuditOutcomes),
-                "subject.auditOutcome" => run.Subject?.AuditOutcome,
-                "subject.executionOutcome" => run.Subject?.ExecutionOutcome,
-                "subject.failureStage" => run.Subject?.FailureStage,
-                "subject.failureCode" => run.Subject?.FailureCode,
-                "subject.processStart" => run.Subject?.ProcessStart ?? run.Process.ProcessStart,
-                "subject.processTermination" => run.Subject?.ProcessTermination ?? run.Process.ProcessTermination,
-                "subject.terminalState" => run.Subject?.TerminalState ?? "not-entered",
-                "subject.artifactState" => run.Subject?.ArtifactState
-                    ?? (run.ObservedCanonicalResult is null ? "absent" : "published"),
-                "repositoryDelta.protectedChanged" => string.Join("\0", run.RepositoryDelta.ProtectedChanged),
-                _ => throw new ProtocolException("HV215_EQUALITY_FIELD_UNKNOWN")
-            }).ToArray();
             if (values.Any(string.IsNullOrWhiteSpace)
                 || values.Distinct(StringComparer.Ordinal).Count() != 1)
             {
@@ -509,6 +489,29 @@ public static class EvidenceValidator
             }
         }
     }
+
+    private static string? EqualityValue(string field, RunEvidence run) =>
+        field switch
+        {
+            "observedObservation" => run.ObservedObservation,
+            "subject.observationCode" => run.Subject?.ObservationCode ?? run.ObservedObservation,
+            "subject.canonicalResultSha256" => run.ObservedCanonicalResult?.Sha256,
+            "observedAuditResult.targetProfile" => run.ObservedAuditResult?.TargetProfile,
+            "observedAuditResult.auditOutcomes" => run.ObservedAuditResult is null
+                ? null
+                : string.Join("\0", run.ObservedAuditResult.AuditOutcomes),
+            "subject.auditOutcome" => run.Subject?.AuditOutcome,
+            "subject.executionOutcome" => run.Subject?.ExecutionOutcome,
+            "subject.failureStage" => run.Subject?.FailureStage,
+            "subject.failureCode" => run.Subject?.FailureCode,
+            "subject.processStart" => run.Subject?.ProcessStart ?? run.Process.ProcessStart,
+            "subject.processTermination" => run.Subject?.ProcessTermination ?? run.Process.ProcessTermination,
+            "subject.terminalState" => run.Subject?.TerminalState ?? "not-entered",
+            "subject.artifactState" => run.Subject?.ArtifactState
+                ?? (run.ObservedCanonicalResult is null ? "absent" : "published"),
+            "repositoryDelta.protectedChanged" => string.Join("\0", run.RepositoryDelta.ProtectedChanged),
+            _ => throw new ProtocolException("HV215_EQUALITY_FIELD_UNKNOWN")
+        };
 
     private static void ValidateCellSet(BundleContext context, IReadOnlyList<CellEvidence> cells)
     {
