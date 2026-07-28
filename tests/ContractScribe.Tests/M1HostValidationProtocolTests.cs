@@ -234,7 +234,10 @@ public sealed class M1HostValidationProtocolTests
             "Repository-controlled MSBuild cannot access secrets.",
             "ContractScribe guarantees network isolation.",
             "The host enforces credential isolation.",
-            "This validation is fully offline and sandboxed."
+            "This validation is fully offline and sandboxed.",
+            "The host blocks all outbound connections.",
+            "Validation prevents outbound access.",
+            "Outbound network traffic is blocked."
         })
         {
             Assert.Equal(
@@ -244,6 +247,8 @@ public sealed class M1HostValidationProtocolTests
         }
         PublicSafetyScanner.EnsureNoUnsupportedClaims(
             "This protocol does not claim network isolation and is not an egress sandbox.");
+        PublicSafetyScanner.EnsureNoUnsupportedClaims(
+            "This protocol does not block outbound access.");
     }
 
     [Fact]
@@ -365,6 +370,82 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_AuditResultSemanticClosureEnforcesTaxonomyRegistryConstraints()
+    {
+        var componentPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "classification-not-applicable.json");
+        using (var component = CanonicalJson.ReadStrict(componentPath, 2 * 1024 * 1024))
+        {
+            AuditResultSemanticValidator.Validate(Root, component.RootElement);
+        }
+
+        AssertInvalidTaxonomyMutation(componentPath, root =>
+        {
+            var classification = root["results"]![0]!["classification"]!.AsObject();
+            classification["supportStatus"] = "support.supported";
+            classification.Remove("skipReason");
+        });
+        AssertInvalidTaxonomyMutation(componentPath, root =>
+            root["results"]![0]!["classification"]!["origin"] = "origin.source");
+        AssertInvalidTaxonomyMutation(componentPath, root =>
+            root["results"]![0]!["classification"]!["parentSymbolRef"]!["documentationCommentId"]
+                = "M:AuditFixtures.NotApplicableWidget.Run");
+
+        var unknownPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "classification-skipped.json");
+        AssertInvalidTaxonomyMutation(unknownPath, root =>
+        {
+            var classification = root["results"]![0]!["classification"]!.AsObject();
+            classification["supportStatus"] = "support.supported";
+            classification.Remove("skipReason");
+        });
+    }
+
+    [Fact]
+    public void HostValidation_HandledFailuresRequireOneExactProtectedRegistryRow()
+    {
+        var context = BundleValidator.Validate(Root);
+        var (subject, evidence) = CreateSyntheticIncompleteCell(context, "ubuntu-x64");
+        var run = CreateMatchedRun(
+            context,
+            subject,
+            "failure.invalid-input",
+            "run-1",
+            101,
+            '2');
+
+        ValidateWithReplacement(context, subject, evidence, run);
+        foreach (var replacement in new[]
+        {
+            run.Subject! with { FailureCode = "host.unknown-code" },
+            run.Subject! with { FailureStage = "environment" },
+            run.Subject! with { ExecutionOutcome = "audit-error" },
+            run.Subject! with { TerminalState = "cancelled" }
+        })
+        {
+            var exception = Assert.Throws<ProtocolException>(() =>
+                ValidateWithReplacement(
+                    context,
+                    subject,
+                    evidence,
+                    run with { Subject = replacement }));
+            Assert.Equal("HV157_FAILURE_REGISTRY_BINDING", exception.Code);
+        }
+    }
+
+    [Fact]
     public void HostValidation_ControlEvidenceRequiresExactGateActionAndPostGateSample()
     {
         var context = BundleValidator.Validate(Root);
@@ -431,19 +512,19 @@ public sealed class M1HostValidationProtocolTests
             entryPoint,
             ["build"]);
         Assert.Equal(
-            "toolchain-owned",
+            "contractscribe-worker",
             ProcessTreeObserver.ClassifyIdentity(
                 "dotnet",
                 entryPoint,
                 ["build"],
-                [new ProcessIdentityRule(fingerprint, "toolchain-owned")]));
+                [new ProcessIdentityRule(fingerprint)]));
         Assert.Equal(
             "contractscribe-worker",
             ProcessTreeObserver.ClassifyIdentity(
                 "dotnet",
                 entryPoint,
                 ["restore"],
-                [new ProcessIdentityRule(fingerprint, "toolchain-owned")]));
+                [new ProcessIdentityRule(fingerprint)]));
         var restoreFingerprint = ProcessTreeObserver.ComputeIdentityFingerprint(
             "dotnet",
             entryPoint,
@@ -454,9 +535,30 @@ public sealed class M1HostValidationProtocolTests
                 "dotnet",
                 entryPoint,
                 ["restore"],
-                [new ProcessIdentityRule(
-                    restoreFingerprint,
-                    "restore-or-runtime-download")]));
+                [new ProcessIdentityRule(restoreFingerprint)]));
+
+        var toolchainRoot = Path.Join(Path.GetTempPath(), $"contractscribe-toolchain-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(toolchainRoot);
+        var toolchainEntryPoint = Path.Join(toolchainRoot, "MSBuild.dll");
+        try
+        {
+            File.Copy(entryPoint, toolchainEntryPoint);
+            var toolchainFingerprint = ProcessTreeObserver.ComputeIdentityFingerprint(
+                "dotnet",
+                toolchainEntryPoint,
+                ["build"]);
+            Assert.Equal(
+                "toolchain-owned",
+                ProcessTreeObserver.ClassifyIdentity(
+                    "dotnet",
+                    toolchainEntryPoint,
+                    ["build"],
+                    [new ProcessIdentityRule(toolchainFingerprint)]));
+        }
+        finally
+        {
+            Directory.Delete(toolchainRoot, recursive: true);
+        }
         Assert.Equal(
             "contractscribe-worker",
             ProcessTreeObserver.ClassifyIdentity("dotnet", entryPoint, [], []));
@@ -637,9 +739,8 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
-    public void HostValidation_ExternalExecutorCommandsBindEveryPathBearingInput()
+    public void HostValidation_ExternalExecutorCommandsMatchFrozenExecutableAndArgumentSequence()
     {
-        var context = BundleValidator.Validate(Root);
         var protocolPath = "tests/fixtures/m1-host-validation/v1/protocol.json";
         var protocolIdentity = new ArtifactIdentity(
             protocolPath,
@@ -660,6 +761,12 @@ public sealed class M1HostValidationProtocolTests
             protocolPath,
             [],
             []);
+        var helperPath =
+            "tests/fixtures/.contractscribe-validation/process.runtime-load-invalid/invalid-entrypoint.dll";
+        var helperIdentity = new ArtifactIdentity(helperPath, new string('1', 64));
+        var arrangementIdentity = new ArtifactIdentity(
+            "tests/fixtures/.contractscribe-validation/process.runtime-load-invalid/arrangement.json",
+            new string('2', 64));
         var fixture = new FixtureRealization(
             "failure.runtime-load-before-entry",
             "external-process",
@@ -668,53 +775,57 @@ public sealed class M1HostValidationProtocolTests
             true,
             null,
             "dotnet",
-            [string.Concat("/", "tmp/unreviewed-helper.dll")],
+            [
+                "repository:.contractscribe-validation/process.runtime-load-invalid/invalid-entrypoint.dll",
+                "{request}",
+                "{response}"
+            ],
             null,
-            [protocolIdentity],
+            [helperIdentity, arrangementIdentity],
             [],
             "bounded-polling",
             null,
             null);
 
-        Assert.Equal(
-            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
-            Assert.Throws<ProtocolException>(() =>
-                CellExecutor.ValidateExecutorArrangement(
-                    Root,
-                    Path.Join(Root, "tests", "fixtures"),
-                    cell,
-                    fixture,
-                    allowMaterializationDrift: false)).Code);
+        CellExecutor.ValidateExecutorArrangement(
+            Root,
+            Path.Join(Root, "tests", "fixtures"),
+            cell,
+            fixture,
+            allowMaterializationDrift: true);
 
-        var unbound = fixture with
+        foreach (var mutation in new[]
         {
-            Arguments = ["repository:m1-host-validation/v1/vectors.json"]
-        };
-        Assert.Equal(
-            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
-            Assert.Throws<ProtocolException>(() =>
-                CellExecutor.ValidateExecutorArrangement(
-                    Root,
-                    Path.Join(Root, "tests", "fixtures"),
-                    cell,
-                    unbound,
-                    allowMaterializationDrift: false)).Code);
-
-        var missingHash = fixture with
+            fixture with
+            {
+                Executable = "repository:m1-host-validation/v1/protocol.json",
+                ExecutableSha256 = new string('2', 64)
+            },
+            fixture with { Arguments = [.. fixture.Arguments, "{control}"] },
+            fixture with { Arguments = fixture.Arguments.Skip(1).ToArray() },
+            fixture with
+            {
+                Arguments =
+                [
+                    fixture.Arguments[0],
+                    fixture.Arguments[2],
+                    fixture.Arguments[1]
+                ]
+            },
+            fixture with { ArrangementInputs = [arrangementIdentity, helperIdentity] },
+            fixture with { ArrangementInputs = [helperIdentity] }
+        })
         {
-            Executable = "repository:m1-host-validation/v1/protocol.json",
-            Arguments = ["synthetic"],
-            ExecutableSha256 = null
-        };
-        Assert.Equal(
-            "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
-            Assert.Throws<ProtocolException>(() =>
-                CellExecutor.ValidateExecutorArrangement(
-                    Root,
-                    Path.Join(Root, "tests", "fixtures"),
-                    cell,
-                    missingHash,
-                    allowMaterializationDrift: false)).Code);
+            Assert.Equal(
+                "HV206_EXECUTOR_ARRANGEMENT_MISMATCH",
+                Assert.Throws<ProtocolException>(() =>
+                    CellExecutor.ValidateExecutorArrangement(
+                        Root,
+                        Path.Join(Root, "tests", "fixtures"),
+                        cell,
+                        mutation,
+                        allowMaterializationDrift: true)).Code);
+        }
     }
 
     [Fact]
@@ -723,12 +834,15 @@ public sealed class M1HostValidationProtocolTests
         var context = BundleValidator.Validate(Root);
         var sha = new string('1', 64);
         var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
+        var failureRegistry = new ArtifactIdentity(
+            "tests/fixtures/m1-host-validation/v1/self-test-host-failure-registry.json",
+            sha);
         var source = new SubjectSourceConfiguration(
             $"source.{sha}",
             new string('1', 40),
             ["src"],
             [artifact],
-            artifact,
+            failureRegistry,
             artifact,
             artifact,
             artifact,
@@ -1163,6 +1277,19 @@ public sealed class M1HostValidationProtocolTests
             EnableFixture(subject, evidence.Cell.CellId, replacement.VectorId),
             ReplaceRuns(evidence, replacement));
 
+    private static void AssertInvalidTaxonomyMutation(
+        string path,
+        Action<JsonObject> mutate)
+    {
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        mutate(root);
+        using var document = JsonDocument.Parse(root.ToJsonString());
+        Assert.Equal(
+            "HV230_AUDIT_RESULT_SEMANTICS",
+            Assert.Throws<ProtocolException>(() =>
+                AuditResultSemanticValidator.Validate(Root, document.RootElement)).Code);
+    }
+
     private static ExecutionSubjectManifest EnableFixture(
         ExecutionSubjectManifest subject,
         string cellId,
@@ -1330,12 +1457,15 @@ public sealed class M1HostValidationProtocolTests
         var sha = new string('1', 64);
         var commit = new string('1', 40);
         var artifact = new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", sha);
+        var failureRegistry = new ArtifactIdentity(
+            "tests/fixtures/m1-host-validation/v1/self-test-host-failure-registry.json",
+            sha);
         var source = new SubjectSourceConfiguration(
             $"source.{sha}",
             commit,
             ["src/ContractScribe.Core"],
             [artifact],
-            artifact,
+            failureRegistry,
             artifact,
             artifact,
             artifact,

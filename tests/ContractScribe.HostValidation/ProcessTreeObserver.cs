@@ -161,20 +161,57 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 commandArguments);
             var matches = identityRegistry
                 .Where(rule => rule.FingerprintSha256 == fingerprint)
-                .Select(rule => rule.Role)
-                .Distinct(StringComparer.Ordinal)
                 .ToArray();
             if (matches.Length == 1)
             {
-                return matches[0];
+                return ClassifyProtectedCommand(imageName, entryPointPath, commandArguments);
             }
         }
 
         return imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
             || imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-            ? "contractscribe-worker"
-            : "unknown-descendant";
+             ? "contractscribe-worker"
+             : "unknown-descendant";
     }
+
+    private static string ClassifyProtectedCommand(
+        string imageName,
+        string entryPointPath,
+        IReadOnlyList<string> commandArguments)
+    {
+        if (IsRestoreOrRuntimeDownload(commandArguments))
+        {
+            return "restore-or-runtime-download";
+        }
+
+        var entryPointName = Path.GetFileName(entryPointPath);
+        if (imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
+            || entryPointName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase))
+        {
+            return "contractscribe-worker";
+        }
+
+        return entryPointName.ToLowerInvariant() switch
+        {
+            "msbuild" or "msbuild.exe" or "msbuild.dll"
+                or "vbcscompiler" or "vbcscompiler.exe" or "vbcscompiler.dll"
+                or "csc" or "csc.exe" or "csc.dll"
+                or "vbc" or "vbc.exe" or "vbc.dll" => "toolchain-owned",
+            _ => "unknown-descendant"
+        };
+    }
+
+    private static bool IsRestoreOrRuntimeDownload(IReadOnlyList<string> arguments) =>
+        arguments.Any(argument =>
+        {
+            var normalized = argument.Trim().ToLowerInvariant();
+            return normalized is "restore" or "-restore" or "/restore"
+                or "--runtime" or "--runtime-id"
+                || normalized.StartsWith("-t:restore", StringComparison.Ordinal)
+                || normalized.StartsWith("/t:restore", StringComparison.Ordinal)
+                || normalized.StartsWith("--runtime=", StringComparison.Ordinal)
+                || normalized.StartsWith("--runtime-id=", StringComparison.Ordinal);
+        });
 
     public static string ComputeIdentityFingerprint(
         string imageName,

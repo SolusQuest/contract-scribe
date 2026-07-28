@@ -429,7 +429,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^(?:missing-executable|dotnet|repository:(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+)$"
+              "pattern": "^(?:missing-executable|subject-entrypoint|dotnet|repository:(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+)$"
             },
             {
               "type": "null"
@@ -583,18 +583,11 @@
     "processIdentityRule": {
       "type": "object",
       "required": [
-        "fingerprintSha256",
-        "role"
+        "fingerprintSha256"
       ],
       "properties": {
         "fingerprintSha256": {
           "$ref": "#/$defs/sha256"
-        },
-        "role": {
-          "enum": [
-            "toolchain-owned",
-            "restore-or-runtime-download"
-          ]
         }
       },
       "additionalProperties": false

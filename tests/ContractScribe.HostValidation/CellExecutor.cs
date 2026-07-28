@@ -209,9 +209,7 @@ public static class CellExecutor
                 var identityRegistry = fixture.ProcessIdentityRegistry ?? [];
                 if (fixture.CapabilityAvailable && fixture.ProcessIdentityRegistry is null
                     || identityRegistry.Select(rule => rule.FingerprintSha256)
-                        .Distinct(StringComparer.Ordinal).Count() != identityRegistry.Count
-                    || identityRegistry.Any(rule =>
-                        rule.Role is not ("toolchain-owned" or "restore-or-runtime-download")))
+                        .Distinct(StringComparer.Ordinal).Count() != identityRegistry.Count)
                 {
                     throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
                 }
@@ -523,19 +521,11 @@ public static class CellExecutor
     {
         if (vector.ExecutorKind == "production-host")
         {
-            var entryPoint = RepositoryPaths.ResolveConfined(root, cell.EntryPoint);
-            var arguments = new List<string>();
-            var executable = cell.LaunchKind == "dotnet-dll" ? "dotnet" : entryPoint;
-            if (cell.LaunchKind == "dotnet-dll")
-            {
-                arguments.Add(entryPoint);
-            }
-            arguments.AddRange(cell.ArgumentPrefix);
-            arguments.Add("--request");
-            arguments.Add(requestPath);
-            arguments.Add("--response");
-            arguments.Add(responsePath);
-            return (executable, arguments);
+            return BuildSubjectInvocation(root, cell, requestPath, responsePath);
+        }
+        if (fixture.Executable == "subject-entrypoint")
+        {
+            return BuildSubjectInvocation(root, cell, requestPath, responsePath);
         }
 
         var fixtureExecutable = ResolveExecutable(
@@ -563,6 +553,27 @@ public static class CellExecutor
         return (fixtureExecutable, fixtureArguments);
     }
 
+    private static (string Executable, IReadOnlyList<string> Arguments) BuildSubjectInvocation(
+        string root,
+        ExecutionCell cell,
+        string requestPath,
+        string responsePath)
+    {
+        var entryPoint = RepositoryPaths.ResolveConfined(root, cell.EntryPoint);
+        var arguments = new List<string>();
+        var executable = cell.LaunchKind == "dotnet-dll" ? "dotnet" : entryPoint;
+        if (cell.LaunchKind == "dotnet-dll")
+        {
+            arguments.Add(entryPoint);
+        }
+        arguments.AddRange(cell.ArgumentPrefix);
+        arguments.Add("--request");
+        arguments.Add(requestPath);
+        arguments.Add("--response");
+        arguments.Add(responsePath);
+        return (executable, arguments);
+    }
+
     public static void ValidateExecutorArrangement(
         string root,
         string repositoryRoot,
@@ -575,6 +586,35 @@ public static class CellExecutor
             throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
         }
 
+        var command = FrozenExecutorCommandRegistry.Get(fixture.VectorId);
+        if (fixture.Executable != command.Executable
+            || !fixture.Arguments.SequenceEqual(command.Arguments, StringComparer.Ordinal))
+        {
+            throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+        }
+        var expectedArrangementPaths = command.ArrangementPaths
+            .Select(path => RepositoryPaths.ToRepositoryRelative(
+                root,
+                ResolveFixturePath(
+                    repositoryRoot,
+                    path,
+                    mustExist: !allowMaterializationDrift)))
+            .ToArray();
+        if (!fixture.ArrangementInputs.Select(identity => identity.Path)
+            .SequenceEqual(expectedArrangementPaths, StringComparer.Ordinal))
+        {
+            throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+        }
+
+        if (command.Executable == "subject-entrypoint")
+        {
+            if (fixture.ExecutableSha256 is not null)
+            {
+                throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+            }
+            return;
+        }
+
         if (fixture.VectorId == "failure.launch-before-entry")
         {
             if (fixture.Executable != "missing-executable"
@@ -584,11 +624,6 @@ public static class CellExecutor
                 throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
             }
             return;
-        }
-
-        if (fixture.ArrangementInputs.Count == 0)
-        {
-            throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
         }
 
         var boundPaths = fixture.ArrangementInputs

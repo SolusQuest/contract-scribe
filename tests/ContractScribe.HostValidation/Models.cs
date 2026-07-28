@@ -222,9 +222,7 @@ public sealed record FixtureRealization(
     string? ExternalCause,
     IReadOnlyList<ProcessIdentityRule>? ProcessIdentityRegistry = null);
 
-public sealed record ProcessIdentityRule(
-    string FingerprintSha256,
-    string Role);
+public sealed record ProcessIdentityRule(string FingerprintSha256);
 
 public sealed record ObservedProcess(
     int ProcessId,

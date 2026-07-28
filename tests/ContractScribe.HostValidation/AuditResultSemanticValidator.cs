@@ -66,9 +66,10 @@ public static class AuditResultSemanticValidator
         var origin = classification.GetProperty("origin").GetString();
         ValidateRegistryEntry(registry.RootElement, "supportStatuses", support, recordType);
         ValidateRegistryEntry(registry.RootElement, "origins", origin, recordType);
+        JsonElement? classifiedEntry = null;
         if (recordType == "TargetClassification")
         {
-            ValidateRegistryEntry(
+            classifiedEntry = ValidateRegistryEntry(
                 registry.RootElement,
                 "primaryKinds",
                 classification.GetProperty("primaryKind").GetString(),
@@ -76,11 +77,15 @@ public static class AuditResultSemanticValidator
         }
         else if (recordType == "ComponentClassification")
         {
-            ValidateRegistryEntry(
+            classifiedEntry = ValidateRegistryEntry(
                 registry.RootElement,
                 "componentKinds",
                 classification.GetProperty("componentKind").GetString(),
                 recordType);
+        }
+        if (classifiedEntry is JsonElement entry)
+        {
+            ValidateClassificationConstraints(classification, entry, support, origin);
         }
         if (support == "support.supported")
         {
@@ -89,7 +94,12 @@ public static class AuditResultSemanticValidator
         else
         {
             var skip = classification.GetProperty("skipReason").GetString();
-            ValidateRegistryEntry(registry.RootElement, "skipReasons", skip, recordType);
+            var skipEntry = ValidateRegistryEntry(
+                registry.RootElement,
+                "skipReasons",
+                skip,
+                recordType);
+            ValidateAllowedSupportStatus(skipEntry, support);
             var expectedPrefix = support switch
             {
                 "support.unsupported" => "skip.unsupported.",
@@ -100,6 +110,13 @@ public static class AuditResultSemanticValidator
             };
             Require(skip?.StartsWith(expectedPrefix, StringComparison.Ordinal) == true);
         }
+        ValidateOriginSpecificCombination(
+            recordType,
+            support,
+            origin,
+            classification.TryGetProperty("skipReason", out var skipReason)
+                ? skipReason.GetString()
+                : null);
     }
 
     private static void ValidatePolicy(JsonElement result, JsonElement classification)
@@ -496,7 +513,7 @@ public static class AuditResultSemanticValidator
             : "documentation.unavailable";
     }
 
-    private static void ValidateRegistryEntry(
+    private static JsonElement ValidateRegistryEntry(
         JsonElement registry,
         string section,
         string? id,
@@ -507,6 +524,117 @@ public static class AuditResultSemanticValidator
         Require(entry.ValueKind == JsonValueKind.Object);
         Require(entry.GetProperty("recordTypes").EnumerateArray()
             .Any(value => value.GetString() == recordType));
+        return entry;
+    }
+
+    private static void ValidateClassificationConstraints(
+        JsonElement classification,
+        JsonElement entry,
+        string? support,
+        string? origin)
+    {
+        ValidateAllowedSupportStatus(entry, support);
+        if (entry.TryGetProperty("requiredOrigin", out var requiredOrigin))
+        {
+            Require(origin == requiredOrigin.GetString());
+        }
+        if (entry.TryGetProperty("requiredSkip", out var requiredSkip))
+        {
+            Require(classification.TryGetProperty("skipReason", out var skip)
+                && skip.GetString() == requiredSkip.GetString());
+        }
+
+        var recordType = classification.GetProperty("recordType").GetString();
+        if (recordType == "TargetClassification")
+        {
+            Require((classification.GetProperty("primaryKind").GetString() == "symbol.unknown")
+                == (support == "support.unsupported"));
+        }
+        else if (recordType == "ComponentClassification")
+        {
+            Require((classification.GetProperty("componentKind").GetString() == "component.unknown")
+                == (support == "support.unsupported"));
+            if (entry.TryGetProperty("parentKinds", out var parentKinds))
+            {
+                var documentationId = classification
+                    .GetProperty("parentSymbolRef")
+                    .GetProperty("documentationCommentId")
+                    .GetString();
+                var possibleParentKinds = PossibleParentKinds(documentationId);
+                Require(parentKinds.EnumerateArray()
+                    .Select(value => value.GetString())
+                    .Any(possibleParentKinds.Contains));
+            }
+        }
+    }
+
+    private static void ValidateAllowedSupportStatus(JsonElement entry, string? support)
+    {
+        if (entry.TryGetProperty("allowedSupportStatuses", out var statuses))
+        {
+            Require(statuses.EnumerateArray().Any(value => value.GetString() == support));
+        }
+    }
+
+    private static IReadOnlySet<string?> PossibleParentKinds(string? documentationId)
+    {
+        if (string.IsNullOrWhiteSpace(documentationId) || documentationId.Length < 2
+            || documentationId[1] != ':')
+        {
+            throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS");
+        }
+        return documentationId[0] switch
+        {
+            'T' => new HashSet<string?>([
+                "symbol.type.class",
+                "symbol.type.struct",
+                "symbol.type.interface",
+                "symbol.type.enum",
+                "symbol.type.delegate"
+            ], StringComparer.Ordinal),
+            'M' => new HashSet<string?>([
+                "symbol.member.constructor",
+                "symbol.member.method",
+                "symbol.member.operator",
+                "symbol.member.conversion"
+            ], StringComparer.Ordinal),
+            'P' => new HashSet<string?>([
+                "symbol.member.property",
+                "symbol.member.indexer"
+            ], StringComparer.Ordinal),
+            'F' => new HashSet<string?>([
+                "symbol.member.field",
+                "symbol.member.enum-member"
+            ], StringComparer.Ordinal),
+            'E' => new HashSet<string?>(["symbol.member.event"], StringComparer.Ordinal),
+            _ => new HashSet<string?>(["symbol.unknown"], StringComparer.Ordinal)
+        };
+    }
+
+    private static void ValidateOriginSpecificCombination(
+        string? recordType,
+        string? support,
+        string? origin,
+        string? skip)
+    {
+        if (origin == "origin.unknown")
+        {
+            Require(support == "support.unavailable-context");
+            Require(skip is "skip.unavailable.generated-provenance"
+                or "skip.unavailable.semantic-context");
+        }
+        if (origin == "origin.mixed")
+        {
+            Require(
+                support == "support.ambiguous"
+                    && skip is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration"
+                || support == "support.unavailable-context"
+                    && skip is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context");
+        }
+        if (skip == "skip.ambiguous.mixed-origin")
+        {
+            Require(origin == "origin.mixed");
+        }
     }
 
     private static string SubjectKey(JsonElement classification) =>

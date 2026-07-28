@@ -65,7 +65,7 @@ public static class RunSemantics
         }
         if (run.Subject is not null)
         {
-            ValidateSubjectResponse(vector, run, source);
+            ValidateSubjectResponse(context, vector, run, source);
         }
         else if (run.Process.ProcessStart == "started"
             && vector.ExecutorKind == "production-host"
@@ -139,6 +139,7 @@ public static class RunSemantics
     }
 
     private static void ValidateSubjectResponse(
+        BundleContext context,
         VectorDefinition vector,
         RunEvidence run,
         SubjectSourceConfiguration source)
@@ -161,6 +162,7 @@ public static class RunSemantics
             {
                 throw new ProtocolException("HV157_FAILURE_REGISTRY_BINDING");
             }
+            ValidateFailureRegistryRow(context.Root, source, subject);
         }
         else if (subject.ExecutionOutcome == "succeeded"
             && subject.FailureRegistryIdentity is not null)
@@ -185,6 +187,31 @@ public static class RunSemantics
                 StringComparer.Ordinal))
         {
             throw new ProtocolException("HV209_SUBJECT_OBSERVER_CONTRADICTION");
+        }
+    }
+
+    private static void ValidateFailureRegistryRow(
+        string root,
+        SubjectSourceConfiguration source,
+        SubjectResponse subject)
+    {
+        using var registry = CanonicalJson.ReadStrict(
+            RepositoryPaths.ResolveConfined(root, source.FailureRegistry.Path),
+            1024 * 1024,
+            requireCanonical: true);
+        var matches = registry.RootElement.GetProperty("entries").EnumerateArray()
+            .Count(entry =>
+                entry.GetProperty("code").GetString() == subject.FailureCode
+                && entry.GetProperty("stage").GetString() == subject.FailureStage
+                && entry.GetProperty("executionOutcome").GetString() == subject.ExecutionOutcome
+                && entry.GetProperty("terminalState").GetString() switch
+                {
+                    "committed-non-success" => subject.TerminalState == "committed",
+                    _ => false
+                });
+        if (matches != 1)
+        {
+            throw new ProtocolException("HV157_FAILURE_REGISTRY_BINDING");
         }
     }
 

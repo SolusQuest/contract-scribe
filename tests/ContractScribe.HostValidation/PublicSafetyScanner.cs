@@ -128,13 +128,13 @@ public static partial class PublicSafetyScanner
     [GeneratedRegex(@"(?i)-----begin [a-z ]+private key-----")]
     private static partial Regex PrivateKeyMarker();
 
-    [GeneratedRegex(@"(?i)\b(?:network|egress|credential|secret|untrusted[- ]msbuild|transient[- ]write)[- ](?:isolation|sandbox(?:ing)?|prevention)\b|\b(?:offline|sandboxed)\b")]
+    [GeneratedRegex(@"(?i)\b(?:network|egress|credential|secret|untrusted[- ]msbuild|transient[- ]write)[- ](?:isolation|sandbox(?:ing)?|prevention)\b|\b(?:offline|sandboxed)\b|\b(?:blocks?|prevents?|denies?|disables?)\b.{0,80}\b(?:outbound|egress)\b.{0,40}\b(?:access|connections?|network|traffic)\b|\b(?:outbound|egress)\b.{0,40}\b(?:access|connections?|network|traffic)\b.{0,80}\b(?:blocked|prevented|denied|disabled)\b")]
     private static partial Regex UnsupportedConcept();
 
-    [GeneratedRegex(@"(?i)\b(?:does\s+not|do\s+not|cannot)\s+(?:claim|guarantee|provide|enforce)\b|\b(?:no|without|not(?:\s+an?)?)\s+(?:network|egress|credential|secret|offline|sandbox|sandboxed|untrusted[- ]msbuild|transient[- ]write)[- ]")]
+    [GeneratedRegex(@"(?i)\b(?:does\s+not|do\s+not|cannot)\s+(?:claim|guarantee|provide|enforce|block|prevent|deny|disable)\b|\b(?:no|without|not(?:\s+an?)?)\s+(?:network|egress|credential|secret|offline|sandbox|sandboxed|untrusted[- ]msbuild|transient[- ]write)[- ]")]
     private static partial Regex ExplicitLimitation();
 
-    [GeneratedRegex(@"(?i)\b(?:guarantees?|provides?|enforces?|ensures?)\b|\b(?:is|are|runs?|ran)\b.*\b(?:isolated|isolation|offline|sandbox|sandboxed|prevention)\b|\b(?:isolation|sandbox(?:ing)?|prevention)\b\s+(?:is|are)\s+(?:provided|enforced|guaranteed)\b")]
+    [GeneratedRegex(@"(?i)\b(?:guarantees?|provides?|enforces?|ensures?|blocks?|prevents?|denies?|disables?)\b|\b(?:is|are|runs?|ran)\b.*\b(?:isolated|isolation|offline|sandbox|sandboxed|prevention|blocked|prevented|denied|disabled)\b|\b(?:isolation|sandbox(?:ing)?|prevention)\b\s+(?:is|are)\s+(?:provided|enforced|guaranteed)\b")]
     private static partial Regex PositiveAssertion();
 
     [GeneratedRegex(@"(?i)\brepository[- ]controlled\s+msbuild\s+cannot\s+access\s+(?:credentials?|secrets?)\b")]

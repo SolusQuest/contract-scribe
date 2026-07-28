@@ -49,6 +49,7 @@ public static class BundleValidator
 
         ValidateProtocolSemantics(root, protocol, vectors);
         StaticValidatorRegistry.ValidateRegistry(protocol.RequiredValidators, vectors.Vectors);
+        FrozenExecutorCommandRegistry.ValidateCatalog(vectors.Vectors);
         ValidateLock(root, protocol, artifactLock);
         ValidateCrosswalk(root, protocol, vectors, crosswalkPath);
         if (!allowProtectedInputDrift)
