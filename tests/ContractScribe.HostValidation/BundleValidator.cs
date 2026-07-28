@@ -537,9 +537,10 @@ public static class BundleValidator
 
         var harnessFileName = "ContractScribe.HostValidation.csproj";
         var prohibitedNetworkPackageMarkers = new[] { "OpenAI", "Octokit", "GitHub", "Azure.AI" };
-        foreach (var projectPath in Directory.EnumerateFiles(Path.Join(root, "src"), "*.csproj", SearchOption.AllDirectories))
+        foreach (var project in Directory
+            .EnumerateFiles(Path.Join(root, "src"), "*.csproj", SearchOption.AllDirectories)
+            .Select(XDocument.Load))
         {
-            var project = XDocument.Load(projectPath);
             if (project.Descendants("ProjectReference").Any(reference =>
                     (reference.Attribute("Include")?.Value ?? string.Empty).Contains(harnessFileName, StringComparison.OrdinalIgnoreCase)))
             {
