@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
@@ -46,6 +47,85 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.Contains("Microsoft.NET.StringTools", integration, StringComparison.Ordinal);
         Assert.Equal(5, XDocument.Parse(integration).Descendants("PackageReference").Count(element =>
             element.Attribute("ExcludeAssets")?.Value == "runtime"));
+    }
+
+    [Fact]
+    public void CoreClassificationContractsRemainPlatformNeutral()
+    {
+        var root = FindRepositoryRoot();
+        var coreProject = XDocument.Load(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Core",
+            "ContractScribe.Core.csproj"));
+        Assert.Empty(coreProject.Descendants("PackageReference"));
+        Assert.Empty(coreProject.Descendants("ProjectReference"));
+
+        var contractTypes = typeof(ClassificationSet).Assembly
+            .GetExportedTypes()
+            .Where(type => type.Namespace == typeof(ClassificationSet).Namespace)
+            .Where(type =>
+                type.Name.Contains("Classification", StringComparison.Ordinal)
+                || type == typeof(SymbolRef)
+                || type == typeof(TargetProfile)
+                || type == typeof(PrimarySymbolKind)
+                || type == typeof(SymbolTrait)
+                || type == typeof(ComponentKind)
+                || type == typeof(RelationKind)
+                || type == typeof(SupportStatus)
+                || type == typeof(SkipReason)
+                || type == typeof(CandidateLocator)
+                || type == typeof(Utf16Span))
+            .ToArray();
+        var exposed = contractTypes
+            .SelectMany(type => type.GetProperties()
+                .Select(property => property.PropertyType)
+                .Append(type))
+            .SelectMany(ExpandType)
+            .Distinct()
+            .ToArray();
+        Assert.DoesNotContain(exposed, type =>
+            type.Assembly.GetName().Name is { } assemblyName
+            && (assemblyName.StartsWith(
+                    "Microsoft.CodeAnalysis",
+                    StringComparison.Ordinal)
+                || assemblyName.StartsWith(
+                    "Microsoft.Build",
+                    StringComparison.Ordinal)));
+
+        var probe = XDocument.Load(Path.Combine(
+            root,
+            "tests",
+            "ContractScribe.LoaderProbe",
+            "ContractScribe.LoaderProbe.csproj"));
+        Assert.Equal(
+            ["../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj"],
+            probe.Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include")!.Value));
+        Assert.DoesNotContain(
+            probe.ToString(),
+            "ContractScribe.Roslyn.Experiment",
+            StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<Type> ExpandType(Type type)
+    {
+        yield return type;
+        if (type.IsArray && type.GetElementType() is { } element)
+        {
+            foreach (var nested in ExpandType(element))
+            {
+                yield return nested;
+            }
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            foreach (var nested in ExpandType(argument))
+            {
+                yield return nested;
+            }
+        }
     }
 
     private static string FindRepositoryRoot()

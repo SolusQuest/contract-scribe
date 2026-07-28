@@ -362,20 +362,22 @@ internal static class PostRegistrationLoader
                     pathResolver,
                     state,
                     cancellationToken);
-                var authoritativeGenerated = new List<(string Name, string Text)>();
+                var authoritativeGenerated = new List<(string Name, string? FilePath, string Text, SyntaxTree Tree)>();
                 var authoritativeGeneratedTrees = new List<SyntaxTree>();
                 foreach (var document in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
                 {
-                    authoritativeGeneratedTrees.Add(
-                        await document.GetSyntaxTreeAsync(cancellationToken)
-                        ?? throw LoaderException.Generated("run.generated.authority-conflict"));
+                    var tree = await document.GetSyntaxTreeAsync(cancellationToken)
+                        ?? throw LoaderException.Generated("run.generated.authority-conflict");
+                    authoritativeGeneratedTrees.Add(tree);
                     authoritativeGenerated.Add((
                         document.Name,
-                        (await document.GetTextAsync(cancellationToken)).ToString()));
+                        document.FilePath,
+                        (await document.GetTextAsync(cancellationToken)).ToString(),
+                        tree));
                 }
 
                 var authoritativeCompilationTrees = new HashSet<SyntaxTree>(
-                    workspaceSourceTrees,
+                    workspaceSourceTrees.Keys,
                     ReferenceEqualityComparer.Instance);
                 authoritativeCompilationTrees.UnionWith(authoritativeGeneratedTrees);
                 if (!authoritativeCompilationTrees.SetEquals(compilation.SyntaxTrees))
@@ -391,20 +393,20 @@ internal static class PostRegistrationLoader
 
                 Observe(observer, LoaderStage.Compilation, cancellationToken);
                 var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
-                generatedFacts.AddRange(RunGenerators(
+                var sourceGeneratorBindings = RunGenerators(
                     project,
                     compilation.RemoveSyntaxTrees(authoritativeGeneratedTrees),
                     node.Identity,
                     contextRef,
                     authoritativeGenerated,
                     identities,
-                    cancellationToken));
+                    cancellationToken);
                 if (authoritativeGenerated.Count != 0)
                 {
                     throw LoaderException.Generated("run.generated.authority-conflict");
                 }
 
-                var toolFacts = CreateToolGeneratedFacts(
+                var toolBindings = CreateToolGeneratedFacts(
                     toolGeneratedSources.Where(input => input.ProjectIdentity == node.Identity).ToArray(),
                     node.Identity,
                     contextRef,
@@ -412,7 +414,30 @@ internal static class PostRegistrationLoader
                     ref compilation,
                     identities,
                     cancellationToken);
-                generatedFacts.AddRange(toolFacts);
+                generatedFacts.AddRange(sourceGeneratorBindings.Select(binding => binding.Fact));
+                generatedFacts.AddRange(toolBindings.Select(binding => binding.Fact));
+                var sourceTrees = new Dictionary<SyntaxTree, LoadedSourceTree>(
+                    ReferenceEqualityComparer.Instance);
+                foreach (var pair in workspaceSourceTrees)
+                {
+                    sourceTrees.Add(
+                        pair.Key,
+                        new LoadedSourceTree(
+                            LoadedSourceKind.Repository,
+                            pair.Value,
+                            null));
+                }
+
+                foreach (var binding in sourceGeneratorBindings.Concat(toolBindings))
+                {
+                    sourceTrees.Add(
+                        binding.SyntaxTree,
+                        new LoadedSourceTree(
+                            binding.Kind,
+                            null,
+                            binding.Fact));
+                }
+
                 Observe(observer, LoaderStage.GeneratedFacts, cancellationToken);
                 loadedProjects.Add(new LoadedProject(
                     node.Identity,
@@ -421,7 +446,8 @@ internal static class PostRegistrationLoader
                     node.IsRoot ? LoadedProjectRole.AuditRoot : LoadedProjectRole.DependencyOnly,
                     node.References.Select(reference => graph[reference].Identity).Order(StringComparer.Ordinal).ToArray(),
                     project,
-                    compilation));
+                    compilation,
+                    sourceTrees));
             }
 
             if (state.Diagnostics.Any(diagnostic => diagnostic.Severity == "error"))
@@ -673,7 +699,7 @@ internal static class PostRegistrationLoader
         return graph;
     }
 
-    private static async Task<IReadOnlySet<SyntaxTree>> ValidateWorkspaceSourcesAsync(
+    private static async Task<IReadOnlyDictionary<SyntaxTree, string>> ValidateWorkspaceSourcesAsync(
         ResolvedRepositoryPaths paths,
         EvaluatedProject node,
         RoslynProject project,
@@ -682,7 +708,7 @@ internal static class PostRegistrationLoader
         LoaderExecutionState state,
         CancellationToken cancellationToken)
     {
-        var trees = new HashSet<SyntaxTree>(ReferenceEqualityComparer.Instance);
+        var trees = new Dictionary<SyntaxTree, string>(ReferenceEqualityComparer.Instance);
         foreach (var document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -699,7 +725,9 @@ internal static class PostRegistrationLoader
                 []);
             var tree = await document.GetSyntaxTreeAsync(cancellationToken)
                 ?? throw LoaderException.Graph("graph.source-outside-root");
-            trees.Add(tree);
+            trees.Add(
+                tree,
+                resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath)));
         }
 
         foreach (var document in project.AdditionalDocuments.Concat(project.AnalyzerConfigDocuments))
@@ -894,12 +922,12 @@ internal static class PostRegistrationLoader
         return $"net{version}".ToLowerInvariant();
     }
 
-    private static IReadOnlyList<GeneratedSourceFact> RunGenerators(
+    private static IReadOnlyList<GeneratedSourceBinding> RunGenerators(
         RoslynProject project,
         Compilation compilation,
         string projectIdentity,
         string contextRef,
-        List<(string Name, string Text)> authoritativeGenerated,
+        List<(string Name, string? FilePath, string Text, SyntaxTree Tree)> authoritativeGenerated,
         GeneratedIdentityHasher identities,
         CancellationToken cancellationToken)
     {
@@ -919,7 +947,7 @@ internal static class PostRegistrationLoader
             parseOptions,
             project.AnalyzerOptions.AnalyzerConfigOptionsProvider);
         driver = driver.RunGenerators(compilation, cancellationToken);
-        var facts = new List<GeneratedSourceFact>();
+        var bindings = new List<GeneratedSourceBinding>();
         foreach (var result in driver.GetRunResult().Results)
         {
             if (result.Exception is not null)
@@ -947,29 +975,66 @@ internal static class PostRegistrationLoader
             {
                 var text = source.SourceText.ToString();
                 var sourceBytes = StrictUtf8(text);
-                var authorityIndex = authoritativeGenerated.FindIndex(document =>
-                    string.Equals(document.Name, source.HintName, StringComparison.Ordinal)
-                    && string.Equals(document.Text, text, StringComparison.Ordinal));
-                if (authorityIndex < 0)
+                var authorityIndexes = authoritativeGenerated
+                    .Select((document, index) => (Document: document, Index: index))
+                    .Where(candidate =>
+                        string.Equals(
+                            candidate.Document.Name,
+                            source.HintName,
+                            StringComparison.Ordinal)
+                        && GeneratedAuthorityPathsMatch(
+                            candidate.Document.FilePath,
+                            source.SyntaxTree.FilePath)
+                        && string.Equals(
+                            candidate.Document.Text,
+                            text,
+                            StringComparison.Ordinal))
+                    .Select(candidate => candidate.Index)
+                    .Take(2)
+                    .ToArray();
+                if (authorityIndexes.Length != 1)
                 {
                     throw LoaderException.Generated("run.generated.authority-conflict");
                 }
+
+                var authorityIndex = authorityIndexes[0];
+                var authority = authoritativeGenerated[authorityIndex];
                 authoritativeGenerated.RemoveAt(authorityIndex);
 
-                facts.Add(new GeneratedSourceFact(
-                    projectIdentity,
-                    contextRef,
-                    producerId,
-                    "sgo." + identities.Hash("contract-scribe/sgo/v1", source.HintName),
-                    Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
-                    text));
+                bindings.Add(new GeneratedSourceBinding(
+                    authority.Tree,
+                    LoadedSourceKind.SourceGenerator,
+                    new GeneratedSourceFact(
+                        projectIdentity,
+                        contextRef,
+                        producerId,
+                        "sgo." + identities.Hash("contract-scribe/sgo/v1", source.HintName),
+                        Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
+                        text)));
             }
         }
 
-        return facts;
+        return bindings;
     }
 
-    private static IReadOnlyList<GeneratedSourceFact> CreateToolGeneratedFacts(
+    private static bool GeneratedAuthorityPathsMatch(
+        string? workspacePath,
+        string? driverPath)
+    {
+        var normalizedWorkspace = workspacePath?.Replace('\\', '/');
+        var normalizedDriver = driverPath?.Replace('\\', '/');
+        return normalizedWorkspace is not null
+            && normalizedDriver is not null
+            && (string.Equals(
+                    normalizedWorkspace,
+                    normalizedDriver,
+                    StringComparison.Ordinal)
+                || normalizedWorkspace.EndsWith(
+                    "/" + normalizedDriver.TrimStart('/'),
+                    StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<GeneratedSourceBinding> CreateToolGeneratedFacts(
         IReadOnlyList<ToolGeneratedSourceInput> inputs,
         string projectIdentity,
         string contextRef,
@@ -1010,7 +1075,7 @@ internal static class PostRegistrationLoader
                 return group.First();
             })
             .ToArray();
-        var facts = new List<GeneratedSourceFact>(normalizedInputs.Length);
+        var bindings = new List<GeneratedSourceBinding>(normalizedInputs.Length);
         foreach (var input in normalizedInputs)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1036,19 +1101,22 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Generated("run.generated.authority-conflict");
             }
 
-            facts.Add(new GeneratedSourceFact(
-                projectIdentity,
-                contextRef,
-                "tgp." + identities.Hash(
-                    "contract-scribe/tgp/v1",
-                    input.ProducerNamespace,
-                    input.ProducerName),
-                outputId,
-                Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
-                input.SourceText));
+            bindings.Add(new GeneratedSourceBinding(
+                tree,
+                LoadedSourceKind.ToolGenerated,
+                new GeneratedSourceFact(
+                    projectIdentity,
+                    contextRef,
+                    "tgp." + identities.Hash(
+                        "contract-scribe/tgp/v1",
+                        input.ProducerNamespace,
+                        input.ProducerName),
+                    outputId,
+                    Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant(),
+                    input.SourceText)));
         }
 
-        return facts;
+        return bindings;
     }
 
     private static string NormalizeToolIdentityField(

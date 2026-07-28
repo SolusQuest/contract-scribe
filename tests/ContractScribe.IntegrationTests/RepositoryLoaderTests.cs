@@ -864,6 +864,53 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task ClassificationProjectionIsStableAcrossFreshProcesses()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Root, "App", "App.cs"),
+            """
+            public class Café
+            {
+                public string Value { get; init; } = "😀";
+            }
+
+            internal class AssemblyOnly { }
+            """);
+
+        var first = await RunClassificationProbeAsync(
+            fixture.Root,
+            "external-api",
+            "zh-CN",
+            "UTC");
+        var second = await RunClassificationProbeAsync(
+            fixture.Root,
+            "external-api",
+            "tr-TR",
+            "Pacific Standard Time");
+        var assemblyVisible = await RunClassificationProbeAsync(
+            fixture.Root,
+            "assembly-visible",
+            "en-US",
+            "UTC");
+
+        Assert.Equal(first, second);
+        Assert.StartsWith(
+            """{"targetProfile":"profile.external-api","targets":[""",
+            first,
+            StringComparison.Ordinal);
+        Assert.Contains("T:Café", first, StringComparison.Ordinal);
+        Assert.DoesNotContain("AssemblyOnly", first, StringComparison.Ordinal);
+        Assert.StartsWith(
+            """{"targetProfile":"profile.assembly-visible","targets":[""",
+            assemblyVisible,
+            StringComparison.Ordinal);
+        Assert.Contains("AssemblyOnly", assemblyVisible, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', first);
+        Assert.DoesNotContain('\r', first);
+    }
+
+    [Fact]
     public async Task CancellationReturnsNoSession()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1458,11 +1505,33 @@ public sealed class RepositoryLoaderTests
         return spawned;
     }
 
+    private static async Task<string> RunClassificationProbeAsync(
+        string repositoryRoot,
+        string profile,
+        string culture,
+        string timeZone)
+    {
+        using var probe = StartLoaderProbe(
+            repositoryRoot,
+            "classification",
+            extraArguments: [profile, culture, timeZone]);
+        var stdout = probe.StandardOutput.ReadToEndAsync();
+        var stderr = probe.StandardError.ReadToEndAsync();
+        await probe.WaitForExitAsync();
+        var output = await stdout;
+        var error = await stderr;
+        Assert.True(
+            probe.ExitCode == 0,
+            $"Classification probe failed with exit {probe.ExitCode}:{Environment.NewLine}{output}{Environment.NewLine}{error}");
+        return output;
+    }
+
     private static Process StartLoaderProbe(
         string repositoryRoot,
         string mode,
         string? readyPath = null,
-        string? releasePath = null)
+        string? releasePath = null,
+        IReadOnlyList<string>? extraArguments = null)
     {
         var probePath = LoaderProbePath();
         var startInfo = new ProcessStartInfo
@@ -1481,6 +1550,11 @@ public sealed class RepositoryLoaderTests
         {
             startInfo.ArgumentList.Add(readyPath);
             startInfo.ArgumentList.Add(releasePath);
+        }
+
+        foreach (var argument in extraArguments ?? [])
+        {
+            startInfo.ArgumentList.Add(argument);
         }
 
         startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
