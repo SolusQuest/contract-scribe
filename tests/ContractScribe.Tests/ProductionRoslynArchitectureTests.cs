@@ -1,6 +1,9 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using ContractScribe.Core;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
@@ -45,6 +48,14 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.DoesNotContain(@"src\ContractScribe.Roslyn", fast, StringComparison.Ordinal);
         Assert.Contains(@"../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj", integration, StringComparison.Ordinal);
         Assert.DoesNotContain(@"tests/ContractScribe.Roslyn", integration, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ContractScribe.ContractBaselineProbe.csproj",
+            integration,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ClassificationConformanceOracle.cs",
+            integration,
+            StringComparison.Ordinal);
         Assert.Contains("Microsoft.NET.StringTools", integration, StringComparison.Ordinal);
         Assert.Equal(5, XDocument.Parse(integration).Descendants("PackageReference").Count(element =>
             element.Attribute("ExcludeAssets")?.Value == "runtime"));
@@ -146,15 +157,7 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.NotEmpty(locatorConstructors);
         Assert.All(locatorConstructors, constructor =>
             Assert.True(
-                constructor.IsFamilyAndAssembly
-                || constructor.IsFamily
-                    && constructor.GetParameters() is
-                    [
-                    {
-                        ParameterType: var parameterType,
-                    },
-                    ]
-                    && parameterType == typeof(CandidateLocator),
+                constructor.IsFamilyAndAssembly,
                 "CandidateLocator must remain closed to external subclasses."));
 
         Assert.Null(typeof(ClassificationOutcome).GetMethod(
@@ -163,6 +166,53 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.NotNull(typeof(ClassificationOutcome).GetMethod(
             "Success",
             BindingFlags.Static | BindingFlags.NonPublic));
+    }
+
+    [Fact]
+    public void CoreInternalsHaveNoProductionAssemblyFriends()
+    {
+        var friends = typeof(ClassificationSet).Assembly
+            .GetCustomAttributes<InternalsVisibleToAttribute>()
+            .Select(attribute =>
+                attribute.AssemblyName.Split(',', 2)[0])
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["ContractScribe.IntegrationTests"], friends);
+    }
+
+    [Fact]
+    public void ExternalAssembliesCannotDeriveCandidateLocators()
+    {
+        const string source = """
+            using ContractScribe.Core;
+
+            public sealed class ForeignLocator : CandidateLocator
+            {
+                public override int GetHashCode() => 0;
+
+                protected override bool EqualsCore(CandidateLocator other) => true;
+            }
+            """;
+        var platformReferences = ((string)AppContext.GetData(
+                "TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "ForeignCandidateLocator",
+            [CSharpSyntaxTree.ParseText(source)],
+            platformReferences.Append(MetadataReference.CreateFromFile(
+                typeof(CandidateLocator).Assembly.Location)),
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary));
+
+        var errors = compilation.GetDiagnostics()
+            .Where(diagnostic =>
+                diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+
+        Assert.Contains(errors, diagnostic =>
+            diagnostic.Id is "CS1729" or "CS0122");
     }
 
     private static IEnumerable<Type> ExpandType(Type type)

@@ -254,14 +254,37 @@ public readonly record struct Utf16Span
     public int End { get; }
 }
 
-public abstract record CandidateLocator
+public abstract class CandidateLocator : IEquatable<CandidateLocator>
 {
     private protected CandidateLocator()
     {
     }
+
+    public bool Equals(CandidateLocator? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+            && GetType() == other.GetType()
+            && EqualsCore(other);
+
+    public override bool Equals(object? obj) =>
+        obj is CandidateLocator other && Equals(other);
+
+    public abstract override int GetHashCode();
+
+    protected abstract bool EqualsCore(CandidateLocator other);
+
+    public static bool operator ==(
+        CandidateLocator? left,
+        CandidateLocator? right) =>
+        left is null ? right is null : left.Equals(right);
+
+    public static bool operator !=(
+        CandidateLocator? left,
+        CandidateLocator? right) =>
+        !(left == right);
 }
 
-public sealed record RepositoryCandidateLocator : CandidateLocator
+public sealed class RepositoryCandidateLocator : CandidateLocator
 {
     internal RepositoryCandidateLocator(
         string path,
@@ -274,9 +297,22 @@ public sealed record RepositoryCandidateLocator : CandidateLocator
     public string Path { get; }
 
     public Utf16Span? Span { get; }
+
+    protected override bool EqualsCore(CandidateLocator other)
+    {
+        var repository = (RepositoryCandidateLocator)other;
+        return string.Equals(Path, repository.Path, StringComparison.Ordinal)
+            && Span == repository.Span;
+    }
+
+    public override int GetHashCode() =>
+        HashCode.Combine(StringComparer.Ordinal.GetHashCode(Path), Span);
+
+    public override string ToString() =>
+        $"RepositoryCandidateLocator {{ Path = {Path}, Span = {Span} }}";
 }
 
-public sealed record GeneratedSourceCandidateLocator : CandidateLocator
+public sealed class GeneratedSourceCandidateLocator : CandidateLocator
 {
     internal GeneratedSourceCandidateLocator(
         string generatorId,
@@ -293,9 +329,32 @@ public sealed record GeneratedSourceCandidateLocator : CandidateLocator
     public string HintNameId { get; }
 
     public Utf16Span? Span { get; }
+
+    protected override bool EqualsCore(CandidateLocator other)
+    {
+        var generated = (GeneratedSourceCandidateLocator)other;
+        return string.Equals(
+                GeneratorId,
+                generated.GeneratorId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                HintNameId,
+                generated.HintNameId,
+                StringComparison.Ordinal)
+            && Span == generated.Span;
+    }
+
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            StringComparer.Ordinal.GetHashCode(GeneratorId),
+            StringComparer.Ordinal.GetHashCode(HintNameId),
+            Span);
+
+    public override string ToString() =>
+        $"GeneratedSourceCandidateLocator {{ GeneratorId = {GeneratorId}, HintNameId = {HintNameId}, Span = {Span} }}";
 }
 
-public sealed record ToolGeneratedCandidateLocator : CandidateLocator
+public sealed class ToolGeneratedCandidateLocator : CandidateLocator
 {
     internal ToolGeneratedCandidateLocator(
         string producerId,
@@ -312,9 +371,32 @@ public sealed record ToolGeneratedCandidateLocator : CandidateLocator
     public string OutputId { get; }
 
     public Utf16Span? Span { get; }
+
+    protected override bool EqualsCore(CandidateLocator other)
+    {
+        var generated = (ToolGeneratedCandidateLocator)other;
+        return string.Equals(
+                ProducerId,
+                generated.ProducerId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                OutputId,
+                generated.OutputId,
+                StringComparison.Ordinal)
+            && Span == generated.Span;
+    }
+
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            StringComparer.Ordinal.GetHashCode(ProducerId),
+            StringComparer.Ordinal.GetHashCode(OutputId),
+            Span);
+
+    public override string ToString() =>
+        $"ToolGeneratedCandidateLocator {{ ProducerId = {ProducerId}, OutputId = {OutputId}, Span = {Span} }}";
 }
 
-public sealed record SyntheticCandidateLocator : CandidateLocator
+public sealed class SyntheticCandidateLocator : CandidateLocator
 {
     internal SyntheticCandidateLocator(string fixtureId)
     {
@@ -322,6 +404,18 @@ public sealed record SyntheticCandidateLocator : CandidateLocator
     }
 
     public string FixtureId { get; }
+
+    protected override bool EqualsCore(CandidateLocator other) =>
+        string.Equals(
+            FixtureId,
+            ((SyntheticCandidateLocator)other).FixtureId,
+            StringComparison.Ordinal);
+
+    public override int GetHashCode() =>
+        StringComparer.Ordinal.GetHashCode(FixtureId);
+
+    public override string ToString() =>
+        $"SyntheticCandidateLocator {{ FixtureId = {FixtureId} }}";
 }
 
 public sealed record TargetClassification

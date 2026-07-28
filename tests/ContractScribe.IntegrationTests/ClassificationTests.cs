@@ -121,6 +121,21 @@ public sealed class ClassificationTests
             Assert.Equal("ctx-app", relation.SourceSymbolRef.CompilationContextRef);
             Assert.Equal("ctx-app", relation.TargetSymbolRef.CompilationContextRef);
         });
+        AssertOracleConforms(
+            ClassificationConformanceOracle.Load(FindRepositoryRoot()),
+            TargetProfile.ExternalApi,
+            external,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ctx-app|P:PublicApi.Value"] =
+                    "symbol.member.property",
+                ["ctx-app|P:DependencyBase.Value"] =
+                    "symbol.member.property",
+                ["ctx-app|M:PublicApi.Call(System.Int32)"] =
+                    "symbol.member.method",
+                ["ctx-app|M:IDependency.Call(System.Int32)"] =
+                    "symbol.member.method",
+            });
 
         Assert.Contains(assemblyVisible.Targets, target =>
             target.SymbolRef.DocumentationCommentId == "T:InternalApi");
@@ -699,12 +714,36 @@ public sealed class ClassificationTests
     public void EndpointFailureOmitsOnlyRelationAndProducesBoundedDiagnostics()
     {
         const string source = """
-            public interface IContract { void Method(); }
+            using System;
+
+            public interface IContract
+            {
+                void Method();
+                int Value { get; }
+                string this[int index] { get; }
+                event Action Changed;
+            }
             public interface IDerivedContract : IContract { }
             public class Base { public virtual void Method() { } }
             public class Derived : Base { public override void Method() { } }
-            public class Implicit : IContract { public void Method() { } }
-            public class Explicit : IContract { void IContract.Method() { } }
+            public class Implicit : IContract
+            {
+                public void Method() { }
+                public int Value => 0;
+                public string this[int index] => "";
+                public event Action? Changed;
+            }
+            public class Explicit : IContract
+            {
+                void IContract.Method() { }
+                int IContract.Value => 0;
+                string IContract.this[int index] => "";
+                event Action IContract.Changed
+                {
+                    add { }
+                    remove { }
+                }
+            }
             """;
         var compilation = Compile("Endpoint", [Source("Endpoint.cs", source)]);
         using var session = CreateSession(new ProjectFixture(
@@ -718,6 +757,30 @@ public sealed class ClassificationTests
         Assert.All(Enum.GetValues<RelationKind>(), kind =>
             Assert.Contains(baseline.Relations, relation =>
                 relation.RelationKind == kind));
+        Assert.Contains(baseline.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId
+                .StartsWith("P:", StringComparison.Ordinal)
+            && !relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "Item",
+                StringComparison.Ordinal));
+        Assert.Contains(baseline.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "Item",
+                StringComparison.Ordinal));
+        Assert.Contains(baseline.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId
+                .StartsWith("E:", StringComparison.Ordinal));
+        AssertOracleConforms(
+            ClassificationConformanceOracle.Load(FindRepositoryRoot()),
+            TargetProfile.ExternalApi,
+            baseline,
+            RelationEndpointKinds(baseline));
 
         foreach (var blockedKind in Enum.GetValues<RelationKind>())
         {
@@ -731,12 +794,14 @@ public sealed class ClassificationTests
                     null,
                     (kind, symbol, isTarget, context) =>
                         kind == blockedKind && isTarget
-                            ? new RelationEndpointResolution(blockedStatus, null)
+                            ? new RelationEndpointResolution(
+                                blockedStatus,
+                                null,
+                                null)
                             : new RelationEndpointResolution(
                                 RelationEndpointStatus.Available,
-                                new SymbolRef(
-                                    context,
-                                    symbol.GetDocumentationCommentId()!)),
+                                context,
+                                symbol.GetDocumentationCommentId()!),
                     null,
                     null);
 
@@ -820,7 +885,46 @@ public sealed class ClassificationTests
     }
 
     [Fact]
-    public void ClassifierSeparatesUndefinedProfileCancellationAndNormalizedFailure()
+    public void PublicCoreInputBoundaryValidatesLocatorsAndReturnsOnlyTerminalOutcomes()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ClassificationInput.RepositoryLocator("../outside.cs"));
+        Assert.Throws<ArgumentException>(() =>
+            ClassificationInput.RepositoryLocator("src/A.cs", 2, 1));
+
+        var invalid = new ClassificationCandidateBuffer();
+        invalid.AddTarget(
+            string.Empty,
+            "T:Invalid",
+            PrimarySymbolKind.Class,
+            [],
+            ClassificationOrigin.Source,
+            []);
+        var failure = invalid.Normalize(TargetProfile.ExternalApi);
+        Assert.Equal(ClassificationRunStatus.Failure, failure.Status);
+        Assert.Null(failure.ClassificationSet);
+        Assert.Equal(
+            ClassificationVocabulary.UnrepresentableRunFailure,
+            failure.PrimaryFailure?.Code);
+
+        var valid = new ClassificationCandidateBuffer();
+        valid.AddTarget(
+            "ctx-public-boundary",
+            "T:Valid",
+            PrimarySymbolKind.Class,
+            [],
+            ClassificationOrigin.Source,
+            []);
+        var success = valid.Normalize(TargetProfile.ExternalApi);
+        var set = AssertSuccess(success);
+        Assert.Equal(
+            "T:Valid",
+            Assert.Single(set.Targets)
+                .SymbolRef.DocumentationCommentId);
+    }
+
+    [Fact]
+    public void ClassifierRejectsUndefinedProfile()
     {
         var compilation = Compile(
             "Outcomes",
@@ -834,45 +938,137 @@ public sealed class ClassificationTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new SymbolClassifier().Classify(session, (TargetProfile)999));
 
+    }
+
+    [Theory]
+    [InlineData((int)ClassificationStage.TargetDiscovery)]
+    [InlineData((int)ClassificationStage.ComponentDiscovery)]
+    [InlineData((int)ClassificationStage.RelationDiscovery)]
+    [InlineData((int)ClassificationStage.UnresolvedDiscovery)]
+    [InlineData((int)ClassificationStage.CandidateBufferingComplete)]
+    [InlineData((int)ClassificationStage.TerminalValidation)]
+    public void CancellationAtEveryBufferedAndTerminalStageIsTransactional(
+        int cancellationStageValue)
+    {
+        var cancellationStage = (ClassificationStage)cancellationStageValue;
+        var compilation = Compile(
+            "CancellationStages",
+            [Source(
+                "CancellationStages.cs",
+                "public class Example { public void Method() { } }")]);
+        using var session = CreateSession(new ProjectFixture(
+            "CancellationStages.csproj",
+            "ctx-cancellation-stages",
+            LoadedProjectRole.AuditRoot,
+            compilation));
         using var cancellation = new CancellationTokenSource();
-        var cancelledClassifier = new SymbolClassifier(
+        var classifier = new SymbolClassifier(
             null,
             null,
             stage =>
             {
-                if (stage == ClassificationStage.CandidateBufferingComplete)
+                if (stage == cancellationStage)
                 {
                     cancellation.Cancel();
                 }
             },
             null);
-        var cancelled = cancelledClassifier.Classify(
+
+        var outcome = classifier.Classify(
             session,
             TargetProfile.ExternalApi,
             cancellation.Token);
-        Assert.Equal(ClassificationRunStatus.Cancelled, cancelled.Status);
-        Assert.Null(cancelled.ClassificationSet);
-        Assert.Null(cancelled.PrimaryFailure);
 
-        var failedClassifier = new SymbolClassifier(
+        Assert.Equal(ClassificationRunStatus.Cancelled, outcome.Status);
+        Assert.Null(outcome.ClassificationSet);
+        Assert.Null(outcome.PrimaryFailure);
+    }
+
+    [Theory]
+    [InlineData((int)ClassificationStage.TargetDiscovery)]
+    [InlineData((int)ClassificationStage.ComponentDiscovery)]
+    [InlineData((int)ClassificationStage.RelationDiscovery)]
+    [InlineData((int)ClassificationStage.UnresolvedDiscovery)]
+    public void InvalidCandidatesAfterEveryBufferedFamilyFailTransactionally(
+        int failureStageValue)
+    {
+        var failureStage = (ClassificationStage)failureStageValue;
+        var compilation = Compile(
+            "FailureStages",
+            [Source(
+                "FailureStages.cs",
+                "public class Example { public void Method() { } }")]);
+        using var session = CreateSession(new ProjectFixture(
+            "FailureStages.csproj",
+            "ctx-failure-stages",
+            LoadedProjectRole.AuditRoot,
+            compilation));
+        var repositoryLocator = new RepositoryCandidateLocator(
+            "FailureStages.cs");
+        var classifier = new SymbolClassifier(
             null,
             null,
             null,
-            batch =>
+            (stage, buffer) =>
             {
-                var first = batch.Targets[0];
-                return batch with
+                if (stage != failureStage)
                 {
-                    Targets =
-                    [
-                        .. batch.Targets,
-                        first with { Origin = ClassificationOrigin.ToolGenerated },
-                    ],
-                };
+                    return;
+                }
+
+                switch (stage)
+                {
+                    case ClassificationStage.TargetDiscovery:
+                        var first = buffer.Targets[0];
+                        buffer.Targets.Add(first with
+                        {
+                            Origin = ClassificationOrigin.ToolGenerated,
+                        });
+                        break;
+                    case ClassificationStage.ComponentDiscovery:
+                        buffer.Components.Add(
+                            new ComponentClassificationCandidate(
+                                new SymbolRef(
+                                    "ctx-failure-stages",
+                                    "T:Example"),
+                                ComponentKind.Return,
+                                "return",
+                                ClassificationOrigin.Source));
+                        break;
+                    case ClassificationStage.RelationDiscovery:
+                        buffer.Relations.Add(new RelationObservationCandidate(
+                            new RelationObservation(
+                                RelationKind.Overrides,
+                                new SymbolRef(
+                                    "ctx-failure-stages",
+                                    "T:Example"),
+                                new SymbolRef(
+                                    "ctx-failure-stages",
+                                    "M:Example.Method")),
+                            PrimarySymbolKind.Class,
+                            PrimarySymbolKind.Method));
+                        break;
+                    case ClassificationStage.UnresolvedDiscovery:
+                        buffer.Unresolved.Add(
+                            new UnresolvedClassificationCandidate(
+                                "ctx-failure-stages",
+                                ClassificationOrigin.Source,
+                                [repositoryLocator]));
+                        buffer.Unresolved.Add(
+                            new UnresolvedClassificationCandidate(
+                                "ctx-failure-stages",
+                                ClassificationOrigin.ToolGenerated,
+                                [repositoryLocator]));
+                        break;
+                    default:
+                        throw new InvalidOperationException();
+                }
             });
-        var failed = failedClassifier.Classify(
+
+        var failed = classifier.Classify(
             session,
             TargetProfile.ExternalApi);
+
         Assert.Equal(ClassificationRunStatus.Failure, failed.Status);
         Assert.Null(failed.ClassificationSet);
         Assert.Equal(
@@ -1382,16 +1578,27 @@ public sealed class ClassificationTests
                 null,
                 null,
                 null).Classify(session, profile));
-            var records = set.Targets.Select(Project)
-                .Concat(set.Components.Select(Project))
-                .Concat(set.Relations.Select(Project))
-                .Concat(unresolved.Unresolved.Select(Project))
-                .Select(Element)
-                .ToArray();
+            var endpointKinds = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["ctx-conformance|P:Base.Value"] =
+                    "symbol.member.property",
+                ["ctx-conformance|P:Derived.Value"] =
+                    "symbol.member.property",
+                ["ctx-conformance|P:IContract.Value"] =
+                    "symbol.member.property",
+            };
 
-            Assert.True(
-                oracle.TryValidateSet(records, out var error),
-                error);
+            AssertOracleConforms(
+                oracle,
+                profile,
+                set,
+                endpointKinds);
+            AssertOracleConforms(
+                oracle,
+                profile,
+                unresolved,
+                endpointKinds);
             AssertExactConformanceSet(profile, set, unresolved, source);
         }
 
@@ -1457,6 +1664,154 @@ public sealed class ClassificationTests
             Enum.GetValues<SkipReason>()
                 .Select(ClassificationVocabulary.GetId)
                 .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void BothProfilesAcceptACompleteEmptyProductionSet()
+    {
+        var compilation = Compile(
+            "EmptyProfiles",
+            [Source("EmptyProfiles.cs", "file class PrivateOnly { }")]);
+        using var session = CreateSession(new ProjectFixture(
+            "EmptyProfiles.csproj",
+            "ctx-empty",
+            LoadedProjectRole.AuditRoot,
+            compilation));
+        var oracle = ClassificationConformanceOracle.Load(
+            FindRepositoryRoot());
+
+        foreach (var profile in Enum.GetValues<TargetProfile>())
+        {
+            var set = AssertSuccess(new SymbolClassifier().Classify(
+                session,
+                profile));
+
+            Assert.Empty(set.Targets);
+            Assert.Empty(set.Components);
+            Assert.Empty(set.Relations);
+            Assert.Empty(set.Unresolved);
+            AssertOracleConforms(oracle, profile, set);
+        }
+    }
+
+    [Fact]
+    public void SemanticOracleRejectsSkippedParentsTypedUnresolvedDuplicatesAndBadRelationDomains()
+    {
+        var oracle = ClassificationConformanceOracle.Load(
+            FindRepositoryRoot());
+        var skippedParentRecords = new[]
+        {
+            ParseRecord("""
+                {
+                  "recordType": "TargetClassification",
+                  "symbolRef": {
+                    "compilationContextRef": "ctx-oracle",
+                    "documentationCommentId": "T:Parent"
+                  },
+                  "primaryKind": "symbol.type.class",
+                  "traits": [],
+                  "origin": "origin.mixed",
+                  "supportStatus": "support.ambiguous",
+                  "skipReason": "skip.ambiguous.mixed-origin"
+                }
+                """),
+            ParseRecord("""
+                {
+                  "recordType": "ComponentClassification",
+                  "parentSymbolRef": {
+                    "compilationContextRef": "ctx-oracle",
+                    "documentationCommentId": "T:Parent"
+                  },
+                  "componentKind": "component.type-parameter",
+                  "identity": "type-parameter/0",
+                  "origin": "origin.source",
+                  "supportStatus": "support.supported"
+                }
+                """),
+        };
+        Assert.False(oracle.TryValidateSet(
+            "profile.external-api",
+            skippedParentRecords,
+            null,
+            out var skippedParentError));
+        Assert.Contains(
+            "component parent domain mismatch",
+            skippedParentError,
+            StringComparison.Ordinal);
+
+        var duplicateTypedUnresolved = new[]
+        {
+            ParseRecord("""
+                {
+                  "recordType": "UnresolvedClassification",
+                  "compilationContextRef": "ctx-oracle",
+                  "origin": "origin.source",
+                  "supportStatus": "support.unavailable-context",
+                  "skipReason": "skip.unavailable.documentation-comment-id",
+                  "candidateLocator": {
+                    "repository": {
+                      "path": "src/A.cs",
+                      "span": { "start": 0, "end": 1 }
+                    }
+                  }
+                }
+                """),
+            ParseRecord("""
+                {
+                  "candidateLocator": {
+                    "repository": {
+                      "span": { "end": 1, "start": 0 },
+                      "path": "src/A.cs"
+                    }
+                  },
+                  "skipReason": "skip.unavailable.documentation-comment-id",
+                  "supportStatus": "support.unavailable-context",
+                  "origin": "origin.source",
+                  "compilationContextRef": "ctx-oracle",
+                  "recordType": "UnresolvedClassification"
+                }
+                """),
+        };
+        Assert.False(oracle.TryValidateSet(
+            "profile.external-api",
+            duplicateTypedUnresolved,
+            null,
+            out var duplicateError));
+        Assert.Contains(
+            "duplicate classification key",
+            duplicateError,
+            StringComparison.Ordinal);
+
+        var invalidRelation = new[]
+        {
+            ParseRecord("""
+                {
+                  "recordType": "RelationObservation",
+                  "relationKind": "relation.overrides",
+                  "sourceSymbolRef": {
+                    "compilationContextRef": "ctx-oracle",
+                    "documentationCommentId": "T:Source"
+                  },
+                  "targetSymbolRef": {
+                    "compilationContextRef": "ctx-oracle",
+                    "documentationCommentId": "T:Target"
+                  }
+                }
+                """),
+        };
+        Assert.False(oracle.TryValidateSet(
+            "profile.external-api",
+            invalidRelation,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ctx-oracle|T:Source"] = "symbol.type.class",
+                ["ctx-oracle|T:Target"] = "symbol.type.class",
+            },
+            out var relationError));
+        Assert.Contains(
+            "relation endpoint domain mismatch",
+            relationError,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1896,6 +2251,69 @@ public sealed class ClassificationTests
         using var document = JsonDocument.Parse(node.ToJsonString());
         return document.RootElement.Clone();
     }
+
+    private static JsonElement ParseRecord(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static void AssertOracleConforms(
+        ClassificationConformanceOracle oracle,
+        TargetProfile profile,
+        ClassificationSet set,
+        IReadOnlyDictionary<string, string>? independentEndpointKinds = null)
+    {
+        var records = set.Targets.Select(Project)
+            .Concat(set.Components.Select(Project))
+            .Concat(set.Relations.Select(Project))
+            .Concat(set.Unresolved.Select(Project))
+            .Select(Element)
+            .ToArray();
+
+        Assert.True(
+            oracle.TryValidateSet(
+                ClassificationVocabulary.GetId(profile),
+                records,
+                independentEndpointKinds,
+                out var error),
+            error);
+    }
+
+    private static IReadOnlyDictionary<string, string> RelationEndpointKinds(
+        ClassificationSet set)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var relation in set.Relations)
+        {
+            result[SymbolKey(relation.SourceSymbolRef)] =
+                EndpointKind(relation.SourceSymbolRef.DocumentationCommentId);
+            result[SymbolKey(relation.TargetSymbolRef)] =
+                EndpointKind(relation.TargetSymbolRef.DocumentationCommentId);
+        }
+
+        return result;
+    }
+
+    private static string EndpointKind(string documentationCommentId) =>
+        documentationCommentId switch
+        {
+            ['T', ':', ..] => "symbol.type.interface",
+            ['M', ':', ..] => "symbol.member.method",
+            ['E', ':', ..] => "symbol.member.event",
+            ['P', ':', ..] when documentationCommentId.Contains(
+                "Item(",
+                StringComparison.Ordinal) =>
+                "symbol.member.indexer",
+            ['P', ':', ..] => "symbol.member.property",
+            _ => throw new InvalidOperationException(
+                $"No independent endpoint kind for {documentationCommentId}."),
+        };
+
+    private static string SymbolKey(SymbolRef symbolRef) =>
+        symbolRef.CompilationContextRef
+        + "|"
+        + symbolRef.DocumentationCommentId;
 
     private static string FindRepositoryRoot()
     {

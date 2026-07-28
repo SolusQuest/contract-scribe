@@ -27,13 +27,194 @@ internal sealed record RelationObservationCandidate(
     PrimarySymbolKind SourceKind,
     PrimarySymbolKind TargetKind);
 
+internal sealed record UnresolvedClassificationCandidate(
+    string CompilationContextRef,
+    ClassificationOrigin Origin,
+    ImmutableArray<CandidateLocator> CandidateLocators);
+
 internal sealed record ClassificationCandidateBatch(
     IReadOnlyList<TargetClassificationCandidate> Targets,
     IReadOnlyList<ComponentClassificationCandidate> Components,
     IReadOnlyList<RelationObservationCandidate> Relations,
-    IReadOnlyList<UnresolvedClassification> Unresolved);
+    IReadOnlyList<UnresolvedClassificationCandidate> Unresolved);
 
 internal sealed class ClassificationUnrepresentableException : Exception;
+
+public static class ClassificationInput
+{
+    public static CandidateLocator RepositoryLocator(
+        string path,
+        int? spanStart = null,
+        int? spanEnd = null) =>
+        Validate(new RepositoryCandidateLocator(
+            path,
+            CreateSpan(spanStart, spanEnd)));
+
+    public static CandidateLocator GeneratedSourceLocator(
+        string generatorId,
+        string hintNameId,
+        int? spanStart = null,
+        int? spanEnd = null) =>
+        Validate(new GeneratedSourceCandidateLocator(
+            generatorId,
+            hintNameId,
+            CreateSpan(spanStart, spanEnd)));
+
+    public static CandidateLocator ToolGeneratedLocator(
+        string producerId,
+        string outputId,
+        int? spanStart = null,
+        int? spanEnd = null) =>
+        Validate(new ToolGeneratedCandidateLocator(
+            producerId,
+            outputId,
+            CreateSpan(spanStart, spanEnd)));
+
+    public static CandidateLocator SyntheticLocator(string fixtureId) =>
+        Validate(new SyntheticCandidateLocator(fixtureId));
+
+    private static Utf16Span? CreateSpan(int? start, int? end)
+    {
+        if (start is null && end is null)
+        {
+            return null;
+        }
+
+        if (start is null || end is null)
+        {
+            throw new ArgumentException(
+                "Candidate locator spans require both start and end.");
+        }
+
+        return new Utf16Span(start.Value, end.Value);
+    }
+
+    private static CandidateLocator Validate(CandidateLocator locator)
+    {
+        try
+        {
+            ClassificationNormalization.ValidateLocator(locator);
+            return locator;
+        }
+        catch (ClassificationUnrepresentableException exception)
+        {
+            throw new ArgumentException(
+                "Candidate locator is outside the closed classification contract.",
+                nameof(locator),
+                exception);
+        }
+    }
+}
+
+public sealed class ClassificationCandidateBuffer
+{
+    internal List<TargetClassificationCandidate> Targets { get; } = [];
+
+    internal List<ComponentClassificationCandidate> Components { get; } = [];
+
+    internal List<RelationObservationCandidate> Relations { get; } = [];
+
+    internal List<UnresolvedClassificationCandidate> Unresolved { get; } = [];
+
+    public void AddTarget(
+        string compilationContextRef,
+        string documentationCommentId,
+        PrimarySymbolKind primaryKind,
+        ImmutableArray<SymbolTrait> traits,
+        ClassificationOrigin origin,
+        IEnumerable<CandidateLocator> candidateLocators,
+        bool generatedProvenanceAvailable = true,
+        bool semanticContextAvailable = true,
+        bool partialAmbiguous = false)
+    {
+        ArgumentNullException.ThrowIfNull(candidateLocators);
+        Targets.Add(new TargetClassificationCandidate(
+            compilationContextRef,
+            documentationCommentId,
+            primaryKind,
+            traits,
+            origin,
+            candidateLocators.ToImmutableArray(),
+            generatedProvenanceAvailable,
+            semanticContextAvailable,
+            partialAmbiguous));
+    }
+
+    public void AddComponent(
+        string compilationContextRef,
+        string documentationCommentId,
+        ComponentKind componentKind,
+        string? identity,
+        ClassificationOrigin origin,
+        CandidateLocator? candidateLocator = null,
+        bool generatedProvenanceAvailable = true,
+        bool semanticContextAvailable = true,
+        bool partialAmbiguous = false) =>
+        Components.Add(new ComponentClassificationCandidate(
+            new SymbolRef(compilationContextRef, documentationCommentId),
+            componentKind,
+            identity,
+            origin,
+            candidateLocator,
+            generatedProvenanceAvailable,
+            semanticContextAvailable,
+            partialAmbiguous));
+
+    public void AddRelation(
+        RelationKind relationKind,
+        string sourceCompilationContextRef,
+        string sourceDocumentationCommentId,
+        string targetCompilationContextRef,
+        string targetDocumentationCommentId,
+        PrimarySymbolKind sourceKind,
+        PrimarySymbolKind targetKind) =>
+        Relations.Add(new RelationObservationCandidate(
+            new RelationObservation(
+                relationKind,
+                new SymbolRef(
+                    sourceCompilationContextRef,
+                    sourceDocumentationCommentId),
+                new SymbolRef(
+                    targetCompilationContextRef,
+                    targetDocumentationCommentId)),
+            sourceKind,
+            targetKind));
+
+    public void AddUnresolvedDocumentationCandidate(
+        string compilationContextRef,
+        ClassificationOrigin origin,
+        IEnumerable<CandidateLocator> candidateLocators)
+    {
+        ArgumentNullException.ThrowIfNull(candidateLocators);
+        Unresolved.Add(new UnresolvedClassificationCandidate(
+            compilationContextRef,
+            origin,
+            candidateLocators.ToImmutableArray()));
+    }
+
+    public ClassificationOutcome Normalize(
+        TargetProfile profile,
+        IEnumerable<ClassificationDiagnostic>? diagnostics = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var set = ClassificationNormalization.Normalize(
+                profile,
+                new ClassificationCandidateBatch(
+                    Targets,
+                    Components,
+                    Relations,
+                    Unresolved),
+                cancellationToken);
+            return ClassificationOutcome.Success(set, diagnostics);
+        }
+        catch (ClassificationUnrepresentableException)
+        {
+            return ClassificationOutcome.Failure(diagnostics);
+        }
+    }
+}
 
 internal static class ClassificationNormalization
 {
@@ -51,7 +232,7 @@ internal static class ClassificationNormalization
         }
 
         var targets = new List<TargetClassification>();
-        var unresolved = new List<UnresolvedClassification>(candidates.Unresolved);
+        var unresolved = new List<UnresolvedClassification>();
         foreach (var candidate in candidates.Targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -66,8 +247,18 @@ internal static class ClassificationNormalization
             candidates.Components,
             supportedParents,
             cancellationToken);
-        var normalizedUnresolved = NormalizeUnresolved(unresolved);
-        var relations = NormalizeRelations(candidates.Relations);
+        foreach (var candidate in candidates.Unresolved)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            NormalizeUnresolvedCandidate(candidate, unresolved);
+        }
+
+        var relations = NormalizeRelations(
+            candidates.Relations,
+            cancellationToken);
+        var normalizedUnresolved = NormalizeUnresolved(
+            unresolved,
+            cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
         return new ClassificationSet(
@@ -76,6 +267,33 @@ internal static class ClassificationNormalization
             components,
             relations,
             normalizedUnresolved);
+    }
+
+    private static void NormalizeUnresolvedCandidate(
+        UnresolvedClassificationCandidate candidate,
+        List<UnresolvedClassification> unresolved)
+    {
+        RequireContext(candidate.CompilationContextRef);
+        RequireEnum(candidate.Origin);
+        if (candidate.Origin is ClassificationOrigin.Unknown
+                or ClassificationOrigin.CompilerSynthesized
+            || candidate.CandidateLocators.IsDefaultOrEmpty)
+        {
+            throw Unrepresentable();
+        }
+
+        foreach (var locator in candidate.CandidateLocators
+            .Distinct()
+            .Order(CandidateLocatorComparer.Instance))
+        {
+            RequireLocator(locator);
+            unresolved.Add(new UnresolvedClassification(
+                candidate.CompilationContextRef,
+                candidate.Origin,
+                SupportStatus.UnavailableContext,
+                SkipReason.UnavailableDocumentationCommentId,
+                locator));
+        }
     }
 
     private static void NormalizeTarget(
@@ -447,10 +665,12 @@ internal static class ClassificationNormalization
     }
 
     private static ImmutableArray<RelationObservation> NormalizeRelations(
-        IReadOnlyList<RelationObservationCandidate> candidates)
+        IReadOnlyList<RelationObservationCandidate> candidates,
+        CancellationToken cancellationToken)
     {
         foreach (var candidate in candidates)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var relation = candidate.Observation;
             RequireEnum(relation.RelationKind);
             RequireEnum(candidate.SourceKind);
@@ -469,6 +689,7 @@ internal static class ClassificationNormalization
         var relations = new List<RelationObservation>();
         foreach (var group in candidates.GroupBy(candidate => candidate.Observation))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (group
                 .Select(candidate => (candidate.SourceKind, candidate.TargetKind))
                 .Distinct()
@@ -501,10 +722,12 @@ internal static class ClassificationNormalization
     }
 
     private static ImmutableArray<UnresolvedClassification> NormalizeUnresolved(
-        IReadOnlyList<UnresolvedClassification> unresolved)
+        IReadOnlyList<UnresolvedClassification> unresolved,
+        CancellationToken cancellationToken)
     {
         foreach (var record in unresolved)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             RequireUnresolved(record);
         }
 
@@ -512,6 +735,7 @@ internal static class ClassificationNormalization
         foreach (var group in unresolved.GroupBy(record =>
             record.CompilationContextRef + "\0" + LocatorKey(record.CandidateLocator)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var variants = group
                 .GroupBy(UnresolvedSignature, StringComparer.Ordinal)
                 .Select(variant => variant.First())
@@ -722,6 +946,9 @@ internal static class ClassificationNormalization
                 throw Unrepresentable();
         }
     }
+
+    internal static void ValidateLocator(CandidateLocator locator) =>
+        RequireLocator(locator);
 
     private static void RequireRepositoryIdentity(string path)
     {

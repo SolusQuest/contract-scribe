@@ -62,7 +62,29 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     "Fixture.SelfAware.g.cs",
                     SourceText.From(
                         $$"""public static class FixtureSelfAware { public const string Value = "{{value}}"; }""",
-                        Encoding.UTF8));
+                    Encoding.UTF8));
+            });
+
+        var manyOutputCounts = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorManyOutputs",
+                    out var value)
+                && int.TryParse(value, out var count)
+                    ? count
+                    : 0);
+        context.RegisterSourceOutput(
+            manyOutputCounts,
+            static (output, count) =>
+            {
+                for (var index = 0; index < count; index++)
+                {
+                    output.AddSource(
+                        $"Fixture.Many.{index:D4}.g.cs",
+                        SourceText.From(
+                            $"public static class FixtureMany{index:D4} {{ }}",
+                            Encoding.UTF8));
+                }
             });
 
         var dynamicAdditionalValues = context.AdditionalTextsProvider

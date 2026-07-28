@@ -25,10 +25,14 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
-    <ProjectReference Include="../ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj" />
     <ProjectReference Include="../ContractScribe.TestGenerator/ContractScribe.TestGenerator.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
                       ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
+             Link="ClassificationConformanceOracle.cs" />
   </ItemGroup>
 </Project>

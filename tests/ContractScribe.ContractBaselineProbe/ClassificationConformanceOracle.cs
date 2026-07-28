@@ -89,12 +89,14 @@ public sealed class ClassificationConformanceOracle
         TryValidateRecord(record, out _);
 
     public bool TryValidateSet(
+        string targetProfile,
         IReadOnlyList<JsonElement> records,
+        IReadOnlyDictionary<string, string>? independentEndpointKinds,
         out string? error)
     {
-        if (records.Count == 0)
+        if (!Known("targetProfiles", targetProfile))
         {
-            error = "classification set is empty";
+            error = $"unknown closed target profile: {targetProfile}";
             return false;
         }
 
@@ -106,7 +108,20 @@ public sealed class ClassificationConformanceOracle
             }
         }
 
-        var targetKinds = new Dictionary<string, string>(StringComparer.Ordinal);
+        var targets = new Dictionary<string, (string Kind, string Status)>(
+            StringComparer.Ordinal);
+        var endpointKinds = independentEndpointKinds is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(
+                independentEndpointKinds,
+                StringComparer.Ordinal);
+        if (endpointKinds.Any(pair =>
+            !Known("primaryKinds", pair.Value)))
+        {
+            error = "independent endpoint kind is outside the closed registry";
+            return false;
+        }
+
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var record in records)
         {
@@ -120,9 +135,18 @@ public sealed class ClassificationConformanceOracle
 
             if (recordType == "TargetClassification")
             {
-                targetKinds.Add(
-                    SymbolKey(record.GetProperty("symbolRef")),
-                    record.GetProperty("primaryKind").GetString()!);
+                var symbolKey = SymbolKey(record.GetProperty("symbolRef"));
+                var kind = record.GetProperty("primaryKind").GetString()!;
+                var status = record.GetProperty("supportStatus").GetString()!;
+                if (!targets.TryAdd(symbolKey, (kind, status))
+                    || endpointKinds.TryGetValue(symbolKey, out var knownKind)
+                        && knownKind != kind)
+                {
+                    error = $"conflicting target endpoint kind: {symbolKey}";
+                    return false;
+                }
+
+                endpointKinds[symbolKey] = kind;
             }
         }
 
@@ -133,12 +157,13 @@ public sealed class ClassificationConformanceOracle
             {
                 var parentKey = SymbolKey(
                     record.GetProperty("parentSymbolRef"));
-                if (!targetKinds.TryGetValue(parentKey, out var parentKind)
+                if (!targets.TryGetValue(parentKey, out var parent)
+                    || parent.Status != "support.supported"
                     || !Contains(
                         registryEntries[
                             record.GetProperty("componentKind").GetString()!],
                         "parentKinds",
-                        parentKind))
+                        parent.Kind))
                 {
                     error = $"component parent domain mismatch: {parentKey}";
                     return false;
@@ -152,8 +177,8 @@ public sealed class ClassificationConformanceOracle
                     record.GetProperty("sourceSymbolRef"));
                 var targetKey = SymbolKey(
                     record.GetProperty("targetSymbolRef"));
-                if (!targetKinds.TryGetValue(sourceKey, out var sourceKind)
-                    || !targetKinds.TryGetValue(targetKey, out var targetKind)
+                if (!endpointKinds.TryGetValue(sourceKey, out var sourceKind)
+                    || !endpointKinds.TryGetValue(targetKey, out var targetKind)
                     || !Contains(
                         relationEntry,
                         "sourceDomain",
@@ -472,9 +497,63 @@ public sealed class ClassificationConformanceOracle
                 "2|" + SymbolKey(record.GetProperty("sourceSymbolRef"))
                 + "|" + record.GetProperty("relationKind").GetString()
                 + "|" + SymbolKey(record.GetProperty("targetSymbolRef")),
-            "UnresolvedClassification" => "3|" + record.GetRawText(),
+            "UnresolvedClassification" =>
+                "3|"
+                + record.GetProperty("compilationContextRef").GetString()
+                + "|"
+                + CandidateLocatorKey(
+                    record.GetProperty("candidateLocator")),
             _ => throw new InvalidOperationException(),
         };
+
+    private static string CandidateLocatorKey(JsonElement locator)
+    {
+        static string SpanKey(JsonElement value)
+        {
+            if (!value.TryGetProperty("span", out var span))
+            {
+                return "0";
+            }
+
+            return "1|"
+                + span.GetProperty("start").GetInt32()
+                + "|"
+                + span.GetProperty("end").GetInt32();
+        }
+
+        if (locator.TryGetProperty("repository", out var repository))
+        {
+            return "repository|"
+                + repository.GetProperty("path").GetString()
+                + "|"
+                + SpanKey(repository);
+        }
+
+        if (locator.TryGetProperty("generatedSource", out var generatedSource))
+        {
+            return "generatedSource|"
+                + generatedSource.GetProperty("generatorId").GetString()
+                + "|"
+                + generatedSource.GetProperty("hintNameId").GetString()
+                + "|"
+                + SpanKey(generatedSource);
+        }
+
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated))
+        {
+            return "toolGenerated|"
+                + toolGenerated.GetProperty("producerId").GetString()
+                + "|"
+                + toolGenerated.GetProperty("outputId").GetString()
+                + "|"
+                + SpanKey(toolGenerated);
+        }
+
+        return "synthetic|"
+            + locator.GetProperty("synthetic")
+                .GetProperty("fixtureId")
+                .GetString();
+    }
 
     private static string SymbolKey(JsonElement symbolRef) =>
         symbolRef.GetProperty("compilationContextRef").GetString()

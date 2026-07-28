@@ -11,7 +11,7 @@ public sealed class SymbolClassifier
     private readonly Func<ISymbol, string?> documentationId;
     private readonly RelationEndpointResolver relationEndpointResolver;
     private readonly Action<ClassificationStage>? observer;
-    private readonly Func<ClassificationCandidateBatch, ClassificationCandidateBatch>? beforeNormalization;
+    private readonly Action<ClassificationStage, ClassificationCandidateBuffer>? candidateObserver;
 
     public SymbolClassifier()
         : this(null, null, null, null)
@@ -22,12 +22,12 @@ public sealed class SymbolClassifier
         Func<ISymbol, string?>? documentationId,
         RelationEndpointResolver? relationEndpointResolver,
         Action<ClassificationStage>? observer,
-        Func<ClassificationCandidateBatch, ClassificationCandidateBatch>? beforeNormalization)
+        Action<ClassificationStage, ClassificationCandidateBuffer>? candidateObserver)
     {
         this.documentationId = documentationId ?? DefaultDocumentationId;
         this.relationEndpointResolver = relationEndpointResolver ?? DefaultRelationEndpoint;
         this.observer = observer;
-        this.beforeNormalization = beforeNormalization;
+        this.candidateObserver = candidateObserver;
     }
 
     public ClassificationOutcome Classify(
@@ -47,24 +47,53 @@ public sealed class SymbolClassifier
         var diagnostics = new List<ClassificationDiagnostic>();
         try
         {
-            var targetCandidates = new List<TargetClassificationCandidate>();
-            var componentCandidates = new List<ComponentClassificationCandidate>();
-            var relations = new List<RelationObservationCandidate>();
+            var candidates = new ClassificationCandidateBuffer();
+            var discoveredTargets = new List<DiscoveredTarget>();
             foreach (var project in session.Projects
                 .Where(project => project.Role == LoadedProjectRole.AuditRoot)
                 .OrderBy(project => project.CompilationContextRef, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DiscoverTargetsAndComponents(
+                DiscoverTargets(
                     project,
                     profile,
-                    targetCandidates,
-                    componentCandidates,
+                    discoveredTargets,
                     cancellationToken);
             }
 
-            Observe(ClassificationStage.TargetDiscovery, cancellationToken);
-            Observe(ClassificationStage.ComponentDiscovery, cancellationToken);
+            foreach (var target in discoveredTargets
+                .Where(target => target.DocumentationCommentId is not null))
+            {
+                candidates.AddTarget(
+                    target.CompilationContextRef,
+                    target.DocumentationCommentId!,
+                    target.PrimaryKind,
+                    target.Traits,
+                    target.Provenance.Origin,
+                    target.Provenance.Locators,
+                    target.Provenance.GeneratedProvenanceAvailable);
+            }
+
+            ObserveCandidates(
+                ClassificationStage.TargetDiscovery,
+                candidates,
+                cancellationToken);
+            foreach (var target in discoveredTargets
+                .Where(CanHaveComponents))
+            {
+                AddComponents(
+                    target.Symbol,
+                    target.CompilationContextRef,
+                    target.DocumentationCommentId!,
+                    target.Provenance.Origin,
+                    candidates,
+                    cancellationToken);
+            }
+
+            ObserveCandidates(
+                ClassificationStage.ComponentDiscovery,
+                candidates,
+                cancellationToken);
             foreach (var project in session.Projects
                 .Where(project => project.Role == LoadedProjectRole.AuditRoot)
                 .OrderBy(project => project.CompilationContextRef, StringComparer.Ordinal))
@@ -73,41 +102,54 @@ public sealed class SymbolClassifier
                 DiscoverRelations(
                     project,
                     profile,
-                    relations,
+                    candidates,
                     diagnostics,
                     cancellationToken);
             }
 
-            Observe(ClassificationStage.RelationDiscovery, cancellationToken);
-            var candidates = new ClassificationCandidateBatch(
-                targetCandidates,
-                componentCandidates,
-                relations,
-                []);
-            candidates = beforeNormalization?.Invoke(candidates) ?? candidates;
-            Observe(ClassificationStage.CandidateBufferingComplete, cancellationToken);
-            var set = ClassificationNormalization.Normalize(
-                profile,
+            ObserveCandidates(
+                ClassificationStage.RelationDiscovery,
                 candidates,
                 cancellationToken);
+            foreach (var target in discoveredTargets
+                .Where(target => target.DocumentationCommentId is null))
+            {
+                candidates.AddUnresolvedDocumentationCandidate(
+                    target.CompilationContextRef,
+                    target.Provenance.Origin,
+                    target.Provenance.Locators);
+            }
+
+            ObserveCandidates(
+                ClassificationStage.UnresolvedDiscovery,
+                candidates,
+                cancellationToken);
+            ObserveCandidates(
+                ClassificationStage.CandidateBufferingComplete,
+                candidates,
+                cancellationToken);
+            var outcome = candidates.Normalize(
+                profile,
+                NormalizeDiagnostics(diagnostics),
+                cancellationToken);
+            if (outcome.Status != ClassificationRunStatus.Success)
+            {
+                return outcome;
+            }
+
             Observe(ClassificationStage.TerminalValidation, cancellationToken);
-            return ClassificationOutcome.Success(set, NormalizeDiagnostics(diagnostics));
+            return outcome;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return ClassificationOutcome.Cancelled(NormalizeDiagnostics(diagnostics));
         }
-        catch (ClassificationUnrepresentableException)
-        {
-            return ClassificationOutcome.Failure(NormalizeDiagnostics(diagnostics));
-        }
     }
 
-    private void DiscoverTargetsAndComponents(
+    private void DiscoverTargets(
         LoadedProject project,
         TargetProfile profile,
-        List<TargetClassificationCandidate> targets,
-        List<ComponentClassificationCandidate> components,
+        List<DiscoveredTarget> targets,
         CancellationToken cancellationToken)
     {
         foreach (var symbol in EnumerateSymbols(project.Compilation.Assembly.GlobalNamespace))
@@ -122,36 +164,20 @@ public sealed class SymbolClassifier
             var original = symbol.OriginalDefinition;
             var provenance = ClassifyProvenance(project, original);
             var kind = ClassifyPrimaryKind(original);
-            var candidate = new TargetClassificationCandidate(
+            targets.Add(new DiscoveredTarget(
+                original,
                 project.CompilationContextRef,
                 documentationId(original),
                 kind ?? PrimarySymbolKind.Unknown,
                 ClassifyTraits(original, cancellationToken),
-                provenance.Origin,
-                provenance.Locators,
-                provenance.GeneratedProvenanceAvailable);
-            targets.Add(candidate);
-            if (!CanHaveComponents(candidate))
-            {
-                continue;
-            }
-
-            var parent = new SymbolRef(
-                candidate.CompilationContextRef,
-                candidate.DocumentationCommentId!);
-            AddComponents(
-                original,
-                parent,
-                candidate.Origin,
-                components,
-                cancellationToken);
+                provenance));
         }
     }
 
     private void DiscoverRelations(
         LoadedProject project,
         TargetProfile profile,
-        List<RelationObservationCandidate> relations,
+        ClassificationCandidateBuffer candidates,
         List<ClassificationDiagnostic> diagnostics,
         CancellationToken cancellationToken)
     {
@@ -173,7 +199,7 @@ public sealed class SymbolClassifier
                         member,
                         overridden.OriginalDefinition,
                         project.CompilationContextRef,
-                        relations,
+                        candidates,
                         diagnostics);
                 }
 
@@ -194,7 +220,7 @@ public sealed class SymbolClassifier
                         member,
                         implemented.OriginalDefinition,
                         project.CompilationContextRef,
-                        relations,
+                        candidates,
                         diagnostics);
                 }
             }
@@ -211,7 +237,7 @@ public sealed class SymbolClassifier
                         type,
                         inherited.OriginalDefinition,
                         project.CompilationContextRef,
-                        relations,
+                        candidates,
                         diagnostics);
                 }
             }
@@ -247,7 +273,7 @@ public sealed class SymbolClassifier
                     CanonicalPartialMember(implementation),
                     interfaceMember.OriginalDefinition,
                     project.CompilationContextRef,
-                    relations,
+                    candidates,
                     diagnostics);
             }
         }
@@ -258,32 +284,31 @@ public sealed class SymbolClassifier
         ISymbol source,
         ISymbol target,
         string context,
-        List<RelationObservationCandidate> relations,
+        ClassificationCandidateBuffer candidates,
         List<ClassificationDiagnostic> diagnostics)
     {
         var sourceResolution = relationEndpointResolver(kind, source, false, context);
         var targetResolution = relationEndpointResolver(kind, target, true, context);
         if (sourceResolution.Status != RelationEndpointStatus.Available
-            || sourceResolution.SymbolRef is null
+            || sourceResolution.CompilationContextRef is null
+            || sourceResolution.DocumentationCommentId is null
             || targetResolution.Status != RelationEndpointStatus.Available
-            || targetResolution.SymbolRef is null)
+            || targetResolution.CompilationContextRef is null
+            || targetResolution.DocumentationCommentId is null)
         {
             AddEndpointDiagnostic(sourceResolution.Status, diagnostics);
             AddEndpointDiagnostic(targetResolution.Status, diagnostics);
             return;
         }
 
-        var sourceKind = ClassifyPrimaryKind(source)
-            ?? throw new ClassificationUnrepresentableException();
-        var targetKind = ClassifyPrimaryKind(target)
-            ?? throw new ClassificationUnrepresentableException();
-        relations.Add(new RelationObservationCandidate(
-            new RelationObservation(
-                kind,
-                sourceResolution.SymbolRef.Value,
-                targetResolution.SymbolRef.Value),
-            sourceKind,
-            targetKind));
+        candidates.AddRelation(
+            kind,
+            sourceResolution.CompilationContextRef,
+            sourceResolution.DocumentationCommentId,
+            targetResolution.CompilationContextRef,
+            targetResolution.DocumentationCommentId,
+            ClassifyPrimaryKind(source) ?? PrimarySymbolKind.Unknown,
+            ClassifyPrimaryKind(target) ?? PrimarySymbolKind.Unknown);
     }
 
     private static void AddEndpointDiagnostic(
@@ -304,17 +329,19 @@ public sealed class SymbolClassifier
 
     private static void AddComponents(
         ISymbol symbol,
-        SymbolRef parent,
+        string compilationContextRef,
+        string documentationCommentId,
         ClassificationOrigin origin,
-        List<ComponentClassificationCandidate> components,
+        ClassificationCandidateBuffer candidates,
         CancellationToken cancellationToken)
     {
         void Add(ComponentKind kind, string identity, ClassificationOrigin? componentOrigin = null) =>
-            components.Add(new ComponentClassificationCandidate(
-                parent,
+            candidates.AddComponent(
+                compilationContextRef,
+                documentationCommentId,
                 kind,
                 identity,
-                componentOrigin ?? origin));
+                componentOrigin ?? origin);
 
         if (symbol is IMethodSymbol method)
         {
@@ -485,13 +512,11 @@ public sealed class SymbolClassifier
         }
     }
 
-    private static bool CanHaveComponents(TargetClassificationCandidate candidate) =>
+    private static bool CanHaveComponents(DiscoveredTarget candidate) =>
         candidate.DocumentationCommentId is not null
-        && candidate.GeneratedProvenanceAvailable
-        && candidate.SemanticContextAvailable
+        && candidate.Provenance.GeneratedProvenanceAvailable
         && candidate.PrimaryKind != PrimarySymbolKind.Unknown
-        && !candidate.PartialAmbiguous
-        && candidate.Origin is ClassificationOrigin.Source
+        && candidate.Provenance.Origin is ClassificationOrigin.Source
             or ClassificationOrigin.SourceGenerator
             or ClassificationOrigin.ToolGenerated;
 
@@ -513,14 +538,14 @@ public sealed class SymbolClassifier
                 continue;
             }
 
-            var span = new Utf16Span(
-                location.SourceSpan.Start,
-                location.SourceSpan.End);
             switch (source)
             {
                 case { Kind: LoadedSourceKind.Repository, RepositoryIdentity: { } path }:
                     origins.Add(ClassificationOrigin.Source);
-                    locators.Add(new RepositoryCandidateLocator(path, span));
+                    locators.Add(ClassificationInput.RepositoryLocator(
+                        path,
+                        location.SourceSpan.Start,
+                        location.SourceSpan.End));
                     break;
                 case
                 {
@@ -528,10 +553,11 @@ public sealed class SymbolClassifier
                     GeneratedSource: { } fact,
                 }:
                     origins.Add(ClassificationOrigin.SourceGenerator);
-                    locators.Add(new GeneratedSourceCandidateLocator(
+                    locators.Add(ClassificationInput.GeneratedSourceLocator(
                         fact.ProducerId,
                         fact.OutputId,
-                        span));
+                        location.SourceSpan.Start,
+                        location.SourceSpan.End));
                     break;
                 case
                 {
@@ -539,10 +565,11 @@ public sealed class SymbolClassifier
                     GeneratedSource: { } fact,
                 }:
                     origins.Add(ClassificationOrigin.ToolGenerated);
-                    locators.Add(new ToolGeneratedCandidateLocator(
+                    locators.Add(ClassificationInput.ToolGeneratedLocator(
                         fact.ProducerId,
                         fact.OutputId,
-                        span));
+                        location.SourceSpan.Start,
+                        location.SourceSpan.End));
                     break;
                 default:
                     available = false;
@@ -1025,10 +1052,24 @@ public sealed class SymbolClassifier
         _ = isTarget;
         var id = symbol.OriginalDefinition.GetDocumentationCommentId();
         return id is null
-            ? new RelationEndpointResolution(RelationEndpointStatus.Unavailable, null)
+            ? new RelationEndpointResolution(
+                RelationEndpointStatus.Unavailable,
+                null,
+                null)
             : new RelationEndpointResolution(
                 RelationEndpointStatus.Available,
-                new SymbolRef(context, id));
+                context,
+                id);
+    }
+
+    private void ObserveCandidates(
+        ClassificationStage stage,
+        ClassificationCandidateBuffer candidates,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        candidateObserver?.Invoke(stage, candidates);
+        Observe(stage, cancellationToken);
     }
 
     private void Observe(
@@ -1053,6 +1094,14 @@ public sealed class SymbolClassifier
         ClassificationOrigin Origin,
         ImmutableArray<CandidateLocator> Locators,
         bool GeneratedProvenanceAvailable);
+
+    private sealed record DiscoveredTarget(
+        ISymbol Symbol,
+        string CompilationContextRef,
+        string? DocumentationCommentId,
+        PrimarySymbolKind PrimaryKind,
+        ImmutableArray<SymbolTrait> Traits,
+        ProvenanceResult Provenance);
 }
 
 internal enum ClassificationStage
@@ -1060,6 +1109,7 @@ internal enum ClassificationStage
     TargetDiscovery,
     ComponentDiscovery,
     RelationDiscovery,
+    UnresolvedDiscovery,
     CandidateBufferingComplete,
     TerminalValidation,
 }
@@ -1073,7 +1123,8 @@ internal enum RelationEndpointStatus
 
 internal readonly record struct RelationEndpointResolution(
     RelationEndpointStatus Status,
-    SymbolRef? SymbolRef);
+    string? CompilationContextRef,
+    string? DocumentationCommentId);
 
 internal delegate RelationEndpointResolution RelationEndpointResolver(
     RelationKind kind,

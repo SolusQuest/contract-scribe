@@ -19,6 +19,7 @@ public sealed class RepositoryLoader
     private readonly Action<LoaderStage>? observer;
     private readonly Func<ReadOnlyMemory<byte>, byte[]> digest;
     private readonly Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>> inventory;
+    private readonly Action<int>? generatedAuthorityComparisonObserver;
 
     public RepositoryLoader()
         : this(null, null)
@@ -28,11 +29,14 @@ public sealed class RepositoryLoader
     internal RepositoryLoader(
         Action<LoaderStage>? observer,
         Func<ReadOnlyMemory<byte>, byte[]>? digest = null,
-        Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory = null)
+        Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory = null,
+        Action<int>? generatedAuthorityComparisonObserver = null)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
         this.inventory = inventory ?? RepositoryInventory.Capture;
+        this.generatedAuthorityComparisonObserver =
+            generatedAuthorityComparisonObserver;
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -70,6 +74,7 @@ public sealed class RepositoryLoader
                 state,
                 observer,
                 digest,
+                generatedAuthorityComparisonObserver,
                 cancellationToken);
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
         }
@@ -256,6 +261,7 @@ internal static class PostRegistrationLoader
         LoaderExecutionState state,
         Action<LoaderStage>? observer,
         Func<ReadOnlyMemory<byte>, byte[]> digest,
+        Action<int>? generatedAuthorityComparisonObserver,
         CancellationToken cancellationToken)
     {
         var identities = new GeneratedIdentityHasher(digest);
@@ -362,14 +368,15 @@ internal static class PostRegistrationLoader
                     pathResolver,
                     state,
                     cancellationToken);
-                var authoritativeGenerated = new List<(string Name, string? FilePath, string Text, SyntaxTree Tree)>();
+                var authoritativeGenerated =
+                    new List<GeneratedAuthorityDocument>();
                 var authoritativeGeneratedTrees = new List<SyntaxTree>();
                 foreach (var document in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
                 {
                     var tree = await document.GetSyntaxTreeAsync(cancellationToken)
                         ?? throw LoaderException.Generated("run.generated.authority-conflict");
                     authoritativeGeneratedTrees.Add(tree);
-                    authoritativeGenerated.Add((
+                    authoritativeGenerated.Add(new GeneratedAuthorityDocument(
                         document.Name,
                         document.FilePath,
                         (await document.GetTextAsync(cancellationToken)).ToString(),
@@ -393,15 +400,19 @@ internal static class PostRegistrationLoader
 
                 Observe(observer, LoaderStage.Compilation, cancellationToken);
                 var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
+                var generatedAuthorityIndex =
+                    new GeneratedAuthorityIndex(authoritativeGenerated);
                 var sourceGeneratorBindings = RunGenerators(
                     project,
                     compilation.RemoveSyntaxTrees(authoritativeGeneratedTrees),
                     node.Identity,
                     contextRef,
-                    authoritativeGenerated,
+                    generatedAuthorityIndex,
                     identities,
                     cancellationToken);
-                if (authoritativeGenerated.Count != 0)
+                generatedAuthorityComparisonObserver?.Invoke(
+                    generatedAuthorityIndex.CandidateComparisons);
+                if (generatedAuthorityIndex.UnmatchedCount != 0)
                 {
                     throw LoaderException.Generated("run.generated.authority-conflict");
                 }
@@ -927,7 +938,7 @@ internal static class PostRegistrationLoader
         Compilation compilation,
         string projectIdentity,
         string contextRef,
-        List<(string Name, string? FilePath, string Text, SyntaxTree Tree)> authoritativeGenerated,
+        GeneratedAuthorityIndex authoritativeGenerated,
         GeneratedIdentityHasher identities,
         CancellationToken cancellationToken)
     {
@@ -975,31 +986,11 @@ internal static class PostRegistrationLoader
             {
                 var text = source.SourceText.ToString();
                 var sourceBytes = StrictUtf8(text);
-                var authorityIndexes = authoritativeGenerated
-                    .Select((document, index) => (Document: document, Index: index))
-                    .Where(candidate =>
-                        string.Equals(
-                            candidate.Document.Name,
-                            source.HintName,
-                            StringComparison.Ordinal)
-                        && GeneratedAuthorityPathsMatch(
-                            candidate.Document.FilePath,
-                            source.SyntaxTree.FilePath)
-                        && string.Equals(
-                            candidate.Document.Text,
-                            text,
-                            StringComparison.Ordinal))
-                    .Select(candidate => candidate.Index)
-                    .Take(2)
-                    .ToArray();
-                if (authorityIndexes.Length != 1)
-                {
-                    throw LoaderException.Generated("run.generated.authority-conflict");
-                }
-
-                var authorityIndex = authorityIndexes[0];
-                var authority = authoritativeGenerated[authorityIndex];
-                authoritativeGenerated.RemoveAt(authorityIndex);
+                var authority = authoritativeGenerated.Match(
+                    source.HintName,
+                    source.SyntaxTree.FilePath,
+                    text,
+                    sourceBytes);
 
                 bindings.Add(new GeneratedSourceBinding(
                     authority.Tree,
@@ -1015,23 +1006,6 @@ internal static class PostRegistrationLoader
         }
 
         return bindings;
-    }
-
-    private static bool GeneratedAuthorityPathsMatch(
-        string? workspacePath,
-        string? driverPath)
-    {
-        var normalizedWorkspace = workspacePath?.Replace('\\', '/');
-        var normalizedDriver = driverPath?.Replace('\\', '/');
-        return normalizedWorkspace is not null
-            && normalizedDriver is not null
-            && (string.Equals(
-                    normalizedWorkspace,
-                    normalizedDriver,
-                    StringComparison.Ordinal)
-                || normalizedWorkspace.EndsWith(
-                    "/" + normalizedDriver.TrimStart('/'),
-                    StringComparison.Ordinal));
     }
 
     private static IReadOnlyList<GeneratedSourceBinding> CreateToolGeneratedFacts(
@@ -1207,6 +1181,127 @@ internal static class PostRegistrationLoader
 
     private static StringComparer PathComparer() =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+}
+
+internal sealed record GeneratedAuthorityDocument(
+    string Name,
+    string? FilePath,
+    string Text,
+    SyntaxTree Tree);
+
+internal sealed class GeneratedAuthorityIndex
+{
+    private static readonly UTF8Encoding StrictUtf8Encoding =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    private readonly IReadOnlyList<Entry> entries;
+    private readonly Dictionary<(string Name, string Digest), List<Entry>> buckets;
+
+    public GeneratedAuthorityIndex(
+        IReadOnlyList<GeneratedAuthorityDocument> documents)
+    {
+        entries = documents.Select(document => new Entry(
+            document,
+            NormalizePath(document.FilePath),
+            Digest(document.Text))).ToArray();
+        buckets = entries
+            .GroupBy(entry => (entry.Document.Name, entry.ContentDigest))
+            .ToDictionary(group => group.Key, group => group.ToList());
+    }
+
+    public int CandidateComparisons { get; private set; }
+
+    public int UnmatchedCount => entries.Count(entry => !entry.Matched);
+
+    public GeneratedAuthorityDocument Match(
+        string hintName,
+        string? driverPath,
+        string text,
+        ReadOnlySpan<byte> utf8Text)
+    {
+        var key = (
+            hintName,
+            Convert.ToHexString(SHA256.HashData(utf8Text)).ToLowerInvariant());
+        if (!buckets.TryGetValue(key, out var bucket))
+        {
+            throw LoaderException.Generated("run.generated.authority-conflict");
+        }
+
+        var normalizedDriverPath = NormalizePath(driverPath);
+        Entry? match = null;
+        foreach (var candidate in bucket)
+        {
+            CandidateComparisons++;
+            if (candidate.Matched
+                || !PathsMatch(candidate.NormalizedPath, normalizedDriverPath)
+                || !string.Equals(
+                    candidate.Document.Text,
+                    text,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (match is not null)
+            {
+                throw LoaderException.Generated(
+                    "run.generated.authority-conflict");
+            }
+
+            match = candidate;
+        }
+
+        if (match is null)
+        {
+            throw LoaderException.Generated("run.generated.authority-conflict");
+        }
+
+        match.Matched = true;
+        return match.Document;
+    }
+
+    private static string Digest(string text)
+    {
+        try
+        {
+            return Convert.ToHexString(SHA256.HashData(
+                StrictUtf8Encoding.GetBytes(text))).ToLowerInvariant();
+        }
+        catch (EncoderFallbackException)
+        {
+            throw LoaderException.Generated("run.generated.authority-conflict");
+        }
+    }
+
+    private static string? NormalizePath(string? path) =>
+        path?.Replace('\\', '/');
+
+    private static bool PathsMatch(
+        string? normalizedWorkspace,
+        string? normalizedDriver) =>
+        normalizedWorkspace is not null
+        && normalizedDriver is not null
+        && (string.Equals(
+                normalizedWorkspace,
+                normalizedDriver,
+                StringComparison.Ordinal)
+            || normalizedWorkspace.EndsWith(
+                "/" + normalizedDriver.TrimStart('/'),
+                StringComparison.Ordinal));
+
+    private sealed class Entry(
+        GeneratedAuthorityDocument document,
+        string? normalizedPath,
+        string contentDigest)
+    {
+        public GeneratedAuthorityDocument Document { get; } = document;
+
+        public string? NormalizedPath { get; } = normalizedPath;
+
+        public string ContentDigest { get; } = contentDigest;
+
+        public bool Matched { get; set; }
+    }
 }
 
 internal sealed record EvaluatedProject(

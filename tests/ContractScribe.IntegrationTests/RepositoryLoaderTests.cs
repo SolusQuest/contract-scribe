@@ -419,6 +419,33 @@ public sealed class RepositoryLoaderTests
         Assert.NotNull(app.Compilation.GetTypeByMetadataName("ToolGenerated"));
     }
 
+    [Fact]
+    public async Task GeneratedAuthorityMatchingUsesOneCandidateComparisonPerUniqueOutput()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(
+            manyOutputGenerator: true);
+        var candidateComparisons = 0;
+        var loader = new RepositoryLoader(
+            null,
+            null,
+            null,
+            count => candidateComparisons += count);
+
+        var outcome = await loader.LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(
+            outcome.Session);
+        var generatedCount = session.GeneratedSources.Count(fact =>
+            fact.ProducerId.StartsWith("sgp.", StringComparison.Ordinal));
+        Assert.Equal(129, generatedCount);
+        Assert.Equal(generatedCount, candidateComparisons);
+    }
+
     [Theory]
     [InlineData("namespace")]
     [InlineData("producer")]
@@ -1894,7 +1921,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
         bool processSensitiveGenerator = false,
         bool selfObservingGenerator = false,
         bool withSecondDependency = false,
-        bool reverseProjectReferences = false)
+        bool reverseProjectReferences = false,
+        bool manyOutputGenerator = false)
     {
         if (reverseProjectReferences && !withSecondDependency)
         {
@@ -2033,7 +2061,10 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 Path.Combine(root, "LibraryTwo", "LibraryTwo.cs"),
                 """public static class LibraryTwo { public static string Value => "ok"; }""");
         }
-        if (withGenerator || processSensitiveGenerator || selfObservingGenerator)
+        if (withGenerator
+            || processSensitiveGenerator
+            || selfObservingGenerator
+            || manyOutputGenerator)
         {
             var repositoryRoot = FindRepositoryRoot();
             var configuration = AppContext.BaseDirectory.Contains(
@@ -2080,12 +2111,24 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 </ItemGroup>
                 """
                 : string.Empty;
+            var manyOutputConfiguration = manyOutputGenerator
+                ?
+                """
+                <PropertyGroup>
+                  <ContractScribeTestGeneratorManyOutputs>128</ContractScribeTestGeneratorManyOutputs>
+                </PropertyGroup>
+                <ItemGroup>
+                  <CompilerVisibleProperty Include="ContractScribeTestGeneratorManyOutputs" />
+                </ItemGroup>
+                """
+                : string.Empty;
             projectText = projectText.Replace(
                 "</Project>",
                 $"""
                 <ItemGroup><Analyzer Include="../Analyzers/ContractScribe.TestGenerator.dll" /></ItemGroup>
                 {processSensitiveConfiguration}
                 {selfObservingConfiguration}
+                {manyOutputConfiguration}
                 </Project>
                 """,
                 StringComparison.Ordinal);
