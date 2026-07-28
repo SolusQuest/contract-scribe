@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageDownload Include="Microsoft.AspNetCore.App.Ref" Version="[9.0.0]" />
+    <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[9.0.0]" />
+    <PackageDownload Include="Microsoft.WindowsDesktop.App.Ref" Version="[9.0.0]" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Tasks.Core" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
+    <ProjectReference Include="../ContractScribe.TestGenerator/ContractScribe.TestGenerator.csproj"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

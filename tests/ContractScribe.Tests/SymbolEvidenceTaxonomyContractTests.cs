@@ -387,10 +387,13 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     }
 
     [Fact]
-    public void ProductionProjects_DoNotReferenceRoslynOrTaxonomyRuntimeTypes()
+    public void NonRoslynProductionProjects_DoNotReferenceRoslynAndProductionCodeDoesNotImplementTaxonomyRuntime()
     {
         var root = FindRepositoryRoot();
-        var productionProjects = Directory.GetFiles(Path.Combine(root, "src"), "*.csproj", SearchOption.AllDirectories);
+        var productionProjects = Directory.GetFiles(Path.Combine(root, "src"), "*.csproj", SearchOption.AllDirectories)
+            .Where(project => !project.EndsWith(
+                Path.Join("ContractScribe.Roslyn", "ContractScribe.Roslyn.csproj"),
+                StringComparison.OrdinalIgnoreCase));
         Assert.All(productionProjects, project => Assert.DoesNotContain("Microsoft.CodeAnalysis", File.ReadAllText(project), StringComparison.Ordinal));
         var productionCode = Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText);
         Assert.DoesNotContain(productionCode, content => content.Contains("SymbolEvidenceTaxonomy", StringComparison.Ordinal));
