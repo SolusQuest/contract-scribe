@@ -304,8 +304,15 @@ internal static class PostRegistrationLoader
                 solution = await workspace.OpenSolutionAsync(paths.PhysicalInput, cancellationToken: cancellationToken);
             }
 
-            Observe(observer, LoaderStage.WorkspaceLoad, cancellationToken);
             var workspaceProjects = solution.Projects.ToArray();
+            ProtectWorkspaceSemanticInputs(
+                paths,
+                graph,
+                workspaceProjects,
+                toolchain,
+                pathResolver,
+                state);
+            Observe(observer, LoaderStage.WorkspaceLoad, cancellationToken);
             if (workspaceProjects.Any(project => project.Language != LanguageNames.CSharp))
             {
                 throw LoaderException.Workspace("workspace.non-csharp-project");
@@ -438,6 +445,46 @@ internal static class PostRegistrationLoader
         {
             workspace.Dispose();
             throw;
+        }
+    }
+
+    private static void ProtectWorkspaceSemanticInputs(
+        ResolvedRepositoryPaths paths,
+        IReadOnlyDictionary<string, EvaluatedProject> graph,
+        IReadOnlyList<RoslynProject> projects,
+        RegisteredToolchain toolchain,
+        RepositoryPathResolver resolver,
+        LoaderExecutionState state)
+    {
+        foreach (var project in projects)
+        {
+            if (string.IsNullOrWhiteSpace(project.FilePath)
+                || !graph.TryGetValue(Path.GetFullPath(project.FilePath), out var node))
+            {
+                throw LoaderException.Workspace("workspace.project-graph-mismatch");
+            }
+
+            foreach (var document in project.Documents)
+            {
+                ProtectWorkspaceSemanticInput(
+                    paths,
+                    node,
+                    toolchain,
+                    document.FilePath,
+                    resolver,
+                    state);
+            }
+
+            foreach (var document in project.AdditionalDocuments.Concat(project.AnalyzerConfigDocuments))
+            {
+                ProtectWorkspaceSemanticInput(
+                    paths,
+                    node,
+                    toolchain,
+                    document.FilePath,
+                    resolver,
+                    state);
+            }
         }
     }
 
