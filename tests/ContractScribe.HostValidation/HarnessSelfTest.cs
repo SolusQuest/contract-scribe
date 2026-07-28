@@ -182,10 +182,15 @@ public static class HarnessSelfTest
 
             var killRace = await RunFakeAsync(context, temp, "controlled-kill-race", "run-1", cancellationToken).ConfigureAwait(false);
             Ensure(
-                killRace.Execution.ProcessTermination != "external-kill"
+                !killRace.Execution.ControlCompleted
+                && killRace.Execution.KillRequestOutcome == "already-exited"
+                && killRace.Execution.ProcessTermination != "external-kill"
                 && killRace.Execution.ControlOutcome != "issued-and-observed"
-                && (killRace.Execution.KillRequestOutcome != "issued"
-                    || !HasExactNativeKill(killRace.Execution))
+                && !HasExactNativeKill(killRace.Execution)
+                && killRace.Execution.NativeTerminationKind
+                    == (OperatingSystem.IsWindows()
+                        ? "windows-terminate-process"
+                        : "unix-exit")
                 && killRace.Execution.NativeTerminationCode == 137,
                 "HV926_SELF_TEST_KILL_RACE");
             Ensure(

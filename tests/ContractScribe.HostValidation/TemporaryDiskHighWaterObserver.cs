@@ -10,7 +10,10 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
     private readonly Dictionary<string, long> currentLengths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ManualResetEventSlim> barrierAcknowledgements =
         new(StringComparer.Ordinal);
+    private readonly object callbackSync = new();
     private readonly FileSystemWatcher[] watchers;
+    private int activeCallbacks;
+    private bool callbacksAccepting = true;
     private bool observerComplete = true;
     private bool retentionBreach;
     private bool observationClosed;
@@ -38,6 +41,7 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             CreateWatcher(this.temporaryWorkRoot, "temporary-work"),
             CreateWatcher(this.outputStagingRoot, "output-staging")
         ];
+        Synchronize();
     }
 
     public TemporaryDiskHighWaterEvidence CaptureGate()
@@ -79,6 +83,13 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 {
                     observerComplete = false;
                 }
+            }
+        }
+        if (!WaitForCallbacksToDrain(TimeSpan.FromSeconds(10)))
+        {
+            lock (sync)
+            {
+                observerComplete = false;
             }
         }
 
@@ -123,6 +134,14 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         foreach (var watcher in watchers)
         {
             watcher.EnableRaisingEvents = false;
+        }
+        lock (callbackSync)
+        {
+            callbacksAccepting = false;
+        }
+        _ = WaitForCallbacksToDrain(TimeSpan.FromSeconds(10));
+        foreach (var watcher in watchers)
+        {
             watcher.Dispose();
         }
         foreach (var acknowledgement in barrierAcknowledgements.Values)
@@ -142,23 +161,73 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 | NotifyFilters.Size
                 | NotifyFilters.LastWrite
         };
-        watcher.Created += (_, args) => ObserveLength(role, root, args.FullPath);
-        watcher.Changed += (_, args) => ObserveLength(role, root, args.FullPath);
-        watcher.Deleted += (_, args) => ObserveRemoval(role, root, args.FullPath);
+        watcher.Created += (_, args) =>
+            ExecuteCallback(() => ObserveLength(role, root, args.FullPath));
+        watcher.Changed += (_, args) =>
+            ExecuteCallback(() => ObserveLength(role, root, args.FullPath));
+        watcher.Deleted += (_, args) =>
+            ExecuteCallback(() => ObserveRemoval(role, root, args.FullPath));
         watcher.Renamed += (_, args) =>
-        {
-            ObserveRemoval(role, root, args.OldFullPath);
-            ObserveLength(role, root, args.FullPath);
-        };
-        watcher.Error += (_, _) =>
-        {
-            lock (sync)
+            ExecuteCallback(() =>
             {
-                observerComplete = false;
-            }
-        };
+                ObserveRemoval(role, root, args.OldFullPath);
+                ObserveLength(role, root, args.FullPath);
+            });
+        watcher.Error += (_, _) =>
+            ExecuteCallback(() =>
+            {
+                lock (sync)
+                {
+                    observerComplete = false;
+                }
+            });
         watcher.EnableRaisingEvents = true;
         return watcher;
+    }
+
+    private void ExecuteCallback(Action callback)
+    {
+        lock (callbackSync)
+        {
+            if (!callbacksAccepting)
+            {
+                return;
+            }
+            activeCallbacks++;
+        }
+        try
+        {
+            callback();
+        }
+        finally
+        {
+            lock (callbackSync)
+            {
+                activeCallbacks--;
+                if (activeCallbacks == 0)
+                {
+                    Monitor.PulseAll(callbackSync);
+                }
+            }
+        }
+    }
+
+    private bool WaitForCallbacksToDrain(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        lock (callbackSync)
+        {
+            while (activeCallbacks != 0)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero
+                    || !Monitor.Wait(callbackSync, remaining))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     private void ObserveLength(string role, string root, string fullPath)
@@ -188,6 +257,13 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 }
                 var length = new FileInfo(fullPath).Length;
                 UpdateLength(key, length);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException
+                    or DirectoryNotFoundException)
+            {
+                retentionBreach = true;
+                RemoveLength(key);
             }
             catch (Exception exception) when (
                 exception is IOException

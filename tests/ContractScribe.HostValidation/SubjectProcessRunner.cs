@@ -222,11 +222,17 @@ public static class SubjectProcessRunner
             {
                 return new(false, "unsupported-control");
             }
-            var exitDeadline = DateTime.UtcNow + control.GateTimeout;
-            while (NativeTerminationObserver.IsAliveNonReaping(process.Id)
-                && DateTime.UtcNow < exitDeadline)
+            File.WriteAllText(
+                Path.Join(control.ControlRoot, $"{control.GateName}.release"),
+                string.Empty);
+            var naturalExit =
+                await NativeTerminationObserver.WaitForNaturalExitAsync(
+                    process,
+                    control.GateTimeout,
+                    cancellationToken).ConfigureAwait(false);
+            if (naturalExit is not null)
             {
-                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                return new(false, naturalExit.KillRequestOutcome, naturalExit);
             }
         }
 

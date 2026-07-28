@@ -426,7 +426,9 @@ public static class Program
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
                 return 0;
             case "controlled-kill-race":
-                await ReachGateAsync(request).ConfigureAwait(false);
+                await ReachGateAsync(
+                    request,
+                    waitForExternalKillRelease: true).ConfigureAwait(false);
                 return 137;
             case "hang":
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
@@ -439,7 +441,9 @@ public static class Program
     private static string BuildSyntheticCredentialMarker() =>
         string.Concat("ghp", "-", new string('a', 20));
 
-    private static async Task ReachGateAsync(SubjectRequest request)
+    private static async Task ReachGateAsync(
+        SubjectRequest request,
+        bool waitForExternalKillRelease = false)
     {
         if (request.ControlRoot is null || request.SynchronizationGates.Count != 1)
         {
@@ -448,7 +452,8 @@ public static class Program
         Directory.CreateDirectory(request.ControlRoot);
         var gateName = request.SynchronizationGates[0];
         File.WriteAllText(Path.Join(request.ControlRoot, $"{gateName}.reached"), string.Empty);
-        if (request.ControlAction == "external-kill")
+        if (request.ControlAction == "external-kill"
+            && !waitForExternalKillRelease)
         {
             return;
         }
