@@ -74,13 +74,21 @@ public static class SubjectProcessRunner
             return StartFailure("permission-failure");
         }
 
+        var executionDeadline = MonotonicDeadline.Start(timeout);
+        var cleanupReserve = control?.Action == "external-kill"
+            ? ComputeCleanupReserve(timeout)
+            : TimeSpan.Zero;
+        using var rootStatusSession =
+            NativeTerminationObserver.CreateRootStatusSession(
+                process,
+                executionDeadline,
+                control?.Action == "external-kill");
         await using var processObserver = new ProcessTreeObserver(
             process,
             processIdentityRegistry ?? []);
-        var executionDeadline = MonotonicDeadline.Start(timeout);
         using var streamDeadlineSource =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        streamDeadlineSource.CancelAfter(timeout);
+        streamDeadlineSource.CancelAfter(executionDeadline.Remaining);
         var stdoutTask = ReadBoundedAsync(
             process.StandardOutput.BaseStream,
             standardOutputLimit,
@@ -94,11 +102,13 @@ public static class SubjectProcessRunner
         var controlTask = control is null
             ? Task.FromResult(new ControlExecutionResult(true, null))
             : ApplyControlAsync(
-                process,
-                processObserver,
-                control,
-                executionDeadline,
-                cancellationToken);
+                 process,
+                 processObserver,
+                 rootStatusSession,
+                 control,
+                 executionDeadline,
+                 cleanupReserve,
+                 cancellationToken);
         var timedOut = false;
         ControlExecutionResult controlResult;
         int? exitCode;
@@ -114,24 +124,14 @@ public static class SubjectProcessRunner
             {
                 _ = NativeTerminationObserver.TerminateTreeAndCapture(
                     process,
+                    rootStatusSession,
                     processObserver.CaptureTerminationPlan(),
                     processObserver.IsCurrentTerminationTarget,
-                    MonotonicDeadline.Start(TimeSpan.FromSeconds(5)),
+                    executionDeadline,
                     CancellationToken.None);
                 throw;
             }
             exitCode = nativeTermination?.ManagedExitCode;
-            if ((!controlResult.Completed
-                    || nativeTermination?.CausalMatch != true)
-                && NativeTerminationObserver.IsAliveNonReaping(process.Id))
-            {
-                _ = NativeTerminationObserver.TerminateTreeAndCapture(
-                    process,
-                    processObserver.CaptureTerminationPlan(),
-                    processObserver.IsCurrentTerminationTarget,
-                    MonotonicDeadline.Start(TimeSpan.FromSeconds(5)),
-                    CancellationToken.None);
-            }
         }
         else
         {
@@ -238,8 +238,10 @@ public static class SubjectProcessRunner
     private static async Task<ControlExecutionResult> ApplyControlAsync(
         Process process,
         ProcessTreeObserver processObserver,
+        NativeTerminationObserver.RootStatusSession rootStatusSession,
         SubjectControl control,
         MonotonicDeadline deadline,
+        TimeSpan cleanupReserve,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(control.ControlRoot);
@@ -247,14 +249,20 @@ public static class SubjectProcessRunner
         while (!File.Exists(reachedPath))
         {
             var exited = control.Action == "external-kill"
-                ? !NativeTerminationObserver.IsAliveNonReaping(process.Id)
+                ? NativeTerminationObserver.IsRootExitedNonReaping(
+                    process,
+                    rootStatusSession)
                 : process.HasExited;
-            if (exited || deadline.IsExpired)
+            if (exited
+                || RemainingExcludingReserve(
+                    deadline,
+                    cleanupReserve) == TimeSpan.Zero)
             {
                 if (control.Action == "external-kill")
                 {
                     var native = NativeTerminationObserver.TerminateTreeAndCapture(
                         process,
+                        rootStatusSession,
                         processObserver.CaptureTerminationPlan(),
                         processObserver.IsCurrentTerminationTarget,
                         deadline,
@@ -270,9 +278,22 @@ public static class SubjectProcessRunner
         }
         if (control.ActionDelay > TimeSpan.Zero)
         {
-            var remaining = deadline.Remaining;
+            var remaining = RemainingExcludingReserve(
+                deadline,
+                cleanupReserve);
             if (remaining == TimeSpan.Zero)
             {
+                if (control.Action == "external-kill")
+                {
+                    var native = NativeTerminationObserver.TerminateTreeAndCapture(
+                        process,
+                        rootStatusSession,
+                        processObserver.CaptureTerminationPlan(),
+                        processObserver.IsCurrentTerminationTarget,
+                        deadline,
+                        cancellationToken);
+                    return new(false, "control-timeout", native);
+                }
                 return new(false, "control-timeout");
             }
             await Task.Delay(
@@ -280,8 +301,21 @@ public static class SubjectProcessRunner
                     ? control.ActionDelay
                     : remaining,
                 cancellationToken).ConfigureAwait(false);
-            if (deadline.IsExpired)
+            if (RemainingExcludingReserve(
+                    deadline,
+                    cleanupReserve) == TimeSpan.Zero)
             {
+                if (control.Action == "external-kill")
+                {
+                    var native = NativeTerminationObserver.TerminateTreeAndCapture(
+                        process,
+                        rootStatusSession,
+                        processObserver.CaptureTerminationPlan(),
+                        processObserver.IsCurrentTerminationTarget,
+                        deadline,
+                        cancellationToken);
+                    return new(false, "control-timeout", native);
+                }
                 return new(false, "control-timeout");
             }
         }
@@ -294,14 +328,27 @@ public static class SubjectProcessRunner
             var naturalExit =
                 await NativeTerminationObserver.WaitForNaturalExitAsync(
                     process,
+                    rootStatusSession,
                     () => File.WriteAllText(
                         Path.Join(
                             control.ControlRoot,
                             $"{control.GateName}.release"),
                         string.Empty),
                     deadline,
+                    cleanupReserve,
                     cancellationToken).ConfigureAwait(false);
-            return new(false, naturalExit.KillRequestOutcome, naturalExit);
+            if (naturalExit.KillRequestOutcome == "already-exited")
+            {
+                return new(false, naturalExit.KillRequestOutcome, naturalExit);
+            }
+            var cleanup = NativeTerminationObserver.TerminateTreeAndCapture(
+                process,
+                rootStatusSession,
+                processObserver.CaptureTerminationPlan(),
+                processObserver.IsCurrentTerminationTarget,
+                deadline,
+                cancellationToken);
+            return new(false, "natural-exit-timeout", cleanup);
         }
 
         switch (control.Action)
@@ -314,19 +361,23 @@ public static class SubjectProcessRunner
                 var generation = processObserver.CompletedSampleGeneration;
                 if (!await processObserver.WaitForSampleAfterAsync(
                         generation,
-                        deadline.Remaining,
+                        RemainingExcludingReserve(
+                            deadline,
+                            cleanupReserve),
                         cancellationToken).ConfigureAwait(false))
                 {
                     var incompleteNative = NativeTerminationObserver.TerminateTreeAndCapture(
                         process,
+                        rootStatusSession,
                         processObserver.CaptureTerminationPlan(),
-                        processObserver.IsCurrentTerminationTarget,
-                        deadline,
-                        cancellationToken);
+                       processObserver.IsCurrentTerminationTarget,
+                       deadline,
+                       cancellationToken);
                     return new(false, "post-gate-sample-missing", incompleteNative);
                 }
                 var native = NativeTerminationObserver.TerminateTreeAndCapture(
                     process,
+                    rootStatusSession,
                     processObserver.CaptureTerminationPlan(),
                     processObserver.IsCurrentTerminationTarget,
                     deadline,
@@ -363,6 +414,33 @@ public static class SubjectProcessRunner
             default:
                 return new(false, "unsupported-control");
         }
+    }
+
+    private static TimeSpan ComputeCleanupReserve(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+        var proportional = TimeSpan.FromTicks(timeout.Ticks / 4);
+        var minimum = timeout < TimeSpan.FromSeconds(2)
+            ? TimeSpan.FromTicks(timeout.Ticks / 2)
+            : TimeSpan.FromSeconds(1);
+        return proportional < minimum
+            ? minimum
+            : proportional > TimeSpan.FromSeconds(5)
+                ? TimeSpan.FromSeconds(5)
+                : proportional;
+    }
+
+    private static TimeSpan RemainingExcludingReserve(
+        MonotonicDeadline deadline,
+        TimeSpan reserve)
+    {
+        var remaining = deadline.Remaining;
+        return remaining <= reserve
+            ? TimeSpan.Zero
+            : remaining - reserve;
     }
 
     private static async Task<(byte[] Bytes, bool Overflow, bool Complete)> ReadBoundedAsync(

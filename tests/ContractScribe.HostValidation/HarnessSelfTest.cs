@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 
@@ -192,6 +193,8 @@ public static class HarnessSelfTest
                 throw new ProtocolException(
                     SubjectProcessRunner.LastObservationDiagnosticCode);
             }
+            EnsureSingleLinuxRootStatusOwner(
+                "HV919F_SELF_TEST_ROOT_STATUS_OWNER");
             Ensure(killed.Response is null, "HV919E_SELF_TEST_CONTROL_RESPONSE");
             var killedTree = await RunFakeAsync(
                 context,
@@ -223,6 +226,46 @@ public static class HarnessSelfTest
                 throw new ProtocolException(
                     SubjectProcessRunner.LastObservationDiagnosticCode);
             }
+            EnsureSingleLinuxRootStatusOwner(
+                "HV943F_SELF_TEST_TREE_ROOT_STATUS_OWNER");
+
+            var gateTimeoutClock = Stopwatch.StartNew();
+            var gateTimeout = await RunFakeAsync(
+                context,
+                temp,
+                "controlled-gate-timeout",
+                "run-1",
+                cancellationToken,
+                TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            gateTimeoutClock.Stop();
+            Ensure(
+                !gateTimeout.Execution.ControlCompleted
+                && gateTimeout.Execution.ControlOutcome
+                    == "issued-but-not-observed"
+                && gateTimeout.Execution.KillRequestOutcome == "issued"
+                && gateTimeoutClock.Elapsed < TimeSpan.FromSeconds(4),
+                "HV957_SELF_TEST_GATE_TIMEOUT_CLEANUP");
+            EnsureSingleLinuxRootStatusOwner(
+                "HV958_SELF_TEST_GATE_TIMEOUT_ROOT_STATUS_OWNER");
+
+            var naturalTimeoutClock = Stopwatch.StartNew();
+            var naturalTimeout = await RunFakeAsync(
+                context,
+                temp,
+                "controlled-natural-exit-timeout",
+                "run-1",
+                cancellationToken,
+                TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            naturalTimeoutClock.Stop();
+            Ensure(
+                !naturalTimeout.Execution.ControlCompleted
+                && naturalTimeout.Execution.ControlOutcome
+                    == "issued-but-not-observed"
+                && naturalTimeout.Execution.KillRequestOutcome == "issued"
+                && naturalTimeoutClock.Elapsed < TimeSpan.FromSeconds(4),
+                "HV959_SELF_TEST_NATURAL_TIMEOUT_CLEANUP");
+            EnsureSingleLinuxRootStatusOwner(
+                "HV960_SELF_TEST_NATURAL_TIMEOUT_ROOT_STATUS_OWNER");
 
             var killRace = await RunFakeAsync(context, temp, "controlled-kill-race", "run-1", cancellationToken).ConfigureAwait(false);
             Ensure(
@@ -234,7 +277,7 @@ public static class HarnessSelfTest
                 && killRace.Execution.NativeTerminationKind
                     == (OperatingSystem.IsWindows()
                         ? "windows-terminate-process"
-                        : "unsupported")
+                        : "unix-exit")
                 && killRace.Execution.NativeTerminationCode == 137,
                 "HV926_SELF_TEST_KILL_RACE");
             Ensure(
@@ -252,8 +295,26 @@ public static class HarnessSelfTest
                     "42 (subject) R 1 2 3"),
                 "HV927_SELF_TEST_NATIVE_WAIT_STATUS");
             var rootIdentity = new ProcessInstanceIdentity(100, 1000);
+            var changedRootIdentity = new ProcessInstanceIdentity(100, 1001);
             var originalDescendant = new ProcessInstanceIdentity(200, 2000);
             Ensure(
+                NativeTerminationObserver.IsLinuxRootSignalAuthorized(
+                    rootIdentity,
+                    rootIdentity,
+                    rootIdentity)
+                && !NativeTerminationObserver.IsLinuxRootSignalAuthorized(
+                    rootIdentity,
+                    rootIdentity,
+                    changedRootIdentity)
+                && !NativeTerminationObserver.IsLinuxRootSignalAuthorized(
+                    rootIdentity,
+                    changedRootIdentity,
+                    changedRootIdentity)
+                && !NativeTerminationObserver.IsLinuxRootSignalAuthorized(
+                    rootIdentity,
+                    rootIdentity,
+                    null)
+                &&
                 ProcessTreeObserver.IsCurrentDescendant(
                     rootIdentity,
                     originalDescendant,
@@ -273,6 +334,9 @@ public static class HarnessSelfTest
                     originalDescendant,
                     [new(rootIdentity, 1)]),
                 "HV930_SELF_TEST_PROCESS_IDENTITY_REUSE");
+            TestRootStatusSessionOrdering(
+                rootIdentity,
+                changedRootIdentity);
             var issued = new NativeTerminationEvidence(
                 OperatingSystem.IsWindows()
                     ? "windows-terminate-process"
@@ -328,6 +392,121 @@ public static class HarnessSelfTest
                 && execution.NativeTerminationCode == NativeTerminationObserver.UnixSigKill;
         }
         return false;
+    }
+
+    private static void EnsureSingleLinuxRootStatusOwner(string code)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+        Ensure(
+            NativeTerminationObserver.LastRootStatusOwnerCount == 1
+            && NativeTerminationObserver.LastRootStatusWaitCompleted
+            && NativeTerminationObserver.LastDiagnosticCode
+                != "HV939_LINUX_ROOT_STATUS_ALREADY_REAPED",
+            code);
+    }
+
+    private static void TestRootStatusSessionOrdering(
+        ProcessInstanceIdentity rootIdentity,
+        ProcessInstanceIdentity changedRootIdentity)
+    {
+        var trace = new List<string>();
+        var identityReads = 0;
+        var signalCalls = 0;
+        using var waiterRelease = new ManualResetEventSlim(false);
+        var operations =
+            new NativeTerminationObserver.RootStatusOperations(
+                processId =>
+                {
+                    trace.Add($"open:{processId}");
+                    return (42, 0);
+                },
+                processId =>
+                {
+                    trace.Add($"read:{processId}");
+                    identityReads++;
+                    return (
+                        true,
+                        identityReads == 1
+                            ? rootIdentity.StartIdentity
+                            : changedRootIdentity.StartIdentity);
+                },
+                (processId, armed) =>
+                {
+                    trace.Add($"wait:{processId}");
+                    armed();
+                    waiterRelease.Wait();
+                    return new(processId, 0, 0);
+                },
+                descriptor =>
+                {
+                    trace.Add($"signal:{descriptor}");
+                    signalCalls++;
+                    return (0, 0);
+                },
+                descriptor => trace.Add($"close:{descriptor}"));
+        using (var session =
+               NativeTerminationObserver.CreateRootStatusSessionForSelfTest(
+                   rootIdentity.ProcessId,
+                   MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                   operations))
+        {
+            Ensure(
+                trace.SequenceEqual(
+                    [
+                        $"open:{rootIdentity.ProcessId}",
+                        $"read:{rootIdentity.ProcessId}",
+                        $"wait:{rootIdentity.ProcessId}"
+                    ])
+                && session.StatusOwnerCount == 1,
+                "HV961_SELF_TEST_ROOT_SESSION_ORDER");
+            var mismatch = session.TerminateRoot(
+                rootIdentity,
+                descendantFailure: null,
+                MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                CancellationToken.None);
+            Ensure(
+                mismatch.KillRequestOutcome == "indeterminate"
+                && signalCalls == 0,
+                "HV962_SELF_TEST_ROOT_SESSION_REBIND");
+            waiterRelease.Set();
+            var natural = session.CaptureWait(
+                "already-exited",
+                causalMatch: false,
+                MonotonicDeadline.Start(TimeSpan.FromSeconds(1)),
+                TimeSpan.Zero,
+                CancellationToken.None);
+            Ensure(
+                natural.Kind == "unix-exit"
+                && natural.ManagedExitCode == 0
+                && session.WaiterCompleted,
+                "HV963_SELF_TEST_ROOT_SESSION_SINGLE_WAIT");
+        }
+        Ensure(
+            trace[^1] == "close:42"
+            && signalCalls == 0,
+            "HV964_SELF_TEST_ROOT_SESSION_CLOSE");
+
+        var expiredCalls = 0;
+        var expiredOperations = operations with
+        {
+            OpenPidFd = processId =>
+            {
+                expiredCalls++;
+                return (43, 0);
+            }
+        };
+        using var expiredSession =
+            NativeTerminationObserver.CreateRootStatusSessionForSelfTest(
+                rootIdentity.ProcessId,
+                MonotonicDeadline.Start(TimeSpan.Zero),
+                expiredOperations);
+        Ensure(
+            expiredCalls == 0
+            && expiredSession.StatusOwnerCount == 0,
+            "HV965_SELF_TEST_EXPIRED_ROOT_SESSION");
     }
 
     private static void EnsureSuccessfulSubject(FakeRun run, string fallbackCode)
@@ -394,6 +573,17 @@ public static class HarnessSelfTest
                 "publication-before-commit",
                 "external-kill",
                 TimeSpan.FromSeconds(5),
+                WaitForExitBeforeAction: true),
+            "controlled-gate-timeout" => new(
+                controlRoot,
+                "publication-before-commit",
+                "external-kill",
+                TimeSpan.FromSeconds(2)),
+            "controlled-natural-exit-timeout" => new(
+                controlRoot,
+                "publication-before-commit",
+                "external-kill",
+                TimeSpan.FromSeconds(2),
                 WaitForExitBeforeAction: true),
             "temporary-over-limit" or "temporary-cleanup-before-gate" => new(
                 controlRoot,

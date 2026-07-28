@@ -23,6 +23,37 @@ public static class NativeTerminationObserver
     internal static string LastDiagnosticCode { get; private set; } =
         "HV932_NATIVE_CONTROL_NOT_RUN";
 
+    internal static int LastRootStatusOwnerCount { get; private set; }
+
+    internal static bool LastRootStatusWaitCompleted { get; private set; }
+
+    internal static RootStatusSession CreateRootStatusSession(
+        Process rootProcess,
+        MonotonicDeadline deadline,
+        bool activate) =>
+        new(
+            rootProcess.Id,
+            deadline,
+            activate && OperatingSystem.IsLinux(),
+            RootStatusOperations.Native);
+
+    internal static RootStatusSession CreateRootStatusSessionForSelfTest(
+        int rootProcessId,
+        MonotonicDeadline deadline,
+        RootStatusOperations operations) =>
+        new(
+            rootProcessId,
+            deadline,
+            activate: true,
+            operations);
+
+    internal static bool IsRootExitedNonReaping(
+        Process rootProcess,
+        RootStatusSession rootSession) =>
+        OperatingSystem.IsLinux()
+            ? rootSession.WaiterCompleted
+            : !IsAliveNonReaping(rootProcess.Id);
+
     public static bool IsAliveNonReaping(int processId)
     {
         if (OperatingSystem.IsWindows())
@@ -50,8 +81,9 @@ public static class NativeTerminationObserver
         return Marshal.GetLastPInvokeError() == Eperm;
     }
 
-    public static NativeTerminationEvidence TerminateTreeAndCapture(
+    internal static NativeTerminationEvidence TerminateTreeAndCapture(
         Process rootProcess,
+        RootStatusSession rootSession,
         ProcessTerminationPlan terminationPlan,
         Func<ProcessTerminationTarget, bool> validateCurrentTarget,
         MonotonicDeadline deadline,
@@ -72,6 +104,7 @@ public static class NativeTerminationObserver
         {
             return TerminateLinux(
                 rootProcess.Id,
+                rootSession,
                 terminationPlan,
                 validateCurrentTarget,
                 deadline,
@@ -80,15 +113,29 @@ public static class NativeTerminationObserver
         return new("unsupported", null, null, "unsupported", false);
     }
 
-    public static async Task<NativeTerminationEvidence> WaitForNaturalExitAsync(
+    internal static async Task<NativeTerminationEvidence> WaitForNaturalExitAsync(
         Process rootProcess,
+        RootStatusSession rootSession,
         Action release,
         MonotonicDeadline deadline,
+        TimeSpan cleanupReserve,
         CancellationToken cancellationToken)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            release();
+            return rootSession.CaptureWait(
+                "already-exited",
+                causalMatch: false,
+                deadline,
+                cleanupReserve,
+                cancellationToken);
+        }
         var exit = rootProcess.WaitForExitAsync(cancellationToken);
         release();
-        var remaining = deadline.Remaining;
+        var remaining = RemainingExcludingReserve(
+            deadline,
+            cleanupReserve);
         if (remaining == TimeSpan.Zero)
         {
             return new("unsupported", null, null, "indeterminate", false);
@@ -112,6 +159,16 @@ public static class NativeTerminationObserver
                 rootProcess.ExitCode,
                 "already-exited",
                 false);
+    }
+
+    private static TimeSpan RemainingExcludingReserve(
+        MonotonicDeadline deadline,
+        TimeSpan reserve)
+    {
+        var remaining = deadline.Remaining;
+        return remaining <= reserve
+            ? TimeSpan.Zero
+            : remaining - reserve;
     }
 
     private static NativeTerminationEvidence TerminateWindows(
@@ -295,6 +352,7 @@ public static class NativeTerminationObserver
 
     private static NativeTerminationEvidence TerminateLinux(
         int rootProcessId,
+        RootStatusSession rootSession,
         ProcessTerminationPlan terminationPlan,
         Func<ProcessTerminationTarget, bool> validateCurrentTarget,
         MonotonicDeadline deadline,
@@ -388,93 +446,11 @@ public static class NativeTerminationObserver
             }
         }
 
-        if (!TryReadLinuxStartIdentity(rootProcessId, out var rootStartIdentity)
-            || rootStartIdentity != terminationPlan.Root.StartIdentity)
-        {
-            LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
-            return new(
-                "unix-wait-status",
-                null,
-                null,
-                "indeterminate",
-                false);
-        }
-        using var waiterArmed = new ManualResetEventSlim(false);
-        var waiterTask = Task.Factory.StartNew(
-            () => WaitForLinuxRootStatusExclusive(
-                rootProcessId,
-                waiterArmed),
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
-        if (!WaitForSignal(waiterArmed, deadline, cancellationToken))
-        {
-            LastDiagnosticCode = "HV942_LINUX_ROOT_WAITER_NOT_ARMED";
-            return new(
-                "unix-wait-status",
-                null,
-                null,
-                "indeterminate",
-                false);
-        }
-
-        var rootFileDescriptor = PidFdOpen(rootProcessId, 0);
-        if (rootFileDescriptor < 0)
-        {
-            var error = Marshal.GetLastPInvokeError();
-            if (error != Esrch)
-            {
-                LastDiagnosticCode = "HV935_LINUX_ROOT_PIDFD_OPEN";
-                return new(
-                    "unix-wait-status",
-                    null,
-                    null,
-                    error == Eperm ? "permission-failure" : "indeterminate",
-                    false);
-            }
-            return CaptureLinuxRootWait(
-                waiterTask,
-                "already-exited",
-                causalMatch: false,
-                deadline,
-                cancellationToken);
-        }
-        try
-        {
-            var killResult = PidFdSendSignal(
-                rootFileDescriptor,
-                UnixSigKill,
-                IntPtr.Zero,
-                0);
-            var killError = killResult == 0 ? 0 : Marshal.GetLastPInvokeError();
-            if (killResult != 0 && killError != Esrch)
-            {
-                LastDiagnosticCode = "HV937_LINUX_ROOT_SIGNAL";
-                return new(
-                    "unix-wait-status",
-                    null,
-                    null,
-                    killError == Eperm ? "permission-failure" : "indeterminate",
-                    false);
-            }
-            var requestOutcome = descendantFailure
-                ?? (killResult == 0 ? "issued" : "already-exited");
-            var captured = CaptureLinuxRootWait(
-                waiterTask,
-                requestOutcome,
-                descendantFailure is null && killResult == 0,
-                deadline,
-                cancellationToken);
-            if (captured.CausalMatch)
-            {
-                LastDiagnosticCode = "HV000_NATIVE_CONTROL_COMPLETE";
-            }
-            return captured;
-        }
-        finally
-        {
-            _ = Close(rootFileDescriptor);
-        }
+        return rootSession.TerminateRoot(
+            terminationPlan.Root,
+            descendantFailure,
+            deadline,
+            cancellationToken);
     }
 
     private static NativeTerminationEvidence CaptureLinuxStatus(
@@ -506,9 +482,9 @@ public static class NativeTerminationObserver
 
     private static LinuxWaitResult WaitForLinuxRootStatusExclusive(
         int rootProcessId,
-        ManualResetEventSlim armed)
+        Action armed)
     {
-        armed.Set();
+        armed();
         int waitResult;
         int rawStatus;
         do
@@ -527,12 +503,19 @@ public static class NativeTerminationObserver
         string requestOutcome,
         bool causalMatch,
         MonotonicDeadline deadline,
+        TimeSpan reserve,
         CancellationToken cancellationToken)
     {
-        while (!deadline.IsExpired)
+        while (RemainingExcludingReserve(deadline, reserve) > TimeSpan.Zero)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (waiterTask.Wait(deadline.NextWaitMilliseconds(50)))
+            var remaining = RemainingExcludingReserve(deadline, reserve);
+            var waitMilliseconds = Math.Max(
+                1,
+                Math.Min(
+                    50,
+                    checked((int)Math.Ceiling(remaining.TotalMilliseconds))));
+            if (waiterTask.Wait(waitMilliseconds))
             {
                 var result = waiterTask.GetAwaiter().GetResult();
                 if (result.Result > 0)
@@ -563,14 +546,14 @@ public static class NativeTerminationObserver
     }
 
     private static bool WaitForSignal(
-        ManualResetEventSlim signal,
+        Task signal,
         MonotonicDeadline deadline,
         CancellationToken cancellationToken)
     {
         while (!deadline.IsExpired)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (signal.Wait(deadline.NextWaitMilliseconds(50)))
+            if (signal.Wait(deadline.NextWaitMilliseconds(50), cancellationToken))
             {
                 return true;
             }
@@ -653,6 +636,17 @@ public static class NativeTerminationObserver
             CausalMatch: true
         };
 
+    internal static bool IsLinuxRootSignalAuthorized(
+        ProcessInstanceIdentity planned,
+        ProcessInstanceIdentity opened,
+        ProcessInstanceIdentity? current) =>
+        planned.ProcessId == opened.ProcessId
+        && planned.StartIdentity != 0
+        && planned.StartIdentity == opened.StartIdentity
+        && current is not null
+        && current.ProcessId == opened.ProcessId
+        && current.StartIdentity == opened.StartIdentity;
+
     private static string? MergeFailure(string? current, string? candidate)
     {
         if (candidate is null)
@@ -706,6 +700,241 @@ public static class NativeTerminationObserver
             && stat[commandEnd + 2] is 'Z' or 'X';
     }
 
+    internal sealed class RootStatusSession : IDisposable
+    {
+        private readonly int rootProcessId;
+        private readonly int rootFileDescriptor;
+        private readonly ProcessInstanceIdentity? openedIdentity;
+        private readonly Task<LinuxWaitResult>? waiterTask;
+        private readonly RootStatusOperations operations;
+        private readonly string initializationOutcome;
+        private bool disposed;
+
+        internal RootStatusSession(
+            int rootProcessId,
+            MonotonicDeadline deadline,
+            bool activate,
+            RootStatusOperations operations)
+        {
+            this.rootProcessId = rootProcessId;
+            this.operations = operations;
+            rootFileDescriptor = -1;
+            initializationOutcome = "unsupported";
+            LastRootStatusOwnerCount = 0;
+            LastRootStatusWaitCompleted = false;
+            if (!activate)
+            {
+                return;
+            }
+            if (deadline.IsExpired)
+            {
+                LastDiagnosticCode = "HV942_LINUX_ROOT_WAITER_NOT_ARMED";
+                initializationOutcome = "indeterminate";
+                return;
+            }
+
+            var opened = operations.OpenPidFd(rootProcessId);
+            rootFileDescriptor = opened.Descriptor;
+            if (rootFileDescriptor < 0)
+            {
+                LastDiagnosticCode = "HV935_LINUX_ROOT_PIDFD_OPEN";
+                initializationOutcome = opened.Error == Esrch
+                    ? "already-exited"
+                    : opened.Error == Eperm
+                        ? "permission-failure"
+                        : "indeterminate";
+                return;
+            }
+            var initialIdentity = operations.ReadStartIdentity(rootProcessId);
+            if (!initialIdentity.Success)
+            {
+                LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
+                initializationOutcome = "indeterminate";
+                return;
+            }
+            openedIdentity = new(
+                rootProcessId,
+                initialIdentity.StartIdentity);
+
+            var waiterArmed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            waiterTask = Task.Factory.StartNew(
+                () => operations.WaitForRootStatus(
+                    rootProcessId,
+                    () => waiterArmed.TrySetResult()),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+            LastRootStatusOwnerCount = 1;
+            if (!WaitForSignal(
+                    waiterArmed.Task,
+                    deadline,
+                    CancellationToken.None))
+            {
+                LastDiagnosticCode = "HV942_LINUX_ROOT_WAITER_NOT_ARMED";
+                initializationOutcome = "indeterminate";
+                return;
+            }
+            initializationOutcome = "ready";
+        }
+
+        internal bool WaiterCompleted => waiterTask?.IsCompleted == true;
+
+        internal int StatusOwnerCount => waiterTask is null ? 0 : 1;
+
+        internal NativeTerminationEvidence CaptureWait(
+            string requestOutcome,
+            bool causalMatch,
+            MonotonicDeadline deadline,
+            TimeSpan reserve,
+            CancellationToken cancellationToken)
+        {
+            if (waiterTask is null)
+            {
+                return InitializationEvidence();
+            }
+            return CaptureLinuxRootWait(
+                waiterTask,
+                requestOutcome,
+                causalMatch,
+                deadline,
+                reserve,
+                cancellationToken);
+        }
+
+        internal NativeTerminationEvidence TerminateRoot(
+            ProcessInstanceIdentity plannedIdentity,
+            string? descendantFailure,
+            MonotonicDeadline deadline,
+            CancellationToken cancellationToken)
+        {
+            if (waiterTask is null
+                || openedIdentity is null
+                || rootFileDescriptor < 0)
+            {
+                return InitializationEvidence();
+            }
+            if (waiterTask.IsCompleted)
+            {
+                return CaptureWait(
+                    "already-exited",
+                    causalMatch: false,
+                    deadline,
+                    TimeSpan.Zero,
+                    cancellationToken);
+            }
+
+            ProcessInstanceIdentity? currentIdentity = null;
+            var current = operations.ReadStartIdentity(rootProcessId);
+            if (current.Success)
+            {
+                currentIdentity = new(
+                    rootProcessId,
+                    current.StartIdentity);
+            }
+            if (!IsLinuxRootSignalAuthorized(
+                    plannedIdentity,
+                    openedIdentity,
+                    currentIdentity))
+            {
+                LastDiagnosticCode = "HV936_LINUX_ROOT_IDENTITY";
+                return new(
+                    "unix-wait-status",
+                    null,
+                    null,
+                    "indeterminate",
+                    false);
+            }
+
+            var signal = operations.SendSignal(rootFileDescriptor);
+            if (signal.Result != 0 && signal.Error != Esrch)
+            {
+                LastDiagnosticCode = "HV937_LINUX_ROOT_SIGNAL";
+                return new(
+                    "unix-wait-status",
+                    null,
+                    null,
+                    signal.Error == Eperm
+                        ? "permission-failure"
+                        : "indeterminate",
+                    false);
+            }
+            var requestOutcome = descendantFailure
+                ?? (signal.Result == 0 ? "issued" : "already-exited");
+            var captured = CaptureWait(
+                requestOutcome,
+                descendantFailure is null && signal.Result == 0,
+                deadline,
+                TimeSpan.Zero,
+                cancellationToken);
+            if (captured.CausalMatch)
+            {
+                LastDiagnosticCode = "HV000_NATIVE_CONTROL_COMPLETE";
+            }
+            return captured;
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+            disposed = true;
+            LastRootStatusOwnerCount = StatusOwnerCount;
+            LastRootStatusWaitCompleted = WaiterCompleted;
+            if (rootFileDescriptor >= 0)
+            {
+                operations.Close(rootFileDescriptor);
+            }
+        }
+
+        private NativeTerminationEvidence InitializationEvidence() =>
+            new(
+                "unix-wait-status",
+                null,
+                null,
+                initializationOutcome,
+                false);
+    }
+
+    internal sealed record RootStatusOperations(
+        Func<int, (int Descriptor, int Error)> OpenPidFd,
+        Func<int, (bool Success, long StartIdentity)> ReadStartIdentity,
+        Func<int, Action, LinuxWaitResult> WaitForRootStatus,
+        Func<int, (int Result, int Error)> SendSignal,
+        Action<int> Close)
+    {
+        internal static RootStatusOperations Native { get; } = new(
+            processId =>
+            {
+                var descriptor = PidFdOpen(processId, 0);
+                return (
+                    descriptor,
+                    descriptor < 0 ? Marshal.GetLastPInvokeError() : 0);
+            },
+            processId =>
+            {
+                var success = TryReadLinuxStartIdentity(
+                    processId,
+                    out var startIdentity);
+                return (success, startIdentity);
+            },
+            WaitForLinuxRootStatusExclusive,
+            descriptor =>
+            {
+                var result = PidFdSendSignal(
+                    descriptor,
+                    UnixSigKill,
+                    IntPtr.Zero,
+                    0);
+                return (
+                    result,
+                    result == 0 ? 0 : Marshal.GetLastPInvokeError());
+            },
+            descriptor => _ = NativeTerminationObserver.Close(descriptor));
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeFileTime
     {
@@ -721,7 +950,7 @@ public static class NativeTerminationObserver
         public short ReturnedEvents;
     }
 
-    private sealed record LinuxWaitResult(
+    internal sealed record LinuxWaitResult(
         int Result,
         int RawStatus,
         int Error);

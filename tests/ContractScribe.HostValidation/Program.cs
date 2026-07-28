@@ -449,6 +449,15 @@ public static class Program
                     request,
                     waitForExternalKillRelease: true).ConfigureAwait(false);
                 return 137;
+            case "controlled-gate-timeout":
+                await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                return 0;
+            case "controlled-natural-exit-timeout":
+                await ReachGateAsync(
+                    request,
+                    waitForExternalKillRelease: true).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                return 0;
             case "hang":
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
                 return 0;
