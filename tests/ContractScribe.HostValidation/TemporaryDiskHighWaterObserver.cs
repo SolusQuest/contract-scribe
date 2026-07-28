@@ -247,13 +247,16 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             AttributesToSkip = FileAttributes.ReparsePoint,
             IgnoreInaccessible = false
         };
-        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+        foreach (var candidate in Directory.EnumerateFiles(root, "*", options)
+                     .Select(path => new
+                     {
+                         Path = path,
+                         Key = ToKey(role, root, path)
+                     })
+                     .Where(candidate =>
+                         !barrierAcknowledgements.ContainsKey(candidate.Key)))
         {
-            var key = ToKey(role, root, path);
-            if (!barrierAcknowledgements.ContainsKey(key))
-            {
-                result[key] = new FileInfo(path).Length;
-            }
+            result[candidate.Key] = new FileInfo(candidate.Path).Length;
         }
     }
 
