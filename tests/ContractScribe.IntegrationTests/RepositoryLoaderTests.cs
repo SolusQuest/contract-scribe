@@ -446,6 +446,44 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(generatedCount, candidateComparisons);
     }
 
+    [Fact]
+    public async Task GeneratedAuthorityMatchingKeysSameHintAndContentByGeneratorPath()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(
+            collidingGeneratorOutputs: true);
+        var candidateComparisons = 0;
+        var loader = new RepositoryLoader(
+            null,
+            null,
+            null,
+            count => candidateComparisons += count);
+
+        var outcome = await loader.LoadAsync(new RepositoryLoadRequest(
+            fixture.Root,
+            "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(
+            outcome.Session);
+        var sourceGeneratorFacts = session.GeneratedSources
+            .Where(fact =>
+                fact.ProducerId.StartsWith("sgp.", StringComparison.Ordinal))
+            .ToArray();
+        var collidingFacts = sourceGeneratorFacts
+            .Where(fact =>
+                fact.SourceText == "// identical collision source")
+            .ToArray();
+        Assert.Equal(2, collidingFacts.Length);
+        Assert.Equal(
+            2,
+            collidingFacts.Select(fact => fact.ProducerId).Distinct().Count());
+        Assert.Single(
+            collidingFacts.Select(fact => fact.OutputId).Distinct());
+        Assert.Equal(sourceGeneratorFacts.Length, candidateComparisons);
+    }
+
     [Theory]
     [InlineData("namespace")]
     [InlineData("producer")]
@@ -1922,7 +1960,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
         bool selfObservingGenerator = false,
         bool withSecondDependency = false,
         bool reverseProjectReferences = false,
-        bool manyOutputGenerator = false)
+        bool manyOutputGenerator = false,
+        bool collidingGeneratorOutputs = false)
     {
         if (reverseProjectReferences && !withSecondDependency)
         {
@@ -2064,7 +2103,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
         if (withGenerator
             || processSensitiveGenerator
             || selfObservingGenerator
-            || manyOutputGenerator)
+            || manyOutputGenerator
+            || collidingGeneratorOutputs)
         {
             var repositoryRoot = FindRepositoryRoot();
             var configuration = AppContext.BaseDirectory.Contains(
@@ -2122,6 +2162,17 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 </ItemGroup>
                 """
                 : string.Empty;
+            var collisionConfiguration = collidingGeneratorOutputs
+                ?
+                """
+                <PropertyGroup>
+                  <ContractScribeTestGeneratorCollisions>true</ContractScribeTestGeneratorCollisions>
+                </PropertyGroup>
+                <ItemGroup>
+                  <CompilerVisibleProperty Include="ContractScribeTestGeneratorCollisions" />
+                </ItemGroup>
+                """
+                : string.Empty;
             projectText = projectText.Replace(
                 "</Project>",
                 $"""
@@ -2129,6 +2180,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 {processSensitiveConfiguration}
                 {selfObservingConfiguration}
                 {manyOutputConfiguration}
+                {collisionConfiguration}
                 </Project>
                 """,
                 StringComparison.Ordinal);

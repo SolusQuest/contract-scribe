@@ -1195,7 +1195,9 @@ internal sealed class GeneratedAuthorityIndex
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly IReadOnlyList<Entry> entries;
-    private readonly Dictionary<(string Name, string Digest), List<Entry>> buckets;
+    private readonly Dictionary<
+        (string Name, string Digest, string? GeneratorRelativePath),
+        List<Entry>> buckets;
 
     public GeneratedAuthorityIndex(
         IReadOnlyList<GeneratedAuthorityDocument> documents)
@@ -1203,9 +1205,15 @@ internal sealed class GeneratedAuthorityIndex
         entries = documents.Select(document => new Entry(
             document,
             NormalizePath(document.FilePath),
+            CanonicalGeneratorRelativePath(
+                document.FilePath,
+                document.Name),
             Digest(document.Text))).ToArray();
         buckets = entries
-            .GroupBy(entry => (entry.Document.Name, entry.ContentDigest))
+            .GroupBy(entry => (
+                entry.Document.Name,
+                entry.ContentDigest,
+                entry.GeneratorRelativePath))
             .ToDictionary(group => group.Key, group => group.ToList());
     }
 
@@ -1221,7 +1229,8 @@ internal sealed class GeneratedAuthorityIndex
     {
         var key = (
             hintName,
-            Convert.ToHexString(SHA256.HashData(utf8Text)).ToLowerInvariant());
+            Convert.ToHexString(SHA256.HashData(utf8Text)).ToLowerInvariant(),
+            CanonicalGeneratorRelativePath(driverPath, hintName));
         if (!buckets.TryGetValue(key, out var bucket))
         {
             throw LoaderException.Generated("run.generated.authority-conflict");
@@ -1276,6 +1285,41 @@ internal sealed class GeneratedAuthorityIndex
     private static string? NormalizePath(string? path) =>
         path?.Replace('\\', '/');
 
+    private static string? CanonicalGeneratorRelativePath(
+        string? path,
+        string hintName)
+    {
+        var normalizedPath = NormalizePath(path);
+        var normalizedHint = NormalizePath(hintName)?.TrimStart('/');
+        if (normalizedPath is null
+            || string.IsNullOrEmpty(normalizedHint))
+        {
+            return null;
+        }
+
+        if (string.Equals(
+            normalizedPath.TrimStart('/'),
+            normalizedHint,
+            StringComparison.Ordinal))
+        {
+            return normalizedHint;
+        }
+
+        var suffix = "/" + normalizedHint;
+        if (!normalizedPath.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var prefix = normalizedPath[..^suffix.Length].TrimEnd('/');
+        var segments = prefix.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length < 2
+            ? normalizedPath.TrimStart('/')
+            : segments[^2] + "/" + segments[^1] + "/" + normalizedHint;
+    }
+
     private static bool PathsMatch(
         string? normalizedWorkspace,
         string? normalizedDriver) =>
@@ -1292,11 +1336,15 @@ internal sealed class GeneratedAuthorityIndex
     private sealed class Entry(
         GeneratedAuthorityDocument document,
         string? normalizedPath,
+        string? generatorRelativePath,
         string contentDigest)
     {
         public GeneratedAuthorityDocument Document { get; } = document;
 
         public string? NormalizedPath { get; } = normalizedPath;
+
+        public string? GeneratorRelativePath { get; } =
+            generatorRelativePath;
 
         public string ContentDigest { get; } = contentDigest;
 

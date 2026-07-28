@@ -124,3 +124,42 @@ public sealed class FixtureGenerator : IIncrementalGenerator
         });
     }
 }
+
+[Generator]
+public sealed class CollisionGeneratorA : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context) =>
+        Register(context);
+
+    internal static void Register(
+        IncrementalGeneratorInitializationContext context)
+    {
+        var enabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorCollisions",
+                    out var value)
+                && string.Equals(
+                    value,
+                    "true",
+                    StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(enabled, static (output, shouldEmit) =>
+        {
+            if (shouldEmit)
+            {
+                output.AddSource(
+                    "Shared.g.cs",
+                    SourceText.From(
+                        "// identical collision source",
+                        Encoding.UTF8));
+            }
+        });
+    }
+}
+
+[Generator]
+public sealed class CollisionGeneratorB : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context) =>
+        CollisionGeneratorA.Register(context);
+}
