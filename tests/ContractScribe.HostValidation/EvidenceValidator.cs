@@ -479,14 +479,14 @@ public static class EvidenceValidator
 
     private static void EnsureEquality(VectorDefinition vector, IReadOnlyList<RunEvidence> runs)
     {
-        foreach (var values in vector.EqualityFields.Select(field =>
-            runs.Select(run => EqualityValue(field, run)).ToArray()))
+        var mismatch = vector.EqualityFields
+            .Select(field => runs.Select(run => EqualityValue(field, run)).ToArray())
+            .Any(values =>
+                values.Any(string.IsNullOrWhiteSpace)
+                || values.Distinct(StringComparer.Ordinal).Count() != 1);
+        if (mismatch)
         {
-            if (values.Any(string.IsNullOrWhiteSpace)
-                || values.Distinct(StringComparer.Ordinal).Count() != 1)
-            {
-                throw new ProtocolException("HV217_DETERMINISM_MISMATCH");
-            }
+            throw new ProtocolException("HV217_DETERMINISM_MISMATCH");
         }
     }
 
