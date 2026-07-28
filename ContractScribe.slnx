@@ -2,9 +2,13 @@
   <Folder Name="/src/">
     <Project Path="src/ContractScribe.Cli/ContractScribe.Cli.csproj" />
     <Project Path="src/ContractScribe.Core/ContractScribe.Core.csproj" />
+    <Project Path="src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj" />
+    <Project Path="tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj" />
+    <Project Path="tests/ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj" />
+    <Project Path="tests/ContractScribe.TestGenerator/ContractScribe.TestGenerator.csproj" />
     <Project Path="tests/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
     <Project Path="tests/ContractScribe.Roslyn.Experiment/ContractScribe.Roslyn.Experiment.csproj" />
     <Project Path="tests/ContractScribe.Tests/ContractScribe.Tests.csproj" />
