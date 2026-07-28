@@ -234,10 +234,11 @@ public sealed class RepositoryLoader
 
 internal static class PostRegistrationLoader
 {
-    private static readonly IReadOnlyDictionary<string, string> DesignTimeGlobalProperties =
+    private static readonly IReadOnlyDictionary<string, string> PinnedBuildHostGlobalProperties =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["DesignTimeBuild"] = "true",
+            ["NonExistentFile"] = @"__NonExistentSubDir__\__NonExistentFile__",
             ["BuildingInsideVisualStudio"] = "true",
             ["BuildProjectReferences"] = "false",
             ["BuildingProject"] = "false",
@@ -259,9 +260,16 @@ internal static class PostRegistrationLoader
     {
         var identities = new GeneratedIdentityHasher(digest);
         VerifyExecutingMsbuild(toolchain);
+        var evaluationProperties = CreateEvaluationProperties(paths);
         var roots = ResolveRoots(paths, pathResolver, state);
         Observe(observer, LoaderStage.InputParsing, cancellationToken);
-        var graph = EvaluateGraph(paths, roots, pathResolver, state, cancellationToken);
+        var graph = EvaluateGraph(
+            paths,
+            roots,
+            evaluationProperties,
+            pathResolver,
+            state,
+            cancellationToken);
         var graphIdentities = graph.Values.Select(node => node.Identity).ToHashSet(StringComparer.Ordinal);
         if (toolGeneratedSources.Any(input => !graphIdentities.Contains(input.ProjectIdentity)))
         {
@@ -270,7 +278,7 @@ internal static class PostRegistrationLoader
 
         Observe(observer, LoaderStage.GraphEvaluation, cancellationToken);
         var workspace = MSBuildWorkspace.Create(
-            new Dictionary<string, string>(DesignTimeGlobalProperties, StringComparer.Ordinal));
+            new Dictionary<string, string>(evaluationProperties, StringComparer.Ordinal));
         workspace.LoadMetadataForReferencedProjects = false;
         workspace.SkipUnrecognizedProjects = false;
         workspace.WorkspaceFailed += (_, args) =>
@@ -339,14 +347,12 @@ internal static class PostRegistrationLoader
 
                 var compilation = await project.GetCompilationAsync(cancellationToken)
                     ?? throw LoaderException.Compilation("compilation.unavailable");
-                if (compilation.GetDiagnostics(cancellationToken)
-                    .Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
-                {
-                    throw LoaderException.Compilation("compilation.errors");
-                }
-
-                Observe(observer, LoaderStage.Compilation, cancellationToken);
-                var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
+                var workspaceSourceTrees = await ValidateWorkspaceSourcesAsync(
+                    paths,
+                    project,
+                    pathResolver,
+                    state,
+                    cancellationToken);
                 var authoritativeGenerated = new List<(string Name, string Text)>();
                 var authoritativeGeneratedTrees = new List<SyntaxTree>();
                 foreach (var document in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
@@ -359,6 +365,23 @@ internal static class PostRegistrationLoader
                         (await document.GetTextAsync(cancellationToken)).ToString()));
                 }
 
+                var authoritativeCompilationTrees = new HashSet<SyntaxTree>(
+                    workspaceSourceTrees,
+                    ReferenceEqualityComparer.Instance);
+                authoritativeCompilationTrees.UnionWith(authoritativeGeneratedTrees);
+                if (!authoritativeCompilationTrees.SetEquals(compilation.SyntaxTrees))
+                {
+                    throw LoaderException.Graph("graph.source-outside-root");
+                }
+
+                if (compilation.GetDiagnostics(cancellationToken)
+                    .Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+                {
+                    throw LoaderException.Compilation("compilation.errors");
+                }
+
+                Observe(observer, LoaderStage.Compilation, cancellationToken);
+                var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
                 generatedFacts.AddRange(RunGenerators(
                     project,
                     compilation.RemoveSyntaxTrees(authoritativeGeneratedTrees),
@@ -426,6 +449,22 @@ internal static class PostRegistrationLoader
         cancellationToken.ThrowIfCancellationRequested();
     }
 
+    private static IReadOnlyDictionary<string, string> CreateEvaluationProperties(
+        ResolvedRepositoryPaths paths)
+    {
+        var properties = new Dictionary<string, string>(
+            PinnedBuildHostGlobalProperties,
+            StringComparer.Ordinal);
+        if (!paths.PhysicalInput.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            properties["SolutionDir"] =
+                Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(paths.PhysicalInput)!)
+                + Path.DirectorySeparatorChar;
+        }
+
+        return properties;
+    }
+
     private static IReadOnlyList<string> ResolveRoots(
         ResolvedRepositoryPaths paths,
         RepositoryPathResolver pathResolver,
@@ -472,6 +511,7 @@ internal static class PostRegistrationLoader
     private static Dictionary<string, EvaluatedProject> EvaluateGraph(
         ResolvedRepositoryPaths paths,
         IReadOnlyList<string> roots,
+        IReadOnlyDictionary<string, string> evaluationProperties,
         RepositoryPathResolver pathResolver,
         LoaderExecutionState state,
         CancellationToken cancellationToken)
@@ -493,7 +533,10 @@ internal static class PostRegistrationLoader
             MsBuildProject discovery;
             try
             {
-                discovery = collection.LoadProject(projectPath);
+                discovery = collection.LoadProject(
+                    projectPath,
+                    new Dictionary<string, string>(evaluationProperties, StringComparer.Ordinal),
+                    toolsVersion: null);
             }
             catch (InvalidProjectFileException)
             {
@@ -517,7 +560,7 @@ internal static class PostRegistrationLoader
             try
             {
                 var globalProperties = new Dictionary<string, string>(
-                    DesignTimeGlobalProperties,
+                    evaluationProperties,
                     StringComparer.Ordinal)
                 {
                     ["TargetFramework"] = targetFramework,
@@ -577,6 +620,36 @@ internal static class PostRegistrationLoader
         }
 
         return graph;
+    }
+
+    private static async Task<IReadOnlySet<SyntaxTree>> ValidateWorkspaceSourcesAsync(
+        ResolvedRepositoryPaths paths,
+        RoslynProject project,
+        RepositoryPathResolver resolver,
+        LoaderExecutionState state,
+        CancellationToken cancellationToken)
+    {
+        var trees = new HashSet<SyntaxTree>(ReferenceEqualityComparer.Instance);
+        foreach (var document in project.Documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourcePath = document.FilePath;
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                throw LoaderException.Graph("graph.source-outside-root");
+            }
+
+            var resolution = resolver.ResolveSource(paths.PhysicalRoot, sourcePath);
+            state.AddPolicy(
+                ProtectionIdentities(paths, resolution, resolver)
+                    .Append(resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath))),
+                []);
+            var tree = await document.GetSyntaxTreeAsync(cancellationToken)
+                ?? throw LoaderException.Graph("graph.source-outside-root");
+            trees.Add(tree);
+        }
+
+        return trees;
     }
 
     private static void RequireSourceInputsContained(

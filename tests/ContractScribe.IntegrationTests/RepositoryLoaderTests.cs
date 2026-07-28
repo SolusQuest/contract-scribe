@@ -122,6 +122,89 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task DiscoversTargetFrameworkConditionedOnDesignTimeBuild()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(projectPath);
+        await File.WriteAllTextAsync(
+            projectPath,
+            text.Replace(
+                "<TargetFramework>net10.0</TargetFramework>",
+                """<TargetFramework Condition="'$(DesignTimeBuild)' == 'true'">net10.0</TargetFramework>""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        var app = Assert.Single(
+            session.Projects,
+            project => project.ProjectIdentity == "App/App.csproj");
+        Assert.Equal("net10.0", app.TargetFramework);
+    }
+
+    [Theory]
+    [InlineData("Fixture.sln")]
+    [InlineData("Fixture.slnx")]
+    public async Task IncludesProjectReferencesConditionedOnSolutionDir(string input)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(projectPath);
+        var solutionDirectory =
+            Path.TrimEndingDirectorySeparator(fixture.Root)
+            + Path.DirectorySeparatorChar;
+        await File.WriteAllTextAsync(
+            projectPath,
+            text.Replace(
+                """<ProjectReference Include="../Library/Library.csproj" />""",
+                $"""<ProjectReference Include="../Library/Library.csproj" Condition="'$(SolutionDir)' == '{solutionDirectory}'" />""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, input));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        var app = Assert.Single(
+            session.Projects,
+            project => project.ProjectIdentity == "App/App.csproj");
+        Assert.Equal(["Library/Library.csproj"], app.ProjectReferences);
+    }
+
+    [Fact]
+    public async Task IncludesProjectReferencesConditionedOnPinnedNonExistentFile()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(projectPath);
+        await File.WriteAllTextAsync(
+            projectPath,
+            text.Replace(
+                """<ProjectReference Include="../Library/Library.csproj" />""",
+                """<ProjectReference Include="../Library/Library.csproj" Condition="'$(NonExistentFile)' == '__NonExistentSubDir__\__NonExistentFile__'" />""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        var app = Assert.Single(
+            session.Projects,
+            project => project.ProjectIdentity == "App/App.csproj");
+        Assert.Equal(["Library/Library.csproj"], app.ProjectReferences);
+    }
+
+    [Fact]
     public async Task LoadsLegacySlnFromAnUnrelatedWorkingDirectory()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -919,6 +1002,41 @@ public sealed class RepositoryLoaderTests
             projectText.Replace(
                 "</Project>",
                 $"""<ItemGroup><Compile Include="{relativeSource}" /></ItemGroup></Project>""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.source-outside-root", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RejectsOutsideSourceAddedByDesignTimeTarget()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await using var outside = await LoaderFixture.CreateAsync();
+        var outsideSource = Path.Combine(outside.Root, "TargetSecret.cs");
+        await File.WriteAllTextAsync(
+            outsideSource,
+            """public static class TargetSecret { public const string Value = "outside"; }""");
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var projectText = await File.ReadAllTextAsync(projectPath);
+        var relativeSource = Path.GetRelativePath(
+                Path.GetDirectoryName(projectPath)!,
+                outsideSource)
+            .Replace('\\', '/');
+        await File.WriteAllTextAsync(
+            projectPath,
+            projectText.Replace(
+                "</Project>",
+                $"""
+                <Target Name="AddExternalSource" BeforeTargets="CoreCompile">
+                  <ItemGroup><Compile Include="{relativeSource}" /></ItemGroup>
+                </Target>
+                </Project>
+                """,
                 StringComparison.Ordinal));
 
         var outcome = await new RepositoryLoader().LoadAsync(

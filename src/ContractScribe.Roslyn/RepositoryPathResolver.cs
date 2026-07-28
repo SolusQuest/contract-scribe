@@ -95,10 +95,46 @@ internal sealed class RepositoryPathResolver
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
         Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/');
 
+    public ResolvedPhysicalPath ResolveSource(string physicalRoot, string sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath)
+            || !Path.IsPathFullyQualified(sourcePath))
+        {
+            throw LoaderException.Graph("graph.source-outside-root");
+        }
+
+        var fullPath = Path.GetFullPath(sourcePath);
+        if (!IsContained(physicalRoot, fullPath))
+        {
+            throw LoaderException.Graph("graph.source-outside-root");
+        }
+
+        try
+        {
+            var resolution = ResolveExistingPath(
+                fullPath,
+                physicalRoot,
+                allowMissingLeaf: true);
+            if (!IsContained(physicalRoot, resolution.PhysicalPath))
+            {
+                throw LoaderException.Graph("graph.source-outside-root");
+            }
+
+            return resolution;
+        }
+        catch (LoaderException)
+        {
+            throw LoaderException.Graph("graph.source-outside-root");
+        }
+    }
+
     public ResolvedPhysicalPath ResolveSemantic(string physicalRoot, string path) =>
         ResolveExistingPath(Path.GetFullPath(path), physicalRoot);
 
-    private ResolvedPhysicalPath ResolveExistingPath(string path, string? containmentRoot = null)
+    private ResolvedPhysicalPath ResolveExistingPath(
+        string path,
+        string? containmentRoot = null,
+        bool allowMissingLeaf = false)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full) ?? throw LoaderException.Input("input.path-invalid");
@@ -110,14 +146,22 @@ internal sealed class RepositoryPathResolver
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var traversedReparseEntries = new List<string>();
         var hops = 0;
-        foreach (var segment in segments)
+        for (var index = 0; index < segments.Length; index++)
         {
+            var segment = segments[index];
             current = Path.Combine(current, segment);
             FileSystemInfo info = Directory.Exists(current)
                 ? new DirectoryInfo(current)
                 : new FileInfo(current);
             if (!info.Exists)
             {
+                if (allowMissingLeaf && index == segments.Length - 1)
+                {
+                    return new ResolvedPhysicalPath(
+                        TrimDirectory(Path.GetFullPath(current)),
+                        traversedReparseEntries.Distinct(PathComparer()).ToArray());
+                }
+
                 throw LoaderException.Input("input.path-not-found");
             }
 
