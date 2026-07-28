@@ -234,6 +234,19 @@ public sealed class RepositoryLoader
 
 internal static class PostRegistrationLoader
 {
+    private static readonly IReadOnlyDictionary<string, string> DesignTimeGlobalProperties =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DesignTimeBuild"] = "true",
+            ["BuildingInsideVisualStudio"] = "true",
+            ["BuildProjectReferences"] = "false",
+            ["BuildingProject"] = "false",
+            ["ProvideCommandLineArgs"] = "true",
+            ["SkipCompilerExecution"] = "true",
+            ["ContinueOnError"] = "ErrorAndContinue",
+            ["ShouldUnsetParentConfigurationAndPlatform"] = "false",
+        };
+
     public static async Task<PostRegistrationResult> LoadAsync(
         ResolvedRepositoryPaths paths,
         RegisteredToolchain toolchain,
@@ -256,10 +269,8 @@ internal static class PostRegistrationLoader
         }
 
         Observe(observer, LoaderStage.GraphEvaluation, cancellationToken);
-        var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["BuildingInsideVisualStudio"] = "true",
-        });
+        var workspace = MSBuildWorkspace.Create(
+            new Dictionary<string, string>(DesignTimeGlobalProperties, StringComparer.Ordinal));
         workspace.LoadMetadataForReferencedProjects = false;
         workspace.SkipUnrecognizedProjects = false;
         workspace.WorkspaceFailed += (_, args) =>
@@ -337,8 +348,12 @@ internal static class PostRegistrationLoader
                 Observe(observer, LoaderStage.Compilation, cancellationToken);
                 var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
                 var authoritativeGenerated = new List<(string Name, string Text)>();
+                var authoritativeGeneratedTrees = new List<SyntaxTree>();
                 foreach (var document in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
                 {
+                    authoritativeGeneratedTrees.Add(
+                        await document.GetSyntaxTreeAsync(cancellationToken)
+                        ?? throw LoaderException.Generated("run.generated.authority-conflict"));
                     authoritativeGenerated.Add((
                         document.Name,
                         (await document.GetTextAsync(cancellationToken)).ToString()));
@@ -346,7 +361,7 @@ internal static class PostRegistrationLoader
 
                 generatedFacts.AddRange(RunGenerators(
                     project,
-                    compilation,
+                    compilation.RemoveSyntaxTrees(authoritativeGeneratedTrees),
                     node.Identity,
                     contextRef,
                     authoritativeGenerated,
@@ -501,13 +516,15 @@ internal static class PostRegistrationLoader
             MsBuildProject project;
             try
             {
+                var globalProperties = new Dictionary<string, string>(
+                    DesignTimeGlobalProperties,
+                    StringComparer.Ordinal)
+                {
+                    ["TargetFramework"] = targetFramework,
+                };
                 project = collection.LoadProject(
                     projectPath,
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["TargetFramework"] = targetFramework,
-                        ["BuildingInsideVisualStudio"] = "true",
-                    },
+                    globalProperties,
                     toolsVersion: null);
             }
             catch (InvalidProjectFileException)
@@ -536,6 +553,7 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Graph("graph.restore-assets-missing");
             }
 
+            RequireSourceInputsContained(paths.PhysicalRoot, project);
             var protectedPaths = ProtectedPaths(paths, projectPath, project, pathResolver);
             var allowedRoots = AllowedOutputRoots(paths.PhysicalRoot, project, pathResolver);
             state.AddPolicy(
@@ -559,6 +577,25 @@ internal static class PostRegistrationLoader
         }
 
         return graph;
+    }
+
+    private static void RequireSourceInputsContained(
+        string physicalRoot,
+        MsBuildProject project)
+    {
+        foreach (var item in project.GetItems("Compile"))
+        {
+            var path = item.GetMetadataValue("FullPath");
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                continue;
+            }
+
+            if (!IsContained(physicalRoot, path))
+            {
+                throw LoaderException.Graph("graph.source-outside-root");
+            }
+        }
     }
 
     private static IReadOnlyList<string> ProtectedPaths(

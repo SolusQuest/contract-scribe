@@ -71,6 +71,57 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task LoadsSolutionThroughRepositoryRootAlias()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var alias = Path.Combine(
+            Path.GetDirectoryName(fixture.Root)!,
+            $"root-alias-{Guid.NewGuid():N}");
+        CreateDirectoryLink(alias, fixture.Root);
+        try
+        {
+            var outcome = await new RepositoryLoader().LoadAsync(
+                new RepositoryLoadRequest(alias, "Fixture.slnx"));
+
+            Assert.True(
+                outcome.Status == RepositoryLoadStatus.Success,
+                $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+            await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+            Assert.Equal(2, session.Projects.Count);
+        }
+        finally
+        {
+            Directory.Delete(alias);
+        }
+    }
+
+    [Fact]
+    public async Task IncludesProjectReferencesConditionedOnDesignTimeBuild()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var text = await File.ReadAllTextAsync(projectPath);
+        await File.WriteAllTextAsync(
+            projectPath,
+            text.Replace(
+                """<ProjectReference Include="../Library/Library.csproj" />""",
+                """<ProjectReference Include="../Library/Library.csproj" Condition="'$(DesignTimeBuild)' == 'true'" />""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        var app = Assert.Single(
+            session.Projects,
+            project => project.ProjectIdentity == "App/App.csproj");
+        Assert.Equal(["Library/Library.csproj"], app.ProjectReferences);
+    }
+
+    [Fact]
     public async Task LoadsLegacySlnFromAnUnrelatedWorkingDirectory()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -326,6 +377,23 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("run.generated.authority-conflict", outcome.PrimaryFailure?.Code);
         Assert.Null(outcome.Session);
+    }
+
+    [Fact]
+    public async Task RerunsGeneratorsAgainstThePreGenerationCompilation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(selfObservingGenerator: true);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        Assert.Contains(session.GeneratedSources, fact =>
+            fact.SourceText.Contains("FixtureSelfAware", StringComparison.Ordinal)
+            && fact.SourceText.Contains("\"clean\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -832,6 +900,36 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task RejectsCompileSourceOutsideRepositoryRoot()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await using var outside = await LoaderFixture.CreateAsync();
+        var outsideSource = Path.Combine(outside.Root, "Secret.cs");
+        await File.WriteAllTextAsync(
+            outsideSource,
+            """public static class Secret { public const string Value = "outside"; }""");
+        var projectPath = Path.Combine(fixture.Root, "App", "App.csproj");
+        var projectText = await File.ReadAllTextAsync(projectPath);
+        var relativeSource = Path.GetRelativePath(
+                Path.GetDirectoryName(projectPath)!,
+                outsideSource)
+            .Replace('\\', '/');
+        await File.WriteAllTextAsync(
+            projectPath,
+            projectText.Replace(
+                "</Project>",
+                $"""<ItemGroup><Compile Include="{relativeSource}" /></ItemGroup></Project>""",
+                StringComparison.Ordinal));
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("graph.source-outside-root", outcome.PrimaryFailure?.Code);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
     public async Task RejectsUnloadableSolutionProjectWithAStableGraphFact()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1307,7 +1405,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
         string? appProject = null,
         string? libraryProject = null,
         bool withGenerator = false,
-        bool processSensitiveGenerator = false)
+        bool processSensitiveGenerator = false,
+        bool selfObservingGenerator = false)
     {
         var root = Path.Combine(Path.GetTempPath(), "contract-scribe-issue36", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "App"));
@@ -1372,7 +1471,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await File.WriteAllTextAsync(
             Path.Combine(root, "Library", "Library.cs"),
             """public static class Library { public static string Value => "ok"; }""");
-        if (withGenerator || processSensitiveGenerator)
+        if (withGenerator || processSensitiveGenerator || selfObservingGenerator)
         {
             var repositoryRoot = FindRepositoryRoot();
             var configuration = AppContext.BaseDirectory.Contains(
@@ -1408,11 +1507,23 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 </ItemGroup>
                 """
                 : string.Empty;
+            var selfObservingConfiguration = selfObservingGenerator
+                ?
+                """
+                <PropertyGroup>
+                  <ContractScribeTestGeneratorSelfObserving>true</ContractScribeTestGeneratorSelfObserving>
+                </PropertyGroup>
+                <ItemGroup>
+                  <CompilerVisibleProperty Include="ContractScribeTestGeneratorSelfObserving" />
+                </ItemGroup>
+                """
+                : string.Empty;
             projectText = projectText.Replace(
                 "</Project>",
                 $"""
                 <ItemGroup><Analyzer Include="../Analyzers/ContractScribe.TestGenerator.dll" /></ItemGroup>
                 {processSensitiveConfiguration}
+                {selfObservingConfiguration}
                 </Project>
                 """,
                 StringComparison.Ordinal);

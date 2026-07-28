@@ -61,7 +61,12 @@ internal sealed class RepositoryPathResolver
     public ResolvedPhysicalPath ResolveProject(string lexicalRoot, string physicalRoot, string projectPath)
     {
         var lexicalProject = Path.GetFullPath(projectPath);
-        RequireContained(lexicalRoot, lexicalProject, "graph.project-outside-root");
+        if (!IsContained(lexicalRoot, lexicalProject)
+            && !IsContained(physicalRoot, lexicalProject))
+        {
+            throw LoaderException.Graph("graph.project-outside-root");
+        }
+
         if (!lexicalProject.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
         {
             throw LoaderException.Graph("graph.project-not-csharp");
@@ -75,6 +80,16 @@ internal sealed class RepositoryPathResolver
         var resolution = ResolveExistingPath(lexicalProject, physicalRoot);
         RequireContained(physicalRoot, resolution.PhysicalPath, "graph.project-outside-root");
         return resolution;
+    }
+
+    private bool IsContained(string root, string candidate)
+    {
+        var normalizedRoot = TrimDirectory(Path.GetFullPath(root));
+        var normalizedCandidate = Path.GetFullPath(candidate);
+        return normalizedCandidate.Equals(normalizedRoot, comparison)
+            || normalizedCandidate.StartsWith(
+                normalizedRoot + Path.DirectorySeparatorChar,
+                comparison);
     }
 
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
