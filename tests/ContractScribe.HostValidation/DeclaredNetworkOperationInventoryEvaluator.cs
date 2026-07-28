@@ -232,15 +232,10 @@ public static partial class DeclaredNetworkOperationInventoryEvaluator
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
-            foreach (var property in element.EnumerateObject())
-            {
-                if (DeclarationKeys.Contains(property.Name)
-                    && IsAffirmative(property.Value)
-                    || HasConfigurationDeclaration(property.Value))
-                {
-                    return true;
-                }
-            }
+            return element.EnumerateObject().Any(property =>
+                (DeclarationKeys.Contains(property.Name)
+                    && IsAffirmative(property.Value))
+                || HasConfigurationDeclaration(property.Value));
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
