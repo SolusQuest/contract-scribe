@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
-using ContractScribe.Core;
-
-namespace ContractScribe.Roslyn;
+namespace ContractScribe.Core;
 
 internal sealed record TargetClassificationCandidate(
     string CompilationContextRef,
@@ -24,10 +22,15 @@ internal sealed record ComponentClassificationCandidate(
     bool SemanticContextAvailable = true,
     bool PartialAmbiguous = false);
 
+internal sealed record RelationObservationCandidate(
+    RelationObservation Observation,
+    PrimarySymbolKind SourceKind,
+    PrimarySymbolKind TargetKind);
+
 internal sealed record ClassificationCandidateBatch(
     IReadOnlyList<TargetClassificationCandidate> Targets,
     IReadOnlyList<ComponentClassificationCandidate> Components,
-    IReadOnlyList<RelationObservation> Relations,
+    IReadOnlyList<RelationObservationCandidate> Relations,
     IReadOnlyList<UnresolvedClassification> Unresolved);
 
 internal sealed class ClassificationUnrepresentableException : Exception;
@@ -58,8 +61,7 @@ internal static class ClassificationNormalization
         var normalizedTargets = NormalizeTargets(targets);
         var supportedParents = normalizedTargets
             .Where(target => target.SupportStatus == SupportStatus.Supported)
-            .Select(target => target.SymbolRef)
-            .ToHashSet();
+            .ToDictionary(target => target.SymbolRef, target => target.PrimaryKind);
         var components = NormalizeComponentCandidates(
             candidates.Components,
             supportedParents,
@@ -240,7 +242,7 @@ internal static class ClassificationNormalization
 
     private static ImmutableArray<ComponentClassification> NormalizeComponentCandidates(
         IReadOnlyList<ComponentClassificationCandidate> candidates,
-        IReadOnlySet<SymbolRef> supportedParents,
+        IReadOnlyDictionary<SymbolRef, PrimarySymbolKind> supportedParents,
         CancellationToken cancellationToken)
     {
         var expanded = new List<ComponentClassificationCandidate>();
@@ -251,10 +253,11 @@ internal static class ClassificationNormalization
             candidate.ComponentKind != ComponentKind.Unknown));
         foreach (var group in unknownGroups)
         {
-            var ordered = group
+            var locatorGroups = group
                 .Select(candidate =>
                 {
-                    if (candidate.CandidateLocator is null)
+                    if (candidate.CandidateLocator is null
+                        || candidate.Identity is not null)
                     {
                         throw Unrepresentable();
                     }
@@ -262,11 +265,23 @@ internal static class ClassificationNormalization
                     RequireLocator(candidate.CandidateLocator);
                     return candidate;
                 })
-                .OrderBy(candidate => candidate.CandidateLocator!, CandidateLocatorComparer.Instance)
+                .GroupBy(
+                    candidate => LocatorKey(candidate.CandidateLocator!),
+                    StringComparer.Ordinal)
+                .OrderBy(locatorGroup => locatorGroup.Key, StringComparer.Ordinal)
                 .ToArray();
-            for (var ordinal = 0; ordinal < ordered.Length; ordinal++)
+            for (var ordinal = 0; ordinal < locatorGroups.Length; ordinal++)
             {
-                expanded.Add(ordered[ordinal] with { Identity = $"unknown/{ordinal}" });
+                var variants = locatorGroups[ordinal]
+                    .GroupBy(UnknownCandidateSignature, StringComparer.Ordinal)
+                    .Select(variant => variant.First())
+                    .ToArray();
+                if (variants.Length != 1)
+                {
+                    throw Unrepresentable();
+                }
+
+                expanded.Add(variants[0] with { Identity = $"unknown/{ordinal}" });
             }
         }
 
@@ -277,7 +292,9 @@ internal static class ClassificationNormalization
             RequireSymbolRef(candidate.ParentSymbolRef);
             RequireEnum(candidate.ComponentKind);
             RequireEnum(candidate.Origin);
-            if (!supportedParents.Contains(candidate.ParentSymbolRef))
+            if (!supportedParents.TryGetValue(
+                candidate.ParentSymbolRef,
+                out var parentKind))
             {
                 continue;
             }
@@ -288,8 +305,18 @@ internal static class ClassificationNormalization
                 throw Unrepresentable();
             }
 
+            if (!AllowsParent(candidate.ComponentKind, parentKind))
+            {
+                throw Unrepresentable();
+            }
+
             if (IsSynthesized(candidate.ComponentKind)
                 && candidate.Origin != ClassificationOrigin.CompilerSynthesized)
+            {
+                throw Unrepresentable();
+            }
+
+            if (candidate.PartialAmbiguous)
             {
                 throw Unrepresentable();
             }
@@ -334,21 +361,6 @@ internal static class ClassificationNormalization
                     candidate.Origin,
                     SupportStatus.Unsupported,
                     SkipReason.UnsupportedComponentKind);
-            }
-            else if (candidate.PartialAmbiguous)
-            {
-                if (candidate.Origin == ClassificationOrigin.Unknown)
-                {
-                    throw Unrepresentable();
-                }
-
-                component = new ComponentClassification(
-                    candidate.ParentSymbolRef,
-                    candidate.ComponentKind,
-                    candidate.Identity,
-                    candidate.Origin,
-                    SupportStatus.Ambiguous,
-                    SkipReason.AmbiguousPartialDeclaration);
             }
             else if (candidate.Origin == ClassificationOrigin.Mixed)
             {
@@ -435,17 +447,41 @@ internal static class ClassificationNormalization
     }
 
     private static ImmutableArray<RelationObservation> NormalizeRelations(
-        IReadOnlyList<RelationObservation> relations)
+        IReadOnlyList<RelationObservationCandidate> candidates)
     {
-        foreach (var relation in relations)
+        foreach (var candidate in candidates)
         {
+            var relation = candidate.Observation;
             RequireEnum(relation.RelationKind);
+            RequireEnum(candidate.SourceKind);
+            RequireEnum(candidate.TargetKind);
             RequireSymbolRef(relation.SourceSymbolRef);
             RequireSymbolRef(relation.TargetSymbolRef);
+            if (!AllowsRelationDomain(
+                relation.RelationKind,
+                candidate.SourceKind,
+                candidate.TargetKind))
+            {
+                throw Unrepresentable();
+            }
+        }
+
+        var relations = new List<RelationObservation>();
+        foreach (var group in candidates.GroupBy(candidate => candidate.Observation))
+        {
+            if (group
+                .Select(candidate => (candidate.SourceKind, candidate.TargetKind))
+                .Distinct()
+                .Take(2)
+                .Count() != 1)
+            {
+                throw Unrepresentable();
+            }
+
+            relations.Add(group.Key);
         }
 
         return relations
-            .Distinct()
             .OrderBy(
                 relation => relation.SourceSymbolRef.CompilationContextRef,
                 StringComparer.Ordinal)
@@ -563,6 +599,13 @@ internal static class ClassificationNormalization
             throw Unrepresentable();
         }
 
+        if (!AllowsComponentStatus(
+            component.ComponentKind,
+            component.SupportStatus))
+        {
+            throw Unrepresentable();
+        }
+
         var valid = component.SupportStatus switch
         {
             SupportStatus.Supported =>
@@ -580,10 +623,8 @@ internal static class ClassificationNormalization
                     and not ClassificationOrigin.CompilerSynthesized,
             SupportStatus.Ambiguous =>
                 component.ComponentKind != ComponentKind.Unknown
-                && component.Origin != ClassificationOrigin.Unknown
-                && (component.SkipReason == SkipReason.AmbiguousPartialDeclaration
-                    || component.SkipReason == SkipReason.AmbiguousMixedOrigin
-                        && component.Origin == ClassificationOrigin.Mixed),
+                && component.Origin == ClassificationOrigin.Mixed
+                && component.SkipReason == SkipReason.AmbiguousMixedOrigin,
             SupportStatus.NotApplicable =>
                 IsSynthesized(component.ComponentKind)
                     && component.Origin == ClassificationOrigin.CompilerSynthesized
@@ -685,9 +726,13 @@ internal static class ClassificationNormalization
     private static void RequireRepositoryIdentity(string path)
     {
         RequireText(path);
-        if (path.Contains("\\", StringComparison.Ordinal)
+        if (path.Contains('\0')
+            || path.Contains("\\", StringComparison.Ordinal)
             || path.StartsWith("/", StringComparison.Ordinal)
-            || path.EndsWith("/", StringComparison.Ordinal))
+            || path.EndsWith("/", StringComparison.Ordinal)
+            || path.Length >= 2
+                && IsAsciiLetter(path[0])
+                && path[1] == ':')
         {
             throw Unrepresentable();
         }
@@ -756,6 +801,117 @@ internal static class ClassificationNormalization
             _ => false,
         };
 
+    private static bool AllowsParent(
+        ComponentKind componentKind,
+        PrimarySymbolKind parentKind) =>
+        componentKind switch
+        {
+            ComponentKind.Parameter =>
+                parentKind is PrimarySymbolKind.Constructor
+                    or PrimarySymbolKind.Method
+                    or PrimarySymbolKind.Operator
+                    or PrimarySymbolKind.Conversion
+                    or PrimarySymbolKind.Indexer
+                    or PrimarySymbolKind.Delegate,
+            ComponentKind.TypeParameter =>
+                parentKind is PrimarySymbolKind.Class
+                    or PrimarySymbolKind.Struct
+                    or PrimarySymbolKind.Interface
+                    or PrimarySymbolKind.Delegate
+                    or PrimarySymbolKind.Method,
+            ComponentKind.Return =>
+                parentKind is PrimarySymbolKind.Method
+                    or PrimarySymbolKind.Operator
+                    or PrimarySymbolKind.Conversion
+                    or PrimarySymbolKind.Delegate,
+            ComponentKind.Value
+                or ComponentKind.AccessorGet
+                or ComponentKind.AccessorSet
+                or ComponentKind.AccessorInit =>
+                parentKind is PrimarySymbolKind.Property
+                    or PrimarySymbolKind.Indexer,
+            ComponentKind.AccessorAdd
+                or ComponentKind.AccessorRemove =>
+                parentKind == PrimarySymbolKind.Event,
+            ComponentKind.BackingField =>
+                parentKind is PrimarySymbolKind.Property
+                    or PrimarySymbolKind.Event,
+            ComponentKind.SynthesizedRecordPositionalProperty
+                or ComponentKind.SynthesizedImplicitConstructor
+                or ComponentKind.SynthesizedRecordCopyConstructor =>
+                parentKind is PrimarySymbolKind.Class
+                    or PrimarySymbolKind.Struct,
+            ComponentKind.SynthesizedDelegateInvoke
+                or ComponentKind.SynthesizedDelegateBeginInvoke
+                or ComponentKind.SynthesizedDelegateEndInvoke =>
+                parentKind == PrimarySymbolKind.Delegate,
+            ComponentKind.Unknown => true,
+            _ => false,
+        };
+
+    private static bool AllowsComponentStatus(
+        ComponentKind componentKind,
+        SupportStatus status) =>
+        componentKind switch
+        {
+            ComponentKind.Parameter
+                or ComponentKind.TypeParameter
+                or ComponentKind.Return
+                or ComponentKind.Value =>
+                status is SupportStatus.Supported
+                    or SupportStatus.UnavailableContext
+                    or SupportStatus.Ambiguous,
+            ComponentKind.AccessorGet
+                or ComponentKind.AccessorSet
+                or ComponentKind.AccessorInit
+                or ComponentKind.AccessorAdd
+                or ComponentKind.AccessorRemove
+                or ComponentKind.BackingField =>
+                status is SupportStatus.NotApplicable
+                    or SupportStatus.Ambiguous,
+            ComponentKind.SynthesizedRecordPositionalProperty
+                or ComponentKind.SynthesizedImplicitConstructor
+                or ComponentKind.SynthesizedRecordCopyConstructor
+                or ComponentKind.SynthesizedDelegateInvoke
+                or ComponentKind.SynthesizedDelegateBeginInvoke
+                or ComponentKind.SynthesizedDelegateEndInvoke =>
+                status == SupportStatus.NotApplicable,
+            ComponentKind.Unknown => status == SupportStatus.Unsupported,
+            _ => false,
+        };
+
+    private static bool AllowsRelationDomain(
+        RelationKind relationKind,
+        PrimarySymbolKind sourceKind,
+        PrimarySymbolKind targetKind)
+    {
+        var ordinaryMember = sourceKind is PrimarySymbolKind.Method
+            or PrimarySymbolKind.Property
+            or PrimarySymbolKind.Indexer
+            or PrimarySymbolKind.Event;
+        var ordinaryTarget = targetKind is PrimarySymbolKind.Method
+            or PrimarySymbolKind.Property
+            or PrimarySymbolKind.Indexer
+            or PrimarySymbolKind.Event;
+        var interfaceMember = ordinaryMember
+            || sourceKind is PrimarySymbolKind.Operator
+                or PrimarySymbolKind.Conversion;
+        var interfaceTarget = ordinaryTarget
+            || targetKind is PrimarySymbolKind.Operator
+                or PrimarySymbolKind.Conversion;
+        return relationKind switch
+        {
+            RelationKind.Overrides => ordinaryMember && ordinaryTarget,
+            RelationKind.ImplicitInterfaceImplementation
+                or RelationKind.ExplicitInterfaceImplementation =>
+                interfaceMember && interfaceTarget,
+            RelationKind.InheritedInterfaceMember =>
+                sourceKind == PrimarySymbolKind.Interface
+                && interfaceTarget,
+            _ => false,
+        };
+    }
+
     private static bool IsOrdinalIdentity(string value, string prefix) =>
         value.StartsWith(prefix, StringComparison.Ordinal)
         && value.Length > prefix.Length
@@ -779,6 +935,9 @@ internal static class ClassificationNormalization
 
     private static bool IsLowerAlphaNumeric(char value) =>
         value is >= 'a' and <= 'z' or >= '0' and <= '9';
+
+    private static bool IsAsciiLetter(char value) =>
+        value is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
 
     private static bool IsWellFormedUnicode(string value)
     {
@@ -817,6 +976,15 @@ internal static class ClassificationNormalization
             component.SkipReason is { } skip
                 ? ClassificationVocabulary.GetId(skip)
                 : string.Empty);
+
+    private static string UnknownCandidateSignature(
+        ComponentClassificationCandidate candidate) =>
+        string.Join(
+            "\0",
+            ClassificationVocabulary.GetId(candidate.Origin),
+            candidate.GeneratedProvenanceAvailable ? "1" : "0",
+            candidate.SemanticContextAvailable ? "1" : "0",
+            candidate.PartialAmbiguous ? "1" : "0");
 
     private static string UnresolvedSignature(UnresolvedClassification unresolved) =>
         string.Join(

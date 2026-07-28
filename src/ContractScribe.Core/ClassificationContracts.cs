@@ -226,65 +226,238 @@ public static class ClassificationVocabulary
         new(nameof(value), value, "The value is outside the closed classification vocabulary.");
 }
 
-public readonly record struct SymbolRef(
-    string CompilationContextRef,
-    string DocumentationCommentId);
+public readonly record struct SymbolRef
+{
+    internal SymbolRef(
+        string compilationContextRef,
+        string documentationCommentId)
+    {
+        CompilationContextRef = compilationContextRef;
+        DocumentationCommentId = documentationCommentId;
+    }
 
-public readonly record struct Utf16Span(int Start, int End);
+    public string CompilationContextRef { get; }
 
-public abstract record CandidateLocator;
+    public string DocumentationCommentId { get; }
+}
 
-public sealed record RepositoryCandidateLocator(
-    string Path,
-    Utf16Span? Span = null) : CandidateLocator;
+public readonly record struct Utf16Span
+{
+    internal Utf16Span(int start, int end)
+    {
+        Start = start;
+        End = end;
+    }
 
-public sealed record GeneratedSourceCandidateLocator(
-    string GeneratorId,
-    string HintNameId,
-    Utf16Span? Span = null) : CandidateLocator;
+    public int Start { get; }
 
-public sealed record ToolGeneratedCandidateLocator(
-    string ProducerId,
-    string OutputId,
-    Utf16Span? Span = null) : CandidateLocator;
+    public int End { get; }
+}
 
-public sealed record SyntheticCandidateLocator(
-    string FixtureId) : CandidateLocator;
+public abstract record CandidateLocator
+{
+    private protected CandidateLocator()
+    {
+    }
+}
 
-public sealed record TargetClassification(
-    SymbolRef SymbolRef,
-    PrimarySymbolKind PrimaryKind,
-    ImmutableArray<SymbolTrait> Traits,
-    ClassificationOrigin Origin,
-    SupportStatus SupportStatus,
-    SkipReason? SkipReason = null);
+public sealed record RepositoryCandidateLocator : CandidateLocator
+{
+    internal RepositoryCandidateLocator(
+        string path,
+        Utf16Span? span = null)
+    {
+        Path = path;
+        Span = span;
+    }
 
-public sealed record ComponentClassification(
-    SymbolRef ParentSymbolRef,
-    ComponentKind ComponentKind,
-    string Identity,
-    ClassificationOrigin Origin,
-    SupportStatus SupportStatus,
-    SkipReason? SkipReason = null);
+    public string Path { get; }
 
-public sealed record RelationObservation(
-    RelationKind RelationKind,
-    SymbolRef SourceSymbolRef,
-    SymbolRef TargetSymbolRef);
+    public Utf16Span? Span { get; }
+}
 
-public sealed record UnresolvedClassification(
-    string CompilationContextRef,
-    ClassificationOrigin Origin,
-    SupportStatus SupportStatus,
-    SkipReason SkipReason,
-    CandidateLocator CandidateLocator);
+public sealed record GeneratedSourceCandidateLocator : CandidateLocator
+{
+    internal GeneratedSourceCandidateLocator(
+        string generatorId,
+        string hintNameId,
+        Utf16Span? span = null)
+    {
+        GeneratorId = generatorId;
+        HintNameId = hintNameId;
+        Span = span;
+    }
 
-public sealed record ClassificationSet(
-    TargetProfile TargetProfile,
-    ImmutableArray<TargetClassification> Targets,
-    ImmutableArray<ComponentClassification> Components,
-    ImmutableArray<RelationObservation> Relations,
-    ImmutableArray<UnresolvedClassification> Unresolved);
+    public string GeneratorId { get; }
+
+    public string HintNameId { get; }
+
+    public Utf16Span? Span { get; }
+}
+
+public sealed record ToolGeneratedCandidateLocator : CandidateLocator
+{
+    internal ToolGeneratedCandidateLocator(
+        string producerId,
+        string outputId,
+        Utf16Span? span = null)
+    {
+        ProducerId = producerId;
+        OutputId = outputId;
+        Span = span;
+    }
+
+    public string ProducerId { get; }
+
+    public string OutputId { get; }
+
+    public Utf16Span? Span { get; }
+}
+
+public sealed record SyntheticCandidateLocator : CandidateLocator
+{
+    internal SyntheticCandidateLocator(string fixtureId)
+    {
+        FixtureId = fixtureId;
+    }
+
+    public string FixtureId { get; }
+}
+
+public sealed record TargetClassification
+{
+    internal TargetClassification(
+        SymbolRef symbolRef,
+        PrimarySymbolKind primaryKind,
+        ImmutableArray<SymbolTrait> traits,
+        ClassificationOrigin origin,
+        SupportStatus supportStatus,
+        SkipReason? skipReason = null)
+    {
+        SymbolRef = symbolRef;
+        PrimaryKind = primaryKind;
+        Traits = traits;
+        Origin = origin;
+        SupportStatus = supportStatus;
+        SkipReason = skipReason;
+    }
+
+    public SymbolRef SymbolRef { get; }
+
+    public PrimarySymbolKind PrimaryKind { get; }
+
+    public ImmutableArray<SymbolTrait> Traits { get; }
+
+    public ClassificationOrigin Origin { get; }
+
+    public SupportStatus SupportStatus { get; }
+
+    public SkipReason? SkipReason { get; }
+}
+
+public sealed record ComponentClassification
+{
+    internal ComponentClassification(
+        SymbolRef parentSymbolRef,
+        ComponentKind componentKind,
+        string identity,
+        ClassificationOrigin origin,
+        SupportStatus supportStatus,
+        SkipReason? skipReason = null)
+    {
+        ParentSymbolRef = parentSymbolRef;
+        ComponentKind = componentKind;
+        Identity = identity;
+        Origin = origin;
+        SupportStatus = supportStatus;
+        SkipReason = skipReason;
+    }
+
+    public SymbolRef ParentSymbolRef { get; }
+
+    public ComponentKind ComponentKind { get; }
+
+    public string Identity { get; }
+
+    public ClassificationOrigin Origin { get; }
+
+    public SupportStatus SupportStatus { get; }
+
+    public SkipReason? SkipReason { get; }
+}
+
+public sealed record RelationObservation
+{
+    internal RelationObservation(
+        RelationKind relationKind,
+        SymbolRef sourceSymbolRef,
+        SymbolRef targetSymbolRef)
+    {
+        RelationKind = relationKind;
+        SourceSymbolRef = sourceSymbolRef;
+        TargetSymbolRef = targetSymbolRef;
+    }
+
+    public RelationKind RelationKind { get; }
+
+    public SymbolRef SourceSymbolRef { get; }
+
+    public SymbolRef TargetSymbolRef { get; }
+}
+
+public sealed record UnresolvedClassification
+{
+    internal UnresolvedClassification(
+        string compilationContextRef,
+        ClassificationOrigin origin,
+        SupportStatus supportStatus,
+        SkipReason skipReason,
+        CandidateLocator candidateLocator)
+    {
+        CompilationContextRef = compilationContextRef;
+        Origin = origin;
+        SupportStatus = supportStatus;
+        SkipReason = skipReason;
+        CandidateLocator = candidateLocator;
+    }
+
+    public string CompilationContextRef { get; }
+
+    public ClassificationOrigin Origin { get; }
+
+    public SupportStatus SupportStatus { get; }
+
+    public SkipReason SkipReason { get; }
+
+    public CandidateLocator CandidateLocator { get; }
+}
+
+public sealed record ClassificationSet
+{
+    internal ClassificationSet(
+        TargetProfile targetProfile,
+        ImmutableArray<TargetClassification> targets,
+        ImmutableArray<ComponentClassification> components,
+        ImmutableArray<RelationObservation> relations,
+        ImmutableArray<UnresolvedClassification> unresolved)
+    {
+        TargetProfile = targetProfile;
+        Targets = targets;
+        Components = components;
+        Relations = relations;
+        Unresolved = unresolved;
+    }
+
+    public TargetProfile TargetProfile { get; }
+
+    public ImmutableArray<TargetClassification> Targets { get; }
+
+    public ImmutableArray<ComponentClassification> Components { get; }
+
+    public ImmutableArray<RelationObservation> Relations { get; }
+
+    public ImmutableArray<UnresolvedClassification> Unresolved { get; }
+}
 
 public enum ClassificationRunStatus
 {
@@ -319,7 +492,7 @@ public sealed class ClassificationOutcome
 
     public ImmutableArray<ClassificationDiagnostic> Diagnostics { get; }
 
-    public static ClassificationOutcome Success(
+    internal static ClassificationOutcome Success(
         ClassificationSet classificationSet,
         IEnumerable<ClassificationDiagnostic>? diagnostics = null) =>
         new(

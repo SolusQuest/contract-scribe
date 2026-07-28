@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -911,6 +912,110 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task ClassificationIsInvariantToTwoDependencyReferenceOrder()
+    {
+        await using var forward = await LoaderFixture.CreateAsync(
+            withSecondDependency: true);
+        await using var reverse = await LoaderFixture.CreateAsync(
+            withSecondDependency: true,
+            reverseProjectReferences: true);
+        const string appSource = """
+            public class App : IFirstContract, ISecondContract
+            {
+                public int First() => 1;
+                public int Second() => 2;
+            }
+            """;
+        const string firstSource = """
+            public interface IFirstContract
+            {
+                int First();
+            }
+            """;
+        const string secondSource = """
+            public interface ISecondContract
+            {
+                int Second();
+            }
+            """;
+        foreach (var fixture in new[] { forward, reverse })
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Root, "App", "App.cs"),
+                appSource);
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Root, "Library", "Library.cs"),
+                firstSource);
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Root, "LibraryTwo", "LibraryTwo.cs"),
+                secondSource);
+        }
+
+        var loader = new RepositoryLoader();
+        var forwardLoad = await loader.LoadAsync(new RepositoryLoadRequest(
+            forward.Root,
+            "App/App.csproj"));
+        var reverseLoad = await loader.LoadAsync(new RepositoryLoadRequest(
+            reverse.Root,
+            "App/App.csproj"));
+        Assert.Equal(RepositoryLoadStatus.Success, forwardLoad.Status);
+        Assert.Equal(RepositoryLoadStatus.Success, reverseLoad.Status);
+        await using var forwardSession =
+            Assert.IsType<LoadedRepositorySession>(forwardLoad.Session);
+        await using var reverseSession =
+            Assert.IsType<LoadedRepositorySession>(reverseLoad.Session);
+        var classifier = new SymbolClassifier();
+        var forwardClassification = classifier.Classify(
+            forwardSession,
+            TargetProfile.ExternalApi);
+        var reverseClassification = classifier.Classify(
+            reverseSession,
+            TargetProfile.ExternalApi);
+
+        Assert.Equal(
+            forwardLoad.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Stage}|{diagnostic.Code}|{diagnostic.Severity}"),
+            reverseLoad.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Stage}|{diagnostic.Code}|{diagnostic.Severity}"));
+        Assert.Equal(
+            forwardClassification.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Stage}|{diagnostic.Code}|{diagnostic.Severity}"),
+            reverseClassification.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Stage}|{diagnostic.Code}|{diagnostic.Severity}"));
+        Assert.Equal(
+            ClassificationRunStatus.Success,
+            forwardClassification.Status);
+        Assert.Equal(
+            ClassificationRunStatus.Success,
+            reverseClassification.Status);
+
+        var forwardBytes = await RunClassificationProbeAsync(
+            forward.Root,
+            "external-api",
+            "en-US",
+            "UTC");
+        var reverseBytes = await RunClassificationProbeAsync(
+            reverse.Root,
+            "external-api",
+            "en-US",
+            "UTC");
+        Assert.Equal(forwardBytes, reverseBytes);
+        Assert.Contains(
+            "M:IFirstContract.First",
+            forwardBytes,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "M:ISecondContract.Second",
+            forwardBytes,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            forwardClassification.ClassificationSet!.Relations.Count(
+                relation => relation.RelationKind
+                    == RelationKind.ImplicitInterfaceImplementation));
+    }
+
+    [Fact]
     public async Task CancellationReturnsNoSession()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1787,11 +1892,24 @@ internal sealed class LoaderFixture : IAsyncDisposable
         string? libraryProject = null,
         bool withGenerator = false,
         bool processSensitiveGenerator = false,
-        bool selfObservingGenerator = false)
+        bool selfObservingGenerator = false,
+        bool withSecondDependency = false,
+        bool reverseProjectReferences = false)
     {
+        if (reverseProjectReferences && !withSecondDependency)
+        {
+            throw new ArgumentException(
+                "Reference order can be reversed only for the two-dependency fixture.",
+                nameof(reverseProjectReferences));
+        }
+
         var root = Path.Combine(Path.GetTempPath(), "contract-scribe-issue36", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "App"));
         Directory.CreateDirectory(Path.Combine(root, "Library"));
+        if (withSecondDependency)
+        {
+            Directory.CreateDirectory(Path.Combine(root, "LibraryTwo"));
+        }
         await File.WriteAllTextAsync(
             Path.Combine(root, "NuGet.Config"),
             """
@@ -1809,34 +1927,83 @@ internal sealed class LoaderFixture : IAsyncDisposable
             """{"sdk":{"version":"10.0.102","rollForward":"latestFeature"}}""");
         await File.WriteAllTextAsync(
             Path.Combine(root, "Fixture.slnx"),
-            """
-            <Solution>
-              <Project Path="App/App.csproj" />
-              <Project Path="Library/Library.csproj" />
-            </Solution>
-            """);
+            withSecondDependency
+                ?
+                """
+                <Solution>
+                  <Project Path="App/App.csproj" />
+                  <Project Path="Library/Library.csproj" />
+                  <Project Path="LibraryTwo/LibraryTwo.csproj" />
+                </Solution>
+                """
+                :
+                """
+                <Solution>
+                  <Project Path="App/App.csproj" />
+                  <Project Path="Library/Library.csproj" />
+                </Solution>
+                """);
         await File.WriteAllTextAsync(
             Path.Combine(root, "Fixture.sln"),
+            withSecondDependency
+                ?
+                """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                # Visual Studio Version 17
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                EndProject
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library", "Library\Library.csproj", "{22222222-2222-2222-2222-222222222222}"
+                EndProject
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LibraryTwo", "LibraryTwo\LibraryTwo.csproj", "{33333333-3333-3333-3333-333333333333}"
+                EndProject
+                Global
+                EndGlobal
+                """
+                :
+                """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                # Visual Studio Version 17
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                EndProject
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library", "Library\Library.csproj", "{22222222-2222-2222-2222-222222222222}"
+                EndProject
+                Global
+                EndGlobal
+                """);
+        var defaultAppProject = withSecondDependency
+            ? reverseProjectReferences
+                ?
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../LibraryTwo/LibraryTwo.csproj" />
+                    <ProjectReference Include="../Library/Library.csproj" />
+                  </ItemGroup>
+                </Project>
+                """
+                :
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Library/Library.csproj" />
+                    <ProjectReference Include="../LibraryTwo/LibraryTwo.csproj" />
+                  </ItemGroup>
+                </Project>
+                """
+            :
             """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            # Visual Studio Version 17
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library", "Library\Library.csproj", "{22222222-2222-2222-2222-222222222222}"
-            EndProject
-            Global
-            EndGlobal
-            """);
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>
+            </Project>
+            """;
         await File.WriteAllTextAsync(
             Path.Combine(root, "App", "App.csproj"),
             PinFixtureFrameworkPacks(
                 appProject
-                ?? """
-                   <Project Sdk="Microsoft.NET.Sdk">
-                     <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-                     <ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>
-                   </Project>
-                   """));
+                ?? defaultAppProject));
         await File.WriteAllTextAsync(
             Path.Combine(root, "App", "App.cs"),
             """public static class App { public static string Value => "ok"; }""");
@@ -1852,6 +2019,20 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await File.WriteAllTextAsync(
             Path.Combine(root, "Library", "Library.cs"),
             """public static class Library { public static string Value => "ok"; }""");
+        if (withSecondDependency)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "LibraryTwo", "LibraryTwo.csproj"),
+                PinFixtureFrameworkPacks(
+                    """
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                    </Project>
+                    """));
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "LibraryTwo", "LibraryTwo.cs"),
+                """public static class LibraryTwo { public static string Value => "ok"; }""");
+        }
         if (withGenerator || processSensitiveGenerator || selfObservingGenerator)
         {
             var repositoryRoot = FindRepositoryRoot();

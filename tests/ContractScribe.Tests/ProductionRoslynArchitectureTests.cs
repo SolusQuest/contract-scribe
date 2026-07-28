@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Xml.Linq;
 using ContractScribe.Core;
 
@@ -106,6 +107,62 @@ public sealed class ProductionRoslynArchitectureTests
             probe.ToString(),
             "ContractScribe.Roslyn.Experiment",
             StringComparison.Ordinal);
+
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Core",
+            "ClassificationNormalization.cs")));
+        Assert.False(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Roslyn",
+            "ClassificationNormalization.cs")));
+    }
+
+    [Fact]
+    public void ClassificationResultsCannotBeForgedThroughThePublicCoreApi()
+    {
+        var resultTypes = new[]
+        {
+            typeof(SymbolRef),
+            typeof(Utf16Span),
+            typeof(RepositoryCandidateLocator),
+            typeof(GeneratedSourceCandidateLocator),
+            typeof(ToolGeneratedCandidateLocator),
+            typeof(SyntheticCandidateLocator),
+            typeof(TargetClassification),
+            typeof(ComponentClassification),
+            typeof(RelationObservation),
+            typeof(UnresolvedClassification),
+            typeof(ClassificationSet),
+        };
+        Assert.All(resultTypes, type =>
+            Assert.Empty(type.GetConstructors(
+                BindingFlags.Instance | BindingFlags.Public)));
+
+        var locatorConstructors = typeof(CandidateLocator).GetConstructors(
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotEmpty(locatorConstructors);
+        Assert.All(locatorConstructors, constructor =>
+            Assert.True(
+                constructor.IsFamilyAndAssembly
+                || constructor.IsFamily
+                    && constructor.GetParameters() is
+                    [
+                    {
+                        ParameterType: var parameterType,
+                    },
+                    ]
+                    && parameterType == typeof(CandidateLocator),
+                "CandidateLocator must remain closed to external subclasses."));
+
+        Assert.Null(typeof(ClassificationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.Public));
+        Assert.NotNull(typeof(ClassificationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.NonPublic));
     }
 
     private static IEnumerable<Type> ExpandType(Type type)

@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.ContractBaselineProbe;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
-using Json.Schema;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -300,6 +300,170 @@ public sealed class ClassificationTests
                     component.SkipReason);
                 Assert.Equal(ClassificationOrigin.Source, component.Origin);
             });
+    }
+
+    [Fact]
+    public void PositionalRecordAndIteratorTraitsFollowTheDeclaringSyntaxOnly()
+    {
+        const string source = """
+            using System.Collections.Generic;
+
+            public record ExplicitPropertyRecord(int Value)
+            {
+                public int Value { get; init; } = Value;
+            }
+
+            public record SynthesizedPropertyRecord(int Value);
+
+            public class IteratorSurface
+            {
+                public IEnumerable<int> Direct()
+                {
+                    yield return 1;
+                }
+
+                public IEnumerable<int> NestedOnly()
+                {
+                    return Local();
+
+                    static IEnumerable<int> Local()
+                    {
+                        yield return 1;
+                    }
+                }
+            }
+            """;
+        var compilation = Compile("SyntaxOwnership", [Source("SyntaxOwnership.cs", source)]);
+        using var session = CreateSession(new ProjectFixture(
+            "SyntaxOwnership.csproj",
+            "ctx-syntax-ownership",
+            LoadedProjectRole.AuditRoot,
+            compilation));
+
+        var set = AssertSuccess(new SymbolClassifier().Classify(
+            session,
+            TargetProfile.ExternalApi));
+
+        Assert.DoesNotContain(set.Components, component =>
+            component.ParentSymbolRef.DocumentationCommentId
+                == "T:ExplicitPropertyRecord"
+            && component.ComponentKind
+                == ComponentKind.SynthesizedRecordPositionalProperty);
+        Assert.Contains(set.Targets, target =>
+            target.SymbolRef.DocumentationCommentId
+                == "P:ExplicitPropertyRecord.Value");
+        Assert.Contains(set.Components, component =>
+            component.ParentSymbolRef.DocumentationCommentId
+                == "T:SynthesizedPropertyRecord"
+            && component.ComponentKind
+                == ComponentKind.SynthesizedRecordPositionalProperty);
+
+        var direct = Assert.Single(set.Targets, target =>
+            target.SymbolRef.DocumentationCommentId
+                == "M:IteratorSurface.Direct");
+        var nestedOnly = Assert.Single(set.Targets, target =>
+            target.SymbolRef.DocumentationCommentId
+                == "M:IteratorSurface.NestedOnly");
+        Assert.Contains(SymbolTrait.Iterator, direct.Traits);
+        Assert.DoesNotContain(SymbolTrait.Iterator, nestedOnly.Traits);
+    }
+
+    [Fact]
+    public void PartialMembersAreOneLogicalTargetWithAggregatedProvenance()
+    {
+        const string definitions = """
+            using System;
+
+            public partial class PartialSurface
+            {
+                public partial void Method();
+                public partial int Value { get; set; }
+                public partial int this[int index] { get; set; }
+                public partial event Action? Changed;
+            }
+            """;
+        const string implementations = """
+            using System;
+
+            public partial class PartialSurface
+            {
+                public partial void Method() { }
+                public partial int Value { get => 1; set { } }
+                public partial int this[int index] { get => index; set { } }
+                public partial event Action? Changed
+                {
+                    add { }
+                    remove { }
+                }
+            }
+            """;
+        var repository = Compile(
+            "PartialRepository",
+            [
+                Source("Definitions.cs", definitions),
+                Source("Implementations.cs", implementations),
+            ]);
+        var mixed = Compile(
+            "PartialMixed",
+            [
+                Source("Definitions.cs", definitions),
+                Source(
+                    "Generated/Implementations.g.cs",
+                    implementations,
+                    LoadedSourceKind.SourceGenerator,
+                    new GeneratedSourceFact(
+                        "PartialMixed.csproj",
+                        "ctx-partial-mixed",
+                        Opaque("sgp.", '8'),
+                        Opaque("sgo.", '9'),
+                        new string('a', 64),
+                        implementations)),
+            ]);
+
+        using var repositorySession = CreateSession(new ProjectFixture(
+            "PartialRepository.csproj",
+            "ctx-partial-repository",
+            LoadedProjectRole.AuditRoot,
+            repository));
+        using var mixedSession = CreateSession(new ProjectFixture(
+            "PartialMixed.csproj",
+            "ctx-partial-mixed",
+            LoadedProjectRole.AuditRoot,
+            mixed));
+
+        var repositorySet = AssertSuccess(new SymbolClassifier().Classify(
+            repositorySession,
+            TargetProfile.ExternalApi));
+        var mixedSet = AssertSuccess(new SymbolClassifier().Classify(
+            mixedSession,
+            TargetProfile.ExternalApi));
+        var memberIds = new[]
+        {
+            "M:PartialSurface.Method",
+            "P:PartialSurface.Value",
+            "P:PartialSurface.Item(System.Int32)",
+            "E:PartialSurface.Changed",
+        };
+
+        foreach (var documentationId in memberIds)
+        {
+            var repositoryTarget = Assert.Single(repositorySet.Targets, target =>
+                target.SymbolRef.DocumentationCommentId == documentationId);
+            Assert.Equal(ClassificationOrigin.Source, repositoryTarget.Origin);
+            Assert.Equal(SupportStatus.Supported, repositoryTarget.SupportStatus);
+            Assert.Contains(SymbolTrait.Partial, repositoryTarget.Traits);
+
+            var mixedTarget = Assert.Single(mixedSet.Targets, target =>
+                target.SymbolRef.DocumentationCommentId == documentationId);
+            Assert.Equal(ClassificationOrigin.Mixed, mixedTarget.Origin);
+            Assert.Equal(SupportStatus.Ambiguous, mixedTarget.SupportStatus);
+            Assert.Equal(
+                SkipReason.AmbiguousMixedOrigin,
+                mixedTarget.SkipReason);
+            Assert.Contains(SymbolTrait.Partial, mixedTarget.Traits);
+            Assert.DoesNotContain(mixedSet.Components, component =>
+                component.ParentSymbolRef == mixedTarget.SymbolRef);
+        }
     }
 
     [Fact]
@@ -864,13 +1028,13 @@ public sealed class ClassificationTests
     }
 
     [Fact]
-    public void ComponentCollisionPrecedenceSuppressesUnsupportedParents()
+    public void ComponentNormalizationValidatesDomainsDeduplicatesUnknownsAndSuppressesUnsupportedParents()
     {
         var parent = new SymbolRef("ctx-components", "T:Parent");
         var supportedTarget = new TargetClassificationCandidate(
             parent.CompilationContextRef,
             parent.DocumentationCommentId,
-            PrimarySymbolKind.Class,
+            PrimarySymbolKind.Property,
             [],
             ClassificationOrigin.Source,
             []);
@@ -879,8 +1043,7 @@ public sealed class ClassificationTests
             ComponentKind.Unknown,
             null,
             ClassificationOrigin.Mixed,
-            new RepositoryCandidateLocator("src/Parent.cs"),
-            PartialAmbiguous: true);
+            new RepositoryCandidateLocator("src/Parent.cs"));
         var mixedAccessor = new ComponentClassificationCandidate(
             parent,
             ComponentKind.AccessorGet,
@@ -890,7 +1053,7 @@ public sealed class ClassificationTests
             TargetProfile.ExternalApi,
             new ClassificationCandidateBatch(
                 [supportedTarget],
-                [mixedAccessor, unknown],
+                [mixedAccessor, unknown, unknown],
                 [],
                 []),
             CancellationToken.None);
@@ -907,6 +1070,68 @@ public sealed class ClassificationTests
             component.ComponentKind == ComponentKind.AccessorGet);
         Assert.Equal(SupportStatus.Ambiguous, accessor.SupportStatus);
         Assert.Equal(SkipReason.AmbiguousMixedOrigin, accessor.SkipReason);
+
+        var conflictingUnknown = unknown with
+        {
+            Origin = ClassificationOrigin.Source,
+        };
+        Assert.Throws<ClassificationUnrepresentableException>(() =>
+            ClassificationNormalization.Normalize(
+                TargetProfile.ExternalApi,
+                new ClassificationCandidateBatch(
+                    [supportedTarget],
+                    [unknown, conflictingUnknown],
+                    [],
+                    []),
+                CancellationToken.None));
+        Assert.Throws<ClassificationUnrepresentableException>(() =>
+            ClassificationNormalization.Normalize(
+                TargetProfile.ExternalApi,
+                new ClassificationCandidateBatch(
+                    [supportedTarget],
+                    [
+                        new ComponentClassificationCandidate(
+                            parent,
+                            ComponentKind.Return,
+                            "return",
+                            ClassificationOrigin.Source),
+                    ],
+                    [],
+                    []),
+                CancellationToken.None));
+        Assert.Throws<ClassificationUnrepresentableException>(() =>
+            ClassificationNormalization.Normalize(
+                TargetProfile.ExternalApi,
+                new ClassificationCandidateBatch(
+                    [supportedTarget],
+                    [
+                        mixedAccessor with
+                        {
+                            PartialAmbiguous = true,
+                        },
+                    ],
+                    [],
+                    []),
+                CancellationToken.None));
+        Assert.Throws<ClassificationUnrepresentableException>(() =>
+            ClassificationNormalization.Normalize(
+                TargetProfile.ExternalApi,
+                new ClassificationCandidateBatch(
+                    [supportedTarget],
+                    [],
+                    [
+                        new RelationObservationCandidate(
+                            new RelationObservation(
+                                RelationKind.Overrides,
+                                parent,
+                                new SymbolRef(
+                                    "ctx-components",
+                                    "P:Other.Value")),
+                            PrimarySymbolKind.Class,
+                            PrimarySymbolKind.Property),
+                    ],
+                    []),
+                CancellationToken.None));
 
         var skippedParent = supportedTarget with
         {
@@ -1132,6 +1357,10 @@ public sealed class ClassificationTests
             {
                 public override int Value => 1;
             }
+            internal class InternalOnly
+            {
+                internal void AssemblyMethod() { }
+            }
             """;
         var compilation = Compile("Conformance", [Source("Conformance.cs", source)]);
         using var session = CreateSession(new ProjectFixture(
@@ -1139,37 +1368,31 @@ public sealed class ClassificationTests
             "ctx-conformance",
             LoadedProjectRole.AuditRoot,
             compilation));
-        var set = AssertSuccess(new SymbolClassifier().Classify(
-            session,
-            TargetProfile.ExternalApi));
-        var unresolved = AssertSuccess(new SymbolClassifier(
-            symbol => symbol.Name == "Derived"
-                ? null
-                : symbol.GetDocumentationCommentId(),
-            null,
-            null,
-            null).Classify(session, TargetProfile.ExternalApi));
-        var schemas = new Dictionary<string, JsonSchema>(StringComparer.Ordinal)
+        var oracle = ClassificationConformanceOracle.Load(
+            FindRepositoryRoot());
+        foreach (var profile in Enum.GetValues<TargetProfile>())
         {
-            ["TargetClassification"] = LoadDefinition("targetClassification"),
-            ["ComponentClassification"] = LoadDefinition("componentClassification"),
-            ["RelationObservation"] = LoadDefinition("relationObservation"),
-            ["UnresolvedClassification"] = LoadDefinition("unresolvedClassification"),
-        };
-        var records = set.Targets.Select(Project)
-            .Concat(set.Components.Select(Project))
-            .Concat(set.Relations.Select(Project))
-            .Concat(unresolved.Unresolved.Select(Project))
-            .ToArray();
+            var set = AssertSuccess(new SymbolClassifier().Classify(
+                session,
+                profile));
+            var unresolved = AssertSuccess(new SymbolClassifier(
+                symbol => symbol.Name == "Derived"
+                    ? null
+                    : symbol.GetDocumentationCommentId(),
+                null,
+                null,
+                null).Classify(session, profile));
+            var records = set.Targets.Select(Project)
+                .Concat(set.Components.Select(Project))
+                .Concat(set.Relations.Select(Project))
+                .Concat(unresolved.Unresolved.Select(Project))
+                .Select(Element)
+                .ToArray();
 
-        Assert.NotEmpty(records);
-        foreach (var record in records)
-        {
-            var recordType = record["recordType"]!.GetValue<string>();
-            var element = Element(record);
             Assert.True(
-                schemas[recordType].Evaluate(element).IsValid,
-                element.GetRawText());
+                oracle.TryValidateSet(records, out var error),
+                error);
+            AssertExactConformanceSet(profile, set, unresolved, source);
         }
 
         using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(
@@ -1365,6 +1588,41 @@ public sealed class ClassificationTests
                 CandidateLocators =
                 [
                     new RepositoryCandidateLocator("../secret.cs"),
+                ],
+            },
+            baseCandidate with
+            {
+                CandidateLocators =
+                [
+                    new RepositoryCandidateLocator("C:secret.cs"),
+                ],
+            },
+            baseCandidate with
+            {
+                CandidateLocators =
+                [
+                    new RepositoryCandidateLocator("C:/secret.cs"),
+                ],
+            },
+            baseCandidate with
+            {
+                CandidateLocators =
+                [
+                    new RepositoryCandidateLocator("src/\0secret.cs"),
+                ],
+            },
+            baseCandidate with
+            {
+                CandidateLocators =
+                [
+                    new RepositoryCandidateLocator(@"src\secret.cs"),
+                ],
+            },
+            baseCandidate with
+            {
+                CandidateLocators =
+                [
+                    new RepositoryCandidateLocator("/src/secret.cs"),
                 ],
             },
             baseCandidate with
@@ -1633,19 +1891,6 @@ public sealed class ClassificationTests
         };
     }
 
-    private static JsonSchema LoadDefinition(string definition)
-    {
-        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(),
-            "schemas",
-            "symbol-evidence-taxonomy",
-            "v1.schema.json")))!.AsObject();
-        var schema = root["$defs"]![definition]!.DeepClone().AsObject();
-        schema["$schema"] = "https://json-schema.org/draft/2020-12/schema";
-        schema["$defs"] = root["$defs"]!.DeepClone();
-        return JsonSchema.FromText(schema.ToJsonString());
-    }
-
     private static JsonElement Element(JsonNode node)
     {
         using var document = JsonDocument.Parse(node.ToJsonString());
@@ -1665,6 +1910,102 @@ public sealed class ClassificationTests
             ?? throw new InvalidOperationException("Repository root not found.");
     }
 
+    private static void AssertExactConformanceSet(
+        TargetProfile profile,
+        ClassificationSet set,
+        ClassificationSet unresolvedSet,
+        string source)
+    {
+        var externalTargets = new[]
+        {
+            "ctx-conformance|P:Base.Value|symbol.member.property|trait.virtual|origin.source|support.supported|",
+            "ctx-conformance|P:Derived.Value|symbol.member.property||origin.source|support.supported|",
+            "ctx-conformance|P:IContract.Value|symbol.member.property|trait.abstract|origin.source|support.supported|",
+            "ctx-conformance|T:Base|symbol.type.class||origin.source|support.supported|",
+            "ctx-conformance|T:Derived|symbol.type.class||origin.source|support.supported|",
+            "ctx-conformance|T:IContract|symbol.type.interface|trait.abstract|origin.source|support.supported|",
+        };
+        var assemblyOnlyTargets = new[]
+        {
+            "ctx-conformance|M:InternalOnly.AssemblyMethod|symbol.member.method||origin.source|support.supported|",
+            "ctx-conformance|T:InternalOnly|symbol.type.class||origin.source|support.supported|",
+        };
+        var externalComponents = new[]
+        {
+            "ctx-conformance|P:Base.Value|component.accessor.get|accessor/get|origin.source|support.not-applicable|skip.not-applicable.non-documentation-component",
+            "ctx-conformance|P:Base.Value|component.value|value|origin.source|support.supported|",
+            "ctx-conformance|P:Derived.Value|component.accessor.get|accessor/get|origin.source|support.not-applicable|skip.not-applicable.non-documentation-component",
+            "ctx-conformance|P:Derived.Value|component.value|value|origin.source|support.supported|",
+            "ctx-conformance|P:IContract.Value|component.accessor.get|accessor/get|origin.source|support.not-applicable|skip.not-applicable.non-documentation-component",
+            "ctx-conformance|P:IContract.Value|component.value|value|origin.source|support.supported|",
+            "ctx-conformance|T:Base|component.synthesized.implicit-constructor|synthesized/implicit-constructor|origin.compiler-synthesized|support.not-applicable|skip.not-applicable.synthesized-non-target",
+            "ctx-conformance|T:Derived|component.synthesized.implicit-constructor|synthesized/implicit-constructor|origin.compiler-synthesized|support.not-applicable|skip.not-applicable.synthesized-non-target",
+        };
+        var assemblyOnlyComponents = new[]
+        {
+            "ctx-conformance|T:InternalOnly|component.synthesized.implicit-constructor|synthesized/implicit-constructor|origin.compiler-synthesized|support.not-applicable|skip.not-applicable.synthesized-non-target",
+        };
+        var expectedTargets = profile == TargetProfile.ExternalApi
+            ? externalTargets
+            : externalTargets
+                .Concat(assemblyOnlyTargets)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+        var expectedComponents = profile == TargetProfile.ExternalApi
+            ? externalComponents
+            : externalComponents
+                .Concat(assemblyOnlyComponents)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+        AssertExactSequence(expectedTargets, set.Targets.Select(TargetKey));
+        AssertExactSequence(
+            expectedComponents,
+            set.Components.Select(ComponentKey));
+        AssertExactSequence(
+            [
+                "ctx-conformance|P:Derived.Value|relation.implicit-interface-implementation|ctx-conformance|P:IContract.Value",
+                "ctx-conformance|P:Derived.Value|relation.overrides|ctx-conformance|P:Base.Value",
+            ],
+            set.Relations.Select(RelationKey));
+
+        var unresolved = Assert.Single(unresolvedSet.Unresolved);
+        Assert.Equal("ctx-conformance", unresolved.CompilationContextRef);
+        Assert.Equal(ClassificationOrigin.Source, unresolved.Origin);
+        Assert.Equal(
+            SupportStatus.UnavailableContext,
+            unresolved.SupportStatus);
+        Assert.Equal(
+            SkipReason.UnavailableDocumentationCommentId,
+            unresolved.SkipReason);
+        var locator = Assert.IsType<RepositoryCandidateLocator>(
+            unresolved.CandidateLocator);
+        Assert.Equal("Conformance.cs", locator.Path);
+        Assert.Equal(
+            new Utf16Span(
+                source.IndexOf("Derived", StringComparison.Ordinal),
+                source.IndexOf("Derived", StringComparison.Ordinal)
+                    + "Derived".Length),
+            locator.Span);
+    }
+
+    private static void AssertExactSequence(
+        IEnumerable<string> expected,
+        IEnumerable<string> actual)
+    {
+        var expectedArray = expected.ToArray();
+        var actualArray = actual.ToArray();
+        Assert.True(
+            expectedArray.SequenceEqual(actualArray, StringComparer.Ordinal),
+            $"""
+            Expected:
+            {string.Join(Environment.NewLine, expectedArray)}
+
+            Actual:
+            {string.Join(Environment.NewLine, actualArray)}
+            """);
+    }
+
     private static string TargetKey(TargetClassification target) =>
         string.Join(
             "|",
@@ -1677,6 +2018,15 @@ public sealed class ClassificationTests
             target.SkipReason is { } skip
                 ? ClassificationVocabulary.GetId(skip)
                 : string.Empty);
+
+    private static string RelationKey(RelationObservation relation) =>
+        string.Join(
+            "|",
+            relation.SourceSymbolRef.CompilationContextRef,
+            relation.SourceSymbolRef.DocumentationCommentId,
+            ClassificationVocabulary.GetId(relation.RelationKind),
+            relation.TargetSymbolRef.CompilationContextRef,
+            relation.TargetSymbolRef.DocumentationCommentId);
 
     private static string ComponentKey(ComponentClassification component) =>
         string.Join(

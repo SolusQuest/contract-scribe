@@ -49,7 +49,7 @@ public sealed class SymbolClassifier
         {
             var targetCandidates = new List<TargetClassificationCandidate>();
             var componentCandidates = new List<ComponentClassificationCandidate>();
-            var relations = new List<RelationObservation>();
+            var relations = new List<RelationObservationCandidate>();
             foreach (var project in session.Projects
                 .Where(project => project.Role == LoadedProjectRole.AuditRoot)
                 .OrderBy(project => project.CompilationContextRef, StringComparer.Ordinal))
@@ -151,7 +151,7 @@ public sealed class SymbolClassifier
     private void DiscoverRelations(
         LoadedProject project,
         TargetProfile profile,
-        List<RelationObservation> relations,
+        List<RelationObservationCandidate> relations,
         List<ClassificationDiagnostic> diagnostics,
         CancellationToken cancellationToken)
     {
@@ -160,7 +160,8 @@ public sealed class SymbolClassifier
             cancellationToken.ThrowIfCancellationRequested();
             var containingTypeSelected = IsIndependentSourceCandidate(type)
                 && IsSelectedTargetSurface(type, profile);
-            foreach (var member in type.GetMembers().Where(IsRelationMember))
+            foreach (var member in EnumerateLogicalMembers(type)
+                .Where(IsRelationMember))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (IsIndependentSourceCandidate(member)
@@ -228,17 +229,22 @@ public sealed class SymbolClassifier
                 cancellationToken.ThrowIfCancellationRequested();
                 var implementation = type.FindImplementationForInterfaceMember(interfaceMember);
                 if (implementation is null
-                    || !implementation.Locations.Any(location => location.IsInSource)
-                    || !IsIndependentSourceCandidate(implementation)
-                    || !IsSelectedTargetSurface(implementation, profile)
-                    || GetExplicitInterfaceMembers(implementation).Any())
+                    || !CanonicalPartialMember(implementation).Locations.Any(
+                        location => location.IsInSource)
+                    || !IsIndependentSourceCandidate(
+                        CanonicalPartialMember(implementation))
+                    || !IsSelectedTargetSurface(
+                        CanonicalPartialMember(implementation),
+                        profile)
+                    || GetExplicitInterfaceMembers(
+                        CanonicalPartialMember(implementation)).Any())
                 {
                     continue;
                 }
 
                 TryAddRelation(
                     RelationKind.ImplicitInterfaceImplementation,
-                    implementation,
+                    CanonicalPartialMember(implementation),
                     interfaceMember.OriginalDefinition,
                     project.CompilationContextRef,
                     relations,
@@ -252,7 +258,7 @@ public sealed class SymbolClassifier
         ISymbol source,
         ISymbol target,
         string context,
-        List<RelationObservation> relations,
+        List<RelationObservationCandidate> relations,
         List<ClassificationDiagnostic> diagnostics)
     {
         var sourceResolution = relationEndpointResolver(kind, source, false, context);
@@ -267,10 +273,17 @@ public sealed class SymbolClassifier
             return;
         }
 
-        relations.Add(new RelationObservation(
-            kind,
-            sourceResolution.SymbolRef.Value,
-            targetResolution.SymbolRef.Value));
+        var sourceKind = ClassifyPrimaryKind(source)
+            ?? throw new ClassificationUnrepresentableException();
+        var targetKind = ClassifyPrimaryKind(target)
+            ?? throw new ClassificationUnrepresentableException();
+        relations.Add(new RelationObservationCandidate(
+            new RelationObservation(
+                kind,
+                sourceResolution.SymbolRef.Value,
+                targetResolution.SymbolRef.Value),
+            sourceKind,
+            targetKind));
     }
 
     private static void AddEndpointDiagnostic(
@@ -397,7 +410,9 @@ public sealed class SymbolClassifier
                 .Select(candidateProperty => (
                     Property: candidateProperty,
                     Parameter: GetRecordPositionalParameter(candidateProperty)))
-                .Where(pair => pair.Parameter is not null)
+                .Where(pair =>
+                    pair.Parameter is not null
+                    && IsRecordPositionalProperty(pair.Property))
                 .OrderBy(pair => pair.Parameter!.Ordinal))
             {
                 Add(
@@ -487,7 +502,9 @@ public sealed class SymbolClassifier
         var origins = new HashSet<ClassificationOrigin>();
         var locators = ImmutableArray.CreateBuilder<CandidateLocator>();
         var available = true;
-        foreach (var location in symbol.Locations.Where(location => location.IsInSource))
+        foreach (var location in EnumerateLogicalDeclarations(symbol)
+            .SelectMany(declaration => declaration.Locations)
+            .Where(location => location.IsInSource))
         {
             if (location.SourceTree is null
                 || !project.SourceTrees.TryGetValue(location.SourceTree, out var source))
@@ -614,11 +631,13 @@ public sealed class SymbolClassifier
                 traits.Add(SymbolTrait.Async);
             }
 
-            if (method.DeclaringSyntaxReferences.Any(reference =>
-                reference.GetSyntax(cancellationToken) is MethodDeclarationSyntax declaration
-                && declaration.DescendantNodes()
-                    .OfType<YieldStatementSyntax>()
-                    .Any()))
+            if (EnumerateLogicalDeclarations(method)
+                .OfType<IMethodSymbol>()
+                .SelectMany(declaration => declaration.DeclaringSyntaxReferences)
+                .Any(reference =>
+                    reference.GetSyntax(cancellationToken)
+                        is MethodDeclarationSyntax declaration
+                    && ContainsDirectYield(declaration)))
             {
                 traits.Add(SymbolTrait.Iterator);
             }
@@ -667,10 +686,16 @@ public sealed class SymbolClassifier
 
     private static bool IsIndependentSourceCandidate(ISymbol symbol)
     {
+        symbol = CanonicalPartialMember(symbol);
         if (!symbol.Locations.Any(location => location.IsInSource)
             || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }
             || GetExplicitInterfaceMembers(symbol).Any()
             || symbol is IPropertySymbol property && IsRecordPositionalProperty(property))
+        {
+            return false;
+        }
+
+        if (IsUnimplementedPartialDefinition(symbol))
         {
             return false;
         }
@@ -801,17 +826,51 @@ public sealed class SymbolClassifier
 
     private static bool IsPartialDeclaration(
         ISymbol symbol,
-        CancellationToken cancellationToken) => symbol switch
+        CancellationToken cancellationToken)
+    {
+        symbol = CanonicalPartialMember(symbol);
+        return symbol switch
         {
             INamedTypeSymbol => symbol.DeclaringSyntaxReferences.Any(reference =>
                 reference.GetSyntax(cancellationToken) is TypeDeclarationSyntax declaration
                 && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
-            IMethodSymbol { MethodKind: MethodKind.Ordinary } =>
-                symbol.DeclaringSyntaxReferences.Any(reference =>
-                    reference.GetSyntax(cancellationToken) is MethodDeclarationSyntax declaration
+            IMethodSymbol { MethodKind: MethodKind.Ordinary } method =>
+                method.PartialImplementationPart is not null
+                || method.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax(cancellationToken)
+                        is MethodDeclarationSyntax declaration
+                    && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
+            IPropertySymbol property =>
+                property.PartialImplementationPart is not null
+                || property.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax(cancellationToken) switch
+                    {
+                        PropertyDeclarationSyntax declaration =>
+                            declaration.Modifiers.Any(SyntaxKind.PartialKeyword),
+                        IndexerDeclarationSyntax declaration =>
+                            declaration.Modifiers.Any(SyntaxKind.PartialKeyword),
+                        _ => false,
+                    }),
+            IEventSymbol @event =>
+                @event.PartialImplementationPart is not null
+                || @event.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax(cancellationToken)
+                        is EventDeclarationSyntax declaration
                     && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
             _ => false,
         };
+    }
+
+    private static bool ContainsDirectYield(
+        MethodDeclarationSyntax declaration) =>
+        declaration.DescendantNodes()
+            .OfType<YieldStatementSyntax>()
+            .Any(statement => ReferenceEquals(
+                statement.Ancestors().First(node =>
+                    node is MethodDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax),
+                declaration));
 
     private static bool IsRelationMember(ISymbol symbol) =>
         !symbol.IsImplicitlyDeclared
@@ -848,11 +907,75 @@ public sealed class SymbolClassifier
         foreach (var type in EnumerateTypes(root))
         {
             yield return type;
-            foreach (var member in type.GetMembers().Where(member => member is not INamedTypeSymbol))
+            foreach (var member in EnumerateLogicalMembers(type)
+                .Where(member => member is not INamedTypeSymbol))
             {
                 yield return member;
             }
         }
+    }
+
+    private static IEnumerable<ISymbol> EnumerateLogicalMembers(
+        INamedTypeSymbol type) =>
+        type.GetMembers()
+            .Select(CanonicalPartialMember)
+            .Distinct(SymbolEqualityComparer.Default);
+
+    private static ISymbol CanonicalPartialMember(ISymbol symbol) =>
+        symbol switch
+        {
+            IMethodSymbol { PartialDefinitionPart: { } definition } => definition,
+            IPropertySymbol { PartialDefinitionPart: { } definition } => definition,
+            IEventSymbol { PartialDefinitionPart: { } definition } => definition,
+            _ => symbol,
+        };
+
+    private static IEnumerable<ISymbol> EnumerateLogicalDeclarations(
+        ISymbol symbol)
+    {
+        var definition = CanonicalPartialMember(symbol);
+        yield return definition;
+        ISymbol? implementation = definition switch
+        {
+            IMethodSymbol method => method.PartialImplementationPart,
+            IPropertySymbol property => property.PartialImplementationPart,
+            IEventSymbol @event => @event.PartialImplementationPart,
+            _ => null,
+        };
+        if (implementation is not null)
+        {
+            yield return implementation;
+        }
+    }
+
+    private static bool IsUnimplementedPartialDefinition(ISymbol symbol)
+    {
+        symbol = CanonicalPartialMember(symbol);
+        return symbol switch
+        {
+            IMethodSymbol method =>
+                method.PartialImplementationPart is null
+                && method.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is MethodDeclarationSyntax declaration
+                    && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
+            IPropertySymbol property =>
+                property.PartialImplementationPart is null
+                && property.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() switch
+                    {
+                        PropertyDeclarationSyntax declaration =>
+                            declaration.Modifiers.Any(SyntaxKind.PartialKeyword),
+                        IndexerDeclarationSyntax declaration =>
+                            declaration.Modifiers.Any(SyntaxKind.PartialKeyword),
+                        _ => false,
+                    }),
+            IEventSymbol @event =>
+                @event.PartialImplementationPart is null
+                && @event.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is EventDeclarationSyntax declaration
+                    && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
+            _ => false,
+        };
     }
 
     private static IEnumerable<INamedTypeSymbol> EnumerateTypes(INamespaceSymbol root)
