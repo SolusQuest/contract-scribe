@@ -7,15 +7,26 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
     private readonly object sync = new();
     private readonly string temporaryWorkRoot;
     private readonly string outputStagingRoot;
+    private readonly string freezeSentinelName =
+        $".contractscribe-hv-freeze-{Guid.NewGuid():N}";
+    private readonly string releaseSentinelName =
+        $".contractscribe-hv-release-{Guid.NewGuid():N}";
     private readonly Dictionary<string, long> currentLengths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ManualResetEventSlim> barrierAcknowledgements =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ManualResetEventSlim> freezeAcknowledgements =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ManualResetEventSlim> releaseAcknowledgements =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> frozenRoles = new(StringComparer.Ordinal);
+    private readonly HashSet<string> releasedRoles = new(StringComparer.Ordinal);
     private readonly object callbackSync = new();
     private readonly FileSystemWatcher[] watchers;
     private int activeCallbacks;
     private bool callbacksAccepting = true;
     private bool observerComplete = true;
     private bool retentionBreach;
+    private bool releaseIssued;
     private bool observationClosed;
     private long currentTemporaryBytes;
     private long currentStagingBytes;
@@ -36,6 +47,10 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         {
             throw new ProtocolException("HV242_TEMPORARY_DISK_CONTRACT");
         }
+        freezeAcknowledgements["temporary-work"] = new(false);
+        freezeAcknowledgements["output-staging"] = new(false);
+        releaseAcknowledgements["temporary-work"] = new(false);
+        releaseAcknowledgements["output-staging"] = new(false);
         watchers =
         [
             CreateWatcher(this.temporaryWorkRoot, "temporary-work"),
@@ -44,13 +59,27 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         Synchronize();
     }
 
-    public TemporaryDiskHighWaterEvidence CaptureGate()
+    public TemporaryDiskGateContract GateContract =>
+        new(
+            temporaryWorkRoot,
+            outputStagingRoot,
+            freezeSentinelName,
+            releaseSentinelName);
+
+    public TemporaryDiskHighWaterEvidence CaptureAndRelease(
+        Action release,
+        MonotonicDeadline deadline)
     {
-        Synchronize();
+        WaitForBoundary(freezeAcknowledgements, deadline);
+        Synchronize(deadline);
+        TemporaryDiskHighWaterEvidence evidence;
         lock (sync)
         {
-            observationClosed = true;
-            return new(
+            if (frozenRoles.Count != 2)
+            {
+                observerComplete = false;
+            }
+            evidence = new(
                 "peak-concurrent-logical-file-bytes",
                 "contractscribe-temporary-work-and-output-staging.v1",
                 "pre-subject-to-temporary-disk-high-water.v1",
@@ -59,10 +88,32 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 peakTotalBytes,
                 observerComplete,
                 retentionBreach);
+            releaseIssued = true;
+        }
+        release();
+        WaitForBoundary(releaseAcknowledgements, deadline);
+        Synchronize(deadline);
+        lock (sync)
+        {
+            if (releasedRoles.Count != 2)
+            {
+                observerComplete = false;
+            }
+            observationClosed = true;
+            return evidence with
+            {
+                ObserverComplete = evidence.ObserverComplete && observerComplete,
+                RetentionBreach = evidence.RetentionBreach || retentionBreach
+            };
         }
     }
 
     public void Synchronize()
+    {
+        Synchronize(MonotonicDeadline.Start(TimeSpan.FromSeconds(10)));
+    }
+
+    private void Synchronize(MonotonicDeadline deadline)
     {
         lock (sync)
         {
@@ -77,7 +128,7 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         TryCreateBarrier(barriers, "output-staging", outputStagingRoot);
         foreach (var barrier in barriers)
         {
-            if (!barrier.Acknowledgement.Wait(TimeSpan.FromSeconds(10)))
+            if (!WaitForSignal(barrier.Acknowledgement, deadline))
             {
                 lock (sync)
                 {
@@ -85,7 +136,7 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 }
             }
         }
-        if (!WaitForCallbacksToDrain(TimeSpan.FromSeconds(10)))
+        if (!WaitForCallbacksToDrain(deadline))
         {
             lock (sync)
             {
@@ -139,7 +190,8 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         {
             callbacksAccepting = false;
         }
-        _ = WaitForCallbacksToDrain(TimeSpan.FromSeconds(10));
+        _ = WaitForCallbacksToDrain(
+            MonotonicDeadline.Start(TimeSpan.FromSeconds(10)));
         foreach (var watcher in watchers)
         {
             watcher.Dispose();
@@ -148,6 +200,18 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         {
             acknowledgement.Dispose();
         }
+        foreach (var acknowledgement in freezeAcknowledgements.Values)
+        {
+            acknowledgement.Dispose();
+        }
+        foreach (var acknowledgement in releaseAcknowledgements.Values)
+        {
+            acknowledgement.Dispose();
+        }
+        DeleteSentinel(temporaryWorkRoot, freezeSentinelName);
+        DeleteSentinel(temporaryWorkRoot, releaseSentinelName);
+        DeleteSentinel(outputStagingRoot, freezeSentinelName);
+        DeleteSentinel(outputStagingRoot, releaseSentinelName);
     }
 
     private FileSystemWatcher CreateWatcher(string root, string role)
@@ -162,16 +226,28 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                 | NotifyFilters.LastWrite
         };
         watcher.Created += (_, args) =>
-            ExecuteCallback(() => ObserveLength(role, root, args.FullPath));
+            ExecuteCallback(() => ObserveLength(
+                role,
+                root,
+                args.FullPath,
+                isMutationEvent: true));
         watcher.Changed += (_, args) =>
-            ExecuteCallback(() => ObserveLength(role, root, args.FullPath));
+            ExecuteCallback(() => ObserveLength(
+                role,
+                root,
+                args.FullPath,
+                isMutationEvent: true));
         watcher.Deleted += (_, args) =>
             ExecuteCallback(() => ObserveRemoval(role, root, args.FullPath));
         watcher.Renamed += (_, args) =>
             ExecuteCallback(() =>
             {
                 ObserveRemoval(role, root, args.OldFullPath);
-                ObserveLength(role, root, args.FullPath);
+                ObserveLength(
+                    role,
+                    root,
+                    args.FullPath,
+                    isMutationEvent: true);
             });
         watcher.Error += (_, _) =>
             ExecuteCallback(() =>
@@ -212,15 +288,14 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         }
     }
 
-    private bool WaitForCallbacksToDrain(TimeSpan timeout)
+    private bool WaitForCallbacksToDrain(MonotonicDeadline deadline)
     {
-        var deadline = DateTime.UtcNow + timeout;
         lock (callbackSync)
         {
             while (activeCallbacks != 0)
             {
-                var remaining = deadline - DateTime.UtcNow;
-                if (remaining <= TimeSpan.Zero
+                var remaining = deadline.Remaining;
+                if (remaining == TimeSpan.Zero
                     || !Monitor.Wait(callbackSync, remaining))
                 {
                     return false;
@@ -230,7 +305,80 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         }
     }
 
-    private void ObserveLength(string role, string root, string fullPath)
+    private void WaitForBoundary(
+        IReadOnlyDictionary<string, ManualResetEventSlim> acknowledgements,
+        MonotonicDeadline deadline)
+    {
+        foreach (var acknowledgement in acknowledgements.Values)
+        {
+            if (!WaitForSignal(acknowledgement, deadline))
+            {
+                lock (sync)
+                {
+                    observerComplete = false;
+                }
+            }
+        }
+    }
+
+    private static bool WaitForSignal(
+        ManualResetEventSlim signal,
+        MonotonicDeadline deadline)
+    {
+        var remaining = deadline.Remaining;
+        return remaining != TimeSpan.Zero && signal.Wait(remaining);
+    }
+
+    private void ObserveFreezeSentinel(string role, string fullPath)
+    {
+        if (releaseIssued || !IsZeroLengthFile(fullPath))
+        {
+            observerComplete = false;
+            retentionBreach = true;
+            return;
+        }
+        if (frozenRoles.Add(role))
+        {
+            freezeAcknowledgements[role].Set();
+        }
+    }
+
+    private void ObserveReleaseSentinel(string role, string fullPath)
+    {
+        if (!releaseIssued
+            || !frozenRoles.Contains(role)
+            || !IsZeroLengthFile(fullPath))
+        {
+            observerComplete = false;
+            retentionBreach = true;
+            return;
+        }
+        if (releasedRoles.Add(role))
+        {
+            releaseAcknowledgements[role].Set();
+        }
+    }
+
+    private static bool IsZeroLengthFile(string path)
+    {
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length == 0;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private void ObserveLength(
+        string role,
+        string root,
+        string fullPath,
+        bool isMutationEvent)
     {
         lock (sync)
         {
@@ -243,6 +391,24 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             {
                 acknowledgement.Set();
                 return;
+            }
+            if (key == ToKey(role, root, Path.Join(root, freezeSentinelName)))
+            {
+                ObserveFreezeSentinel(role, fullPath);
+                return;
+            }
+            if (key == ToKey(role, root, Path.Join(root, releaseSentinelName)))
+            {
+                ObserveReleaseSentinel(role, fullPath);
+                return;
+            }
+            if (releasedRoles.Contains(role))
+            {
+                return;
+            }
+            if (frozenRoles.Contains(role) && isMutationEvent)
+            {
+                retentionBreach = true;
             }
             if (Directory.Exists(fullPath))
             {
@@ -288,6 +454,17 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
             {
                 return;
             }
+            if (key == ToKey(role, root, Path.Join(root, freezeSentinelName))
+                || key == ToKey(role, root, Path.Join(root, releaseSentinelName)))
+            {
+                observerComplete = false;
+                retentionBreach = true;
+                return;
+            }
+            if (releasedRoles.Contains(role))
+            {
+                return;
+            }
             retentionBreach = true;
             RemoveLength(key);
         }
@@ -330,7 +507,15 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
                          Key = ToKey(role, root, path)
                      })
                      .Where(candidate =>
-                         !barrierAcknowledgements.ContainsKey(candidate.Key)))
+                         !barrierAcknowledgements.ContainsKey(candidate.Key)
+                         && candidate.Key != ToKey(
+                             role,
+                             root,
+                             Path.Join(root, freezeSentinelName))
+                         && candidate.Key != ToKey(
+                             role,
+                             root,
+                             Path.Join(root, releaseSentinelName))))
         {
             result[candidate.Key] = new FileInfo(candidate.Path).Length;
         }
@@ -379,7 +564,8 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
     private void Reconcile(IReadOnlyDictionary<string, long> current)
     {
         foreach (var missing in currentLengths.Keys
-                     .Where(key => !current.ContainsKey(key))
+                     .Where(key => !current.ContainsKey(key)
+                         && !releasedRoles.Contains(RoleFromKey(key)))
                      .ToArray())
         {
             retentionBreach = true;
@@ -387,6 +573,17 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
         }
         foreach (var pair in current)
         {
+            var role = RoleFromKey(pair.Key);
+            if (releasedRoles.Contains(role))
+            {
+                continue;
+            }
+            var existed = currentLengths.TryGetValue(pair.Key, out var previous);
+            if (frozenRoles.Contains(role)
+                && (!existed || previous != pair.Value))
+            {
+                retentionBreach = true;
+            }
             UpdateLength(pair.Key, pair.Value);
         }
     }
@@ -449,6 +646,26 @@ public sealed class TemporaryDiskHighWaterObserver : IDisposable
 
     private static string ToKey(string role, string root, string fullPath) =>
         $"{role}/{Path.GetRelativePath(root, fullPath).Replace('\\', '/')}";
+
+    private static string RoleFromKey(string key)
+    {
+        var separator = key.IndexOf('/');
+        return separator < 0 ? string.Empty : key[..separator];
+    }
+
+    private static void DeleteSentinel(string root, string name)
+    {
+        try
+        {
+            File.Delete(Path.Join(root, name));
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException)
+        {
+        }
+    }
 
     private sealed record BarrierRegistration(
         string Path,

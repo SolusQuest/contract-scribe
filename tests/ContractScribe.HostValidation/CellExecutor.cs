@@ -362,7 +362,7 @@ public static class CellExecutor
                 context.Protocol.ExecutionContract.SubjectTimeoutSeconds,
                 temporaryDiskObserver is null
                     ? null
-                    : temporaryDiskObserver.CaptureGate);
+                    : temporaryDiskObserver.CaptureAndRelease);
             var request = new SubjectRequest(
                 "contractscribe-m1-host-validation-subject-request-v1",
                 "production-host",
@@ -375,7 +375,8 @@ public static class CellExecutor
                 control?.Action ?? "continue",
                 networkOperationLogPath,
                 transitionLogPath,
-                auditTemporaryRoot);
+                auditTemporaryRoot,
+                temporaryDiskObserver?.GateContract);
             CanonicalJson.WriteCanonical(requestPath, request);
             SchemaValidation.ValidateDefinition(
                 requestPath,
@@ -694,7 +695,8 @@ public static class CellExecutor
         VectorDefinition vector,
         string tempRoot,
         int timeoutSeconds,
-        Func<TemporaryDiskHighWaterEvidence>? measureTemporaryDisk) =>
+        Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
+            measureTemporaryDisk) =>
         vector.VectorId switch
         {
             "cancellation.before-commit" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),

@@ -118,7 +118,9 @@
           "required": [
             "gate",
             "retainUntilRelease",
-            "cleanupBeforeGateAllowed"
+            "cleanupBeforeGateAllowed",
+            "freezeBoundary",
+            "releaseBoundary"
           ],
           "properties": {
             "gate": {
@@ -129,6 +131,12 @@
             },
             "cleanupBeforeGateAllowed": {
               "const": false
+            },
+            "freezeBoundary": {
+              "const": "subject-sentinel-in-each-governed-root-before-control-gate"
+            },
+            "releaseBoundary": {
+              "const": "subject-sentinel-in-each-governed-root-before-post-release-mutation"
             }
           },
           "additionalProperties": false
@@ -744,7 +752,8 @@
         "controlAction",
         "networkOperationLogPath",
         "transitionLogPath",
-        "auditTemporaryRoot"
+        "auditTemporaryRoot",
+        "temporaryDiskGate"
       ],
       "properties": {
         "formatVersion": {
@@ -834,8 +843,76 @@
           ],
           "minLength": 1,
           "maxLength": 1024
+        },
+        "temporaryDiskGate": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "temporaryWorkRoot",
+                "outputStagingRoot",
+                "freezeSentinelName",
+                "releaseSentinelName"
+              ],
+              "properties": {
+                "temporaryWorkRoot": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "outputStagingRoot": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "freezeSentinelName": {
+                  "type": "string",
+                  "pattern": "^\\.contractscribe-hv-freeze-[a-f0-9]{32}$"
+                },
+                "releaseSentinelName": {
+                  "type": "string",
+                  "pattern": "^\\.contractscribe-hv-release-[a-f0-9]{32}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "controlAction": {
+                "const": "measure-temporary-disk"
+              }
+            },
+            "required": [
+              "controlAction"
+            ]
+          },
+          "then": {
+            "properties": {
+              "auditTemporaryRoot": {
+                "type": "string"
+              },
+              "temporaryDiskGate": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "temporaryDiskGate": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "subjectResponse": {

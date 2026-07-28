@@ -1,5 +1,8 @@
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -40,8 +43,52 @@ public static partial class NetworkOperationSourceScanner
             .Select(artifact => Path.GetFullPath(
                 RepositoryPaths.ResolveConfined(root, artifact.Path)))
             .ToArray();
-        var closure = BuildManagedClosure(declared);
+        var closure = BuildManagedClosure(declared, materialization.SelectedRuntime);
         return closure.Any(HasForbiddenMemberReference);
+    }
+
+    public static string SelectedRuntimeManifestIdentity(string selectedRuntime)
+    {
+        try
+        {
+            var runtimeAssemblies = TrustedPlatformAssemblies(selectedRuntime);
+            return $"runtime.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(
+                runtimeAssemblies
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new
+                    {
+                        Identity = pair.Key,
+                        FileName = Path.GetFileName(pair.Value),
+                        Sha256 = CanonicalJson.Sha256File(pair.Value)
+                    })
+                    .ToArray()))}";
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or BadImageFormatException
+                or ProtocolException
+            {
+                Code: "HV249_SELECTED_RUNTIME_MANIFEST"
+            })
+        {
+            throw new ProtocolException("HV249_SELECTED_RUNTIME_MANIFEST");
+        }
+    }
+
+    public static string SelectedRuntimeManifestInputIdentity(
+        string selectedRuntime)
+    {
+        try
+        {
+            return SelectedRuntimeManifestIdentity(selectedRuntime);
+        }
+        catch (ProtocolException exception) when (
+            exception.Code == "HV249_SELECTED_RUNTIME_MANIFEST")
+        {
+            return $"runtime-incomplete.{CanonicalJson.Sha256(
+                Encoding.UTF8.GetBytes(selectedRuntime))}";
+        }
     }
 
     public static void ValidateSyntheticSource(string sourceText)
@@ -185,7 +232,9 @@ public static partial class NetworkOperationSourceScanner
                     or "GetDelegateForFunctionPointer";
     }
 
-    private static IReadOnlySet<string> BuildManagedClosure(IEnumerable<string> roots)
+    private static IReadOnlySet<string> BuildManagedClosure(
+        IEnumerable<string> roots,
+        string selectedRuntime)
     {
         var rootArray = roots.ToArray();
         var pathComparer = OperatingSystem.IsWindows()
@@ -195,9 +244,9 @@ public static partial class NetworkOperationSourceScanner
         {
             throw new ProtocolException("HV244_PRODUCTION_DEPENDENCY_CLOSURE");
         }
-        var candidateByName = rootArray
+        var candidateByIdentity = rootArray
             .GroupBy(
-                GetAssemblySimpleName,
+                path => GetAssemblyIdentity(path).Canonical,
                 StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
             group => group.Key,
@@ -211,7 +260,19 @@ public static partial class NetworkOperationSourceScanner
                 return candidates[0];
             },
             StringComparer.OrdinalIgnoreCase);
-        var frameworkAssemblyNames = TrustedPlatformAssemblyNames();
+        IReadOnlyDictionary<string, string> trustedPlatformAssemblies;
+        try
+        {
+            trustedPlatformAssemblies =
+                TrustedPlatformAssemblies(selectedRuntime);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or BadImageFormatException)
+        {
+            throw new ProtocolException("HV249_SELECTED_RUNTIME_MANIFEST");
+        }
         var closure = new HashSet<string>(
             pathComparer);
         var pending = new Stack<string>(rootArray);
@@ -223,11 +284,13 @@ public static partial class NetworkOperationSourceScanner
             }
             foreach (var reference in GetAssemblyReferences(path))
             {
-                if (candidateByName.TryGetValue(reference, out var dependency))
+                if (candidateByIdentity.TryGetValue(
+                        reference.Canonical,
+                        out var dependency))
                 {
                     pending.Push(dependency);
                 }
-                else if (!frameworkAssemblyNames.Contains(reference))
+                else if (!trustedPlatformAssemblies.ContainsKey(reference.Canonical))
                 {
                     throw new ProtocolException(
                         "HV244_PRODUCTION_DEPENDENCY_CLOSURE");
@@ -237,35 +300,78 @@ public static partial class NetworkOperationSourceScanner
         return closure;
     }
 
-    private static IReadOnlySet<string> TrustedPlatformAssemblyNames()
+    private static IReadOnlyDictionary<string, string> TrustedPlatformAssemblies(
+        string selectedRuntime)
     {
         if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is not string paths)
         {
             throw new ProtocolException(
-                "HV244_PRODUCTION_DEPENDENCY_CLOSURE");
+                "HV249_SELECTED_RUNTIME_MANIFEST");
         }
-        return paths
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(path => Path.GetFileNameWithoutExtension(path)!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static string GetAssemblySimpleName(string assemblyPath)
-    {
-        using var stream = File.OpenRead(assemblyPath);
-        using var peReader = new PEReader(stream);
-        if (!peReader.HasMetadata)
+        var runtimeDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(RuntimeEnvironment.GetRuntimeDirectory()));
+        if (!string.Equals(
+                Environment.Version.ToString(),
+                selectedRuntime,
+                StringComparison.Ordinal))
         {
-            throw new BadImageFormatException(
-                "A declared managed artifact does not contain metadata.");
+            throw new ProtocolException(
+                "HV249_SELECTED_RUNTIME_MANIFEST");
         }
-        var metadata = peReader.GetMetadataReader();
-        return metadata.IsAssembly
-            ? metadata.GetString(metadata.GetAssemblyDefinition().Name)
-            : Path.GetFileNameWithoutExtension(assemblyPath);
+        var runtimePaths = paths
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(Path.GetFullPath)
+            .Where(path => string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(path)!),
+                runtimeDirectory,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+            .Distinct(
+                OperatingSystem.IsWindows()
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal)
+            .ToArray();
+        if (runtimePaths.Length == 0)
+        {
+            throw new ProtocolException(
+                "HV249_SELECTED_RUNTIME_MANIFEST");
+        }
+        return runtimePaths
+            .GroupBy(
+                path => GetAssemblyIdentity(path).Canonical,
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var candidates = group.Order(StringComparer.Ordinal).ToArray();
+                    if (candidates.Length != 1)
+                    {
+                        throw new ProtocolException(
+                            "HV249_SELECTED_RUNTIME_MANIFEST");
+                    }
+                    return candidates[0];
+                },
+                StringComparer.OrdinalIgnoreCase);
     }
 
-    private static IEnumerable<string> GetAssemblyReferences(string assemblyPath)
+    private static ManagedAssemblyIdentity GetAssemblyIdentity(string assemblyPath)
+    {
+        var identity = AssemblyName.GetAssemblyName(assemblyPath);
+        return new(
+            identity.Name
+                ?? throw new BadImageFormatException(
+                    "A declared managed artifact has no assembly name."),
+            identity.Version?.ToString() ?? "0.0.0.0",
+            string.IsNullOrEmpty(identity.CultureName)
+                ? "neutral"
+                : identity.CultureName,
+            FormatPublicKeyToken(identity.GetPublicKeyToken()));
+    }
+
+    private static IReadOnlyList<ManagedAssemblyIdentity> GetAssemblyReferences(
+        string assemblyPath)
     {
         using var stream = File.OpenRead(assemblyPath);
         using var peReader = new PEReader(stream);
@@ -276,9 +382,39 @@ public static partial class NetworkOperationSourceScanner
         }
         var metadata = peReader.GetMetadataReader();
         return metadata.AssemblyReferences
-            .Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+            .Select(handle =>
+            {
+                var reference = metadata.GetAssemblyReference(handle);
+                var keyOrToken = metadata.GetBlobBytes(reference.PublicKeyOrToken);
+                var token = (reference.Flags & AssemblyFlags.PublicKey) != 0
+                    ? ComputePublicKeyToken(keyOrToken)
+                    : FormatPublicKeyToken(keyOrToken);
+                var culture = reference.Culture.IsNil
+                    ? "neutral"
+                    : metadata.GetString(reference.Culture);
+                return new ManagedAssemblyIdentity(
+                    metadata.GetString(reference.Name),
+                    reference.Version.ToString(),
+                    string.IsNullOrEmpty(culture) ? "neutral" : culture,
+                    token);
+            })
             .ToArray();
     }
+
+    private static string ComputePublicKeyToken(byte[] publicKey)
+    {
+        if (publicKey.Length == 0)
+        {
+            return "null";
+        }
+        var digest = SHA1.HashData(publicKey);
+        return Convert.ToHexStringLower(digest[^8..].Reverse().ToArray());
+    }
+
+    private static string FormatPublicKeyToken(byte[]? token) =>
+        token is null || token.Length == 0
+            ? "null"
+            : Convert.ToHexStringLower(token);
 
     private static string StripCommentsAndLiterals(string source)
     {
@@ -332,5 +468,15 @@ public static partial class NetworkOperationSourceScanner
             }
         }
         return builder.ToString();
+    }
+
+    private sealed record ManagedAssemblyIdentity(
+        string Name,
+        string Version,
+        string Culture,
+        string PublicKeyToken)
+    {
+        public string Canonical =>
+            $"{Name}, Version={Version}, Culture={Culture}, PublicKeyToken={PublicKeyToken}";
     }
 }

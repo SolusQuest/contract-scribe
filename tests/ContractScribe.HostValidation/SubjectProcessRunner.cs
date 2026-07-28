@@ -6,6 +6,9 @@ namespace ContractScribe.HostValidation;
 
 public static class SubjectProcessRunner
 {
+    internal static string LastObservationDiagnosticCode { get; private set; } =
+        "HV944_OBSERVATION_NOT_RUN";
+
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static async Task<ProcessExecutionResult> RunAsync(
@@ -74,11 +77,28 @@ public static class SubjectProcessRunner
         await using var processObserver = new ProcessTreeObserver(
             process,
             processIdentityRegistry ?? []);
-        var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, standardOutputLimit, cancellationToken);
-        var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, standardErrorLimit, cancellationToken);
+        var executionDeadline = MonotonicDeadline.Start(timeout);
+        using var streamDeadlineSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        streamDeadlineSource.CancelAfter(timeout);
+        var stdoutTask = ReadBoundedAsync(
+            process.StandardOutput.BaseStream,
+            standardOutputLimit,
+            streamDeadlineSource.Token,
+            cancellationToken);
+        var stderrTask = ReadBoundedAsync(
+            process.StandardError.BaseStream,
+            standardErrorLimit,
+            streamDeadlineSource.Token,
+            cancellationToken);
         var controlTask = control is null
             ? Task.FromResult(new ControlExecutionResult(true, null))
-            : ApplyControlAsync(process, processObserver, control, cancellationToken);
+            : ApplyControlAsync(
+                process,
+                processObserver,
+                control,
+                executionDeadline,
+                cancellationToken);
         var timedOut = false;
         ControlExecutionResult controlResult;
         int? exitCode;
@@ -94,10 +114,24 @@ public static class SubjectProcessRunner
             {
                 _ = NativeTerminationObserver.TerminateTreeAndCapture(
                     process,
-                    processObserver.Snapshot());
+                    processObserver.CaptureTerminationPlan(),
+                    processObserver.IsCurrentTerminationTarget,
+                    MonotonicDeadline.Start(TimeSpan.FromSeconds(5)),
+                    CancellationToken.None);
                 throw;
             }
             exitCode = nativeTermination?.ManagedExitCode;
+            if ((!controlResult.Completed
+                    || nativeTermination?.CausalMatch != true)
+                && NativeTerminationObserver.IsAliveNonReaping(process.Id))
+            {
+                _ = NativeTerminationObserver.TerminateTreeAndCapture(
+                    process,
+                    processObserver.CaptureTerminationPlan(),
+                    processObserver.IsCurrentTerminationTarget,
+                    MonotonicDeadline.Start(TimeSpan.FromSeconds(5)),
+                    CancellationToken.None);
+            }
         }
         else
         {
@@ -125,15 +159,32 @@ public static class SubjectProcessRunner
 
         var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
+        if (control?.Action == "external-kill"
+            && (!stdout.Complete || !stderr.Complete))
+        {
+            controlResult = controlResult with
+            {
+                Completed = false,
+                Outcome = "stream-timeout"
+            };
+        }
         if (!controlResult.Completed && control?.Action != "external-kill")
         {
             _ = TryKill(process);
         }
         var platformTermination = ClassifyTermination(exitCode, nativeTermination);
+        LastObservationDiagnosticCode = !processObserver.ObservationComplete
+            ? processObserver.DiagnosticCode
+            : !stdout.Complete
+                ? "HV945_STANDARD_OUTPUT_INCOMPLETE"
+                : !stderr.Complete
+                    ? "HV946_STANDARD_ERROR_INCOMPLETE"
+                    : "HV000_OBSERVATION_COMPLETE";
         var confirmedExternalKill = control?.Action == "external-kill"
             && controlResult.Completed
-            && nativeTermination?.KillRequestOutcome == "issued"
-            && nativeTermination.CausalMatch;
+            && NativeTerminationObserver.IsTerminationFullyObserved(
+                nativeTermination,
+                stdout.Complete && stderr.Complete);
         var observedControlOutcome = control?.Action == "external-kill"
             && nativeTermination?.KillRequestOutcome == "issued"
                 ? confirmedExternalKill
@@ -156,7 +207,9 @@ public static class SubjectProcessRunner
             timedOut,
             controlResult.Completed,
             observedControlOutcome,
-            processObserver.ObservationComplete,
+            processObserver.ObservationComplete
+                && stdout.Complete
+                && stderr.Complete,
             processObserver.Snapshot(),
             control?.Action == "external-kill" ? nativeTermination?.KillRequestOutcome : null,
             platformTermination,
@@ -186,23 +239,26 @@ public static class SubjectProcessRunner
         Process process,
         ProcessTreeObserver processObserver,
         SubjectControl control,
+        MonotonicDeadline deadline,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(control.ControlRoot);
         var reachedPath = Path.Join(control.ControlRoot, $"{control.GateName}.reached");
-        var deadline = DateTime.UtcNow + control.GateTimeout;
         while (!File.Exists(reachedPath))
         {
             var exited = control.Action == "external-kill"
                 ? !NativeTerminationObserver.IsAliveNonReaping(process.Id)
                 : process.HasExited;
-            if (exited || DateTime.UtcNow >= deadline)
+            if (exited || deadline.IsExpired)
             {
                 if (control.Action == "external-kill")
                 {
                     var native = NativeTerminationObserver.TerminateTreeAndCapture(
                         process,
-                        processObserver.Snapshot());
+                        processObserver.CaptureTerminationPlan(),
+                        processObserver.IsCurrentTerminationTarget,
+                        deadline,
+                        cancellationToken);
                     return new(
                         false,
                         exited ? "already-exited" : "gate-timeout",
@@ -214,7 +270,20 @@ public static class SubjectProcessRunner
         }
         if (control.ActionDelay > TimeSpan.Zero)
         {
-            await Task.Delay(control.ActionDelay, cancellationToken).ConfigureAwait(false);
+            var remaining = deadline.Remaining;
+            if (remaining == TimeSpan.Zero)
+            {
+                return new(false, "control-timeout");
+            }
+            await Task.Delay(
+                control.ActionDelay < remaining
+                    ? control.ActionDelay
+                    : remaining,
+                cancellationToken).ConfigureAwait(false);
+            if (deadline.IsExpired)
+            {
+                return new(false, "control-timeout");
+            }
         }
         if (control.WaitForExitBeforeAction)
         {
@@ -230,6 +299,7 @@ public static class SubjectProcessRunner
                             control.ControlRoot,
                             $"{control.GateName}.release"),
                         string.Empty),
+                    deadline,
                     cancellationToken).ConfigureAwait(false);
             return new(false, naturalExit.KillRequestOutcome, naturalExit);
         }
@@ -244,17 +314,23 @@ public static class SubjectProcessRunner
                 var generation = processObserver.CompletedSampleGeneration;
                 if (!await processObserver.WaitForSampleAfterAsync(
                         generation,
-                        control.GateTimeout,
+                        deadline.Remaining,
                         cancellationToken).ConfigureAwait(false))
                 {
                     var incompleteNative = NativeTerminationObserver.TerminateTreeAndCapture(
                         process,
-                        processObserver.Snapshot());
+                        processObserver.CaptureTerminationPlan(),
+                        processObserver.IsCurrentTerminationTarget,
+                        deadline,
+                        cancellationToken);
                     return new(false, "post-gate-sample-missing", incompleteNative);
                 }
                 var native = NativeTerminationObserver.TerminateTreeAndCapture(
                     process,
-                    processObserver.Snapshot());
+                    processObserver.CaptureTerminationPlan(),
+                    processObserver.IsCurrentTerminationTarget,
+                    deadline,
+                    cancellationToken);
                 return new(native.KillRequestOutcome == "issued", native.KillRequestOutcome, native);
             case "release-late-completion":
                 File.WriteAllText(Path.Join(control.ControlRoot, "cancel.requested"), string.Empty);
@@ -264,7 +340,7 @@ public static class SubjectProcessRunner
                 var sampleGeneration = processObserver.CompletedSampleGeneration;
                 if (!await processObserver.WaitForSampleAfterAsync(
                         sampleGeneration,
-                        control.GateTimeout,
+                        deadline.Remaining,
                         cancellationToken).ConfigureAwait(false))
                 {
                     return new(false, "post-gate-sample-missing");
@@ -276,42 +352,57 @@ public static class SubjectProcessRunner
                 {
                     return new(false, "unsupported-control");
                 }
-                var measurement = control.MeasureTemporaryDisk();
-                File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
+                var measurement = control.MeasureTemporaryDisk(
+                    () => File.WriteAllText(
+                        Path.Join(
+                            control.ControlRoot,
+                            $"{control.GateName}.release"),
+                        string.Empty),
+                    deadline);
                 return new(true, "observed", TemporaryDiskHighWater: measurement);
             default:
                 return new(false, "unsupported-control");
         }
     }
 
-    private static async Task<(byte[] Bytes, bool Overflow)> ReadBoundedAsync(
+    private static async Task<(byte[] Bytes, bool Overflow, bool Complete)> ReadBoundedAsync(
         Stream stream,
         int limit,
-        CancellationToken cancellationToken)
+        CancellationToken deadlineToken,
+        CancellationToken callerCancellationToken)
     {
         var buffer = new byte[8192];
         using var captured = new MemoryStream(Math.Min(limit, 64 * 1024));
         var overflow = false;
-        while (true)
+        try
         {
-            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            while (true)
             {
-                break;
-            }
+                var read = await stream.ReadAsync(
+                    buffer,
+                    deadlineToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
 
-            var remaining = limit - checked((int)captured.Length);
-            if (remaining > 0)
-            {
-                captured.Write(buffer, 0, Math.Min(read, remaining));
-            }
-            if (read > remaining)
-            {
-                overflow = true;
+                var remaining = limit - checked((int)captured.Length);
+                if (remaining > 0)
+                {
+                    captured.Write(buffer, 0, Math.Min(read, remaining));
+                }
+                if (read > remaining)
+                {
+                    overflow = true;
+                }
             }
         }
-
-        return (captured.ToArray(), overflow);
+        catch (OperationCanceledException) when (
+            !callerCancellationToken.IsCancellationRequested)
+        {
+            return (captured.ToArray(), overflow, false);
+        }
+        return (captured.ToArray(), overflow, true);
     }
 
     private static bool IsValidUtf8(byte[] bytes)

@@ -39,6 +39,7 @@
     "tests/ContractScribe.HostValidation/HarnessSelfTest.cs",
     "tests/ContractScribe.HostValidation/IncompleteEvidenceWriter.cs",
     "tests/ContractScribe.HostValidation/Models.cs",
+    "tests/ContractScribe.HostValidation/MonotonicDeadline.cs",
     "tests/ContractScribe.HostValidation/NativeTerminationObserver.cs",
     "tests/ContractScribe.HostValidation/NetworkClaimSetRegistry.cs",
     "tests/ContractScribe.HostValidation/NetworkEvidenceEvaluator.cs",

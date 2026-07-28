@@ -160,7 +160,10 @@ public static class NetworkEvidenceEvaluator
             BuiltArtifacts = materialization.BuiltArtifacts
                 .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(artifact => artifact.Path, StringComparer.Ordinal)
-                .ToArray()
+                .ToArray(),
+            SelectedRuntimeManifest =
+                NetworkOperationSourceScanner.SelectedRuntimeManifestInputIdentity(
+                    materialization.SelectedRuntime)
         }))}";
         var observerIdentity = $"observer.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(new
         {
@@ -335,6 +338,15 @@ public static class NetworkEvidenceEvaluator
             return new(
                 "network.production-managed-input-invalid",
                 "subject-nonconformance");
+        }
+        if (exception is ProtocolException
+            {
+                Code: "HV249_SELECTED_RUNTIME_MANIFEST"
+            })
+        {
+            return new(
+                "network.selected-runtime-manifest-incomplete",
+                "environment-or-infrastructure-incomplete");
         }
         return new(
             "network.checked-in-scanner-failed",

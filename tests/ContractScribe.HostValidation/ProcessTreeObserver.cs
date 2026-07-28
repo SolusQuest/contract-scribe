@@ -8,12 +8,18 @@ namespace ContractScribe.HostValidation;
 public sealed class ProcessTreeObserver : IAsyncDisposable
 {
     private readonly int subjectProcessId;
+    private readonly ProcessInstanceIdentity subjectIdentity;
     private readonly IReadOnlyList<ProcessIdentityRule> identityRegistry;
     private readonly CancellationTokenSource cancellation = new();
+    private readonly SemaphoreSlim samplingGate = new(1, 1);
     private readonly Dictionary<int, ObservedProcess> observed = new();
+    private readonly HashSet<ProcessInstanceIdentity> observedIdentities = [];
     private readonly Task sampler;
     private volatile bool complete = true;
     private long completedSampleGeneration;
+
+    internal string DiagnosticCode { get; private set; } =
+        "HV000_PROCESS_TREE_OBSERVATION_COMPLETE";
 
     public ProcessTreeObserver(
         Process subjectProcess,
@@ -23,14 +29,19 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         this.identityRegistry = identityRegistry;
         try
         {
+            subjectIdentity = new(
+                subjectProcessId,
+                GetStartIdentity(subjectProcess));
             observed[subjectProcessId] = new ObservedProcess(
                 subjectProcessId,
                 GetParentProcessId(subjectProcess),
                 "subject-runtime",
                 SanitizeImageName(subjectProcess.ProcessName));
+            observedIdentities.Add(subjectIdentity);
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException
+            exception is ArgumentException
+                or InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or NotSupportedException
                 or IOException
@@ -38,12 +49,25 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 or FormatException
                 or OverflowException)
         {
-            complete = false;
+            MarkIncomplete("HV947_PROCESS_TREE_ROOT_IDENTITY_UNAVAILABLE");
+            subjectIdentity = new(subjectProcessId, 0);
         }
         sampler = SampleAsync(cancellation.Token);
     }
 
-    public bool ObservationComplete => complete && !sampler.IsFaulted;
+    public bool ObservationComplete
+    {
+        get
+        {
+            if (sampler.IsFaulted)
+            {
+                DiagnosticCode =
+                    $"HV955_PROCESS_TREE_SAMPLER_{sampler.Exception?.GetBaseException().GetType().Name.ToUpperInvariant()}";
+                return false;
+            }
+            return complete;
+        }
+    }
 
     public long CompletedSampleGeneration => Interlocked.Read(ref completedSampleGeneration);
 
@@ -52,16 +76,36 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (CompletedSampleGeneration <= generation)
+        if (timeout <= TimeSpan.Zero
+            || !await samplingGate.WaitAsync(
+                timeout,
+                cancellationToken).ConfigureAwait(false))
         {
-            if (!ObservationComplete || DateTime.UtcNow >= deadline)
-            {
-                return false;
-            }
-            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+            return false;
         }
-        return ObservationComplete;
+        try
+        {
+            CaptureSample();
+            return CompletedSampleGeneration > generation
+                && ObservationComplete;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException
+                or IOException
+                or UnauthorizedAccessException
+                or FormatException
+                or OverflowException)
+        {
+            MarkIncomplete("HV956_PROCESS_TREE_FRESH_SAMPLE_FAILED");
+            return false;
+        }
+        finally
+        {
+            samplingGate.Release();
+        }
     }
 
     public IReadOnlyList<ObservedProcess> Snapshot()
@@ -72,6 +116,113 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 .OrderBy(process => process.ProcessId)
                 .ToArray();
         }
+    }
+
+    public ProcessTerminationPlan CaptureTerminationPlan()
+    {
+        var processes = OperatingSystem.IsWindows()
+            ? CaptureWindowsProcesses()
+            : CapturePortableProcesses();
+        if (subjectIdentity.StartIdentity == 0
+            || !processes.TryGetValue(subjectProcessId, out var root)
+            || root.StartIdentity != subjectIdentity.StartIdentity)
+        {
+            MarkIncomplete("HV948_PROCESS_TREE_ROOT_IDENTITY_CHANGED");
+            return new(subjectIdentity, [], false);
+        }
+
+        var descendants = new List<ProcessTerminationTarget>();
+        foreach (var candidate in processes.Values)
+        {
+            if (candidate.ProcessId == subjectProcessId)
+            {
+                continue;
+            }
+            var depth = GetDescendantDepth(candidate, processes);
+            if (depth is null)
+            {
+                continue;
+            }
+            if (candidate.StartIdentity == 0)
+            {
+                MarkIncomplete("HV949_PROCESS_TREE_DESCENDANT_IDENTITY_UNAVAILABLE");
+                continue;
+            }
+            var identity = new ProcessInstanceIdentity(
+                candidate.ProcessId,
+                candidate.StartIdentity);
+            descendants.Add(new(
+                identity,
+                candidate.ParentId,
+                depth.Value));
+            lock (observed)
+            {
+                if (!observedIdentities.Contains(identity))
+                {
+                    MarkIncomplete("HV950_PROCESS_TREE_DESCENDANT_NOT_SAMPLED");
+                }
+                observedIdentities.Add(identity);
+                observed[candidate.ProcessId] = new(
+                    candidate.ProcessId,
+                    candidate.ParentId,
+                    ClassifyProcess(candidate.ProcessId, candidate.Name),
+                    candidate.Name);
+            }
+        }
+        return new(
+            subjectIdentity,
+            descendants
+                .OrderByDescending(target => target.Depth)
+                .ThenBy(target => target.Identity.ProcessId)
+                .ToArray(),
+            ObservationComplete);
+    }
+
+    public bool IsCurrentTerminationTarget(ProcessTerminationTarget target)
+    {
+        var processes = OperatingSystem.IsWindows()
+            ? CaptureWindowsProcesses()
+            : CapturePortableProcesses();
+        return IsCurrentDescendant(
+            subjectIdentity,
+            target.Identity,
+            processes.Values
+                .Where(process => process.StartIdentity != 0)
+                .Select(process => new ProcessSnapshotIdentity(
+                    new(
+                        process.ProcessId,
+                        process.StartIdentity),
+                    process.ParentId))
+                .ToArray());
+    }
+
+    public static bool IsCurrentDescendant(
+        ProcessInstanceIdentity root,
+        ProcessInstanceIdentity candidate,
+        IReadOnlyList<ProcessSnapshotIdentity> processes)
+    {
+        var table = processes.ToDictionary(
+            process => process.Identity.ProcessId,
+            process => process);
+        if (!table.TryGetValue(candidate.ProcessId, out var current)
+            || current.Identity != candidate)
+        {
+            return false;
+        }
+        var visited = new HashSet<int>();
+        while (visited.Add(current.Identity.ProcessId))
+        {
+            if (current.Identity.ProcessId == root.ProcessId)
+            {
+                return current.Identity == root;
+            }
+            if (current.ParentProcessId <= 0
+                || !table.TryGetValue(current.ParentProcessId, out current))
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     public async ValueTask DisposeAsync()
@@ -86,65 +237,88 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         }
         catch
         {
-            complete = false;
+            MarkIncomplete("HV953_PROCESS_TREE_SAMPLER_FAULTED");
         }
         cancellation.Dispose();
+        samplingGate.Dispose();
     }
 
     private async Task SampleAsync(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
-            var processes = OperatingSystem.IsWindows()
-                ? CaptureWindowsProcesses()
-                : CapturePortableProcesses();
-
-            foreach (var candidate in processes)
+            await samplingGate.WaitAsync(token).ConfigureAwait(false);
+            try
             {
-                if (!IsDescendant(candidate.Key, processes))
-                {
-                    continue;
-                }
-
-                var role = candidate.Key == subjectProcessId
-                    ? "subject-runtime"
-                    : ClassifyProcess(candidate.Key, candidate.Value.Name);
-                lock (observed)
-                {
-                    observed[candidate.Key] = new ObservedProcess(
-                        candidate.Key,
-                        candidate.Value.ParentId,
-                        role,
-                        candidate.Value.Name);
-                }
+                CaptureSample();
+            }
+            finally
+            {
+                samplingGate.Release();
             }
 
-            Interlocked.Increment(ref completedSampleGeneration);
             await Task.Delay(20, token).ConfigureAwait(false);
         }
     }
 
-    private bool IsDescendant(int processId, IReadOnlyDictionary<int, (int ParentId, string Name)> processes)
+    private void CaptureSample()
     {
-        var current = processId;
-        var visited = new HashSet<int>();
-        while (visited.Add(current))
+        var processes = OperatingSystem.IsWindows()
+            ? CaptureWindowsProcesses()
+            : CapturePortableProcesses();
+
+        foreach (var candidate in processes.Values)
         {
-            if (current == subjectProcessId)
+            if (GetDescendantDepth(candidate, processes) is null)
             {
-                return true;
+                continue;
             }
-            if (!processes.TryGetValue(current, out var process))
+
+            var role = candidate.ProcessId == subjectProcessId
+                ? "subject-runtime"
+                : ClassifyProcess(candidate.ProcessId, candidate.Name);
+            lock (observed)
             {
-                return false;
+                observed[candidate.ProcessId] = new ObservedProcess(
+                    candidate.ProcessId,
+                    candidate.ParentId,
+                    role,
+                    candidate.Name);
+                if (candidate.StartIdentity != 0)
+                {
+                    observedIdentities.Add(new(
+                        candidate.ProcessId,
+                        candidate.StartIdentity));
+                }
             }
-            if (process.ParentId <= 0)
-            {
-                return false;
-            }
-            current = process.ParentId;
         }
-        return false;
+
+        Interlocked.Increment(ref completedSampleGeneration);
+    }
+
+    private int? GetDescendantDepth(
+        CapturedProcess candidate,
+        IReadOnlyDictionary<int, CapturedProcess> processes)
+    {
+        var current = candidate;
+        var visited = new HashSet<int>();
+        var depth = 0;
+        while (visited.Add(current.ProcessId))
+        {
+            if (current.ProcessId == subjectProcessId)
+            {
+                return current.StartIdentity == subjectIdentity.StartIdentity
+                    ? depth
+                    : null;
+            }
+            if (current.ParentId <= 0
+                || !processes.TryGetValue(current.ParentId, out current))
+            {
+                return null;
+            }
+            depth++;
+        }
+        return null;
     }
 
     public static string ClassifyIdentity(
@@ -274,7 +448,8 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 identityRegistry);
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException
+            exception is ArgumentException
+                or InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or NotSupportedException
                 or IOException
@@ -366,21 +541,24 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         }
     }
 
-    private Dictionary<int, (int ParentId, string Name)> CapturePortableProcesses()
+    private Dictionary<int, CapturedProcess> CapturePortableProcesses()
     {
-        var processes = new Dictionary<int, (int ParentId, string Name)>();
+        var processes = new Dictionary<int, CapturedProcess>();
         foreach (var process in Process.GetProcesses())
         {
             using (process)
             {
                 try
                 {
-                    processes[process.Id] = (
+                    processes[process.Id] = new(
+                        process.Id,
                         GetParentProcessId(process),
-                        SanitizeImageName(process.ProcessName));
+                        SanitizeImageName(process.ProcessName),
+                        GetStartIdentity(process));
                 }
                 catch (Exception exception) when (
-                    exception is InvalidOperationException
+                    exception is ArgumentException
+                        or InvalidOperationException
                         or System.ComponentModel.Win32Exception
                         or NotSupportedException
                         or IOException
@@ -390,7 +568,7 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 {
                     if (!HasDisappeared(process))
                     {
-                        complete = false;
+                        MarkIncomplete("HV954_PROCESS_TREE_PROCESS_READ_FAILED");
                     }
                 }
             }
@@ -398,13 +576,13 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         return processes;
     }
 
-    private Dictionary<int, (int ParentId, string Name)> CaptureWindowsProcesses()
+    private Dictionary<int, CapturedProcess> CaptureWindowsProcesses()
     {
         const uint snapshotProcesses = 0x00000002;
         var snapshot = CreateToolhelp32Snapshot(snapshotProcesses, 0);
         if (snapshot == new IntPtr(-1))
         {
-            complete = false;
+            MarkIncomplete("HV951_PROCESS_TREE_SNAPSHOT_FAILED");
             return [];
         }
         try
@@ -415,16 +593,19 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
             };
             if (!Process32First(snapshot, ref entry))
             {
-                complete = false;
+                MarkIncomplete("HV952_PROCESS_TREE_SNAPSHOT_EMPTY");
                 return [];
             }
-            var processes = new Dictionary<int, (int ParentId, string Name)>();
+            var processes = new Dictionary<int, CapturedProcess>();
             do
             {
+                var processId = checked((int)entry.ProcessId);
                 var image = Path.GetFileNameWithoutExtension(entry.ExecutableFile);
-                processes[checked((int)entry.ProcessId)] = (
+                processes[processId] = new(
+                    processId,
                     checked((int)entry.ParentProcessId),
-                    SanitizeImageName(image));
+                    SanitizeImageName(image),
+                    TryGetStartIdentity(processId));
                 entry.Size = (uint)Marshal.SizeOf<ProcessEntry32>();
             }
             while (Process32Next(snapshot, ref entry));
@@ -470,6 +651,12 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         return name;
     }
 
+    private void MarkIncomplete(string diagnosticCode)
+    {
+        DiagnosticCode = diagnosticCode;
+        complete = false;
+    }
+
     private static int GetParentProcessId(Process process)
     {
         if (OperatingSystem.IsLinux())
@@ -498,6 +685,65 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
 
         return 0;
     }
+
+    private static long GetStartIdentity(Process process)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            return ParseLinuxStartIdentity(
+                File.ReadAllText($"/proc/{process.Id}/stat"));
+        }
+        if (OperatingSystem.IsWindows())
+        {
+            return process.StartTime.ToUniversalTime().ToFileTimeUtc();
+        }
+        return process.StartTime.ToUniversalTime().Ticks;
+    }
+
+    private static long TryGetStartIdentity(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return GetStartIdentity(process);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException
+                or IOException
+                or UnauthorizedAccessException
+                or FormatException
+                or OverflowException)
+        {
+            return 0;
+        }
+    }
+
+    internal static long ParseLinuxStartIdentity(string stat)
+    {
+        var closingParenthesis = stat.LastIndexOf(')');
+        if (closingParenthesis < 0)
+        {
+            throw new FormatException("Invalid /proc process stat.");
+        }
+        var fields = stat[(closingParenthesis + 2)..]
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length <= 19)
+        {
+            throw new FormatException("Invalid /proc process stat.");
+        }
+        return long.Parse(
+            fields[19],
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private sealed record CapturedProcess(
+        int ProcessId,
+        int ParentId,
+        string Name,
+        long StartIdentity);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation

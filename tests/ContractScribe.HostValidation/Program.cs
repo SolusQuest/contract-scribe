@@ -296,6 +296,9 @@ public static class Program
             case "fake-child":
                 await Task.Delay(1_000).ConfigureAwait(false);
                 return 0;
+            case "fake-child-hang":
+                await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                return 0;
             default:
                 throw new ProtocolException("HV003_COMMAND_UNKNOWN");
         }
@@ -425,6 +428,22 @@ public static class Program
                 await ReachGateAsync(request).ConfigureAwait(false);
                 await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
                 return 0;
+            case "controlled-kill-with-child":
+                {
+                    using var child = System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo("dotnet")
+                        {
+                            UseShellExecute = false,
+                            ArgumentList =
+                            {
+                                typeof(Program).Assembly.Location,
+                                "fake-child-hang"
+                            }
+                        }) ?? throw new ProtocolException("HV920_FAKE_CHILD_START");
+                    await ReachGateAsync(request).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                    return 0;
+                }
             case "controlled-kill-race":
                 await ReachGateAsync(
                     request,
@@ -451,6 +470,10 @@ public static class Program
         }
         Directory.CreateDirectory(request.ControlRoot);
         var gateName = request.SynchronizationGates[0];
+        if (request.ControlAction == "measure-temporary-disk")
+        {
+            WriteTemporaryDiskBoundary(request, freeze: true);
+        }
         File.WriteAllText(Path.Join(request.ControlRoot, $"{gateName}.reached"), string.Empty);
         if (request.ControlAction == "external-kill"
             && !waitForExternalKillRelease)
@@ -466,6 +489,45 @@ public static class Program
                 throw new ProtocolException("HV925_SYNTHETIC_CONTROL_TIMEOUT");
             }
             await Task.Delay(10).ConfigureAwait(false);
+        }
+        if (request.ControlAction == "measure-temporary-disk")
+        {
+            WriteTemporaryDiskBoundary(request, freeze: false);
+        }
+    }
+
+    private static void WriteTemporaryDiskBoundary(
+        SubjectRequest request,
+        bool freeze)
+    {
+        var contract = request.TemporaryDiskGate
+            ?? throw new ProtocolException("HV924_SYNTHETIC_CONTROL_INVALID");
+        if (request.AuditTemporaryRoot is null
+            || !string.Equals(
+                Path.GetFullPath(request.AuditTemporaryRoot),
+                Path.GetFullPath(contract.TemporaryWorkRoot),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new ProtocolException("HV924_SYNTHETIC_CONTROL_INVALID");
+        }
+        var sentinel = freeze
+            ? contract.FreezeSentinelName
+            : contract.ReleaseSentinelName;
+        foreach (var root in new[]
+                 {
+                     contract.TemporaryWorkRoot,
+                     contract.OutputStagingRoot
+                 })
+        {
+            Directory.CreateDirectory(root);
+            using var stream = new FileStream(
+                Path.Join(root, sentinel),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            stream.Flush(flushToDisk: true);
         }
     }
 

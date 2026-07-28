@@ -158,7 +158,14 @@ public sealed record SubjectRequest(
     string ControlAction,
     string? NetworkOperationLogPath = null,
     string? TransitionLogPath = null,
-    string? AuditTemporaryRoot = null);
+    string? AuditTemporaryRoot = null,
+    TemporaryDiskGateContract? TemporaryDiskGate = null);
+
+public sealed record TemporaryDiskGateContract(
+    string TemporaryWorkRoot,
+    string OutputStagingRoot,
+    string FreezeSentinelName,
+    string ReleaseSentinelName);
 
 public sealed record SubjectResponse(
     string FormatVersion,
@@ -273,7 +280,8 @@ public sealed record SubjectControl(
     TimeSpan GateTimeout,
     TimeSpan ActionDelay = default,
     bool WaitForExitBeforeAction = false,
-    Func<TemporaryDiskHighWaterEvidence>? MeasureTemporaryDisk = null);
+    Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
+        MeasureTemporaryDisk = null);
 
 public sealed record ExecutionSubjectManifest(
     string FormatVersion,
@@ -337,6 +345,24 @@ public sealed record ObservedProcess(
     int ParentProcessId,
     string Role,
     string ImageName);
+
+public sealed record ProcessInstanceIdentity(
+    int ProcessId,
+    long StartIdentity);
+
+public sealed record ProcessSnapshotIdentity(
+    ProcessInstanceIdentity Identity,
+    int ParentProcessId);
+
+public sealed record ProcessTerminationTarget(
+    ProcessInstanceIdentity Identity,
+    int ParentProcessId,
+    int Depth);
+
+public sealed record ProcessTerminationPlan(
+    ProcessInstanceIdentity Root,
+    IReadOnlyList<ProcessTerminationTarget> Descendants,
+    bool Complete);
 
 public sealed record RepositorySnapshot(
     IReadOnlyDictionary<string, string> ProtectedFiles,

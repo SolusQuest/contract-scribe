@@ -49,7 +49,8 @@ public static class HarnessSelfTest
         {
             var first = await RunFakeAsync(context, temp, "success", "run-1", cancellationToken).ConfigureAwait(false);
             var second = await RunFakeAsync(context, temp, "success", "run-2", cancellationToken).ConfigureAwait(false);
-            Ensure(first.Execution.ExitCode == 0 && second.Execution.ExitCode == 0, "HV901_SELF_TEST_SUCCESS");
+            EnsureSuccessfulSubject(first, "HV901A_SELF_TEST_FIRST_SUCCESS");
+            EnsureSuccessfulSubject(second, "HV901B_SELF_TEST_SECOND_SUCCESS");
             Ensure(first.Response?.ObservationCode == second.Response?.ObservationCode, "HV902_SELF_TEST_DETERMINISM");
             var firstPid = first.Execution.ObservedProcesses.Single(process => process.Role == "subject-runtime").ProcessId;
             var secondPid = second.Execution.ObservedProcesses.Single(process => process.Role == "subject-runtime").ProcessId;
@@ -172,13 +173,56 @@ public static class HarnessSelfTest
                 "HV929_SELF_TEST_TEMPORARY_RETENTION");
 
             var killed = await RunFakeAsync(context, temp, "controlled-kill", "run-1", cancellationToken).ConfigureAwait(false);
+            if (!HasExactNativeKill(killed.Execution))
+            {
+                throw new ProtocolException(
+                    NativeTerminationObserver.LastDiagnosticCode);
+            }
+            if (killed.Execution.KillRequestOutcome != "issued")
+            {
+                throw new ProtocolException(
+                    NativeTerminationObserver.LastDiagnosticCode);
+            }
+            Ensure(killed.Execution.ControlCompleted, "HV919A_SELF_TEST_CONTROL_INCOMPLETE");
             Ensure(
-                killed.Execution.ControlCompleted
-                && killed.Execution.ProcessTermination == "external-kill"
-                && killed.Execution.KillRequestOutcome == "issued"
-                && HasExactNativeKill(killed.Execution)
-                && killed.Response is null,
-                "HV919_SELF_TEST_CONTROL_KILL");
+                killed.Execution.ProcessTermination == "external-kill",
+                "HV919B_SELF_TEST_CONTROL_TERMINATION");
+            if (!killed.Execution.ObservationComplete)
+            {
+                throw new ProtocolException(
+                    SubjectProcessRunner.LastObservationDiagnosticCode);
+            }
+            Ensure(killed.Response is null, "HV919E_SELF_TEST_CONTROL_RESPONSE");
+            var killedTree = await RunFakeAsync(
+                context,
+                temp,
+                "controlled-kill-with-child",
+                "run-1",
+                cancellationToken).ConfigureAwait(false);
+            Ensure(
+                killedTree.Execution.ObservedProcesses.Count >= 2,
+                "HV943A_SELF_TEST_DESCENDANT_NOT_OBSERVED");
+            if (!HasExactNativeKill(killedTree.Execution))
+            {
+                throw new ProtocolException(
+                    NativeTerminationObserver.LastDiagnosticCode);
+            }
+            if (killedTree.Execution.KillRequestOutcome != "issued")
+            {
+                throw new ProtocolException(
+                    NativeTerminationObserver.LastDiagnosticCode);
+            }
+            Ensure(
+                killedTree.Execution.ControlCompleted,
+                "HV943D_SELF_TEST_TREE_CONTROL_INCOMPLETE");
+            Ensure(
+                killedTree.Execution.ProcessTermination == "external-kill",
+                "HV943E_SELF_TEST_TREE_TERMINATION");
+            if (!killedTree.Execution.ObservationComplete)
+            {
+                throw new ProtocolException(
+                    SubjectProcessRunner.LastObservationDiagnosticCode);
+            }
 
             var killRace = await RunFakeAsync(context, temp, "controlled-kill-race", "run-1", cancellationToken).ConfigureAwait(false);
             Ensure(
@@ -207,6 +251,62 @@ public static class HarnessSelfTest
                 && !NativeTerminationObserver.IsExitedProcStat(
                     "42 (subject) R 1 2 3"),
                 "HV927_SELF_TEST_NATIVE_WAIT_STATUS");
+            var rootIdentity = new ProcessInstanceIdentity(100, 1000);
+            var originalDescendant = new ProcessInstanceIdentity(200, 2000);
+            Ensure(
+                ProcessTreeObserver.IsCurrentDescendant(
+                    rootIdentity,
+                    originalDescendant,
+                    [
+                        new(rootIdentity, 1),
+                        new(originalDescendant, 100)
+                    ])
+                && !ProcessTreeObserver.IsCurrentDescendant(
+                    rootIdentity,
+                    originalDescendant,
+                    [
+                        new(rootIdentity, 1),
+                        new(new ProcessInstanceIdentity(200, 3000), 100)
+                    ])
+                && !ProcessTreeObserver.IsCurrentDescendant(
+                    rootIdentity,
+                    originalDescendant,
+                    [new(rootIdentity, 1)]),
+                "HV930_SELF_TEST_PROCESS_IDENTITY_REUSE");
+            var issued = new NativeTerminationEvidence(
+                OperatingSystem.IsWindows()
+                    ? "windows-terminate-process"
+                    : "unix-signal",
+                null,
+                OperatingSystem.IsWindows()
+                    ? NativeTerminationObserver.WindowsTerminationSentinel
+                    : NativeTerminationObserver.UnixSigKill,
+                "issued",
+                true);
+            Ensure(
+                NativeTerminationObserver.IsTerminationFullyObserved(
+                    issued,
+                    streamsComplete: true)
+                && !NativeTerminationObserver.IsTerminationFullyObserved(
+                    issued with
+                    {
+                        KillRequestOutcome = "indeterminate",
+                        CausalMatch = false
+                    },
+                    streamsComplete: true)
+                && !NativeTerminationObserver.IsTerminationFullyObserved(
+                    issued,
+                    streamsComplete: false)
+                && NativeTerminationObserver.CombineTerminationFailuresForSelfTest(
+                    planComplete: true,
+                    null,
+                    null) is null
+                && NativeTerminationObserver.CombineTerminationFailuresForSelfTest(
+                    planComplete: true,
+                    "indeterminate") == "indeterminate"
+                && NativeTerminationObserver.CombineTerminationFailuresForSelfTest(
+                    planComplete: false) == "indeterminate",
+                "HV931_SELF_TEST_BOUNDED_TREE_TERMINATION");
         }
         finally
         {
@@ -228,6 +328,38 @@ public static class HarnessSelfTest
                 && execution.NativeTerminationCode == NativeTerminationObserver.UnixSigKill;
         }
         return false;
+    }
+
+    private static void EnsureSuccessfulSubject(FakeRun run, string fallbackCode)
+    {
+        if (run.Execution.ExitCode == 0)
+        {
+            return;
+        }
+        if (run.Execution.ProcessStart != "started")
+        {
+            throw new ProtocolException(
+                $"{fallbackCode}_PROCESS_START");
+        }
+        if (run.Execution.TimedOut)
+        {
+            throw new ProtocolException(
+                $"{fallbackCode}_TIMEOUT");
+        }
+        var subjectCode = Encoding.UTF8.GetString(
+                run.Execution.StandardError)
+            .Trim();
+        if (string.IsNullOrEmpty(subjectCode))
+        {
+            throw new ProtocolException(
+                $"{fallbackCode}_NO_SUBJECT_DIAGNOSTIC");
+        }
+        throw new ProtocolException(
+            subjectCode.StartsWith("HV", StringComparison.Ordinal)
+            && subjectCode.All(character =>
+                char.IsAsciiLetterOrDigit(character) || character == '_')
+                ? subjectCode
+                : fallbackCode);
     }
 
     private static async Task<FakeRun> RunFakeAsync(
@@ -252,7 +384,11 @@ public static class HarnessSelfTest
         SubjectControl? control = behavior switch
         {
             "controlled-cancel" => new(controlRoot, "before-commit", "cancel", TimeSpan.FromSeconds(5)),
-            "controlled-kill" => new(controlRoot, "publication-before-commit", "external-kill", TimeSpan.FromSeconds(5)),
+            "controlled-kill" or "controlled-kill-with-child" => new(
+                controlRoot,
+                "publication-before-commit",
+                "external-kill",
+                TimeSpan.FromSeconds(5)),
             "controlled-kill-race" => new(
                 controlRoot,
                 "publication-before-commit",
@@ -264,7 +400,7 @@ public static class HarnessSelfTest
                 "temporary-disk-high-water",
                 "measure-temporary-disk",
                 TimeSpan.FromSeconds(5),
-                MeasureTemporaryDisk: temporaryDiskObserver!.CaptureGate),
+                MeasureTemporaryDisk: temporaryDiskObserver!.CaptureAndRelease),
             _ => null
         };
         var request = new SubjectRequest(
@@ -279,7 +415,8 @@ public static class HarnessSelfTest
             control?.Action ?? "continue",
             null,
             null,
-            auditTemporaryRoot);
+            auditTemporaryRoot,
+            temporaryDiskObserver?.GateContract);
         CanonicalJson.WriteCanonical(requestPath, request);
         SchemaValidation.ValidateDefinition(
             requestPath,

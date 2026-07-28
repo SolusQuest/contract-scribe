@@ -492,6 +492,16 @@ public sealed class M1HostValidationProtocolTests
             NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
                 new IOException("synthetic observer failure"),
                 "current").CauseClass);
+        var runtimeManifestFailure =
+            NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
+                new ProtocolException("HV249_SELECTED_RUNTIME_MANIFEST"),
+                "current");
+        Assert.Equal(
+            "environment-or-infrastructure-incomplete",
+            runtimeManifestFailure.CauseClass);
+        Assert.Equal(
+            "network.selected-runtime-manifest-incomplete",
+            runtimeManifestFailure.ObservationCode);
         Assert.Equal(
             "subject-nonconformance",
             NetworkEvidenceEvaluator.ClassifyBoundedScanFailure(
@@ -749,10 +759,14 @@ public sealed class M1HostValidationProtocolTests
             BlockedReasonCode = null
         };
         var repositoryDelta = new RepositoryDelta([], [], [], [], [], [], [], [], []);
+        var materialization = cell.Materialization with
+        {
+            SelectedRuntime = Environment.Version.ToString()
+        };
         var actualEvidence = NetworkEvidenceEvaluator.Evaluate(
             context,
             subject.SourceConfiguration,
-            cell.Materialization,
+            materialization,
             "operation-observed",
             true,
             [],
@@ -801,7 +815,7 @@ public sealed class M1HostValidationProtocolTests
             run,
             fixture,
             subject.SourceConfiguration,
-            cell.Materialization);
+            materialization);
 
         Assert.Equal("protocol-invalid-observation", derived.Verdict);
         Assert.Equal("network.evidence-observation-mismatch", derived.Observation);
@@ -945,7 +959,7 @@ public sealed class M1HostValidationProtocolTests
                 "linux-x64",
                 "x64",
                 "10.0.102",
-                "10.0.0",
+                Environment.Version.ToString(),
                 "18.0.0",
                 [entryIdentity]);
             Assert.Equal(
@@ -959,6 +973,74 @@ public sealed class M1HostValidationProtocolTests
                 Root,
                 source,
                 materialization with { BuiltArtifacts = [entryIdentity, helperIdentity] }));
+
+            var collisionAssemblyName = "System.Console";
+            var collisionReferences = references
+                .Where(reference => !string.Equals(
+                    Path.GetFileNameWithoutExtension(reference.FilePath),
+                    collisionAssemblyName,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var collisionHelperPath = Path.Join(
+                helperDirectory,
+                $"{collisionAssemblyName}.dll");
+            EmitAssembly(
+                collisionHelperPath,
+                collisionAssemblyName,
+                """
+                using System.Net.Http;
+                using System.Reflection;
+                [assembly: AssemblyVersion("99.0.0.0")]
+                public static class RuntimeNameCollisionClient
+                {
+                    public static object Send() => new HttpClient();
+                }
+                """,
+                collisionReferences);
+            var collisionEntryPath = Path.Join(
+                entryDirectory,
+                "Production.Collision.Entry.dll");
+            EmitAssembly(
+                collisionEntryPath,
+                "Production.Collision.Entry",
+                """
+                public static class CollisionEntry
+                {
+                    public static object Run() => RuntimeNameCollisionClient.Send();
+                }
+                """,
+                collisionReferences.Append(
+                    MetadataReference.CreateFromFile(collisionHelperPath)));
+            var collisionEntryIdentity = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, collisionEntryPath),
+                CanonicalJson.Sha256File(collisionEntryPath));
+            var collisionHelperIdentity = new ArtifactIdentity(
+                RepositoryPaths.ToRepositoryRelative(Root, collisionHelperPath),
+                CanonicalJson.Sha256File(collisionHelperPath));
+            Assert.Equal(
+                "HV244_PRODUCTION_DEPENDENCY_CLOSURE",
+                Assert.Throws<ProtocolException>(() =>
+                    NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                        Root,
+                        source,
+                        materialization with
+                        {
+                            SelectedRuntime = Environment.Version.ToString(),
+                            BuiltArtifacts = [collisionEntryIdentity]
+                        })).Code);
+            Assert.True(
+                NetworkOperationSourceScanner.HasContractScribeInitiatedNetworkOperation(
+                    Root,
+                    source,
+                    materialization with
+                    {
+                        SelectedRuntime = Environment.Version.ToString(),
+                        BuiltArtifacts =
+                        [
+                            collisionEntryIdentity,
+                            collisionHelperIdentity
+                        ]
+                    }));
 
             foreach (var (assemblyName, sourceText) in new[]
                      {
@@ -1432,10 +1514,81 @@ public sealed class M1HostValidationProtocolTests
                 stream.SetLength(1024);
                 stream.Flush(flushToDisk: true);
             }
-            var shrinkEvidence = observer.CaptureGate();
+            var gate = observer.GateContract;
+            WriteBoundarySentinels(gate, freeze: true);
+            var shrinkEvidence = observer.CaptureAndRelease(() =>
+                WriteBoundarySentinels(gate, freeze: false),
+                MonotonicDeadline.Start(TimeSpan.FromSeconds(10)));
             Assert.True(shrinkEvidence.ObserverComplete);
             Assert.True(shrinkEvidence.RetentionBreach);
             Assert.Equal(8 * 1024, shrinkEvidence.TotalBytes);
+        }
+        finally
+        {
+            Directory.Delete(observerRoot, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("create")]
+    [InlineData("grow")]
+    [InlineData("equal-length-rewrite")]
+    [InlineData("capture-release-window")]
+    public void HostValidation_TemporaryDiskFreezeBoundaryRejectsPostGateMutation(
+        string mutation)
+    {
+        var observerRoot = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-hv-freeze-{Guid.NewGuid():N}");
+        var temporaryRoot = Path.Join(observerRoot, "temporary");
+        var stagingRoot = Path.Join(observerRoot, "staging");
+        Directory.CreateDirectory(temporaryRoot);
+        Directory.CreateDirectory(stagingRoot);
+        try
+        {
+            using var observer = new TemporaryDiskHighWaterObserver(
+                temporaryRoot,
+                stagingRoot);
+            var subjectPath = Path.Join(temporaryRoot, "subject.bin");
+            if (mutation != "create")
+            {
+                File.WriteAllBytes(subjectPath, [1, 2, 3, 4]);
+                observer.Synchronize();
+            }
+
+            var gate = observer.GateContract;
+            WriteBoundarySentinels(gate, freeze: true);
+            switch (mutation)
+            {
+                case "create":
+                    File.WriteAllBytes(subjectPath, [1, 2, 3, 4]);
+                    break;
+                case "grow":
+                    using (var stream = new FileStream(
+                               subjectPath,
+                               FileMode.Append,
+                               FileAccess.Write,
+                               FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        stream.Write([5, 6, 7, 8]);
+                        stream.Flush(flushToDisk: true);
+                    }
+                    break;
+                case "equal-length-rewrite":
+                    File.WriteAllBytes(subjectPath, [4, 3, 2, 1]);
+                    break;
+            }
+
+            var evidence = observer.CaptureAndRelease(() =>
+            {
+                if (mutation == "capture-release-window")
+                {
+                    File.WriteAllBytes(subjectPath, [4, 3, 2, 1]);
+                }
+                WriteBoundarySentinels(gate, freeze: false);
+            }, MonotonicDeadline.Start(TimeSpan.FromSeconds(10)));
+            Assert.True(evidence.ObserverComplete);
+            Assert.True(evidence.RetentionBreach);
         }
         finally
         {
@@ -3058,6 +3211,28 @@ public sealed class M1HostValidationProtocolTests
                 .ToArray(),
             "environment-or-infrastructure-incomplete");
         return (subject, evidence);
+    }
+
+    private static void WriteBoundarySentinels(
+        TemporaryDiskGateContract contract,
+        bool freeze)
+    {
+        var sentinel = freeze
+            ? contract.FreezeSentinelName
+            : contract.ReleaseSentinelName;
+        foreach (var root in new[]
+                 {
+                     contract.TemporaryWorkRoot,
+                     contract.OutputStagingRoot
+                 })
+        {
+            using var stream = new FileStream(
+                Path.Join(root, sentinel),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            stream.Flush(flushToDisk: true);
+        }
     }
 
     private static void EmitAssembly(

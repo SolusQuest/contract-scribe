@@ -28,7 +28,9 @@
   "temporaryDiskRetentionContract": {
     "gate": "temporary-disk-high-water",
     "retainUntilRelease": true,
-    "cleanupBeforeGateAllowed": false
+    "cleanupBeforeGateAllowed": false,
+    "freezeBoundary": "subject-sentinel-in-each-governed-root-before-control-gate",
+    "releaseBoundary": "subject-sentinel-in-each-governed-root-before-post-release-mutation"
   },
   "processContract": {
     "requestArgument": "--request",
