@@ -631,6 +631,57 @@ public sealed class ClassificationTests
             ClassificationRunStatus.Cancelled,
             cancelled.Outcome.Status);
         Assert.Null(cancelled.Outcome.ClassificationSet);
+
+        var cachedProperties = string.Join(
+            ", ",
+            Enumerable.Range(0, 64)
+                .Select(index => $"int P{index}"));
+        var cachedCompilation = Compile(
+            "CachedComponentCancellation",
+            [Source(
+                "CachedComponentCancellation.cs",
+                $"public record CachedRow({cachedProperties});")]);
+        using var cachedSession = CreateSession(new ProjectFixture(
+            "CachedComponentCancellation.csproj",
+            "ctx-cached-component-cancellation",
+            LoadedProjectRole.AuditRoot,
+            cachedCompilation));
+        using var cachedCancellation = new CancellationTokenSource();
+        var componentPhase = false;
+        var cachedComponentOperations = 0;
+        var cachedClassifier = new SymbolClassifier(
+            null,
+            null,
+            stage =>
+            {
+                if (stage == ClassificationStage.TargetDiscovery)
+                {
+                    componentPhase = true;
+                }
+            },
+            null,
+            () =>
+            {
+                if (!componentPhase)
+                {
+                    return;
+                }
+
+                cachedComponentOperations++;
+                cachedCancellation.Cancel();
+            });
+
+        var cachedCancelled = cachedClassifier.Classify(
+            cachedSession,
+            TargetProfile.ExternalApi,
+            cachedCancellation.Token);
+
+        Assert.Equal(
+            ClassificationRunStatus.Cancelled,
+            cachedCancelled.Status);
+        Assert.Null(cachedCancelled.ClassificationSet);
+        Assert.Null(cachedCancelled.PrimaryFailure);
+        Assert.Equal(1, cachedComponentOperations);
     }
 
     [Fact]

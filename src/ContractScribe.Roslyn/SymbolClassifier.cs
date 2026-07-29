@@ -87,6 +87,7 @@ public sealed class SymbolClassifier
             foreach (var target in discoveredTargets
                 .Where(CanHaveComponents))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 AddComponents(
                     target.Symbol,
                     target.CompilationContextRef,
@@ -357,6 +358,8 @@ public sealed class SymbolClassifier
         SymbolDiscoveryIndex discoveryIndex,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         void Add(ComponentKind kind, string identity, ClassificationOrigin? componentOrigin = null) =>
             candidates.AddComponent(
                 compilationContextRef,
@@ -1144,6 +1147,7 @@ public sealed class SymbolClassifier
             CancellationToken cancellationToken)
         {
             operationObserver?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
             return GetTypeData(member.ContainingType, cancellationToken)
                 .BackingFieldOwners
                 .Contains(CanonicalPartialMember(member));
@@ -1155,6 +1159,7 @@ public sealed class SymbolClassifier
             out int ordinal)
         {
             operationObserver?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
             return GetTypeData(property.ContainingType, cancellationToken)
                 .RecordPositionalOrdinals
                 .TryGetValue(CanonicalPartialMember(property), out ordinal);
