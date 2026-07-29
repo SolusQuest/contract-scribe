@@ -1333,11 +1333,10 @@ public sealed class M1ContractBaselineTests
                 "failureCases/failure.semantic-context",
                 "failureCases/failure.unrepresentable-generated"
             };
-            foreach (var row in expectedKeys.Select(rowKey =>
-                rows.OfType<JsonObject>().Single(candidate =>
-                    candidate["rowKey"]?.GetValue<string>() == rowKey)))
-            {
-                if (!HasExactProperties(
+            return expectedKeys
+                .Select(rowKey => rows.OfType<JsonObject>().Single(candidate =>
+                    candidate["rowKey"]?.GetValue<string>() == rowKey))
+                .All(row => HasExactProperties(
                         row,
                         "rowKey",
                         "disposition",
@@ -1347,24 +1346,18 @@ public sealed class M1ContractBaselineTests
                         "invalidOrMutation",
                         "oracle",
                         "downstreamIssue")
-                    || row["disposition"]?.GetValue<string>() != "amended"
-                    || row["normativeSection"]?.GetValue<string>()
-                        != "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md"
-                    || row["schemaOrRegistry"]?.GetValue<string>()
-                        != "schemas/symbol-evidence-taxonomy/v1.registry.json"
-                    || row["validFixture"]?.GetValue<string>()
-                        != "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
-                    || row["invalidOrMutation"]?.GetValue<string>()
-                        != "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
-                    || row["oracle"]?.GetValue<string>()
-                        != "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
-                    || row["downstreamIssue"]?.GetValue<int>() != 37)
-                {
-                    return false;
-                }
-            }
-
-            return true;
+                    && row["disposition"]?.GetValue<string>() == "amended"
+                    && row["normativeSection"]?.GetValue<string>()
+                        == "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md"
+                    && row["schemaOrRegistry"]?.GetValue<string>()
+                        == "schemas/symbol-evidence-taxonomy/v1.registry.json"
+                    && row["validFixture"]?.GetValue<string>()
+                        == "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
+                    && row["invalidOrMutation"]?.GetValue<string>()
+                        == "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
+                    && row["oracle"]?.GetValue<string>()
+                        == "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
+                    && row["downstreamIssue"]?.GetValue<int>() == 37);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
