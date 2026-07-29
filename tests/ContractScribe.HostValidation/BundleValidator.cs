@@ -335,7 +335,8 @@ public static class BundleValidator
             || catalog.FormatVersion != "contractscribe-m1-host-validation-vectors-v1"
             || protocol.Baseline.CoordinatingIssue
                 != "https://github.com/SolusQuest/contract-scribe/issues/55"
-            || protocol.Baseline.Disposition is not ("pending" or "main")
+            || protocol.Baseline.Disposition
+                is not ("pending-main-reconciliation" or "main-reachable")
             || protocol.Baseline.Predecessor
                 != new PredecessorBaselineIdentity(
                     "https://github.com/SolusQuest/contract-scribe/issues/35",
@@ -353,7 +354,7 @@ public static class BundleValidator
         {
             throw new ProtocolException("HV123_CONTRACT_BASELINE_DRIFT");
         }
-        if (protocol.Baseline.Disposition == "pending")
+        if (protocol.Baseline.Disposition == "pending-main-reconciliation")
         {
             if (protocol.Baseline.MergeCommit is not null)
             {

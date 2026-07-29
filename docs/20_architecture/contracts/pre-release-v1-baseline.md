@@ -18,13 +18,25 @@ The current machine-readable inventory is [`tests/fixtures/m1-contract-baseline/
 
 The current crosswalk has one row for every identified ADR annex decision row and uses set equality in both directions. Each row records disposition, normative source, machine surface, valid and invalid vector source, oracle, and downstream implementation owner.
 
+## Validation-bundle disposition
+
+This successor revision closes the contract-content defect with a structurally valid Host Validation candidate. The candidate binds the exact current protected inputs and bundle members, but its baseline disposition remains `pending-main-reconciliation` and its review remains pending and non-authorizing. Its bundle ID is a content identity, not a validated-host claim. `S1`, also called contract baseline `C1`, is the exact squash commit that records this contract-content baseline and its `issue-55-classification-origin-closure-v1` manifest identity.
+
+After exact-main closure, Issues #37-#40 are rebound to `S1`, the successor `contractRevision`, and the exact manifest path and digest while preserving their original sibling dependencies. Their implementation acceptance does not depend on an accepted Host bundle. Issue #37 must additionally revalidate the implementation already merged by PR #54 against exact `S1`. Issue #41 remains blocked until a separate Host Validation certification Task has produced and recorded an accepted exact bundle.
+
+Every pull request in Issues #37-#40, #24, or another work item that changes a Host protected input must refresh the protected-input manifest, direct artifact inventory when required, artifact lock, candidate bundle ID, and matching pending review ID in that same pull request, then pass structural validation, both dry-runs, self-test, and ordinary CI. A pull request that changes no protected input records that reviewed no-change disposition. Each refreshed candidate supersedes the prior pending candidate as current lineage but does not inherit or require independent acceptance.
+
+The certification Task waits until native blockers #24 and #37-#40, plus every later-discovered protected-input owner added as a blocker, are closed at accepted exact commits. It records the selected stable main revision as certification base `P0` in the certification PR and immutable Task closure record, proves ancestry `S1 → P0 → S2 → S3`, keeps `P0` outside the baseline and bundle/review identity preimages, keeps `S1/C1` as the contract baseline unless a later contract-amendment issue explicitly supersedes it, and produces final bundle target `S2` plus a separate review-record-only squash commit `S3`. Any protected-byte change computes a new candidate bundle ID; the Issue #55 pending candidate remains historical non-authorizing lineage. Ordinary Host protected-input drift receives a pending-candidate refresh, while drift in an `S1` contract-manifest-owned input requires an explicit successor contract-amendment baseline before certification may retain or replace `baseline.mergeCommit = S1`. Issue #41 may execute or publish production evidence only after the accepted `S2` review is main-reachable at `S3`.
+
+Any protected-input or bundle-member drift after `S2`, after `S3`, or before or during Issue #41 invalidates the accepted review and current-bundle claim. The certification Task must be reopened or replaced by a linked successor, restored as a native blocker of #41 before further execution, and completed again. Affected #41 evidence and dependent #30 integration or smoke evidence are marked stale or superseded and rerun in dependency order.
+
 ## Historical evidence boundary
 
 `tests/fixtures/m1-target-observation/adr-0003-vectors.json` records the accepted decision inputs at commit `beada966b3c06e1b823e488472a9f515b87b0760`. Its baseline commit and registry digests are immutable historical provenance. Current-registry validation belongs to the separate M1 manifest and must never be represented by rewriting the ADR's historical fields.
 
 ## Production disposition
 
-Issue #36's authoritative loading and generated-fact foundation is completed. The main branch also contains classification implementation work from the prematurely merged PR #54, but Issue #55 reopens the governing contract and baseline; that implementation is not accepted as satisfying Issue #37 until it is revalidated against this successor baseline. The Host candidate in this PR is explicitly pending and non-authorizing until a later exact main-reachable reconciliation.
+Issue #36's authoritative loading and generated-fact foundation is completed. The main branch also contains classification implementation work from the prematurely merged PR #54, but Issue #55 reopens the governing contract and baseline; that implementation is not accepted as satisfying Issue #37 until it is revalidated against this successor baseline. The Host candidate in this PR is explicitly pending and non-authorizing. Its later main-reachable reconciliation and independent acceptance belong to the separate promotion Task rather than Issue #55.
 
 | Issue | Disposition | Downstream responsibility |
 | --- | --- | --- |

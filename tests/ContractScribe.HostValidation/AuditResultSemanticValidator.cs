@@ -14,12 +14,13 @@ public static class AuditResultSemanticValidator
         {
             var results = document.GetProperty("results").EnumerateArray().ToArray();
             Require(results.Length > 0);
-            foreach (var classification in results.Select(result => result.GetProperty("classification")))
+            foreach (var classification in results
+                .Select(result => result.GetProperty("classification"))
+                .Where(classification =>
+                    classification.GetProperty("recordType").GetString()
+                        == "UnresolvedClassification"))
             {
-                if (classification.GetProperty("recordType").GetString() == "UnresolvedClassification")
-                {
-                    ValidateCandidateLocator(classification.GetProperty("candidateLocator"));
-                }
+                ValidateCandidateLocator(classification.GetProperty("candidateLocator"));
             }
             Require(results.Select(ResultSortKey).SequenceEqual(
                 results.Select(ResultSortKey).Order()));
@@ -843,7 +844,8 @@ public static class AuditResultSemanticValidator
         if (variants[0] == "repository")
         {
             var repository = locator.GetProperty("repository");
-            Require(IsRepositoryPath(repository.GetProperty("path").GetString()));
+            Require(IsCandidateRepositoryPath(
+                repository.GetProperty("path").GetString()));
             ValidateSpan(repository);
         }
         else if (variants[0] == "generatedSource")
@@ -941,6 +943,16 @@ public static class AuditResultSemanticValidator
 
     private static bool IsRepositoryPath(string? value) =>
         !string.IsNullOrWhiteSpace(value)
+        && !Path.IsPathRooted(value)
+        && !(value.Length >= 2
+            && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
+            && value[1] == ':')
+        && !value.Contains('\\', StringComparison.Ordinal)
+        && !value.Split('/').Any(segment => segment is "" or "." or "..");
+
+    private static bool IsCandidateRepositoryPath(string? value) =>
+        !string.IsNullOrEmpty(value)
+        && !value.Contains('\0')
         && !Path.IsPathRooted(value)
         && !(value.Length >= 2
             && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'

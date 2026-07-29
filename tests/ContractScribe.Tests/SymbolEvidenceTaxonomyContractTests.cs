@@ -26,6 +26,28 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
     private static readonly Lazy<Dictionary<string, JsonElement>> RegistryEntries = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToDictionary(entry => entry.GetProperty("id").GetString()!, entry => entry.Clone(), StringComparer.Ordinal));
     private static readonly Lazy<ClassificationConformanceOracle> ClassificationOracle = new(() => ClassificationConformanceOracle.Load(FindRepositoryRoot()));
+
+    [Fact]
+    public void ClassificationOriginSkipMatrix_IsConsumedByTheTaxonomyOracle()
+    {
+        using var matrix = JsonDocument.Parse(File.ReadAllBytes(Path.Join(
+            FindRepositoryRoot(),
+            "tests",
+            "fixtures",
+            "m1-contract-baseline",
+            "v1",
+            "classification-origin-skip-vectors.json")));
+        foreach (var row in matrix.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var expected = row.GetProperty("outcome").GetString() == "accept";
+            Assert.Equal(
+                expected,
+                ClassificationOracle.Value.IsValidRecord(
+                    row.GetProperty("record"))
+                    && ClassificationConditionsSelectRecord(row));
+        }
+    }
+
     [Fact]
     public void Registry_UsesClosedUniqueDottedIdentifiers()
     {
@@ -1089,7 +1111,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var kinds = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         return kinds.Length == 1 && kinds[0] switch
         {
-            "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString())
+            "repository" => IsRawCandidateRepositoryPath(
+                    locator.GetProperty("repository").GetProperty("path").GetString())
                 && (!locator.GetProperty("repository").TryGetProperty("span", out var repositorySpan) || repositorySpan.GetProperty("start").GetInt32() <= repositorySpan.GetProperty("end").GetInt32()),
             "generatedSource" => locator.GetProperty("generatedSource").TryGetProperty("generatorId", out var generator) && locator.GetProperty("generatedSource").TryGetProperty("hintNameId", out var hint)
                 && IsGeneratedId(generator.GetString(), "sgp.") && IsGeneratedId(hint.GetString(), "sgo.")
@@ -1141,6 +1164,51 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         if (string.IsNullOrEmpty(path) || path.Contains('\0') || path.StartsWith('/') || path.StartsWith('\\') || System.Text.RegularExpressions.Regex.IsMatch(path, "^[A-Za-z]:")) return false;
         var normalized = path.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not ".").ToArray();
         return normalized.Length > 0 && normalized.All(segment => segment != "..");
+    }
+
+    private static bool IsRawCandidateRepositoryPath(string? path) =>
+        !string.IsNullOrEmpty(path)
+        && !path.Contains('\0')
+        && !path.Contains('\\')
+        && !path.StartsWith('/')
+        && !System.Text.RegularExpressions.Regex.IsMatch(path, "^[A-Za-z]:")
+        && path.Split('/').All(segment =>
+            segment.Length > 0
+            && segment is not ("." or ".."));
+
+    private static bool ClassificationConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var record = row.GetProperty("record");
+        var origin = record.GetProperty("origin").GetString();
+        var skipReason = record.GetProperty("skipReason").GetString();
+        var knownOrigin = origin is "origin.source"
+            or "origin.source-generator"
+            or "origin.tool-generated"
+            or "origin.mixed";
+        if (conditions.Contains(
+            "generated-provenance-unavailable",
+            StringComparer.Ordinal))
+        {
+            return origin == "origin.unknown"
+                && skipReason == "skip.unavailable.generated-provenance";
+        }
+
+        if (conditions.SequenceEqual(
+            ["semantic-context-unavailable"],
+            StringComparer.Ordinal))
+        {
+            return knownOrigin
+                && skipReason == "skip.unavailable.semantic-context";
+        }
+
+        return conditions.SequenceEqual(
+                ["documentation-comment-id-unavailable"],
+                StringComparer.Ordinal)
+            && knownOrigin
+            && skipReason == "skip.unavailable.documentation-comment-id";
     }
 
     private static bool IsValidRepositoryLocator(JsonElement repository, IReadOnlyDictionary<string, string>? originalEvidenceTexts = null)

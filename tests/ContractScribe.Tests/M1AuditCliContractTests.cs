@@ -192,11 +192,51 @@ public sealed class M1AuditCliContractTests
         }
 
         var bindings = meta.GetProperty("oracleBindings").EnumerateArray().ToArray();
-        Assert.Equal(RequiredOracleProtectedInputs.Order(StringComparer.Ordinal), bindings.Select(binding => binding.GetProperty("path").GetString()!).Order(StringComparer.Ordinal));
-        Assert.All(bindings, binding => Assert.Equal("shared-usage", binding.GetProperty("binding").GetString()));
+        Assert.Equal(
+            RequiredOracleProtectedInputs,
+            bindings.Select(binding =>
+                binding.GetProperty("path").GetString()!));
+        Assert.All(bindings, binding =>
+        {
+            Assert.Equal(
+                new[] { "path", "binding", "role" },
+                binding.EnumerateObject().Select(property => property.Name));
+            Assert.Equal(
+                "shared-usage",
+                binding.GetProperty("binding").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(
+                binding.GetProperty("role").GetString()));
+        });
         Assert.All(RequiredOracleProtectedInputs, path => Assert.True(File.Exists(Path.Join(Root, path.Replace('/', Path.DirectorySeparatorChar)))));
-        Assert.Contains("Issue #55", meta.GetProperty("reconciliationGate").GetString(), StringComparison.Ordinal);
-        Assert.Contains("S1", meta.GetProperty("reconciliationGate").GetString(), StringComparison.Ordinal);
+        var reconciliationGate =
+            meta.GetProperty("reconciliationGate").GetString()!;
+        Assert.Contains("Issue #55", reconciliationGate, StringComparison.Ordinal);
+        Assert.Contains("S1", reconciliationGate, StringComparison.Ordinal);
+        Assert.Contains(
+            "Host Validation promotion Task",
+            reconciliationGate,
+            StringComparison.Ordinal);
+        Assert.Contains("Issue #41", reconciliationGate, StringComparison.Ordinal);
+
+        var document = File.ReadAllText(DocPath);
+        Assert.Contains("Issue #55", document, StringComparison.Ordinal);
+        Assert.Contains("S1", document, StringComparison.Ordinal);
+        Assert.Contains(
+            "ClassificationConformanceOracle.cs",
+            document,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "classification-origin-skip-vectors.json",
+            document,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "repository-candidate-locator-vectors.json",
+            document,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "accepted #35 baseline",
+            document,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

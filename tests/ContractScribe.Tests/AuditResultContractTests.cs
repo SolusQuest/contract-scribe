@@ -11,6 +11,44 @@ using static ContractScribe.Tests.AuditResultConformance;
 public sealed class AuditResultContractTests
 {
     [Fact]
+    public void ClassificationOriginSkipMatrix_IsConsumedAsFullAuditDocuments()
+    {
+        using var matrix = ParseStrict(File.ReadAllBytes(Path.Join(
+            FindRepositoryRoot(),
+            "tests",
+            "fixtures",
+            "m1-contract-baseline",
+            "v1",
+            "classification-origin-skip-vectors.json")));
+        foreach (var row in matrix.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            using var document = BuildClassificationMatrixDocument(
+                row.GetProperty("record"));
+            var expected = row.GetProperty("outcome").GetString() == "accept";
+            Assert.Equal(
+                expected,
+                AuditSchema.Value.Evaluate(document.RootElement).IsValid
+                    && IsSemanticallyValid(document.RootElement)
+                    && AuditConditionsSelectRecord(row));
+        }
+
+        var corrected = JsonNode.Parse(File.ReadAllText(
+            FixturePath("payloads", "unresolved-classification.json")))!
+            .AsObject();
+        using (var document = JsonDocument.Parse(
+            JsonSerializer.SerializeToUtf8Bytes(corrected)))
+        {
+            ValidateDocument(document.RootElement);
+        }
+
+        corrected["results"]![0]!["classification"]!["origin"] =
+            "origin.unknown";
+        using var mutation = JsonDocument.Parse(
+            JsonSerializer.SerializeToUtf8Bytes(corrected));
+        Assert.False(IsSemanticallyValid(mutation.RootElement));
+    }
+
+    [Fact]
     public void PublicFixtures_CoverMatrixAndPassSchemaAndSemanticOracle()
     {
         var root = FixtureRoot();
@@ -463,6 +501,55 @@ public sealed class AuditResultContractTests
         var fullPath = Path.GetFullPath(Path.Join(fullRoot, normalized));
         Assert.True(fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), $"Fixture path escapes its root: {relativePath}");
         return fullPath;
+    }
+
+    private static JsonDocument BuildClassificationMatrixDocument(
+        JsonElement classification)
+    {
+        var template = classification.GetProperty("recordType").GetString()
+            == "UnresolvedClassification"
+            ? "unresolved-classification.json"
+            : "classification-skipped.json";
+        var document = JsonNode.Parse(File.ReadAllText(
+            FixturePath("payloads", template)))!.AsObject();
+        document["results"]![0]!["classification"] =
+            JsonNode.Parse(classification.GetRawText());
+        return JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(document));
+    }
+
+    private static bool AuditConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var classification = row.GetProperty("record");
+        var origin = classification.GetProperty("origin").GetString();
+        var skipReason = classification.GetProperty("skipReason").GetString();
+        var knownOrigin = origin is "origin.source"
+            or "origin.source-generator"
+            or "origin.tool-generated"
+            or "origin.mixed";
+        if (conditions.Contains(
+            "generated-provenance-unavailable",
+            StringComparer.Ordinal))
+        {
+            return origin == "origin.unknown"
+                && skipReason == "skip.unavailable.generated-provenance";
+        }
+
+        if (conditions.SequenceEqual(
+            ["semantic-context-unavailable"],
+            StringComparer.Ordinal))
+        {
+            return knownOrigin
+                && skipReason == "skip.unavailable.semantic-context";
+        }
+
+        return conditions.SequenceEqual(
+                ["documentation-comment-id-unavailable"],
+                StringComparer.Ordinal)
+            && knownOrigin
+            && skipReason == "skip.unavailable.documentation-comment-id";
     }
 
     private static JsonDocument BuildEvidenceBoundaryDocument(int itemCount, int excerptLength)

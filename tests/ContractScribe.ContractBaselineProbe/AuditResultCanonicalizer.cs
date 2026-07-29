@@ -446,7 +446,8 @@ public static class AuditResultCanonicalizer
         string.Join('/', value.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
 
     private static bool IsCanonicalRepositoryPath(string? value) =>
-        !string.IsNullOrWhiteSpace(value)
+        !string.IsNullOrEmpty(value)
+        && !value.Contains('\0')
         && !Path.IsPathRooted(value)
         && !(value.Length >= 2
             && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'

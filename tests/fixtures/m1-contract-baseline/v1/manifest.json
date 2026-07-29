@@ -16,7 +16,7 @@
   "currentInputs": {
     "docs/20_architecture/contracts/audit-result-v1.md": "e324ea5cdf0c8778009842a01f2ebb8ca1cd3b0f434674b02c40edadf7ee223e",
     "docs/20_architecture/contracts/policy-configuration-v1.md": "9d283f2ad5e25adb748fb4121625999b220ebf0901fd928b0d422da951c977cf",
-    "docs/20_architecture/contracts/pre-release-v1-baseline.md": "1ed79a5c8d46650947d193a406d6d30eea8b152bfb57336876ffa70af0150a58",
+    "docs/20_architecture/contracts/pre-release-v1-baseline.md": "3fd015d15bccc4b8c413371715966f3e71362fb8c3675cbf1278562fbdf4ad9b",
     "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "d503d3b816d49cad6cb8f809e15e4ecf6ee3fcf8a2642eac3ff1e11e586280c5",
     "docs/20_architecture/decisions/0003-target-profiles-and-documentation-observation.md": "f0c9cba3881fdcdbc11bedd3de1ae738d05d431f7b274b6c234e325dbbb43bf4",
     "schemas/audit-result/v1.registry.json": "961b342e314dae5f59bd9aac9d86634787f08b2fc2540227f13c2e4ac480634e",
@@ -25,15 +25,16 @@
     "schemas/symbol-evidence-taxonomy/v1.manifest.schema.json": "12c871e9c48a81065e148dfa1ae79c66753e2d13f816afe45cc89e42872d615a",
     "schemas/symbol-evidence-taxonomy/v1.registry.json": "561314420371c991f70b35a0e8daede99d796d843785efc49f68f68c591f3513",
     "schemas/symbol-evidence-taxonomy/v1.schema.json": "8468e294a45da32a0acbc2183cf3b0438ed31b47151f1abe5ade4597bf38e5f7",
-    "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "89db5e66a69ef89705c626e76caae2d6b39ada0fcae0158d434aec5378b8f79e",
+    "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "ca94a1dbb769fc48ca0f078ed01f8ceaeb7ed8d001048b0c56a591bbd576d484",
     "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs": "c6c97b3ab072f8614962c2140724c60eb9ab255300a5bc8275a2f2ae2892520e",
-    "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs": "59ba9accbde0dfc2d5624730161b3f143760c10e80232285985e7d35071eb5d8",
+    "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs": "804e1001f5e6c7e19eb80f7e12ebfce6bda8c0fb2b05d058fdac7d77b29ec50a",
     "tests/ContractScribe.Tests/AuditResultConformance.cs": "e511b41cf9366655b483ff935bd2ac655e3969ffc340470683279a7915c033d9",
-    "tests/ContractScribe.Tests/AuditResultContractTests.cs": "bef0f4602c2df4930fa7a6208e68d139e02371f04eb5841a04803c236d1c208a",
-    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "11d837b6575e7d0baf30bbebdfd7019503b852a0498021db71f0e35f8c2e11e7",
+    "tests/ContractScribe.Tests/AuditResultContractTests.cs": "6bb677cf4d96e4938b6c85e7d2a613d32e0f452fc3d1c734101694fb92c67ba1",
+    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "aee21fa0b658a8350824c246b250e7203e34179fc5559061657ae24230bf2be6",
+    "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs": "7a6ce44344ed12c24fb7568a2090210b5035611bd7e45a2282463c661091ed83",
     "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs": "f3ef7864f63fb98c26265a4e38c5c7e17b46ae8f04729707077e8e707e487e2c",
     "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs": "fd1ffb4732900e0495cf2718e21185622aafdd7855ac17b275ee123515e0ee59",
-    "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs": "687dd4d5159bb056ff04853ecdeec7c2175bdf2b4db5ec3898898c8f83aacda7",
+    "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs": "c0a5aa699468a8e2da4a2bb2c8e1957b72b96e452cda497f3937465f44db1296",
     "tests/fixtures/audit-result/v1/cases.json": "96455f2cc70f54e6ad9931e8248773d85db74eb1325c74eab129d46b9629178e",
     "tests/fixtures/audit-result/v1/golden/required-present.canonical.json": "295251cdd7c3d00031df22a9228a9076289df20d153ff1e494cd92ba1b5e5755",
     "tests/fixtures/audit-result/v1/invalid-cases.json": "f0e5be42a7966d027643e352aca7ad7b4eafd43633746a6248a880a79ba0eb68",
@@ -84,12 +85,12 @@
     "tests/fixtures/audit-result/v1/payloads/required-present.json": "d143a6367b15426a6a3ff277dee69b43d1a1b820539dd5ef29c9fa5672a72317",
     "tests/fixtures/audit-result/v1/payloads/unresolved-classification.json": "e4dd56d1c356c0699d436de696d48550c36093506af00a9e28bc7d3415d32bee",
     "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json": "d9b4f8ebb5ad36097f31c59277e66e3a0df0a0f5b19b9e12e0ad22ca402a78a6",
-    "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json": "b40fce3c1c4bae876d1319bf1632c1406448b4850741fb06a6bd38a6ee993a33",
+    "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json": "4081a637f926a8928b31602344faace36a2743880fe5370a976f94a15a8eaa45",
     "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json": "b256a4cbfa8d48a3c012730b8eafef5354db755c3bdbd44cb53ddb0eb8c5198d",
     "tests/fixtures/m1-contract-baseline/v1/process-replay-input.json": "b5908589d354c9fbf441ec454da768dbd2b2a79734d0d0ac0a830eaf7470f1ca",
     "tests/fixtures/m1-contract-baseline/v1/profile-cases.json": "f7e89d9550e9cf52122e8c65ff5d9da7aac78c7b9f8147f4207dc6d19579f7e1",
-    "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json": "f5502dc482429d094f83c7c59d015597c1e6e6cd250b034e850ff4a1c31e0ce8",
-    "tests/fixtures/m1-contract-baseline/v1/row-crosswalk.json": "1e544d3b4c35e3ae4b59139c6754b9135ba26b80f77aad9676fdb04f2f82cb99",
+    "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json": "aa1e27792844f3c9830e04f3c4bf7385a9f797f80e0bfc351cb55f831c740a6f",
+    "tests/fixtures/m1-contract-baseline/v1/row-crosswalk.json": "d6de00c9ab7ae241a01b453a1d55a28eafcc596f1e2dfe4058be15484c5bb891",
     "tests/fixtures/m1-target-observation/adr-0003-vectors.json": "2b96dfa6decbf251e6015800b87a8f2e5a2c187e0442b6a32d7b3ffe5ab4238c",
     "tests/fixtures/policy-configuration/v1/cases.json": "c68533fff46b47b923f6b3e049c4965ef04db686338269c90a6f1ed5408d36af",
     "tests/fixtures/policy-configuration/v1/policies/case-sensitive.json": "236fbf10910d996286567c98b4a3c28ae02f95c8bff96351d49b2857156bbe4d",
@@ -139,16 +140,16 @@
     "processReplay": "tests/fixtures/m1-contract-baseline/v1/process-replay-input.json"
   },
   "implementationDisposition": {
-    "completed": [
+    "completedImplementationIssues": [
       36
     ],
-    "activeImplementation": [
+    "activeImplementationIssues": [
       37,
       38,
       39,
       40
     ],
-    "activeValidation": [
+    "activeValidationIssues": [
       41
     ]
   }

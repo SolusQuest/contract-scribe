@@ -33,7 +33,7 @@
       "caseId": "repository.canonical.accept",
       "locator": {
         "repository": {
-          "path": "src/Missing.cs",
+          "path": "fixtures/unavailable.cs",
           "span": {
             "start": 0,
             "end": 1
@@ -46,7 +46,7 @@
       "caseId": "repository.dot-segment.reject",
       "locator": {
         "repository": {
-          "path": "./src/Missing.cs"
+          "path": "src/./Missing.cs"
         }
       },
       "outcome": "reject"
@@ -61,10 +61,46 @@
       "outcome": "reject"
     },
     {
+      "caseId": "repository.drive-relative.reject",
+      "locator": {
+        "repository": {
+          "path": "C:src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
       "caseId": "repository.drive-root.reject",
       "locator": {
         "repository": {
           "path": "C:/src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.empty.reject",
+      "locator": {
+        "repository": {
+          "path": ""
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.leading-dot-segment.reject",
+      "locator": {
+        "repository": {
+          "path": "./src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.nul.reject",
+      "locator": {
+        "repository": {
+          "path": "src/\u0000/Missing.cs"
         }
       },
       "outcome": "reject"
@@ -99,6 +135,24 @@
         }
       },
       "outcome": "reject"
+    },
+    {
+      "caseId": "repository.unc-like.reject",
+      "locator": {
+        "repository": {
+          "path": "//server/share/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.whitespace-segment.accept",
+      "locator": {
+        "repository": {
+          "path": "src/ /Missing.cs"
+        }
+      },
+      "outcome": "accept"
     },
     {
       "caseId": "synthetic.accept",

@@ -17,6 +17,82 @@ public sealed class M1ContractBaselineTests
     private static readonly string Root = FindRepositoryRoot();
     private static readonly string FixtureRoot = Path.Join(Root, "tests", "fixtures", "m1-contract-baseline", "v1");
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly string[] ExpectedClassificationOriginSkipIds =
+    [
+        "component.generated-and-semantic.generated-selection.accept",
+        "component.generated-and-semantic.semantic-selection.reject",
+        "component.generated-provenance.compiler-synthesized-origin.reject",
+        "component.generated-provenance.mixed-origin.reject",
+        "component.generated-provenance.source-generator-origin.reject",
+        "component.generated-provenance.source-origin.reject",
+        "component.generated-provenance.tool-generated-origin.reject",
+        "component.generated-provenance.unknown-origin.accept",
+        "component.semantic-context.compiler-synthesized-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject",
+        "component.semantic-context.component.return.eligible.accept",
+        "component.semantic-context.component.type-parameter.eligible.accept",
+        "component.semantic-context.component.value.eligible.accept",
+        "component.semantic-context.mixed-origin.accept",
+        "component.semantic-context.source-generator-origin.accept",
+        "component.semantic-context.source-origin.accept",
+        "component.semantic-context.tool-generated-origin.accept",
+        "component.semantic-context.unknown-origin.reject",
+        "target.generated-and-semantic.generated-selection.accept",
+        "target.generated-and-semantic.semantic-selection.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "target.generated-provenance.mixed-origin.reject",
+        "target.generated-provenance.source-generator-origin.reject",
+        "target.generated-provenance.source-origin.reject",
+        "target.generated-provenance.tool-generated-origin.reject",
+        "target.generated-provenance.unknown-origin.accept",
+        "target.semantic-context.compiler-synthesized-origin.reject",
+        "target.semantic-context.mixed-origin.accept",
+        "target.semantic-context.source-generator-origin.accept",
+        "target.semantic-context.source-origin.accept",
+        "target.semantic-context.tool-generated-origin.accept",
+        "target.semantic-context.unknown-origin.reject",
+        "unresolved.documentation-comment-id.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.mixed-origin.accept",
+        "unresolved.documentation-comment-id.source-generator-origin.accept",
+        "unresolved.documentation-comment-id.source-origin.accept",
+        "unresolved.documentation-comment-id.tool-generated-origin.accept",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "unresolved.generated-and-semantic.generated-selection.accept",
+        "unresolved.generated-and-semantic.semantic-selection.reject",
+        "unresolved.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.generated-provenance.mixed-origin.reject",
+        "unresolved.generated-provenance.source-generator-origin.reject",
+        "unresolved.generated-provenance.source-origin.reject",
+        "unresolved.generated-provenance.tool-generated-origin.reject",
+        "unresolved.generated-provenance.unknown-origin.accept",
+        "unresolved.semantic-context.compiler-synthesized-origin.reject",
+        "unresolved.semantic-context.mixed-origin.accept",
+        "unresolved.semantic-context.source-generator-origin.accept",
+        "unresolved.semantic-context.source-origin.accept",
+        "unresolved.semantic-context.tool-generated-origin.accept",
+        "unresolved.semantic-context.unknown-origin.reject"
+    ];
+    private static readonly string[] ExpectedRepositoryCandidateLocatorIds =
+    [
+        "generated-source.accept",
+        "repository.absolute.reject",
+        "repository.backslash.reject",
+        "repository.canonical.accept",
+        "repository.dot-segment.reject",
+        "repository.double-separator.reject",
+        "repository.drive-relative.reject",
+        "repository.drive-root.reject",
+        "repository.empty.reject",
+        "repository.leading-dot-segment.reject",
+        "repository.nul.reject",
+        "repository.parent-segment.reject",
+        "repository.reversed-span.reject",
+        "repository.trailing-separator.reject",
+        "repository.unc-like.reject",
+        "repository.whitespace-segment.accept",
+        "synthetic.accept",
+        "tool-generated.accept"
+    ];
 
     [Fact]
     public void ClassificationOriginSkipVectors_AreClosedAndAcceptedByIndependentConsumers()
@@ -31,8 +107,7 @@ public sealed class M1ContractBaselineTests
             root.GetProperty("formatVersion").GetString());
         var cases = root.GetProperty("cases").EnumerateArray().ToArray();
         var ids = cases.Select(row => row.GetProperty("caseId").GetString()!).ToArray();
-        Assert.Equal(ids.Order(StringComparer.Ordinal), ids);
-        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(ExpectedClassificationOriginSkipIds, ids);
         Assert.All(cases, row => Assert.Equal(
             new[] { "caseId", "conditions", "record", "outcome" },
             row.EnumerateObject().Select(property => property.Name)));
@@ -40,26 +115,40 @@ public sealed class M1ContractBaselineTests
             root,
             "contractscribe-m1-classification-origin-skip-v1",
             ["caseId", "conditions", "record", "outcome"],
-            ids);
+            ExpectedClassificationOriginSkipIds);
+        Assert.True(IsClosedClassificationCatalog(
+            JsonNode.Parse(root.GetRawText())!.AsObject()));
 
         var taxonomyOracle = ClassificationConformanceOracle.Load(Root);
         foreach (var row in cases)
         {
             var expected = row.GetProperty("outcome").GetString() == "accept";
             var record = row.GetProperty("record");
-            Assert.Equal(expected, taxonomyOracle.IsValidRecord(record));
-            Assert.Equal(expected, IsAuditClassificationValid(record));
+            Assert.Equal(
+                expected,
+                taxonomyOracle.IsValidRecord(record)
+                    && ConditionsSelectRecord(row));
+            Assert.Equal(
+                expected,
+                IsAuditClassificationValid(record)
+                    && ConditionsSelectRecord(row));
         }
 
-        var precedence = cases.Single(row =>
+        var wrongPrecedence = cases.Single(row =>
             row.GetProperty("caseId").GetString()
-                == "target.generated-and-semantic.generated-precedence");
-        Assert.Equal(
-            new[] { "generated-provenance-unavailable", "semantic-context-unavailable" },
-            precedence.GetProperty("conditions").EnumerateArray().Select(value => value.GetString()));
-        Assert.Equal(
-            "skip.unavailable.generated-provenance",
-            precedence.GetProperty("record").GetProperty("skipReason").GetString());
+                == "target.generated-and-semantic.semantic-selection.reject");
+        Assert.True(taxonomyOracle.IsValidRecord(
+            wrongPrecedence.GetProperty("record")));
+        Assert.False(ConditionsSelectRecord(wrongPrecedence));
+
+        var unknownCondition = JsonNode.Parse(root.GetRawText())!.AsObject();
+        unknownCondition["cases"]![0]!["conditions"]![0] =
+            "semantic-contex-unavailable";
+        Assert.False(IsClosedClassificationCatalog(unknownCondition));
+        var unknownRecordMember = JsonNode.Parse(root.GetRawText())!.AsObject();
+        unknownRecordMember["cases"]![0]!["record"]!["unexpected"] = true;
+        Assert.False(IsClosedClassificationCatalog(unknownRecordMember));
+        AssertStrictJsonRejections();
     }
 
     [Fact]
@@ -75,8 +164,7 @@ public sealed class M1ContractBaselineTests
             root.GetProperty("formatVersion").GetString());
         var cases = root.GetProperty("cases").EnumerateArray().ToArray();
         var ids = cases.Select(row => row.GetProperty("caseId").GetString()!).ToArray();
-        Assert.Equal(ids.Order(StringComparer.Ordinal), ids);
-        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(ExpectedRepositoryCandidateLocatorIds, ids);
         Assert.All(cases, row => Assert.Equal(
             new[] { "caseId", "locator", "outcome" },
             row.EnumerateObject().Select(property => property.Name)));
@@ -84,7 +172,9 @@ public sealed class M1ContractBaselineTests
             root,
             "contractscribe-m1-repository-candidate-locator-v1",
             ["caseId", "locator", "outcome"],
-            ids);
+            ExpectedRepositoryCandidateLocatorIds);
+        Assert.True(IsClosedLocatorCatalog(
+            JsonNode.Parse(root.GetRawText())!.AsObject()));
 
         var taxonomyOracle = ClassificationConformanceOracle.Load(Root);
         var template = JsonNode.Parse(File.ReadAllText(Path.Join(
@@ -119,6 +209,12 @@ public sealed class M1ContractBaselineTests
             Assert.Equal(expected, IsReplayDocumentValid(parsed.RootElement));
             Assert.Equal(expected, IsHostAuditResultValid(parsed.RootElement));
         }
+
+        var unknownLocatorMember =
+            JsonNode.Parse(root.GetRawText())!.AsObject();
+        unknownLocatorMember["cases"]![0]!["locator"]!["unexpected"] =
+            new JsonObject();
+        Assert.False(IsClosedLocatorCatalog(unknownLocatorMember));
     }
 
     [Fact]
@@ -129,8 +225,9 @@ public sealed class M1ContractBaselineTests
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("issue-55-classification-origin-closure-v1", root.GetProperty("contractRevision").GetString());
         Assert.Equal(
-            new[] { "profile.assembly-visible", "profile.external-api" },
-            root.GetProperty("profiles").EnumerateArray().Select(value => value.GetString()).Order(StringComparer.Ordinal));
+            new[] { "profile.external-api", "profile.assembly-visible" },
+            root.GetProperty("profiles").EnumerateArray()
+                .Select(value => value.GetString()));
 
         var predecessor = root.GetProperty("predecessor");
         Assert.Equal(
@@ -190,13 +287,16 @@ public sealed class M1ContractBaselineTests
         var disposition = root.GetProperty("implementationDisposition");
         Assert.Equal(
             new[] { 36 },
-            disposition.GetProperty("completed").EnumerateArray().Select(value => value.GetInt32()));
+            disposition.GetProperty("completedImplementationIssues")
+                .EnumerateArray().Select(value => value.GetInt32()));
         Assert.Equal(
             new[] { 37, 38, 39, 40 },
-            disposition.GetProperty("activeImplementation").EnumerateArray().Select(value => value.GetInt32()));
+            disposition.GetProperty("activeImplementationIssues")
+                .EnumerateArray().Select(value => value.GetInt32()));
         Assert.Equal(
             new[] { 41 },
-            disposition.GetProperty("activeValidation").EnumerateArray().Select(value => value.GetInt32()));
+            disposition.GetProperty("activeValidationIssues")
+                .EnumerateArray().Select(value => value.GetInt32()));
         Assert.True(File.Exists(Path.Join(Root, root.GetProperty("inventory").GetString()!.Replace('/', Path.DirectorySeparatorChar))));
 
         var value = JsonNode.Parse(root.GetRawText())!.AsObject();
@@ -218,6 +318,32 @@ public sealed class M1ContractBaselineTests
                     property.Value?.DeepClone())));
         reordered["currentInputs"] = reversedInputs;
         Assert.False(IsValidSuccessorManifest(reordered, expectedInputs));
+        var unknownNested = (JsonObject)value.DeepClone();
+        unknownNested["predecessor"]!["unexpected"] = true;
+        Assert.False(IsValidSuccessorManifest(unknownNested, expectedInputs));
+        var wrongInventory = (JsonObject)value.DeepClone();
+        wrongInventory["inventory"] =
+            "docs/20_architecture/contracts/audit-result-v1.md";
+        Assert.False(IsValidSuccessorManifest(wrongInventory, expectedInputs));
+        var wrongFixture = (JsonObject)value.DeepClone();
+        wrongFixture["fixtures"]!["classificationOriginSkip"] =
+            "tests/fixtures/m1-contract-baseline/v1/profile-cases.json";
+        Assert.False(IsValidSuccessorManifest(wrongFixture, expectedInputs));
+        var reorderedProfiles = (JsonObject)value.DeepClone();
+        reorderedProfiles["profiles"] = new JsonArray(
+            "profile.assembly-visible",
+            "profile.external-api");
+        Assert.False(IsValidSuccessorManifest(
+            reorderedProfiles,
+            expectedInputs));
+        var wrongIssueSet = (JsonObject)value.DeepClone();
+        wrongIssueSet["implementationDisposition"]!
+            ["activeValidationIssues"] = new JsonArray(40, 41);
+        Assert.False(IsValidSuccessorManifest(wrongIssueSet, expectedInputs));
+        var wrongPredecessor = (JsonObject)value.DeepClone();
+        wrongPredecessor["predecessor"]!["contractRevision"] =
+            "issue-35-pre-release-v2";
+        Assert.False(IsValidSuccessorManifest(wrongPredecessor, expectedInputs));
     }
 
     [Fact]
@@ -253,6 +379,21 @@ public sealed class M1ContractBaselineTests
                 Assert.DoesNotContain("m1-target-observation/adr-0003-vectors.json", row.GetProperty("validFixture").GetString(), StringComparison.Ordinal);
             }
         });
+
+        var closed = JsonNode.Parse(crosswalk.RootElement.GetRawText())!
+            .AsObject();
+        Assert.True(AreAffectedCrosswalkRowsExact(closed));
+        var wrongOwner = (JsonObject)closed.DeepClone();
+        FindCrosswalkRow(
+            wrongOwner,
+            "failureCases/failure.semantic-context")["downstreamIssue"] = 38;
+        Assert.False(AreAffectedCrosswalkRowsExact(wrongOwner));
+        var wrongPath = (JsonObject)closed.DeepClone();
+        FindCrosswalkRow(
+            wrongPath,
+            "failureCases/failure.generated-provenance")["oracle"] =
+                "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs";
+        Assert.False(AreAffectedCrosswalkRowsExact(wrongPath));
     }
 
     [Fact]
@@ -784,6 +925,213 @@ public sealed class M1ContractBaselineTests
             && ids.SequenceEqual(expectedIds, StringComparer.Ordinal);
     }
 
+    private static bool IsClosedClassificationCatalog(JsonObject value)
+    {
+        try
+        {
+            if (!IsClosedCatalog(
+                    value,
+                    "contractscribe-m1-classification-origin-skip-v1",
+                    ["caseId", "conditions", "record", "outcome"],
+                    ExpectedClassificationOriginSkipIds))
+            {
+                return false;
+            }
+
+            return value["cases"]!.AsArray().All(node =>
+            {
+                var row = node!.AsObject();
+                var conditions = row["conditions"]!.AsArray()
+                    .Select(condition => condition!.GetValue<string>())
+                    .ToArray();
+                var allowedConditions = conditions.SequenceEqual(
+                        ["generated-provenance-unavailable"],
+                        StringComparer.Ordinal)
+                    || conditions.SequenceEqual(
+                        ["semantic-context-unavailable"],
+                        StringComparer.Ordinal)
+                    || conditions.SequenceEqual(
+                        ["documentation-comment-id-unavailable"],
+                        StringComparer.Ordinal)
+                    || conditions.SequenceEqual(
+                        [
+                            "generated-provenance-unavailable",
+                            "semantic-context-unavailable"
+                        ],
+                        StringComparer.Ordinal);
+                return allowedConditions
+                    && IsClosedClassificationRecord(row["record"]!.AsObject());
+            });
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or KeyNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsClosedClassificationRecord(JsonObject record)
+    {
+        var recordType = record["recordType"]?.GetValue<string>();
+        if (recordType == "TargetClassification")
+        {
+            return HasExactProperties(
+                    record,
+                    "recordType",
+                    "symbolRef",
+                    "primaryKind",
+                    "traits",
+                    "origin",
+                    "supportStatus",
+                    "skipReason")
+                && record["symbolRef"] is JsonObject symbolRef
+                && HasExactProperties(
+                    symbolRef,
+                    "compilationContextRef",
+                    "documentationCommentId")
+                && record["traits"] is JsonArray;
+        }
+
+        if (recordType == "ComponentClassification")
+        {
+            return HasExactProperties(
+                    record,
+                    "recordType",
+                    "parentSymbolRef",
+                    "componentKind",
+                    "identity",
+                    "origin",
+                    "supportStatus",
+                    "skipReason")
+                && record["parentSymbolRef"] is JsonObject parentSymbolRef
+                && HasExactProperties(
+                    parentSymbolRef,
+                    "compilationContextRef",
+                    "documentationCommentId");
+        }
+
+        return recordType == "UnresolvedClassification"
+            && HasExactProperties(
+                record,
+                "recordType",
+                "compilationContextRef",
+                "origin",
+                "supportStatus",
+                "skipReason",
+                "candidateLocator")
+            && record["candidateLocator"] is JsonObject candidateLocator
+            && HasExactProperties(candidateLocator, "synthetic")
+            && candidateLocator["synthetic"] is JsonObject synthetic
+            && HasExactProperties(synthetic, "fixtureId");
+    }
+
+    private static bool IsClosedLocatorCatalog(JsonObject value)
+    {
+        try
+        {
+            if (!IsClosedCatalog(
+                    value,
+                    "contractscribe-m1-repository-candidate-locator-v1",
+                    ["caseId", "locator", "outcome"],
+                    ExpectedRepositoryCandidateLocatorIds))
+            {
+                return false;
+            }
+
+            return value["cases"]!.AsArray().All(node =>
+            {
+                var locator = node!["locator"]!.AsObject();
+                if (locator.Count != 1)
+                {
+                    return false;
+                }
+
+                if (locator["repository"] is JsonObject repository)
+                {
+                    if (!HasExactProperties(repository, "path")
+                        && !HasExactProperties(repository, "path", "span"))
+                    {
+                        return false;
+                    }
+
+                    return repository["span"] is not JsonObject span
+                        || HasExactProperties(span, "start", "end");
+                }
+
+                return locator["generatedSource"] is JsonObject generatedSource
+                        && HasExactProperties(
+                            generatedSource,
+                            "generatorId",
+                            "hintNameId")
+                    || locator["toolGenerated"] is JsonObject toolGenerated
+                        && HasExactProperties(
+                            toolGenerated,
+                            "producerId",
+                            "outputId")
+                    || locator["synthetic"] is JsonObject synthetic
+                        && HasExactProperties(synthetic, "fixtureId");
+            });
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or KeyNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var record = row.GetProperty("record");
+        var origin = record.GetProperty("origin").GetString();
+        var skipReason = record.GetProperty("skipReason").GetString();
+        var knownOrigin = origin is "origin.source"
+            or "origin.source-generator"
+            or "origin.tool-generated"
+            or "origin.mixed";
+        if (conditions.Contains(
+            "generated-provenance-unavailable",
+            StringComparer.Ordinal))
+        {
+            return origin == "origin.unknown"
+                && skipReason == "skip.unavailable.generated-provenance";
+        }
+
+        if (conditions.SequenceEqual(
+            ["semantic-context-unavailable"],
+            StringComparer.Ordinal))
+        {
+            return knownOrigin
+                && skipReason == "skip.unavailable.semantic-context";
+        }
+
+        return conditions.SequenceEqual(
+                ["documentation-comment-id-unavailable"],
+                StringComparer.Ordinal)
+            && knownOrigin
+            && skipReason == "skip.unavailable.documentation-comment-id";
+    }
+
+    private static bool HasExactProperties(
+        JsonObject value,
+        params string[] properties) =>
+        value.Select(property => property.Key)
+            .SequenceEqual(properties, StringComparer.Ordinal);
+
+    private static void AssertStrictJsonRejections()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            ParseStrict(Encoding.UTF8.GetBytes("{\"a\":1,\"a\":2}")));
+        Assert.Throws<InvalidDataException>(() =>
+            ParseStrict([0xef, 0xbb, 0xbf, (byte)'{', (byte)'}']));
+        Assert.Throws<DecoderFallbackException>(() =>
+            ParseStrict([0xff]));
+    }
+
     private static SortedDictionary<string, string> ExpectedCurrentInputs()
     {
         var paths = new HashSet<string>(StringComparer.Ordinal)
@@ -799,32 +1147,33 @@ public sealed class M1ContractBaselineTests
             "tests/ContractScribe.Tests/AuditResultConformance.cs",
             "tests/ContractScribe.Tests/AuditResultContractTests.cs",
             "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+            "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",
             "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
             "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
             "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs"
         };
-        foreach (var relativeRoot in new[]
-        {
-            "schemas/audit-result",
-            "schemas/policy-configuration",
-            "schemas/symbol-evidence-taxonomy",
-            "tests/fixtures/audit-result/v1",
-            "tests/fixtures/m1-target-observation",
-            "tests/fixtures/policy-configuration/v1",
-            "tests/fixtures/symbol-evidence-taxonomy/v1",
-            "tests/fixtures/m1-contract-baseline/v1"
-        })
-        {
-            var fullRoot = Path.Join(
-                Root,
-                relativeRoot.Replace('/', Path.DirectorySeparatorChar));
-            foreach (var file in Directory.EnumerateFiles(
-                fullRoot,
-                "*",
-                SearchOption.AllDirectories))
+        foreach (var fullRoot in new[]
             {
-                var relative = Path.GetRelativePath(Root, file)
-                    .Replace(Path.DirectorySeparatorChar, '/');
+                "schemas/audit-result",
+                "schemas/policy-configuration",
+                "schemas/symbol-evidence-taxonomy",
+                "tests/fixtures/audit-result/v1",
+                "tests/fixtures/m1-target-observation",
+                "tests/fixtures/policy-configuration/v1",
+                "tests/fixtures/symbol-evidence-taxonomy/v1",
+                "tests/fixtures/m1-contract-baseline/v1"
+            }
+            .Select(relativeRoot => Path.Join(
+                Root,
+                relativeRoot.Replace('/', Path.DirectorySeparatorChar))))
+        {
+            foreach (var relative in Directory.EnumerateFiles(
+                    fullRoot,
+                    "*",
+                    SearchOption.AllDirectories)
+                .Select(file => Path.GetRelativePath(Root, file)
+                    .Replace(Path.DirectorySeparatorChar, '/')))
+            {
                 if (relative
                     != "tests/fixtures/m1-contract-baseline/v1/manifest.json")
                 {
@@ -847,8 +1196,10 @@ public sealed class M1ContractBaselineTests
         JsonObject value,
         IReadOnlyDictionary<string, string> expectedInputs)
     {
-        if (!value.Select(property => property.Key).SequenceEqual(
-                [
+        try
+        {
+            if (!HasExactProperties(
+                    value,
                     "schemaVersion",
                     "contractRevision",
                     "inventory",
@@ -856,26 +1207,244 @@ public sealed class M1ContractBaselineTests
                     "predecessor",
                     "currentInputs",
                     "fixtures",
-                    "implementationDisposition"
-                ],
-                StringComparer.Ordinal)
-            || value["schemaVersion"]?.GetValue<int>() != 1
-            || value["contractRevision"]?.GetValue<string>()
-                != "issue-55-classification-origin-closure-v1"
-            || value["currentInputs"] is not JsonObject inputs)
+                    "implementationDisposition")
+                || value["schemaVersion"]?.GetValue<int>() != 1
+                || value["contractRevision"]?.GetValue<string>()
+                    != "issue-55-classification-origin-closure-v1"
+                || value["inventory"]?.GetValue<string>()
+                    != "docs/20_architecture/contracts/pre-release-v1-baseline.md"
+                || value["profiles"] is not JsonArray profiles
+                || !profiles.Select(profile => profile?.GetValue<string>())
+                    .SequenceEqual(
+                        [
+                            "profile.external-api",
+                            "profile.assembly-visible"
+                        ],
+                        StringComparer.Ordinal)
+                || value["predecessor"] is not JsonObject predecessor
+                || !HasExactProperties(
+                    predecessor,
+                    "coordinatingIssue",
+                    "contractRevision",
+                    "mergeCommit",
+                    "contractManifest",
+                    "contractManifestSha256")
+                || predecessor["coordinatingIssue"]?.GetValue<string>()
+                    != "https://github.com/SolusQuest/contract-scribe/issues/35"
+                || predecessor["contractRevision"]?.GetValue<string>()
+                    != "issue-35-pre-release-v1"
+                || predecessor["mergeCommit"]?.GetValue<string>()
+                    != "bb4654edc180e2953dda6b89a29211b18778b78e"
+                || predecessor["contractManifest"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/manifest.json"
+                || predecessor["contractManifestSha256"]?.GetValue<string>()
+                    != "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+                || value["currentInputs"] is not JsonObject inputs
+                || value["fixtures"] is not JsonObject fixtures
+                || !HasExactProperties(
+                    fixtures,
+                    "policy",
+                    "profiles",
+                    "generatedIdentity",
+                    "auditAuthority",
+                    "classificationOriginSkip",
+                    "repositoryCandidateLocator",
+                    "rowCrosswalk",
+                    "processReplay")
+                || fixtures["policy"]?.GetValue<string>()
+                    != "tests/fixtures/policy-configuration/v1/cases.json"
+                || fixtures["profiles"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/profile-cases.json"
+                || fixtures["generatedIdentity"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/generated-identity-vectors.json"
+                || fixtures["auditAuthority"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json"
+                || fixtures["classificationOriginSkip"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
+                || fixtures["repositoryCandidateLocator"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json"
+                || fixtures["rowCrosswalk"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/row-crosswalk.json"
+                || fixtures["processReplay"]?.GetValue<string>()
+                    != "tests/fixtures/m1-contract-baseline/v1/process-replay-input.json"
+                || value["implementationDisposition"] is not JsonObject disposition
+                || !HasExactProperties(
+                    disposition,
+                    "completedImplementationIssues",
+                    "activeImplementationIssues",
+                    "activeValidationIssues")
+                || !MatchesIntegerArray(
+                    disposition["completedImplementationIssues"],
+                    36)
+                || !MatchesIntegerArray(
+                    disposition["activeImplementationIssues"],
+                    37,
+                    38,
+                    39,
+                    40)
+                || !MatchesIntegerArray(
+                    disposition["activeValidationIssues"],
+                    41))
+            {
+                return false;
+            }
+
+            var actual = inputs.ToArray();
+            return actual.Select(property => property.Key)
+                    .SequenceEqual(expectedInputs.Keys, StringComparer.Ordinal)
+                && actual.All(property =>
+                    property.Value?.GetValue<string>()
+                        == expectedInputs[property.Key]);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or KeyNotFoundException)
         {
             return false;
         }
-
-        var actual = inputs.ToArray();
-        return actual.Select(property => property.Key)
-                .SequenceEqual(expectedInputs.Keys, StringComparer.Ordinal)
-            && actual.All(property =>
-                property.Value?.GetValue<string>()
-                    == expectedInputs[property.Key]);
     }
 
-    private static JsonDocument Load(string name) => JsonDocument.Parse(File.ReadAllText(Path.Join(FixtureRoot, name)));
+    private static bool MatchesIntegerArray(
+        JsonNode? value,
+        params int[] expected) =>
+        value is JsonArray array
+        && array.Select(item => item?.GetValue<int>())
+            .SequenceEqual(expected.Select(number => (int?)number));
+
+    private static bool AreAffectedCrosswalkRowsExact(JsonObject root)
+    {
+        try
+        {
+            if (!HasExactProperties(
+                    root,
+                    "schemaVersion",
+                    "sourceDecision",
+                    "rows")
+                || root["schemaVersion"]?.GetValue<int>() != 1
+                || root["sourceDecision"]?.GetValue<string>()
+                    != "docs/20_architecture/decisions/0003-target-profiles-and-documentation-observation.md"
+                || root["rows"] is not JsonArray rows)
+            {
+                return false;
+            }
+
+            var expectedKeys = new[]
+            {
+                "failureCases/failure.documentation-id-unknown-origin",
+                "failureCases/failure.generated-provenance",
+                "failureCases/failure.semantic-context",
+                "failureCases/failure.unrepresentable-generated"
+            };
+            foreach (var rowKey in expectedKeys)
+            {
+                var row = rows.OfType<JsonObject>().Single(candidate =>
+                    candidate["rowKey"]?.GetValue<string>() == rowKey);
+                if (!HasExactProperties(
+                        row,
+                        "rowKey",
+                        "disposition",
+                        "normativeSection",
+                        "schemaOrRegistry",
+                        "validFixture",
+                        "invalidOrMutation",
+                        "oracle",
+                        "downstreamIssue")
+                    || row["disposition"]?.GetValue<string>() != "amended"
+                    || row["normativeSection"]?.GetValue<string>()
+                        != "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md"
+                    || row["schemaOrRegistry"]?.GetValue<string>()
+                        != "schemas/symbol-evidence-taxonomy/v1.registry.json"
+                    || row["validFixture"]?.GetValue<string>()
+                        != "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
+                    || row["invalidOrMutation"]?.GetValue<string>()
+                        != "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json"
+                    || row["oracle"]?.GetValue<string>()
+                        != "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
+                    || row["downstreamIssue"]?.GetValue<int>() != 37)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or KeyNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static JsonObject FindCrosswalkRow(
+        JsonObject root,
+        string rowKey) =>
+        root["rows"]!.AsArray().OfType<JsonObject>().Single(row =>
+            row["rowKey"]?.GetValue<string>() == rowKey);
+
+    private static JsonDocument Load(string name) =>
+        ParseStrict(File.ReadAllBytes(Path.Join(FixtureRoot, name)));
+
+    private static JsonDocument ParseStrict(byte[] payload)
+    {
+        if (payload.Length >= 3
+            && payload[0] == 0xef
+            && payload[1] == 0xbb
+            && payload[2] == 0xbf)
+        {
+            throw new InvalidDataException("UTF-8 BOM is forbidden.");
+        }
+
+        var text = new UTF8Encoding(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true).GetString(payload);
+        var document = JsonDocument.Parse(
+            text,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow
+            });
+        try
+        {
+            RejectDuplicateProperties(document.RootElement);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
+    }
+
+    private static void RejectDuplicateProperties(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                {
+                    throw new InvalidDataException(
+                        $"Duplicate JSON property '{property.Name}'.");
+                }
+
+                RejectDuplicateProperties(property.Value);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                RejectDuplicateProperties(item);
+            }
+        }
+    }
+
     private static JsonElement Element(JsonNode node) => node.Deserialize<JsonElement>();
     private static string Sha256(string path) => Sha256(File.ReadAllBytes(path));
     private static string Sha256(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

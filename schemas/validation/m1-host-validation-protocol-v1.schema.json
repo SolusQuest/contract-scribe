@@ -38,8 +38,8 @@
         },
         "disposition": {
           "enum": [
-            "pending",
-            "main"
+            "pending-main-reconciliation",
+            "main-reachable"
           ]
         },
         "mergeCommit": {
@@ -89,7 +89,7 @@
           "if": {
             "properties": {
               "disposition": {
-                "const": "pending"
+                "const": "pending-main-reconciliation"
               }
             },
             "required": [

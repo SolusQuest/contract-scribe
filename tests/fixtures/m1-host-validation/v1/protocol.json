@@ -3,10 +3,10 @@
   "protocolId": "m1-host-validation-v1",
   "baseline": {
     "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/55",
-    "disposition": "pending",
+    "disposition": "pending-main-reconciliation",
     "mergeCommit": null,
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-    "contractManifestSha256": "7e8da90111604233f593ab125bfb27869757adf2b414865993c8e981397256fd",
+    "contractManifestSha256": "6a342bdb02a9b6ca1ec011d90057f584efc6fa580472308ab619c1b994a94c3d",
     "predecessor": {
       "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/35",
       "contractRevision": "issue-35-pre-release-v1",
@@ -40,6 +40,9 @@
     "schemas/validation/m1-host-validation-vectors-v1.schema.json",
     "schemas/validation/m1-host-calibrated-bounds-v1.schema.json",
     "schemas/validation/m1-host-failure-registry-v1.schema.json",
+    "src/ContractScribe.Cli/ContractScribe.Cli.csproj",
+    "src/ContractScribe.Core/ContractScribe.Core.csproj",
+    "src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj",
     "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
     "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
     "tests/ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj",
