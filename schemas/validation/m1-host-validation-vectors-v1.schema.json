@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-vectors-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "vectors"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-vectors-v1"
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 40,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/vector"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vector": {
+      "type": "object",
+      "required": [
+        "vectorId",
+        "category",
+        "executorKind",
+        "cells",
+        "invocationCount",
+        "freshProcessPerInvocation",
+        "runIds",
+        "equalityFields",
+        "crossCellEquality",
+        "fixture",
+        "expectedObservation",
+        "expectedEnforcementClass",
+        "supportDisposition",
+        "observerRequirements",
+        "protectedInputClasses"
+      ],
+      "properties": {
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "category": {
+          "enum": [
+            "bounds",
+            "cancellation",
+            "contracts",
+            "determinism",
+            "diagnostics",
+            "failure",
+            "input-shape",
+            "network",
+            "path",
+            "project-graph",
+            "publication",
+            "repository-write",
+            "support",
+            "toolchain"
+          ]
+        },
+        "executorKind": {
+          "enum": [
+            "harness-static",
+            "production-host",
+            "external-process",
+            "platform-fixture"
+          ]
+        },
+        "cells": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ubuntu-x64",
+              "windows-x64"
+            ]
+          }
+        },
+        "invocationCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "freshProcessPerInvocation": {
+          "type": "boolean"
+        },
+        "runIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "run-1",
+              "run-2"
+            ]
+          }
+        },
+        "equalityFields": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][A-Za-z0-9.]*$",
+            "maxLength": 96
+          }
+        },
+        "crossCellEquality": {
+          "type": "boolean"
+        },
+        "fixture": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "expectedObservation": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 128
+        },
+        "expectedEnforcementClass": {
+          "enum": [
+            "internally-enforceable",
+            "caller-or-os-enforced",
+            "observable-only",
+            "not-enforceable-selected-topology"
+          ]
+        },
+        "supportDisposition": {
+          "enum": [
+            "required",
+            "unsupported",
+            "trusted-observed",
+            "deferred-owned",
+            "selected-topology-limitation"
+          ]
+        },
+        "observerRequirements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "artifact-state",
+              "bounded-source-metadata-scan",
+              "canonical-bytes",
+              "delete-shrink-rename-retention-breach",
+              "declared-operation-inventory",
+              "empty-governed-prestate",
+              "exact-built-artifact-source-metadata-scan",
+              "filesystem-delta",
+              "independently-derived-declared-operation-inventory",
+              "known-prestate",
+              "logical-file-byte-snapshot",
+              "peak-current-logical-file-byte-tracking",
+              "process-tree",
+              "public-streams",
+              "restore-runtime-download-process-artifact-observer",
+              "retention-breach-observer",
+              "selected-toolchain",
+              "subject-response",
+              "temporary-disk-high-water-gate",
+              "test-operation-recorder",
+              "watcher-sentinel-drain"
+            ]
+          }
+        },
+        "protectedInputClasses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "build-input",
+              "command-contract",
+              "contract",
+              "coverage-manifest",
+              "environment-policy",
+              "fixture",
+              "host-source",
+              "package",
+              "protocol",
+              "runner-image",
+              "selected-runtime",
+              "temporary-disk-contract",
+              "toolchain",
+              "workflow"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

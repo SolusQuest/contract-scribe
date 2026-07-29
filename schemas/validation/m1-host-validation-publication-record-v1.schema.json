@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-publication-record-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "bundleId",
+    "networkClaimSetId",
+    "reviewId",
+    "sourceConfigurationId",
+    "validationAttempt",
+    "evidenceRecordRevision",
+    "publishedEvidence"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-publication-record-v1"
+    },
+    "bundleId": {
+      "type": "string",
+      "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+    },
+    "networkClaimSetId": {
+      "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
+    },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^review\\.[0-9a-f]{64}$"
+    },
+    "sourceConfigurationId": {
+      "type": "string",
+      "pattern": "^source\\.[0-9a-f]{64}$"
+    },
+    "validationAttempt": {
+      "$ref": "#/$defs/validationAttempt"
+    },
+    "evidenceRecordRevision": {
+      "$ref": "#/$defs/commit"
+    },
+    "publishedEvidence": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/artifactIdentity"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "artifactIdentity": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "validationAttempt": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "validationExecutionSha": {
+          "$ref": "#/$defs/commit"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "repositoryPath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+      "maxLength": 512
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    }
+  }
+}

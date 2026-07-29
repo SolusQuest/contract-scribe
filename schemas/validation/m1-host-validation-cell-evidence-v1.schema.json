@@ -1,0 +1,978 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-validation-cell-evidence-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "bundleId",
+    "networkClaimSetId",
+    "reviewId",
+    "sourceConfigurationId",
+    "subjectManifestSha256",
+    "validationAttempt",
+    "cell",
+    "runs",
+    "outcome"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-m1-host-validation-cell-evidence-v1"
+    },
+    "bundleId": {
+      "$ref": "#/$defs/bundleId"
+    },
+    "networkClaimSetId": {
+      "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
+    },
+    "reviewId": {
+      "$ref": "#/$defs/reviewId"
+    },
+    "sourceConfigurationId": {
+      "type": "string",
+      "pattern": "^source\\.[0-9a-f]{64}$"
+    },
+    "subjectManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "validationAttempt": {
+      "$ref": "#/$defs/validationAttempt"
+    },
+    "cell": {
+      "$ref": "#/$defs/cell"
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/run"
+      }
+    },
+    "outcome": {
+      "$ref": "#/$defs/validationOutcome"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "bundleId": {
+      "type": "string",
+      "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
+    },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^review\\.[0-9a-f]{64}$"
+    },
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._:/-]+$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._/-]+$"
+    },
+    "artifactIdentity": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cell": {
+      "type": "object",
+      "required": [
+        "cellId",
+        "jobId",
+        "jobUrl",
+        "runnerImage",
+        "rid",
+        "architecture",
+        "selectedSdk",
+        "selectedRuntime",
+        "selectedMsbuild",
+        "builtArtifacts"
+      ],
+      "properties": {
+        "cellId": {
+          "enum": [
+            "ubuntu-x64",
+            "windows-x64"
+          ]
+        },
+        "jobId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "jobUrl": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "runnerImage": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "rid": {
+          "enum": [
+            "linux-x64",
+            "win-x64"
+          ]
+        },
+        "architecture": {
+          "const": "X64"
+        },
+        "selectedSdk": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedRuntime": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedMsbuild": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "builtArtifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/artifactIdentity"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "vectorId",
+        "runId",
+        "verdict",
+        "expectedObservation",
+        "observedObservation",
+        "expectedEnforcementClass",
+        "observedEnforcementClass",
+        "subject",
+        "process",
+        "observedCanonicalResult",
+        "observedAuditResult",
+        "repositoryDelta",
+        "observedProcesses",
+        "diagnosticCodes"
+      ],
+      "properties": {
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "runId": {
+          "enum": [
+            "run-1",
+            "run-2"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "matched",
+            "subject-nonconformance",
+            "vector-environment-blocked",
+            "vector-infrastructure-incomplete",
+            "protocol-invalid-observation"
+          ]
+        },
+        "expectedObservation": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "observedObservation": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "expectedEnforcementClass": {
+          "$ref": "#/$defs/enforcementClass"
+        },
+        "observedEnforcementClass": {
+          "$ref": "#/$defs/enforcementClass"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/subject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryDelta": {
+          "$ref": "#/$defs/repositoryDelta"
+        },
+        "observedProcesses": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/observedProcess"
+          }
+        },
+        "diagnosticCodes": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^HV[0-9]{3}(?:_[A-Z0-9_]+)?$",
+            "maxLength": 64
+          }
+        },
+        "process": {
+          "$ref": "#/$defs/processObservation"
+        },
+        "observedCanonicalResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAuditResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/observedAuditResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "subject": {
+      "type": "object",
+      "required": [
+        "formatVersion",
+        "vectorId",
+        "runId",
+        "processStart",
+        "processTermination",
+        "auditOutcome",
+        "executionOutcome",
+        "failureRegistryIdentity",
+        "failureCode",
+        "failureStage",
+        "terminalState",
+        "artifactState",
+        "enforcementClass",
+        "observationCode",
+        "canonicalResult"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": "contractscribe-m1-host-validation-subject-response-v1"
+        },
+        "vectorId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "runId": {
+          "enum": [
+            "run-1",
+            "run-2"
+          ]
+        },
+        "processStart": {
+          "enum": [
+            "started",
+            "launch-failure",
+            "runtime-load-failure",
+            "permission-failure",
+            "startup-timeout"
+          ]
+        },
+        "processTermination": {
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started"
+          ]
+        },
+        "auditOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "compliant",
+            "violation",
+            "skipped",
+            null
+          ]
+        },
+        "executionOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "invalid-input",
+            "environment-unavailable",
+            "load-failure",
+            "audit-error",
+            "cancelled",
+            "timeout",
+            "succeeded",
+            null
+          ]
+        },
+        "failureRegistryIdentity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "failureStage": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "terminalState": {
+          "enum": [
+            "not-entered",
+            "pending",
+            "committed",
+            "rejected-late"
+          ]
+        },
+        "artifactState": {
+          "enum": [
+            "absent",
+            "invalidated",
+            "staged",
+            "published"
+          ]
+        },
+        "enforcementClass": {
+          "$ref": "#/$defs/enforcementClass"
+        },
+        "observationCode": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "canonicalResult": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "enforcementClass": {
+      "enum": [
+        "internally-enforceable",
+        "caller-or-os-enforced",
+        "observable-only",
+        "not-enforceable-selected-topology"
+      ]
+    },
+    "repositoryDelta": {
+      "type": "object",
+      "required": [
+        "protectedCreated",
+        "protectedDeleted",
+        "protectedChanged",
+        "otherCreated",
+        "otherDeleted",
+        "otherChanged",
+        "allowedDesignTimeCreated",
+        "allowedDesignTimeDeleted",
+        "allowedDesignTimeChanged",
+        "protectedCreatedOrChangedBytes",
+        "otherCreatedOrChangedBytes",
+        "allowedDesignTimeCreatedOrChangedBytes"
+      ],
+      "properties": {
+        "protectedCreated": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "protectedDeleted": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "protectedChanged": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "otherCreated": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "otherDeleted": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "otherChanged": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "allowedDesignTimeCreated": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "allowedDesignTimeChanged": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "allowedDesignTimeDeleted": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "protectedCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "otherCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowedDesignTimeCreatedOrChangedBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "pathArray": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/repositoryPath"
+      }
+    },
+    "observedProcess": {
+      "type": "object",
+      "required": [
+        "processId",
+        "parentProcessId",
+        "role",
+        "imageName"
+      ],
+      "properties": {
+        "processId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parentProcessId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role": {
+          "enum": [
+            "subject-runtime",
+            "contractscribe-worker",
+            "toolchain-owned",
+            "restore-or-runtime-download",
+            "unknown-descendant"
+          ]
+        },
+        "imageName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "validationOutcome": {
+      "enum": [
+        "protected-input-invalidated",
+        "protocol-failure",
+        "subject-nonconformance",
+        "environment-or-infrastructure-incomplete",
+        "harness-or-ci-cancelled",
+        "harness-or-ci-timed-out",
+        "passed"
+      ]
+    },
+    "validationAttempt": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "workflowRevision",
+        "workflowRunId",
+        "runAttempt",
+        "validationExecutionSha",
+        "hostRevision"
+      ],
+      "properties": {
+        "workflow": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "validationExecutionSha": {
+          "$ref": "#/$defs/commit"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonicalResult": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "byteCount",
+        "encoding",
+        "canonical"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "encoding": {
+          "const": "canonical-json-utf8-no-bom-single-lf"
+        },
+        "canonical": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "observedAuditResult": {
+      "type": "object",
+      "required": [
+        "auditResultVersion",
+        "policyConfigurationVersion",
+        "taxonomyRegistryVersion",
+        "targetProfile",
+        "auditOutcomes"
+      ],
+      "properties": {
+        "auditResultVersion": {
+          "const": 1
+        },
+        "policyConfigurationVersion": {
+          "const": 1
+        },
+        "taxonomyRegistryVersion": {
+          "const": 1
+        },
+        "targetProfile": {
+          "enum": [
+            "profile.external-api",
+            "profile.assembly-visible"
+          ]
+        },
+        "auditOutcomes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "enum": [
+              "audit.outcome.compliant",
+              "audit.outcome.violation",
+              "audit.outcome.skipped"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "processObservation": {
+      "type": "object",
+      "required": [
+        "exitCode",
+        "processStart",
+        "processTermination",
+        "timedOut",
+        "controlCompleted",
+        "observationComplete",
+        "observedGateName",
+        "observedControlAction",
+        "postGateSampleObserved",
+        "observedControlOutcome",
+        "networkOperationRecorderState",
+        "transitionEvents",
+        "standardOutputByteCount",
+        "standardErrorByteCount",
+        "killRequestOutcome",
+        "finalPlatformTerminationStatus",
+        "nativeTerminationKind",
+        "nativeTerminationCode",
+        "temporaryDiskHighWater",
+        "networkEvidence"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processStart": {
+          "enum": [
+            "started",
+            "launch-failure",
+            "runtime-load-failure",
+            "permission-failure",
+            "startup-timeout"
+          ]
+        },
+        "processTermination": {
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "controlCompleted": {
+          "type": "boolean"
+        },
+        "observationComplete": {
+          "type": "boolean"
+        },
+        "observedGateName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "observedControlAction": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "cancel",
+            "external-kill",
+            "measure-temporary-disk",
+            "observe",
+            "release-late-completion",
+            null
+          ]
+        },
+        "postGateSampleObserved": {
+          "type": "boolean"
+        },
+        "observedControlOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "requested",
+            "released",
+            "observed",
+            "issued-and-observed",
+            "issued-but-not-observed",
+            "already-exited",
+            "permission-failure",
+            "unsupported",
+            "indeterminate",
+            "gate-timeout",
+            "post-gate-sample-missing",
+            "unsupported-control",
+            null
+          ]
+        },
+        "networkOperationRecorderState": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "empty",
+            "missing",
+            "operation-observed",
+            null
+          ]
+        },
+        "transitionEvents": {
+          "oneOf": [
+            {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "enum": [
+                  "invalidation-completed",
+                  "failure-prone-stage-entered",
+                  "staging-created-in-destination",
+                  "atomic-rename-committed",
+                  "terminal-commit-cancelled",
+                  "competing-terminal-attempt-rejected",
+                  "late-terminal-attempt-rejected"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "standardOutputByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "standardErrorByteCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "killRequestOutcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "issued",
+            "already-exited",
+            "permission-failure",
+            "unsupported",
+            "indeterminate",
+            null
+          ]
+        },
+        "finalPlatformTerminationStatus": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "normal",
+            "crash",
+            "abort",
+            "external-kill",
+            "out-of-memory",
+            "stack-overflow",
+            "fatal-runtime-termination",
+            "not-started",
+            null
+          ]
+        },
+        "nativeTerminationKind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "windows-terminate-process",
+            "unix-signal",
+            "unix-exit",
+            "unix-wait-status",
+            "unsupported",
+            null
+          ]
+        },
+        "nativeTerminationCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "temporaryDiskHighWater": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "quantity",
+                "governedRootsIdentity",
+                "intervalIdentity",
+                "temporaryWorkBytes",
+                "outputStagingBytes",
+                "totalBytes",
+                "observerComplete",
+                "retentionBreach"
+              ],
+              "properties": {
+                "quantity": {
+                  "const": "peak-concurrent-logical-file-bytes"
+                },
+                "governedRootsIdentity": {
+                  "const": "contractscribe-temporary-work-and-output-staging.v1"
+                },
+                "intervalIdentity": {
+                  "const": "pre-subject-to-temporary-disk-high-water.v1"
+                },
+                "temporaryWorkBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputStagingBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "totalBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "observerComplete": {
+                  "type": "boolean"
+                },
+                "retentionBreach": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "networkEvidence": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "profileId",
+                "claimSetId",
+                "methods"
+              ],
+              "properties": {
+                "profileId": {
+                  "const": "m1.bounded-exact-revision-network-conformance.v1"
+                },
+                "claimSetId": {
+                  "const": "m1.network-behavior-and-bounded-evidence-claims.v1"
+                },
+                "methods": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "methodId",
+                      "methodVersion",
+                      "inputIdentity",
+                      "coverageLimitationId",
+                      "status",
+                      "observationCode",
+                      "causeClass"
+                    ],
+                    "properties": {
+                      "methodId": {
+                        "enum": [
+                          "declared-dependency-and-operation-inventory",
+                          "bounded-source-and-managed-metadata-regression-scan",
+                          "test-operation-recorder",
+                          "restore-runtime-download-process-artifact-observer"
+                        ]
+                      },
+                      "methodVersion": {
+                        "const": 1
+                      },
+                      "inputIdentity": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+                      },
+                      "coverageLimitationId": {
+                        "enum": [
+                          "declared-operations-and-protected-dependencies.v1",
+                          "explicit-source-metadata-route-regressions.v1",
+                          "product-owned-operation-seams.v1",
+                          "synchronized-process-and-protected-artifact-observation.v1"
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "complete",
+                          "finding",
+                          "incomplete"
+                        ]
+                      },
+                      "observationCode": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+                      },
+                      "causeClass": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "protected-input-invalidated",
+                          "protocol-failure",
+                          "subject-nonconformance",
+                          "environment-or-infrastructure-incomplete",
+                          null
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

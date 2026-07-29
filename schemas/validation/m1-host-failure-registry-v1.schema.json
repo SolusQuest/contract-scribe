@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-failure-registry-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "registryVersion",
+    "entries"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-host-failure-registry-v1"
+    },
+    "registryVersion": {
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "stage",
+          "executionOutcome",
+          "terminalState"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^host\\.[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+            "maxLength": 128
+          },
+          "stage": {
+            "enum": [
+              "input",
+              "environment",
+              "sdk-discovery",
+              "workspace-load",
+              "classification",
+              "documentation-observation",
+              "policy-evidence",
+              "audit",
+              "result-validation",
+              "publication",
+              "shutdown",
+              "internal"
+            ]
+          },
+          "executionOutcome": {
+            "enum": [
+              "invalid-input",
+              "environment-unavailable",
+              "load-failure",
+              "audit-error",
+              "cancelled",
+              "timeout"
+            ]
+          },
+          "terminalState": {
+            "const": "committed-non-success"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

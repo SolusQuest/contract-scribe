@@ -1,0 +1,42 @@
+{
+  "formatVersion": "contractscribe-m1-host-validation-subject-descriptor-v1",
+  "subjectKind": "self-test",
+  "adapterVersion": "contractscribe-m1-host-validation-subject-v1",
+  "entryPoint": "tests/ContractScribe.HostValidation/fake-subject",
+  "implementationOwner": "issue-26",
+  "allowedForProductionEvidence": false,
+  "requestSchema": "contractscribe-m1-host-validation-subject-request-v1",
+  "responseSchema": "contractscribe-m1-host-validation-subject-response-v1",
+  "controlContract": {
+    "namedSynchronizationGates": true,
+    "controlActions": [
+      "continue",
+      "cancel",
+      "external-kill",
+      "measure-temporary-disk",
+      "release-late-completion",
+      "observe"
+    ],
+    "shellAllowed": false
+  },
+  "networkOperationRecorderContract": {
+    "activationRecord": "{\"formatVersion\":\"contractscribe-network-operation-recorder-v1\",\"state\":\"active\"}",
+    "formatVersion": "contractscribe-network-operation-recorder-v1",
+    "harnessOwnedPath": true,
+    "productOwnedSeamsRequired": true
+  },
+  "temporaryDiskRetentionContract": {
+    "gate": "temporary-disk-high-water",
+    "retainUntilRelease": true,
+    "cleanupBeforeGateAllowed": false,
+    "freezeBoundary": "subject-sentinel-in-each-governed-root-before-control-gate",
+    "releaseBoundary": "subject-sentinel-in-each-governed-root-before-post-release-mutation"
+  },
+  "processContract": {
+    "requestArgument": "--request",
+    "responseArgument": "--response",
+    "workingDirectory": "repository-root",
+    "stdoutOwnership": "harness-redirected-bounded-never-echoed",
+    "stderrOwnership": "harness-redirected-bounded-never-echoed"
+  }
+}

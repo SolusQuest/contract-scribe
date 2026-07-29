@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SolusQuest/contract-scribe/schemas/validation/m1-host-calibrated-bounds-v1.schema.json",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "boundsVersion",
+    "entries"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "contractscribe-host-calibrated-bounds-v1"
+    },
+    "boundsVersion": {
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "enforcementClass",
+          "unit",
+          "limit",
+          "calibrationEvidenceSha256"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "sdk-discovery-timeout",
+              "workspace-load-timeout",
+              "total-audit-timeout",
+              "graceful-shutdown-timeout",
+              "diagnostic-count",
+              "diagnostic-utf8-bytes",
+              "temporary-disk-bytes",
+              "toolchain-subprocess-count"
+            ]
+          },
+          "enforcementClass": {
+            "enum": [
+              "internally-enforceable",
+              "caller-or-os-enforced",
+              "observable-only",
+              "not-enforceable-selected-topology"
+            ]
+          },
+          "unit": {
+            "enum": [
+              "milliseconds",
+              "count",
+              "bytes"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "calibrationEvidenceSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

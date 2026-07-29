@@ -31,6 +31,15 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore ContractScribe.slnx
       - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Validate frozen M1 host-validation bundle
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- validate-bundle --root .
+      - name: Dry-run M1 host-validation cell
+        shell: pwsh
+        run: |
+          $cell = if ("${{ runner.os }}" -eq "Windows") { "windows-x64" } else { "ubuntu-x64" }
+          dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- dry-run --root . --cell $cell
+      - name: Self-test M1 host-validation harness
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- self-test --root .
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: SolusQuest/contract-scribe

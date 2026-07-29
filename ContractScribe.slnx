@@ -6,6 +6,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ContractScribe.ContractBaselineProbe/ContractScribe.ContractBaselineProbe.csproj" />
+    <Project Path="tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj" />
     <Project Path="tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj" />
     <Project Path="tests/ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj" />
     <Project Path="tests/ContractScribe.TestGenerator/ContractScribe.TestGenerator.csproj" />

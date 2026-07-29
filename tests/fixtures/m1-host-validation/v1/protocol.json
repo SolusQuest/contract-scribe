@@ -1,0 +1,251 @@
+{
+  "formatVersion": "contractscribe-m1-host-validation-protocol-v1",
+  "protocolId": "m1-host-validation-v1",
+  "baseline": {
+    "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/35",
+    "mergeCommit": "bb4654edc180e2953dda6b89a29211b18778b78e",
+    "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+    "contractManifestSha256": "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+  },
+  "artifactInventory": [
+    ".github/workflows/ci.yml",
+    "ContractScribe.slnx",
+    "Directory.Build.props",
+    "Directory.Packages.props",
+    "docs/20_architecture/validation/m1-host-validation-protocol.md",
+    "global.json",
+    "schemas/validation/m1-host-validation-aggregate-evidence-v1.schema.json",
+    "schemas/validation/m1-host-validation-cell-evidence-v1.schema.json",
+    "schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json",
+    "schemas/validation/m1-host-validation-network-evidence-profile-v1.schema.json",
+    "schemas/validation/m1-host-validation-publication-record-v1.schema.json",
+    "schemas/validation/m1-host-validation-protocol-v1.schema.json",
+    "schemas/validation/m1-host-validation-review-v1.schema.json",
+    "schemas/validation/m1-host-validation-subject-v1.schema.json",
+    "schemas/validation/m1-host-validation-vectors-v1.schema.json",
+    "schemas/validation/m1-host-calibrated-bounds-v1.schema.json",
+    "schemas/validation/m1-host-failure-registry-v1.schema.json",
+    "tests/ContractScribe.HostValidation/AuditResultV1Canonicalizer.cs",
+    "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs",
+    "tests/ContractScribe.HostValidation/BundleValidator.cs",
+    "tests/ContractScribe.HostValidation/CanonicalJson.cs",
+    "tests/ContractScribe.HostValidation/CellExecutor.cs",
+    "tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj",
+    "tests/ContractScribe.HostValidation/DeclaredNetworkOperationInventoryEvaluator.cs",
+    "tests/ContractScribe.HostValidation/EvidenceValidator.cs",
+    "tests/ContractScribe.HostValidation/FixtureRecipeRegistry.cs",
+    "tests/ContractScribe.HostValidation/FrozenExecutorCommandRegistry.cs",
+    "tests/ContractScribe.HostValidation/FrozenFixtureRegistry.cs",
+    "tests/ContractScribe.HostValidation/HarnessSelfTest.cs",
+    "tests/ContractScribe.HostValidation/IncompleteEvidenceWriter.cs",
+    "tests/ContractScribe.HostValidation/LinuxSubjectProcess.cs",
+    "tests/ContractScribe.HostValidation/Models.cs",
+    "tests/ContractScribe.HostValidation/MonotonicDeadline.cs",
+    "tests/ContractScribe.HostValidation/NativeTerminationObserver.cs",
+    "tests/ContractScribe.HostValidation/NetworkClaimSetRegistry.cs",
+    "tests/ContractScribe.HostValidation/NetworkEvidenceEvaluator.cs",
+    "tests/ContractScribe.HostValidation/NetworkOperationSourceScanner.cs",
+    "tests/ContractScribe.HostValidation/OutputPathGuard.cs",
+    "tests/ContractScribe.HostValidation/ProcessTreeObserver.cs",
+    "tests/ContractScribe.HostValidation/Program.cs",
+    "tests/ContractScribe.HostValidation/ProtocolException.cs",
+    "tests/ContractScribe.HostValidation/PublicSafetyScanner.cs",
+    "tests/ContractScribe.HostValidation/RepositoryObserver.cs",
+    "tests/ContractScribe.HostValidation/RepositoryPaths.cs",
+    "tests/ContractScribe.HostValidation/RunSemantics.cs",
+    "tests/ContractScribe.HostValidation/SchemaValidation.cs",
+    "tests/ContractScribe.HostValidation/StaticValidatorRegistry.cs",
+    "tests/ContractScribe.HostValidation/SubjectProcessRunner.cs",
+    "tests/ContractScribe.HostValidation/TemporaryDiskHighWaterObserver.cs",
+    "tests/ContractScribe.Tests/ContractScribe.Tests.csproj",
+    "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",
+    "tests/fixtures/m1-host-validation/v1/authoritative-source-keys.json",
+    "tests/fixtures/m1-host-validation/v1/evidence-mutation-corpus.json",
+    "tests/fixtures/m1-host-validation/v1/execution-subject.template.json",
+    "tests/fixtures/m1-host-validation/v1/network-evidence-profile.json",
+    "tests/fixtures/m1-host-validation/v1/production-subject.template.json",
+    "tests/fixtures/m1-host-validation/v1/protected-inputs.json",
+    "tests/fixtures/m1-host-validation/v1/protocol.json",
+    "tests/fixtures/m1-host-validation/v1/requirements-crosswalk.json",
+    "tests/fixtures/m1-host-validation/v1/self-test-host-failure-registry.json",
+    "tests/fixtures/m1-host-validation/v1/self-test-subject.json",
+    "tests/fixtures/m1-host-validation/v1/vectors.json"
+  ],
+  "requiredCells": [
+    {
+      "cellId": "ubuntu-x64",
+      "runnerOs": "ubuntu",
+      "architecture": "X64",
+      "rid": "linux-x64",
+      "runnerImagePolicy": "github-hosted-ubuntu-latest-record-concrete-image"
+    },
+    {
+      "cellId": "windows-x64",
+      "runnerOs": "windows",
+      "architecture": "X64",
+      "rid": "win-x64",
+      "runnerImagePolicy": "github-hosted-windows-latest-record-concrete-image"
+    }
+  ],
+  "subjectSourceContract": {
+    "sourceRoots": [
+      "ContractScribe.slnx",
+      "Directory.Build.props",
+      "Directory.Packages.props",
+      "global.json",
+      "src"
+    ],
+    "failureRegistry": "src/ContractScribe.Core/Hosting/host-failure-registry-v1.json",
+    "calibratedBounds": "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json",
+    "buildRecipe": "Directory.Build.props",
+    "commandContract": "schemas/validation/m1-host-validation-subject-v1.schema.json",
+    "contractBaseline": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+    "environmentPolicy": "docs/20_architecture/security-boundary.md",
+    "workflow": ".github/workflows/ci.yml"
+  },
+  "taxonomies": {
+    "processStart": [
+      "started",
+      "launch-failure",
+      "runtime-load-failure",
+      "permission-failure",
+      "startup-timeout"
+    ],
+    "processTermination": [
+      "normal",
+      "crash",
+      "abort",
+      "external-kill",
+      "out-of-memory",
+      "stack-overflow",
+      "fatal-runtime-termination",
+      "not-started"
+    ],
+    "auditOutcome": [
+      "compliant",
+      "violation",
+      "skipped"
+    ],
+    "executionOutcome": [
+      "invalid-input",
+      "environment-unavailable",
+      "load-failure",
+      "audit-error",
+      "cancelled",
+      "timeout",
+      "succeeded"
+    ],
+    "vectorVerdict": [
+      "matched",
+      "subject-nonconformance",
+      "vector-environment-blocked",
+      "vector-infrastructure-incomplete",
+      "protocol-invalid-observation"
+    ],
+    "validationOutcome": [
+      "protected-input-invalidated",
+      "protocol-failure",
+      "subject-nonconformance",
+      "environment-or-infrastructure-incomplete",
+      "harness-or-ci-cancelled",
+      "harness-or-ci-timed-out",
+      "passed"
+    ],
+    "validationPrecedence": [
+      "protected-input-invalidated",
+      "protocol-failure",
+      "subject-nonconformance",
+      "environment-or-infrastructure-incomplete",
+      "harness-or-ci-cancelled",
+      "harness-or-ci-timed-out",
+      "passed"
+    ],
+    "enforcementClass": [
+      "internally-enforceable",
+      "caller-or-os-enforced",
+      "observable-only",
+      "not-enforceable-selected-topology"
+    ]
+  },
+  "executionContract": {
+    "adapterVersion": "contractscribe-m1-host-validation-subject-v1",
+    "requestEncoding": "canonical-json-utf8-no-bom-single-lf",
+    "responseEncoding": "canonical-json-utf8-no-bom-single-lf",
+    "standardOutputByteLimit": 65536,
+    "standardErrorByteLimit": 65536,
+    "responseByteLimit": 262144,
+    "evidenceByteLimit": 4194304,
+    "subjectTimeoutSeconds": 30,
+    "retryPolicy": "unrecorded-retries-forbidden-new-attempt-required",
+    "repositoryObserverClaim": "detection-only-no-prevention-rollback-transient-capture-or-sandbox",
+    "processObserverClaim": "bounded-descendant-detection-only-no-process-isolation"
+  },
+  "publicSafety": {
+    "networkClaimSetId": "m1.network-behavior-and-bounded-evidence-claims.v1",
+    "networkClaimSetMembers": [
+      {
+        "claimId": "m1.no-declared-network-operation.no-contractscribe-initiation.v1",
+        "text": "The deterministic audit declares no network-dependent operation, and ContractScribe initiates no provider, GitHub, update, telemetry, restore, runtime-download, or other declared network-dependent operation."
+      },
+      {
+        "claimId": "m1.exact-revision-bounded-network-conformance.v1",
+        "text": "The recorded evidence is bounded to one exact reviewed production revision and the frozen checks."
+      },
+      {
+        "claimId": "m1.no-egress-sandbox-or-adversarial-completeness.v1",
+        "text": "The recorded evidence does not establish egress isolation, sandboxing, capability security, secret isolation from repository-controlled build logic, whole-program non-reachability, or the absence of every possible network path in arbitrary or adversarial .NET code. Repository-controlled MSBuild targets, analyzers, generators, and SDK logic execute as trusted input with caller privileges and are outside this ContractScribe behavior claim."
+      }
+    ],
+    "prohibitedClaims": [
+      "network-isolation-enforced",
+      "offline-sandbox",
+      "untrusted-msbuild-sandboxed",
+      "transient-writes-prevented"
+    ],
+    "publicArtifactAllowlist": [
+      "cell-evidence.json",
+      "aggregate-evidence.json",
+      "incomplete-evidence.json",
+      "publication-record.json"
+    ],
+    "stableDiagnosticCodes": [
+      "HV101_ARTIFACT_UNREADABLE",
+      "HV104_INVALID_UTF8",
+      "HV109_DUPLICATE_PROPERTY",
+      "HV111_SCHEMA_REJECTED",
+      "HV118_PUBLIC_MACHINE_PATH",
+      "HV119_PUBLIC_CREDENTIAL_MARKER",
+      "HV134_ARTIFACT_HASH_MISMATCH",
+      "HV150_EVIDENCE_BUNDLE_MISMATCH",
+      "HV154_EVIDENCE_EXECUTION_SET",
+      "HV160_MIXED_EXECUTION_ATTEMPT",
+      "HV998_CANCELLED",
+      "HV999_INTERNAL_ERROR"
+    ]
+  },
+  "networkEvidenceProfile": {
+    "path": "tests/fixtures/m1-host-validation/v1/network-evidence-profile.json",
+    "sha256": "61cecb4919333893dd4df01823f42f3cbb249170a4bd442f631dfff0b20b0e95"
+  },
+  "requiredValidators": [
+    "bundle.identity",
+    "bundle.inventory",
+    "bundle.schema",
+    "crosswalk.bidirectional",
+    "evidence.canonical",
+    "evidence.execution-set",
+    "evidence.public-safety",
+    "evidence.review-binding",
+    "evidence.incomplete-retention",
+    "evidence.network-bounded-profile",
+    "execution.stream-boundary",
+    "execution.vector-runner",
+    "observer.process-tree",
+    "observer.repository-delta",
+    "observer.temporary-disk-high-water",
+    "observer.native-termination-cause",
+    "project.boundary",
+    "subject.materialization",
+    "validation.attempt-identity"
+  ]
+}

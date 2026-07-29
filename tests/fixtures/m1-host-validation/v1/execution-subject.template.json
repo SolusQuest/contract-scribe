@@ -1,0 +1,2785 @@
+{
+  "formatVersion": "contractscribe-m1-host-validation-execution-subject-v1",
+  "bundleId": "m1hvp1.0000000000000000000000000000000000000000000000000000000000000000",
+  "subjectKind": "production-host",
+  "implementationOwner": "issue-24",
+  "entryPointContract": "prebuilt-in-process-test-entrypoint",
+  "sourceConfiguration": {
+    "sourceConfigurationId": "source.0000000000000000000000000000000000000000000000000000000000000000",
+    "hostRevision": "0000000000000000000000000000000000000000",
+    "declaredOperationInventoryId": "operations.0000000000000000000000000000000000000000000000000000000000000000",
+    "sourceRoots": [
+      "ContractScribe.slnx",
+      "Directory.Build.props",
+      "Directory.Packages.props",
+      "global.json",
+      "src"
+    ],
+    "sourceAndBuildInputs": [
+      {
+        "path": "src/ContractScribe.Core/ContractScribe.Core.csproj",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "failureRegistry": {
+      "path": "src/ContractScribe.Core/Hosting/host-failure-registry-v1.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "calibratedBounds": {
+      "path": "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "buildRecipe": {
+      "path": "Directory.Build.props",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "commandContract": {
+      "path": "schemas/validation/m1-host-validation-subject-v1.schema.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "contractBaseline": {
+      "path": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "environmentPolicy": {
+      "path": "docs/20_architecture/security-boundary.md",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "workflow": {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "validationAttempt": {
+    "workflow": ".github/workflows/ci.yml",
+    "workflowRevision": "0000000000000000000000000000000000000000000000000000000000000000",
+    "workflowRunId": "1",
+    "runAttempt": 1,
+    "validationExecutionSha": "0000000000000000000000000000000000000000",
+    "hostRevision": "0000000000000000000000000000000000000000"
+  },
+  "cells": [
+    {
+      "materialization": {
+        "cellId": "ubuntu-x64",
+        "jobId": "1",
+        "jobUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+        "runnerImage": "template-image",
+        "rid": "linux-x64",
+        "architecture": "X64",
+        "selectedSdk": "10.0.102",
+        "selectedRuntime": "10.0.0",
+        "selectedMsbuild": "18.0.0",
+        "builtArtifacts": [
+          {
+            "path": "src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "path": "src/ContractScribe.Core/bin/Release/net10.0/ContractScribe.Core.dll",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "launchKind": "dotnet-dll",
+      "entryPoint": "src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll",
+      "argumentPrefix": [],
+      "fixtures": [
+        {
+          "vectorId": "contracts.policy-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.policy-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.taxonomy-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.taxonomy-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.audit-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.audit-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.profile-external-api",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.profile-external-api",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.profile-assembly-visible",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.profile-assembly-visible",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-compliant",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.outcome-compliant",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-violation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.outcome-violation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-skipped",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/contracts.outcome-skipped",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "determinism.fresh-process-canonical",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/determinism.fresh-process-canonical",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            },
+            {
+              "runId": "run-2",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.invalid-input",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.invalid-input",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.environment-unavailable",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.environment-unavailable",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.load-failure",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.load-failure",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.audit-error",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.audit-error",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.launch-before-entry",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.launch-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.runtime-load-before-entry",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.runtime-load-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.permission-before-entry",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.permission-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.startup-timeout",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.startup-timeout",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.out-of-memory",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.out-of-memory",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "out-of-memory"
+        },
+        {
+          "vectorId": "failure.stack-overflow",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.stack-overflow",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "stack-overflow"
+        },
+        {
+          "vectorId": "failure.abort",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/failure.abort",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "abort"
+        },
+        {
+          "vectorId": "cancellation.before-commit",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/cancellation.before-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.after-commit",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/cancellation.after-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.late-completion",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/cancellation.late-completion",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.terminal-precedence",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/cancellation.terminal-precedence",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.stale-invalidation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/publication.stale-invalidation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "stale-invalid",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.same-directory-atomic",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/publication.same-directory-atomic",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.kill-before-commit",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/publication.kill-before-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.kill-after-commit",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/publication.kill-after-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.cross-volume-rejected",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/publication.cross-volume-rejected",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.lexical-escape",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/path.lexical-escape",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.symlink-escape",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/path.symlink-escape",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.working-directory-independent",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/path.working-directory-independent",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            },
+            {
+              "runId": "run-2",
+              "mode": "system-temp"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "diagnostics.bounded-sanitized",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/diagnostics.bounded-sanitized",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "repository-write.protected-files",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/repository-write.protected-files",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "repository-write.allowed-design-time",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/repository-write.allowed-design-time",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.missing-assets",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/toolchain.missing-assets",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.no-automatic-restore",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/toolchain.no-automatic-restore",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "network.no-contractscribe-initiated-operation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/network.no-contractscribe-initiated-operation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.selected-identities",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/toolchain.selected-identities",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.process-topology",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/toolchain.process-topology",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.owned-subprocesses",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/toolchain.owned-subprocesses",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.temporary-disk",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/bounds.temporary-disk",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.memory-runtime",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/bounds.memory-runtime",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.forced-termination",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/bounds.forced-termination",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.sln",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.sln",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.slnx",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.slnx",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.csproj",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.csproj",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.slnf",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.slnf",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.non-csharp-project",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.non-csharp-project",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.analyzer",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.analyzer",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.generator",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.generator",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.custom-target",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.custom-target",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.multi-targeting",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/ubuntu-x64/support.multi-targeting",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        }
+      ]
+    },
+    {
+      "materialization": {
+        "cellId": "windows-x64",
+        "jobId": "1",
+        "jobUrl": "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+        "runnerImage": "template-image",
+        "rid": "win-x64",
+        "architecture": "X64",
+        "selectedSdk": "10.0.102",
+        "selectedRuntime": "10.0.0",
+        "selectedMsbuild": "18.0.0",
+        "builtArtifacts": [
+          {
+            "path": "src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "path": "src/ContractScribe.Core/bin/Release/net10.0/ContractScribe.Core.dll",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "launchKind": "dotnet-dll",
+      "entryPoint": "src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll",
+      "argumentPrefix": [],
+      "fixtures": [
+        {
+          "vectorId": "contracts.policy-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.policy-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.taxonomy-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.taxonomy-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.audit-conformance",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.audit-conformance",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.profile-external-api",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.profile-external-api",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.profile-assembly-visible",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.profile-assembly-visible",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-compliant",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.outcome-compliant",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-violation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.outcome-violation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "contracts.outcome-skipped",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/contracts.outcome-skipped",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "determinism.fresh-process-canonical",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/determinism.fresh-process-canonical",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            },
+            {
+              "runId": "run-2",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.invalid-input",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.invalid-input",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.environment-unavailable",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.environment-unavailable",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.load-failure",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.load-failure",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.audit-error",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.audit-error",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.launch-before-entry",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.launch-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.runtime-load-before-entry",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.runtime-load-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.permission-before-entry",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.permission-before-entry",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.startup-timeout",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.startup-timeout",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "failure.out-of-memory",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.out-of-memory",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "out-of-memory"
+        },
+        {
+          "vectorId": "failure.stack-overflow",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.stack-overflow",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "stack-overflow"
+        },
+        {
+          "vectorId": "failure.abort",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/failure.abort",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": "abort"
+        },
+        {
+          "vectorId": "cancellation.before-commit",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/cancellation.before-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.after-commit",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/cancellation.after-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.late-completion",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/cancellation.late-completion",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "cancellation.terminal-precedence",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/cancellation.terminal-precedence",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.stale-invalidation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/publication.stale-invalidation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "stale-invalid",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.same-directory-atomic",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/publication.same-directory-atomic",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.kill-before-commit",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/publication.kill-before-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.kill-after-commit",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/publication.kill-after-commit",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "publication.cross-volume-rejected",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/publication.cross-volume-rejected",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.lexical-escape",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/path.lexical-escape",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.junction-reparse-escape",
+          "executorKind": "platform-fixture",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/path.junction-reparse-escape",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "path.working-directory-independent",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/path.working-directory-independent",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            },
+            {
+              "runId": "run-2",
+              "mode": "system-temp"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "diagnostics.bounded-sanitized",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/diagnostics.bounded-sanitized",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "repository-write.protected-files",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/repository-write.protected-files",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "repository-write.allowed-design-time",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/repository-write.allowed-design-time",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.missing-assets",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/toolchain.missing-assets",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.no-automatic-restore",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/toolchain.no-automatic-restore",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "network.no-contractscribe-initiated-operation",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/network.no-contractscribe-initiated-operation",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.selected-identities",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/toolchain.selected-identities",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.process-topology",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/toolchain.process-topology",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "toolchain.owned-subprocesses",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/toolchain.owned-subprocesses",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "synchronized-tree",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.temporary-disk",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/bounds.temporary-disk",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.memory-runtime",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/bounds.memory-runtime",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "bounds.forced-termination",
+          "executorKind": "external-process",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/bounds.forced-termination",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.sln",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.sln",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.slnx",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.slnx",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.csproj",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.csproj",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.slnf",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.slnf",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.non-csharp-project",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.non-csharp-project",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.analyzer",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.analyzer",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.generator",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.generator",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.custom-target",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.custom-target",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": null,
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        },
+        {
+          "vectorId": "support.multi-targeting",
+          "executorKind": "production-host",
+          "repositoryRoot": "tests/fixtures/m1-host-validation/runtime/windows-x64/support.multi-targeting",
+          "repositoryIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "capabilityAvailable": false,
+          "blockedReasonCode": "HV900_TEMPLATE_UNMATERIALIZED",
+          "executable": null,
+          "arguments": [],
+          "executableSha256": null,
+          "arrangementInputs": [],
+          "allowedDesignTimeRoots": [
+            "obj"
+          ],
+          "processObservationMode": "bounded-polling",
+          "resultPath": "TestResults/audit-result.json",
+          "resultPrestate": "absent",
+          "runWorkingDirectories": [
+            {
+              "runId": "run-1",
+              "mode": "repository-root"
+            }
+          ],
+          "externalCause": null
+        }
+      ]
+    }
+  ]
+}
