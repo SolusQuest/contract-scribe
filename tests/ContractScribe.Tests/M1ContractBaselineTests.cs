@@ -1172,13 +1172,11 @@ public sealed class M1ContractBaselineTests
                     "*",
                     SearchOption.AllDirectories)
                 .Select(file => Path.GetRelativePath(Root, file)
-                    .Replace(Path.DirectorySeparatorChar, '/')))
+                    .Replace(Path.DirectorySeparatorChar, '/'))
+                .Where(relative => relative
+                    != "tests/fixtures/m1-contract-baseline/v1/manifest.json"))
             {
-                if (relative
-                    != "tests/fixtures/m1-contract-baseline/v1/manifest.json")
-                {
-                    paths.Add(relative);
-                }
+                paths.Add(relative);
             }
         }
 
@@ -1335,10 +1333,10 @@ public sealed class M1ContractBaselineTests
                 "failureCases/failure.semantic-context",
                 "failureCases/failure.unrepresentable-generated"
             };
-            foreach (var rowKey in expectedKeys)
+            foreach (var row in expectedKeys.Select(rowKey =>
+                rows.OfType<JsonObject>().Single(candidate =>
+                    candidate["rowKey"]?.GetValue<string>() == rowKey)))
             {
-                var row = rows.OfType<JsonObject>().Single(candidate =>
-                    candidate["rowKey"]?.GetValue<string>() == rowKey);
                 if (!HasExactProperties(
                         row,
                         "rowKey",

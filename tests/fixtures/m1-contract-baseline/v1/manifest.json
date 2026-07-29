@@ -30,7 +30,7 @@
     "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs": "804e1001f5e6c7e19eb80f7e12ebfce6bda8c0fb2b05d058fdac7d77b29ec50a",
     "tests/ContractScribe.Tests/AuditResultConformance.cs": "e511b41cf9366655b483ff935bd2ac655e3969ffc340470683279a7915c033d9",
     "tests/ContractScribe.Tests/AuditResultContractTests.cs": "6bb677cf4d96e4938b6c85e7d2a613d32e0f452fc3d1c734101694fb92c67ba1",
-    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "aee21fa0b658a8350824c246b250e7203e34179fc5559061657ae24230bf2be6",
+    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "8ebfdf797a852babdac2d539e16b15a38a437aed848069f16bbdc21a3b35b418",
     "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs": "7a6ce44344ed12c24fb7568a2090210b5035611bd7e45a2282463c661091ed83",
     "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs": "f3ef7864f63fb98c26265a4e38c5c7e17b46ae8f04729707077e8e707e487e2c",
     "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs": "fd1ffb4732900e0495cf2718e21185622aafdd7855ac17b275ee123515e0ee59",
