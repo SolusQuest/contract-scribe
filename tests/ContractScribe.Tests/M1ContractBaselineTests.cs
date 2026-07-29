@@ -109,12 +109,27 @@ public sealed class M1ContractBaselineTests
         var ids = cases.Select(row => row.GetProperty("caseId").GetString()!).ToArray();
         Assert.Equal(ExpectedClassificationOriginSkipIds, ids);
         Assert.All(cases, row => Assert.Equal(
-            new[] { "caseId", "conditions", "record", "outcome" },
+            new[]
+            {
+                "caseId",
+                "conditions",
+                "record",
+                "recordOutcome",
+                "selectionOutcome",
+                "outcome"
+            },
             row.EnumerateObject().Select(property => property.Name)));
         AssertClosedCatalogMutations(
             root,
             "contractscribe-m1-classification-origin-skip-v1",
-            ["caseId", "conditions", "record", "outcome"],
+            [
+                "caseId",
+                "conditions",
+                "record",
+                "recordOutcome",
+                "selectionOutcome",
+                "outcome"
+            ],
             ExpectedClassificationOriginSkipIds);
         Assert.True(IsClosedClassificationCatalog(
             JsonNode.Parse(root.GetRawText())!.AsObject()));
@@ -122,16 +137,20 @@ public sealed class M1ContractBaselineTests
         var taxonomyOracle = ClassificationConformanceOracle.Load(Root);
         foreach (var row in cases)
         {
-            var expected = row.GetProperty("outcome").GetString() == "accept";
             var record = row.GetProperty("record");
+            var expectedRecord =
+                row.GetProperty("recordOutcome").GetString() == "accept";
+            var expectedSelection =
+                row.GetProperty("selectionOutcome").GetString() == "accept";
+            var taxonomyAccepted = taxonomyOracle.IsValidRecord(record);
+            var auditAccepted = IsAuditClassificationValid(record);
+            var selectionAccepted = ConditionsSelectRecord(row);
+            Assert.Equal(expectedRecord, taxonomyAccepted);
+            Assert.Equal(expectedRecord, auditAccepted);
+            Assert.Equal(expectedSelection, selectionAccepted);
             Assert.Equal(
-                expected,
-                taxonomyOracle.IsValidRecord(record)
-                    && ConditionsSelectRecord(row));
-            Assert.Equal(
-                expected,
-                IsAuditClassificationValid(record)
-                    && ConditionsSelectRecord(row));
+                row.GetProperty("outcome").GetString() == "accept",
+                taxonomyAccepted && selectionAccepted);
         }
 
         var wrongPrecedence = cases.Single(row =>
@@ -932,7 +951,14 @@ public sealed class M1ContractBaselineTests
             if (!IsClosedCatalog(
                     value,
                     "contractscribe-m1-classification-origin-skip-v1",
-                    ["caseId", "conditions", "record", "outcome"],
+                    [
+                        "caseId",
+                        "conditions",
+                        "record",
+                        "recordOutcome",
+                        "selectionOutcome",
+                        "outcome"
+                    ],
                     ExpectedClassificationOriginSkipIds))
             {
                 return false;
@@ -959,7 +985,18 @@ public sealed class M1ContractBaselineTests
                             "semantic-context-unavailable"
                         ],
                         StringComparer.Ordinal);
+                var recordOutcome =
+                    row["recordOutcome"]?.GetValue<string>();
+                var selectionOutcome =
+                    row["selectionOutcome"]?.GetValue<string>();
+                var combinedOutcome = recordOutcome == "accept"
+                    && selectionOutcome == "accept"
+                    ? "accept"
+                    : "reject";
                 return allowedConditions
+                    && recordOutcome is "accept" or "reject"
+                    && selectionOutcome is "accept" or "reject"
+                    && row["outcome"]?.GetValue<string>() == combinedOutcome
                     && IsClosedClassificationRecord(row["record"]!.AsObject());
             });
         }
@@ -1086,34 +1123,23 @@ public sealed class M1ContractBaselineTests
         var conditions = row.GetProperty("conditions").EnumerateArray()
             .Select(value => value.GetString()!)
             .ToArray();
-        var record = row.GetProperty("record");
-        var origin = record.GetProperty("origin").GetString();
-        var skipReason = record.GetProperty("skipReason").GetString();
-        var knownOrigin = origin is "origin.source"
-            or "origin.source-generator"
-            or "origin.tool-generated"
-            or "origin.mixed";
-        if (conditions.Contains(
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
             "generated-provenance-unavailable",
-            StringComparer.Ordinal))
-        {
-            return origin == "origin.unknown"
-                && skipReason == "skip.unavailable.generated-provenance";
-        }
-
-        if (conditions.SequenceEqual(
-            ["semantic-context-unavailable"],
-            StringComparer.Ordinal))
-        {
-            return knownOrigin
-                && skipReason == "skip.unavailable.semantic-context";
-        }
-
-        return conditions.SequenceEqual(
-                ["documentation-comment-id-unavailable"],
+            StringComparer.Ordinal)
+            ? "skip.unavailable.generated-provenance"
+            : conditions.Contains(
+                "semantic-context-unavailable",
                 StringComparer.Ordinal)
-            && knownOrigin
-            && skipReason == "skip.unavailable.documentation-comment-id";
+                ? "skip.unavailable.semantic-context"
+                : conditions.Contains(
+                    "documentation-comment-id-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.documentation-comment-id"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
     }
 
     private static bool HasExactProperties(

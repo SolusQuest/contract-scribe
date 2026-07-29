@@ -20,16 +20,41 @@ public sealed class AuditResultContractTests
             "m1-contract-baseline",
             "v1",
             "classification-origin-skip-vectors.json")));
-        foreach (var row in matrix.RootElement.GetProperty("cases").EnumerateArray())
+        var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("caseId").GetString()!,
+                row => row,
+                StringComparer.Ordinal);
+        foreach (var (caseId, row) in rows)
         {
             using var document = BuildClassificationMatrixDocument(
                 row.GetProperty("record"));
-            var expected = row.GetProperty("outcome").GetString() == "accept";
-            Assert.Equal(
-                expected,
+            var recordAccepted =
                 AuditSchema.Value.Evaluate(document.RootElement).IsValid
-                    && IsSemanticallyValid(document.RootElement)
-                    && AuditConditionsSelectRecord(row));
+                && IsSemanticallyValid(document.RootElement);
+            var selectionAccepted = AuditConditionsSelectRecord(row);
+            Assert.True(
+                recordAccepted
+                    == (row.GetProperty("recordOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                selectionAccepted
+                    == (row.GetProperty("selectionOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                (recordAccepted && selectionAccepted)
+                    == (row.GetProperty("outcome").GetString() == "accept"),
+                caseId);
+        }
+
+        foreach (var caseId in RepresentativeClassificationRejections)
+        {
+            using var document = BuildClassificationMatrixDocument(
+                rows[caseId].GetProperty("record"));
+            Assert.False(
+                AuditSchema.Value.Evaluate(document.RootElement).IsValid
+                    && IsSemanticallyValid(document.RootElement),
+                caseId);
         }
 
         var corrected = JsonNode.Parse(File.ReadAllText(
@@ -522,35 +547,33 @@ public sealed class AuditResultContractTests
         var conditions = row.GetProperty("conditions").EnumerateArray()
             .Select(value => value.GetString()!)
             .ToArray();
-        var classification = row.GetProperty("record");
-        var origin = classification.GetProperty("origin").GetString();
-        var skipReason = classification.GetProperty("skipReason").GetString();
-        var knownOrigin = origin is "origin.source"
-            or "origin.source-generator"
-            or "origin.tool-generated"
-            or "origin.mixed";
-        if (conditions.Contains(
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
             "generated-provenance-unavailable",
-            StringComparer.Ordinal))
-        {
-            return origin == "origin.unknown"
-                && skipReason == "skip.unavailable.generated-provenance";
-        }
-
-        if (conditions.SequenceEqual(
-            ["semantic-context-unavailable"],
-            StringComparer.Ordinal))
-        {
-            return knownOrigin
-                && skipReason == "skip.unavailable.semantic-context";
-        }
-
-        return conditions.SequenceEqual(
-                ["documentation-comment-id-unavailable"],
+            StringComparer.Ordinal)
+            ? "skip.unavailable.generated-provenance"
+            : conditions.Contains(
+                "semantic-context-unavailable",
                 StringComparer.Ordinal)
-            && knownOrigin
-            && skipReason == "skip.unavailable.documentation-comment-id";
+                ? "skip.unavailable.semantic-context"
+                : conditions.Contains(
+                    "documentation-comment-id-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.documentation-comment-id"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
     }
+
+    private static readonly string[] RepresentativeClassificationRejections =
+    [
+        "target.generated-provenance.source-origin.reject",
+        "target.semantic-context.unknown-origin.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject"
+    ];
 
     private static JsonDocument BuildEvidenceBoundaryDocument(int itemCount, int excerptLength)
     {

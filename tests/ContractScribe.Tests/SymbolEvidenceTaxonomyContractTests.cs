@@ -37,14 +37,35 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             "m1-contract-baseline",
             "v1",
             "classification-origin-skip-vectors.json")));
-        foreach (var row in matrix.RootElement.GetProperty("cases").EnumerateArray())
+        var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("caseId").GetString()!,
+                row => row,
+                StringComparer.Ordinal);
+        foreach (var (caseId, row) in rows)
         {
-            var expected = row.GetProperty("outcome").GetString() == "accept";
-            Assert.Equal(
-                expected,
+            var recordAccepted = ClassificationOracle.Value.IsValidRecord(
+                row.GetProperty("record"));
+            Assert.True(
+                recordAccepted
+                    == (row.GetProperty("recordOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                ClassificationConditionsSelectRecord(row)
+                    == (row.GetProperty("selectionOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                (recordAccepted && ClassificationConditionsSelectRecord(row))
+                    == (row.GetProperty("outcome").GetString() == "accept"),
+                caseId);
+        }
+
+        foreach (var caseId in RepresentativeClassificationRejections)
+        {
+            Assert.False(
                 ClassificationOracle.Value.IsValidRecord(
-                    row.GetProperty("record"))
-                    && ClassificationConditionsSelectRecord(row));
+                    rows[caseId].GetProperty("record")),
+                caseId);
         }
     }
 
@@ -1181,35 +1202,33 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var conditions = row.GetProperty("conditions").EnumerateArray()
             .Select(value => value.GetString()!)
             .ToArray();
-        var record = row.GetProperty("record");
-        var origin = record.GetProperty("origin").GetString();
-        var skipReason = record.GetProperty("skipReason").GetString();
-        var knownOrigin = origin is "origin.source"
-            or "origin.source-generator"
-            or "origin.tool-generated"
-            or "origin.mixed";
-        if (conditions.Contains(
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
             "generated-provenance-unavailable",
-            StringComparer.Ordinal))
-        {
-            return origin == "origin.unknown"
-                && skipReason == "skip.unavailable.generated-provenance";
-        }
-
-        if (conditions.SequenceEqual(
-            ["semantic-context-unavailable"],
-            StringComparer.Ordinal))
-        {
-            return knownOrigin
-                && skipReason == "skip.unavailable.semantic-context";
-        }
-
-        return conditions.SequenceEqual(
-                ["documentation-comment-id-unavailable"],
+            StringComparer.Ordinal)
+            ? "skip.unavailable.generated-provenance"
+            : conditions.Contains(
+                "semantic-context-unavailable",
                 StringComparer.Ordinal)
-            && knownOrigin
-            && skipReason == "skip.unavailable.documentation-comment-id";
+                ? "skip.unavailable.semantic-context"
+                : conditions.Contains(
+                    "documentation-comment-id-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.documentation-comment-id"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
     }
+
+    private static readonly string[] RepresentativeClassificationRejections =
+    [
+        "target.generated-provenance.source-origin.reject",
+        "target.semantic-context.unknown-origin.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject"
+    ];
 
     private static bool IsValidRepositoryLocator(JsonElement repository, IReadOnlyDictionary<string, string>? originalEvidenceTexts = null)
     {

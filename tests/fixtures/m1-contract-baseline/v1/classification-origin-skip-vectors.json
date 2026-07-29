@@ -19,6 +19,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -39,6 +41,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
       "outcome": "reject"
     },
     {
@@ -58,6 +62,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -77,6 +83,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -96,6 +104,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -115,6 +125,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -134,6 +146,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -153,6 +167,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -172,6 +188,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -183,7 +201,7 @@
         "recordType": "ComponentClassification",
         "parentSymbolRef": {
           "compilationContextRef": "synthetic.v1",
-          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+          "documentationCommentId": "P:Baseline.Widget.Value"
         },
         "componentKind": "component.accessor.get",
         "identity": "accessor/get",
@@ -191,6 +209,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -210,6 +230,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -229,6 +251,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -248,6 +272,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -267,6 +293,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -286,6 +314,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -305,6 +335,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -324,6 +356,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -343,6 +377,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -363,6 +399,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -383,6 +421,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
       "outcome": "reject"
     },
     {
@@ -402,6 +442,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -421,6 +463,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -440,6 +484,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -459,6 +505,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -478,6 +526,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -497,6 +547,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -516,6 +568,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -535,6 +589,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -554,6 +610,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -573,6 +631,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -592,6 +652,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -611,6 +673,8 @@
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.semantic-context"
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -630,6 +694,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -649,6 +715,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -668,6 +736,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -687,6 +757,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -706,6 +778,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -725,6 +799,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -745,6 +821,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -765,6 +843,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
       "outcome": "reject"
     },
     {
@@ -784,6 +864,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -803,6 +885,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -822,6 +906,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -841,6 +927,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -860,6 +948,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -879,6 +969,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -898,6 +990,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     },
     {
@@ -917,6 +1011,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -936,6 +1032,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -955,6 +1053,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -974,6 +1074,8 @@
           }
         }
       },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
       "outcome": "accept"
     },
     {
@@ -993,6 +1095,8 @@
           }
         }
       },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
       "outcome": "reject"
     }
   ]

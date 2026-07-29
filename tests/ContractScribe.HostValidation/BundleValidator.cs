@@ -721,7 +721,7 @@ public static class BundleValidator
 
     private static void RequireAuthorizingBaseline(ProtocolManifest protocol)
     {
-        if (protocol.Baseline.Disposition != "main")
+        if (protocol.Baseline.Disposition != "main-reachable")
         {
             throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
         }
