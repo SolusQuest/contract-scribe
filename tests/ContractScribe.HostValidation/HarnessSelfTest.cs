@@ -13,6 +13,7 @@ public static class HarnessSelfTest
         await TestProcessAndObserverAsync(context, cancellationToken).ConfigureAwait(false);
         await TestStreamsAsync(context, cancellationToken).ConfigureAwait(false);
         await TestFailureAndTimeoutAsync(context, cancellationToken).ConfigureAwait(false);
+        await TestBoundedProcessCleanupAsync().ConfigureAwait(false);
     }
 
     private static void TestStrictJson()
@@ -384,6 +385,46 @@ public static class HarnessSelfTest
         {
             Directory.Delete(temp, recursive: true);
         }
+    }
+
+    private static async Task TestBoundedProcessCleanupAsync()
+    {
+        var waitInvoked = false;
+        var failedKill = await SubjectProcessRunner
+            .TerminateAndWaitBoundedForSelfTestAsync(
+                () => "permission-failure",
+                _ =>
+                {
+                    waitInvoked = true;
+                    return Task.CompletedTask;
+                },
+                TimeSpan.FromMilliseconds(50))
+            .ConfigureAwait(false);
+        Ensure(
+            failedKill is
+            {
+                KillRequestOutcome: "permission-failure",
+                Exited: false
+            }
+            && !waitInvoked,
+            "HV970_SELF_TEST_FAILED_KILL_WAIT");
+
+        var cleanupClock = Stopwatch.StartNew();
+        var stuckAfterKill = await SubjectProcessRunner
+            .TerminateAndWaitBoundedForSelfTestAsync(
+                () => "issued",
+                token => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                TimeSpan.FromMilliseconds(50))
+            .ConfigureAwait(false);
+        cleanupClock.Stop();
+        Ensure(
+            stuckAfterKill is
+            {
+                KillRequestOutcome: "issued",
+                Exited: false
+            }
+            && cleanupClock.Elapsed < TimeSpan.FromSeconds(1),
+            "HV971_SELF_TEST_ISSUED_KILL_WAIT");
     }
 
     private static bool HasExactNativeKill(ProcessExecutionResult execution)

@@ -36,6 +36,7 @@ public static class Program
 
         var command = args[0];
         var options = ParseOptions(args[1..]);
+        ValidateOptions(command, options);
         switch (command)
         {
             case "lock-bundle":
@@ -556,6 +557,87 @@ public static class Program
             }
         }
         return result;
+    }
+
+    private static void ValidateOptions(
+        string command,
+        IReadOnlyDictionary<string, string?> options)
+    {
+        string[]? allowed = command switch
+        {
+            "lock-bundle" or "lock-protected-inputs" or "self-test" =>
+                ["--root"],
+            "validate-bundle" =>
+                ["--root", "--require-review", "--review"],
+            "dry-run" =>
+                ["--root", "--cell"],
+            "provision-fixtures" =>
+                ["--root", "--subject-manifest"],
+            "run-cell" =>
+                [
+                    "--root",
+                    "--subject-manifest",
+                    "--review",
+                    "--cell",
+                    "--incomplete-output",
+                    "--output"
+                ],
+            "validate-cell" or "validate-incomplete" =>
+                ["--root", "--evidence", "--review", "--subject-manifest"],
+            "aggregate" =>
+                [
+                    "--root",
+                    "--evidence",
+                    "--output",
+                    "--review",
+                    "--subject-manifest",
+                    "--supersedes",
+                    "--matrix-result",
+                    "--publication-base-revision"
+                ],
+            "validate-aggregate" =>
+                [
+                    "--root",
+                    "--evidence",
+                    "--cell-evidence",
+                    "--supersedes",
+                    "--review",
+                    "--subject-manifest"
+                ],
+            "validate-publication-record" =>
+                [
+                    "--root",
+                    "--record",
+                    "--aggregate-evidence",
+                    "--cell-evidence",
+                    "--supersedes",
+                    "--review",
+                    "--subject-manifest"
+                ],
+            "prepare-public" =>
+                [
+                    "--root",
+                    "--source",
+                    "--output",
+                    "--review",
+                    "--subject-manifest",
+                    "--cell-evidence",
+                    "--supersedes",
+                    "--aggregate-evidence",
+                    "--kind"
+                ],
+            "fake-subject" =>
+                ["--request", "--behavior"],
+            "fake-child" or "fake-child-hang" =>
+                [],
+            _ => null
+        };
+        if (allowed is not null
+            && options.Keys.Any(option =>
+                !allowed.Contains(option, StringComparer.Ordinal)))
+        {
+            throw new ProtocolException("HV004_OPTION_INVALID");
+        }
     }
 
     private static string Required(IReadOnlyDictionary<string, string?> options, string name)

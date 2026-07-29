@@ -130,6 +130,7 @@ public static class SubjectProcessRunner
                  cleanupReserve,
                  cancellationToken);
         var timedOut = false;
+        ProcessCleanupResult? ordinaryCleanup = null;
         ControlExecutionResult controlResult;
         int? exitCode;
         NativeTerminationEvidence? nativeTermination = null;
@@ -157,24 +158,31 @@ public static class SubjectProcessRunner
         {
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(timeout);
+            var processExited = false;
             try
             {
                 await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+                processExited = true;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 timedOut = true;
-                _ = TryKill(process);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                ordinaryCleanup = await TerminateAndWaitBoundedAsync(
+                    () => TryKill(process),
+                    token => process.WaitForExitAsync(token),
+                    ComputeCleanupReserve(timeout)).ConfigureAwait(false);
+                processExited = ordinaryCleanup.Exited;
             }
             catch (OperationCanceledException)
             {
-                _ = TryKill(process);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                _ = await TerminateAndWaitBoundedAsync(
+                    () => TryKill(process),
+                    token => process.WaitForExitAsync(token),
+                    ComputeCleanupReserve(timeout)).ConfigureAwait(false);
                 throw;
             }
             controlResult = await controlTask.ConfigureAwait(false);
-            exitCode = process.ExitCode;
+            exitCode = processExited ? process.ExitCode : null;
         }
 
         var stdout = await stdoutTask.ConfigureAwait(false);
@@ -193,7 +201,10 @@ public static class SubjectProcessRunner
             _ = TryKill(process);
         }
         var platformTermination = ClassifyTermination(exitCode, nativeTermination);
-        LastObservationDiagnosticCode = !processObserver.ObservationComplete
+        var ordinaryTerminationComplete = ordinaryCleanup?.Exited != false;
+        LastObservationDiagnosticCode = !ordinaryTerminationComplete
+            ? "HV969_PROCESS_TERMINATION_INCOMPLETE"
+            : !processObserver.ObservationComplete
             ? processObserver.DiagnosticCode
             : !stdout.Complete
                 ? "HV945_STANDARD_OUTPUT_INCOMPLETE"
@@ -211,7 +222,13 @@ public static class SubjectProcessRunner
                     ? "issued-and-observed"
                     : "issued-but-not-observed"
                 : controlResult.Outcome;
-        var termination = timedOut || confirmedExternalKill
+        var confirmedOrdinaryTimeoutKill = timedOut
+            && ordinaryCleanup is
+            {
+                KillRequestOutcome: "issued",
+                Exited: true
+            };
+        var termination = confirmedOrdinaryTimeoutKill || confirmedExternalKill
             ? "external-kill"
             : platformTermination;
         return new ProcessExecutionResult(
@@ -227,11 +244,14 @@ public static class SubjectProcessRunner
             timedOut,
             controlResult.Completed,
             observedControlOutcome,
-            processObserver.ObservationComplete
+            ordinaryTerminationComplete
+                && processObserver.ObservationComplete
                 && stdout.Complete
                 && stderr.Complete,
             processObserver.Snapshot(),
-            control?.Action == "external-kill" ? nativeTermination?.KillRequestOutcome : null,
+            control?.Action == "external-kill"
+                ? nativeTermination?.KillRequestOutcome
+                : ordinaryCleanup?.KillRequestOutcome,
             platformTermination,
             nativeTermination?.Kind,
             nativeTermination?.Code,
@@ -536,6 +556,15 @@ public static class SubjectProcessRunner
         return result.Complete;
     }
 
+    internal static Task<ProcessCleanupResult> TerminateAndWaitBoundedForSelfTestAsync(
+        Func<string> requestKill,
+        Func<CancellationToken, Task> waitForExitAsync,
+        TimeSpan cleanupTimeout) =>
+        TerminateAndWaitBoundedAsync(
+            requestKill,
+            waitForExitAsync,
+            cleanupTimeout);
+
     private static bool IsValidUtf8(byte[] bytes)
     {
         try
@@ -601,4 +630,36 @@ public static class SubjectProcessRunner
             return "unsupported";
         }
     }
+
+    private static async Task<ProcessCleanupResult> TerminateAndWaitBoundedAsync(
+        Func<string> requestKill,
+        Func<CancellationToken, Task> waitForExitAsync,
+        TimeSpan cleanupTimeout)
+    {
+        var killRequestOutcome = requestKill();
+        if (killRequestOutcome == "already-exited")
+        {
+            return new(killRequestOutcome, true);
+        }
+        if (killRequestOutcome != "issued")
+        {
+            return new(killRequestOutcome, false);
+        }
+
+        using var cleanupSource = new CancellationTokenSource();
+        cleanupSource.CancelAfter(cleanupTimeout);
+        try
+        {
+            await waitForExitAsync(cleanupSource.Token).ConfigureAwait(false);
+            return new(killRequestOutcome, true);
+        }
+        catch (OperationCanceledException) when (cleanupSource.IsCancellationRequested)
+        {
+            return new(killRequestOutcome, false);
+        }
+    }
+
+    internal sealed record ProcessCleanupResult(
+        string KillRequestOutcome,
+        bool Exited);
 }

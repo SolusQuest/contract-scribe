@@ -2588,6 +2588,45 @@ public sealed class M1HostValidationProtocolTests
         Assert.Equal(string.Empty, stderr);
     }
 
+    [Fact]
+    public void HostValidation_ExecutableRejectsUnknownCommandOptions()
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release";
+        var harness = Path.Join(
+            Root,
+            "tests",
+            "ContractScribe.HostValidation",
+            "bin",
+            configuration,
+            "net10.0",
+            "ContractScribe.HostValidation.dll");
+        Assert.True(File.Exists(harness), $"Host-validation harness was not built at {harness}.");
+
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        start.ArgumentList.Add(harness);
+        start.ArgumentList.Add("validate-bundle");
+        start.ArgumentList.Add("--root");
+        start.ArgumentList.Add(Root);
+        start.ArgumentList.Add("--require-reveiw");
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException(
+                "Could not start the host-validation harness.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(
+            process.WaitForExit(30_000),
+            "Host-validation invalid-option test timed out.");
+
+        Assert.Equal(2, process.ExitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Equal("HV004_OPTION_INVALID", stderr.Trim());
+    }
+
     private static void ExecuteMutationCase(string operation)
     {
         var context = BundleValidator.Validate(Root);
