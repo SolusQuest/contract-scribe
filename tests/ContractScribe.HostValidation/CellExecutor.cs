@@ -920,6 +920,7 @@ public static class CellExecutor
             RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
             requireCanonical: false);
         var rootElement = document.RootElement;
+        AuditResultSemanticValidator.Validate(root, rootElement);
         byte[] canonicalBytes;
         try
         {
@@ -933,7 +934,6 @@ public static class CellExecutor
         {
             throw new ProtocolException("HV106_NONCANONICAL_JSON");
         }
-        AuditResultSemanticValidator.Validate(root, rootElement);
         var facts = new ObservedAuditResultFacts(
             rootElement.GetProperty("auditResultVersion").GetInt32(),
             rootElement.GetProperty("policyConfigurationVersion").GetInt32(),

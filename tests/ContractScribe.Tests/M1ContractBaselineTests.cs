@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ContractScribe.ContractBaselineProbe;
+using ContractScribe.HostValidation;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -18,25 +19,205 @@ public sealed class M1ContractBaselineTests
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     [Fact]
-    public void CurrentManifest_PinsAmendedRegistriesAndOwnsBothProfiles()
+    public void ClassificationOriginSkipVectors_AreClosedAndAcceptedByIndependentConsumers()
+    {
+        using var fixture = Load("classification-origin-skip-vectors.json");
+        var root = fixture.RootElement;
+        Assert.Equal(
+            new[] { "formatVersion", "cases" },
+            root.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(
+            "contractscribe-m1-classification-origin-skip-v1",
+            root.GetProperty("formatVersion").GetString());
+        var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+        var ids = cases.Select(row => row.GetProperty("caseId").GetString()!).ToArray();
+        Assert.Equal(ids.Order(StringComparer.Ordinal), ids);
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(cases, row => Assert.Equal(
+            new[] { "caseId", "conditions", "record", "outcome" },
+            row.EnumerateObject().Select(property => property.Name)));
+        AssertClosedCatalogMutations(
+            root,
+            "contractscribe-m1-classification-origin-skip-v1",
+            ["caseId", "conditions", "record", "outcome"],
+            ids);
+
+        var taxonomyOracle = ClassificationConformanceOracle.Load(Root);
+        foreach (var row in cases)
+        {
+            var expected = row.GetProperty("outcome").GetString() == "accept";
+            var record = row.GetProperty("record");
+            Assert.Equal(expected, taxonomyOracle.IsValidRecord(record));
+            Assert.Equal(expected, IsAuditClassificationValid(record));
+        }
+
+        var precedence = cases.Single(row =>
+            row.GetProperty("caseId").GetString()
+                == "target.generated-and-semantic.generated-precedence");
+        Assert.Equal(
+            new[] { "generated-provenance-unavailable", "semantic-context-unavailable" },
+            precedence.GetProperty("conditions").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(
+            "skip.unavailable.generated-provenance",
+            precedence.GetProperty("record").GetProperty("skipReason").GetString());
+    }
+
+    [Fact]
+    public void RepositoryCandidateLocatorVectors_RejectRawNonCanonicalFormsBeforeKeysOrOrdering()
+    {
+        using var fixture = Load("repository-candidate-locator-vectors.json");
+        var root = fixture.RootElement;
+        Assert.Equal(
+            new[] { "formatVersion", "cases" },
+            root.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(
+            "contractscribe-m1-repository-candidate-locator-v1",
+            root.GetProperty("formatVersion").GetString());
+        var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+        var ids = cases.Select(row => row.GetProperty("caseId").GetString()!).ToArray();
+        Assert.Equal(ids.Order(StringComparer.Ordinal), ids);
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(cases, row => Assert.Equal(
+            new[] { "caseId", "locator", "outcome" },
+            row.EnumerateObject().Select(property => property.Name)));
+        AssertClosedCatalogMutations(
+            root,
+            "contractscribe-m1-repository-candidate-locator-v1",
+            ["caseId", "locator", "outcome"],
+            ids);
+
+        var taxonomyOracle = ClassificationConformanceOracle.Load(Root);
+        var template = JsonNode.Parse(File.ReadAllText(Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "unresolved-classification.json")))!.AsObject();
+        foreach (var row in cases)
+        {
+            var expected = row.GetProperty("outcome").GetString() == "accept";
+            var locator = JsonNode.Parse(row.GetProperty("locator").GetRawText())!;
+            var record = new JsonObject
+            {
+                ["recordType"] = "UnresolvedClassification",
+                ["compilationContextRef"] = "synthetic.v1",
+                ["origin"] = "origin.source",
+                ["supportStatus"] = "support.unavailable-context",
+                ["skipReason"] = "skip.unavailable.semantic-context",
+                ["candidateLocator"] = locator.DeepClone()
+            };
+            Assert.Equal(expected, taxonomyOracle.IsValidRecord(Element(record)));
+            Assert.Equal(expected, IsAuditClassificationValid(Element(record)));
+
+            var document = (JsonObject)template.DeepClone();
+            document["results"]![0]!["classification"]!["candidateLocator"] =
+                locator.DeepClone();
+            using var parsed = JsonDocument.Parse(
+                JsonSerializer.SerializeToUtf8Bytes(document));
+            Assert.Equal(expected, IsReplayDocumentValid(parsed.RootElement));
+            Assert.Equal(expected, IsHostAuditResultValid(parsed.RootElement));
+        }
+    }
+
+    [Fact]
+    public void CurrentManifest_BindsTheIssue55SuccessorAndExactCurrentInputClosure()
     {
         using var manifest = Load("manifest.json");
         var root = manifest.RootElement;
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal("issue-35-pre-release-v1", root.GetProperty("contractRevision").GetString());
+        Assert.Equal("issue-55-classification-origin-closure-v1", root.GetProperty("contractRevision").GetString());
         Assert.Equal(
             new[] { "profile.assembly-visible", "profile.external-api" },
             root.GetProperty("profiles").EnumerateArray().Select(value => value.GetString()).Order(StringComparer.Ordinal));
+
+        var predecessor = root.GetProperty("predecessor");
         Assert.Equal(
-            Sha256(Path.Join(Root, "schemas", "audit-result", "v1.registry.json")),
-            root.GetProperty("registries").GetProperty("auditResultSha256").GetString());
+            "https://github.com/SolusQuest/contract-scribe/issues/35",
+            predecessor.GetProperty("coordinatingIssue").GetString());
         Assert.Equal(
-            Sha256(Path.Join(Root, "schemas", "symbol-evidence-taxonomy", "v1.registry.json")),
-            root.GetProperty("registries").GetProperty("symbolEvidenceTaxonomySha256").GetString());
+            "issue-35-pre-release-v1",
+            predecessor.GetProperty("contractRevision").GetString());
         Assert.Equal(
-            new[] { 36, 37, 38, 39, 40 },
-            root.GetProperty("downstreamImplementationIssues").EnumerateArray().Select(value => value.GetInt32()));
+            "bb4654edc180e2953dda6b89a29211b18778b78e",
+            predecessor.GetProperty("mergeCommit").GetString());
+        Assert.Equal(
+            "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+            predecessor.GetProperty("contractManifest").GetString());
+        Assert.Equal(
+            "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31",
+            predecessor.GetProperty("contractManifestSha256").GetString());
+
+        var expectedInputs = ExpectedCurrentInputs();
+        var currentInputs = root.GetProperty("currentInputs");
+        var currentPaths = currentInputs.EnumerateObject().Select(property => property.Name).ToArray();
+        Assert.Equal(expectedInputs.Keys, currentPaths);
+        Assert.All(currentInputs.EnumerateObject(), property =>
+        {
+            Assert.Matches("^[0-9a-f]{64}$", property.Value.GetString()!);
+            Assert.Equal(
+                Sha256(Path.Join(
+                    Root,
+                    property.Name.Replace('/', Path.DirectorySeparatorChar))),
+                property.Value.GetString());
+        });
+        Assert.DoesNotContain(
+            "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+            currentPaths,
+            StringComparer.Ordinal);
+
+        var fixtures = root.GetProperty("fixtures");
+        Assert.Equal(
+            new[]
+            {
+                "policy",
+                "profiles",
+                "generatedIdentity",
+                "auditAuthority",
+                "classificationOriginSkip",
+                "repositoryCandidateLocator",
+                "rowCrosswalk",
+                "processReplay"
+            },
+            fixtures.EnumerateObject().Select(property => property.Name));
+        Assert.All(
+            fixtures.EnumerateObject(),
+            property => Assert.True(File.Exists(Path.Join(
+                Root,
+                property.Value.GetString()!.Replace('/', Path.DirectorySeparatorChar)))));
+
+        var disposition = root.GetProperty("implementationDisposition");
+        Assert.Equal(
+            new[] { 36 },
+            disposition.GetProperty("completed").EnumerateArray().Select(value => value.GetInt32()));
+        Assert.Equal(
+            new[] { 37, 38, 39, 40 },
+            disposition.GetProperty("activeImplementation").EnumerateArray().Select(value => value.GetInt32()));
+        Assert.Equal(
+            new[] { 41 },
+            disposition.GetProperty("activeValidation").EnumerateArray().Select(value => value.GetInt32()));
         Assert.True(File.Exists(Path.Join(Root, root.GetProperty("inventory").GetString()!.Replace('/', Path.DirectorySeparatorChar))));
+
+        var value = JsonNode.Parse(root.GetRawText())!.AsObject();
+        Assert.True(IsValidSuccessorManifest(value, expectedInputs));
+        var removed = (JsonObject)value.DeepClone();
+        removed["currentInputs"]!.AsObject().Remove(expectedInputs.Keys.First());
+        Assert.False(IsValidSuccessorManifest(removed, expectedInputs));
+        var added = (JsonObject)value.DeepClone();
+        added["currentInputs"]!["unexpected.txt"] = new string('0', 64);
+        Assert.False(IsValidSuccessorManifest(added, expectedInputs));
+        var changed = (JsonObject)value.DeepClone();
+        changed["currentInputs"]![expectedInputs.Keys.First()] = new string('f', 64);
+        Assert.False(IsValidSuccessorManifest(changed, expectedInputs));
+        var reordered = (JsonObject)value.DeepClone();
+        var reversedInputs = new JsonObject(
+            reordered["currentInputs"]!.AsObject().Reverse()
+                .Select(property => KeyValuePair.Create(
+                    property.Key,
+                    property.Value?.DeepClone())));
+        reordered["currentInputs"] = reversedInputs;
+        Assert.False(IsValidSuccessorManifest(reordered, expectedInputs));
     }
 
     [Fact]
@@ -472,6 +653,226 @@ public sealed class M1ContractBaselineTests
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, error);
         return output.Trim();
+    }
+
+    private static bool IsAuditClassificationValid(JsonElement record)
+    {
+        try
+        {
+            AuditResultConformance.ValidateClassification(record);
+            return true;
+        }
+        catch (Xunit.Sdk.XunitException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsReplayDocumentValid(JsonElement document)
+    {
+        try
+        {
+            AuditResultCanonicalizer.ValidateReplayDocument(document);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is FormatException
+                or InvalidOperationException
+                or KeyNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsHostAuditResultValid(JsonElement document)
+    {
+        try
+        {
+            AuditResultSemanticValidator.Validate(Root, document);
+            return true;
+        }
+        catch (ProtocolException)
+        {
+            return false;
+        }
+    }
+
+    private static void AssertClosedCatalogMutations(
+        JsonElement original,
+        string formatVersion,
+        IReadOnlyList<string> caseProperties,
+        IReadOnlyList<string> expectedIds)
+    {
+        Assert.True(IsClosedCatalog(
+            JsonNode.Parse(original.GetRawText())!.AsObject(),
+            formatVersion,
+            caseProperties,
+            expectedIds));
+
+        JsonObject Mutate(Action<JsonArray> mutation)
+        {
+            var value = JsonNode.Parse(original.GetRawText())!.AsObject();
+            mutation(value["cases"]!.AsArray());
+            return value;
+        }
+
+        Assert.False(IsClosedCatalog(
+            Mutate(cases => cases.RemoveAt(cases.Count - 1)),
+            formatVersion,
+            caseProperties,
+            expectedIds));
+        Assert.False(IsClosedCatalog(
+            Mutate(cases => cases.Add(cases[0]!.DeepClone())),
+            formatVersion,
+            caseProperties,
+            expectedIds));
+        Assert.False(IsClosedCatalog(
+            Mutate(cases =>
+            {
+                var added = cases[0]!.DeepClone().AsObject();
+                added["caseId"] = "unexpected.added-case";
+                cases.Add(added);
+            }),
+            formatVersion,
+            caseProperties,
+            expectedIds));
+        Assert.False(IsClosedCatalog(
+            Mutate(cases =>
+            {
+                var reversed = cases
+                    .Select(row => row!.DeepClone())
+                    .Reverse()
+                    .ToArray();
+                cases.Clear();
+                foreach (var row in reversed)
+                {
+                    cases.Add(row);
+                }
+            }),
+            formatVersion,
+            caseProperties,
+            expectedIds));
+    }
+
+    private static bool IsClosedCatalog(
+        JsonObject value,
+        string formatVersion,
+        IReadOnlyList<string> caseProperties,
+        IReadOnlyList<string> expectedIds)
+    {
+        if (!value.Select(property => property.Key)
+                .SequenceEqual(["formatVersion", "cases"], StringComparer.Ordinal)
+            || value["formatVersion"]?.GetValue<string>() != formatVersion
+            || value["cases"] is not JsonArray cases)
+        {
+            return false;
+        }
+
+        var objects = cases.OfType<JsonObject>().ToArray();
+        var ids = objects.Select(row => row["caseId"]?.GetValue<string>()).ToArray();
+        return objects.Length == cases.Count
+            && objects.All(row => row.Select(property => property.Key)
+                .SequenceEqual(caseProperties, StringComparer.Ordinal))
+            && objects.All(row => row["outcome"]?.GetValue<string>()
+                is "accept" or "reject")
+            && ids.All(id => id is not null)
+            && ids.Distinct(StringComparer.Ordinal).Count() == ids.Length
+            && ids.SequenceEqual(expectedIds, StringComparer.Ordinal);
+    }
+
+    private static SortedDictionary<string, string> ExpectedCurrentInputs()
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "docs/20_architecture/contracts/audit-result-v1.md",
+            "docs/20_architecture/contracts/policy-configuration-v1.md",
+            "docs/20_architecture/contracts/pre-release-v1-baseline.md",
+            "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+            "docs/20_architecture/decisions/0003-target-profiles-and-documentation-observation.md",
+            "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
+            "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+            "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs",
+            "tests/ContractScribe.Tests/AuditResultConformance.cs",
+            "tests/ContractScribe.Tests/AuditResultContractTests.cs",
+            "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+            "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+            "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
+            "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs"
+        };
+        foreach (var relativeRoot in new[]
+        {
+            "schemas/audit-result",
+            "schemas/policy-configuration",
+            "schemas/symbol-evidence-taxonomy",
+            "tests/fixtures/audit-result/v1",
+            "tests/fixtures/m1-target-observation",
+            "tests/fixtures/policy-configuration/v1",
+            "tests/fixtures/symbol-evidence-taxonomy/v1",
+            "tests/fixtures/m1-contract-baseline/v1"
+        })
+        {
+            var fullRoot = Path.Join(
+                Root,
+                relativeRoot.Replace('/', Path.DirectorySeparatorChar));
+            foreach (var file in Directory.EnumerateFiles(
+                fullRoot,
+                "*",
+                SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(Root, file)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                if (relative
+                    != "tests/fixtures/m1-contract-baseline/v1/manifest.json")
+                {
+                    paths.Add(relative);
+                }
+            }
+        }
+
+        return new SortedDictionary<string, string>(
+            paths.ToDictionary(
+                path => path,
+                path => Sha256(Path.Join(
+                    Root,
+                    path.Replace('/', Path.DirectorySeparatorChar))),
+                StringComparer.Ordinal),
+            StringComparer.Ordinal);
+    }
+
+    private static bool IsValidSuccessorManifest(
+        JsonObject value,
+        IReadOnlyDictionary<string, string> expectedInputs)
+    {
+        if (!value.Select(property => property.Key).SequenceEqual(
+                [
+                    "schemaVersion",
+                    "contractRevision",
+                    "inventory",
+                    "profiles",
+                    "predecessor",
+                    "currentInputs",
+                    "fixtures",
+                    "implementationDisposition"
+                ],
+                StringComparer.Ordinal)
+            || value["schemaVersion"]?.GetValue<int>() != 1
+            || value["contractRevision"]?.GetValue<string>()
+                != "issue-55-classification-origin-closure-v1"
+            || value["currentInputs"] is not JsonObject inputs)
+        {
+            return false;
+        }
+
+        var actual = inputs.ToArray();
+        return actual.Select(property => property.Key)
+                .SequenceEqual(expectedInputs.Keys, StringComparer.Ordinal)
+            && actual.All(property =>
+                property.Value?.GetValue<string>()
+                    == expectedInputs[property.Key]);
     }
 
     private static JsonDocument Load(string name) => JsonDocument.Parse(File.ReadAllText(Path.Join(FixtureRoot, name)));

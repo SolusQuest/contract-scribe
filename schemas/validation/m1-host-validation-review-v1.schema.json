@@ -27,19 +27,28 @@
       "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
     },
     "reviewedHead": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "reviewerKind": {
-      "const": "independent-relay"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "relaySessionId": {
-      "type": "string",
-      "format": "uuid"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "relayTaskId": {
-      "type": "string",
-      "format": "uuid"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "verdict": {
       "enum": [
@@ -58,9 +67,75 @@
       }
     },
     "reviewedAtUtc": {
-      "type": "string",
-      "format": "date-time"
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "pending"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reviewedHead": {
+            "type": "null"
+          },
+          "reviewerKind": {
+            "type": "null"
+          },
+          "relaySessionId": {
+            "type": "null"
+          },
+          "relayTaskId": {
+            "type": "null"
+          },
+          "blockingFindingIds": {
+            "const": [
+              "baseline.main-reconciliation-pending"
+            ]
+          },
+          "reviewedAtUtc": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "reviewedHead": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "reviewerKind": {
+            "const": "independent-relay"
+          },
+          "relaySessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relayTaskId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "blockingFindingIds": {
+            "const": []
+          },
+          "reviewedAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  ]
 }

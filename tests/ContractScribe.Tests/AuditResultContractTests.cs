@@ -428,13 +428,13 @@ public sealed class AuditResultContractTests
     }
 
     [Fact]
-    public void UnresolvedSubjectKey_IsStructuralRatherThanRawJsonText()
+    public void UnresolvedSubjectKey_IsStructuralAndRejectsNonCanonicalRepositoryPaths()
     {
         using var first = JsonDocument.Parse("{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":0,\"end\":1}}}");
         using var second = JsonDocument.Parse("{\"repository\":{\"span\":{\"end\":1,\"start\":0},\"path\":\"src/Missing.cs\"}}");
         Assert.Equal(CandidateLocatorKey(first.RootElement), CandidateLocatorKey(second.RootElement));
         using var lexical = JsonDocument.Parse("{\"repository\":{\"path\":\"./src//Missing.cs\",\"span\":{\"start\":0,\"end\":1}}}");
-        Assert.Equal(CandidateLocatorKey(second.RootElement), CandidateLocatorKey(lexical.RootElement));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ValidateCandidateLocator(lexical.RootElement));
     }
 
     [Fact]
@@ -444,7 +444,7 @@ public sealed class AuditResultContractTests
         using var repository10 = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":10,\"end\":11}}}}");
         using var generated = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"generatedSource\":{\"generatorId\":\"synthetic.generator\",\"hintNameId\":\"widget.g.cs\"}}}");
         using var synthetic = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"synthetic-fixture\"}}}");
-        using var lexicalZ = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"./z.cs\"}}}");
+        using var lexicalZ = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"z.cs\"}}}");
         using var plainA = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"a.cs\"}}}");
         Assert.True(GetResultSortKey(repository2.RootElement).CompareTo(GetResultSortKey(repository10.RootElement)) < 0);
         Assert.True(GetResultSortKey(plainA.RootElement).CompareTo(GetResultSortKey(lexicalZ.RootElement)) < 0);

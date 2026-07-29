@@ -14,6 +14,13 @@ public static class AuditResultSemanticValidator
         {
             var results = document.GetProperty("results").EnumerateArray().ToArray();
             Require(results.Length > 0);
+            foreach (var classification in results.Select(result => result.GetProperty("classification")))
+            {
+                if (classification.GetProperty("recordType").GetString() == "UnresolvedClassification")
+                {
+                    ValidateCandidateLocator(classification.GetProperty("candidateLocator"));
+                }
+            }
             Require(results.Select(ResultSortKey).SequenceEqual(
                 results.Select(ResultSortKey).Order()));
             var targetKinds = results
@@ -689,11 +696,29 @@ public static class AuditResultSemanticValidator
         string? origin,
         string? skip)
     {
+        if (support == "support.unavailable-context")
+        {
+            if (skip == "skip.unavailable.generated-provenance")
+            {
+                Require(origin == "origin.unknown");
+            }
+            else if (skip is "skip.unavailable.documentation-comment-id"
+                     or "skip.unavailable.semantic-context")
+            {
+                Require(origin is "origin.source"
+                    or "origin.source-generator"
+                    or "origin.tool-generated"
+                    or "origin.mixed");
+            }
+            else
+            {
+                throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS");
+            }
+        }
         if (origin == "origin.unknown")
         {
             Require(support == "support.unavailable-context");
-            Require(skip is "skip.unavailable.generated-provenance"
-                or "skip.unavailable.semantic-context");
+            Require(skip == "skip.unavailable.generated-provenance");
         }
         if (origin == "origin.mixed")
         {
@@ -701,7 +726,7 @@ public static class AuditResultSemanticValidator
                 support == "support.ambiguous"
                     && skip is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration"
                 || support == "support.unavailable-context"
-                    && skip is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context");
+                    && skip is "skip.unavailable.documentation-comment-id" or "skip.unavailable.semantic-context");
         }
         if (skip == "skip.ambiguous.mixed-origin")
         {
@@ -717,7 +742,7 @@ public static class AuditResultSemanticValidator
             "ComponentClassification" =>
                 $"component\0{classification.GetProperty("parentSymbolRef").GetRawText()}\0{classification.GetProperty("componentKind").GetString()}\0{classification.GetProperty("identity").GetString()}",
             "UnresolvedClassification" =>
-                $"unresolved\0{classification.GetProperty("compilationContextRef").GetString()}\0{classification.GetProperty("candidateLocator").GetRawText()}",
+                $"unresolved\0{classification.GetProperty("compilationContextRef").GetString()}\0{CandidateLocatorKey(classification.GetProperty("candidateLocator"))}",
             _ => throw new ProtocolException("HV230_AUDIT_RESULT_SEMANTICS")
         };
 
@@ -757,7 +782,7 @@ public static class AuditResultSemanticValidator
         var locator = classification.GetProperty("candidateLocator");
         if (locator.TryGetProperty("repository", out var repository))
         {
-            return LocatorKey(context, 0, NormalizeRepositoryPath(repository.GetProperty("path").GetString()!), string.Empty, repository);
+            return LocatorKey(context, 0, repository.GetProperty("path").GetString()!, string.Empty, repository);
         }
         if (locator.TryGetProperty("generatedSource", out var generatedSource))
         {
@@ -809,8 +834,71 @@ public static class AuditResultSemanticValidator
             hasSpan ? span.GetProperty("end").GetInt32() : 0);
     }
 
-    private static string NormalizeRepositoryPath(string value) =>
-        string.Join('/', value.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
+    private static void ValidateCandidateLocator(JsonElement locator)
+    {
+        var variants = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }
+            .Where(name => locator.TryGetProperty(name, out _))
+            .ToArray();
+        Require(variants.Length == 1);
+        if (variants[0] == "repository")
+        {
+            var repository = locator.GetProperty("repository");
+            Require(IsRepositoryPath(repository.GetProperty("path").GetString()));
+            ValidateSpan(repository);
+        }
+        else if (variants[0] == "generatedSource")
+        {
+            var generatedSource = locator.GetProperty("generatedSource");
+            Require(IsGeneratedId(generatedSource.GetProperty("generatorId").GetString(), "sgp."));
+            Require(IsGeneratedId(generatedSource.GetProperty("hintNameId").GetString(), "sgo."));
+            ValidateSpan(generatedSource);
+        }
+        else if (variants[0] == "toolGenerated")
+        {
+            var toolGenerated = locator.GetProperty("toolGenerated");
+            Require(IsGeneratedId(toolGenerated.GetProperty("producerId").GetString(), "tgp."));
+            Require(IsGeneratedId(toolGenerated.GetProperty("outputId").GetString(), "tgo."));
+            ValidateSpan(toolGenerated);
+        }
+    }
+
+    private static string CandidateLocatorKey(JsonElement locator)
+    {
+        if (locator.TryGetProperty("repository", out var repository))
+        {
+            return $"repository\0{repository.GetProperty("path").GetString()}\0{SpanKey(repository)}";
+        }
+        if (locator.TryGetProperty("generatedSource", out var generatedSource))
+        {
+            return $"generatedSource\0{generatedSource.GetProperty("generatorId").GetString()}\0{generatedSource.GetProperty("hintNameId").GetString()}\0{SpanKey(generatedSource)}";
+        }
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated))
+        {
+            return $"toolGenerated\0{toolGenerated.GetProperty("producerId").GetString()}\0{toolGenerated.GetProperty("outputId").GetString()}\0{SpanKey(toolGenerated)}";
+        }
+        return $"synthetic\0{locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()}";
+    }
+
+    private static string SpanKey(JsonElement locator) =>
+        locator.TryGetProperty("span", out var span)
+            ? $"{span.GetProperty("start").GetInt32()}\0{span.GetProperty("end").GetInt32()}"
+            : string.Empty;
+
+    private static void ValidateSpan(JsonElement locator)
+    {
+        if (!locator.TryGetProperty("span", out var span))
+        {
+            return;
+        }
+        Require(span.GetProperty("start").GetInt32() <= span.GetProperty("end").GetInt32());
+    }
+
+    private static bool IsGeneratedId(string? value, string prefix) =>
+        value is not null
+        && value.Length == prefix.Length + 64
+        && value.StartsWith(prefix, StringComparison.Ordinal)
+        && value[prefix.Length..].All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private readonly record struct ResultOrderKey(
         int TypeRank,
@@ -854,6 +942,9 @@ public static class AuditResultSemanticValidator
     private static bool IsRepositoryPath(string? value) =>
         !string.IsNullOrWhiteSpace(value)
         && !Path.IsPathRooted(value)
+        && !(value.Length >= 2
+            && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
+            && value[1] == ':')
         && !value.Contains('\\', StringComparison.Ordinal)
         && !value.Split('/').Any(segment => segment is "" or "." or "..");
 

@@ -76,7 +76,7 @@ public static class Program
                 {
                     var root = Required(options, "--root");
                     var subjectPath = Required(options, "--subject-manifest");
-                    var context = BundleValidator.Validate(root);
+                    var context = BundleValidator.Validate(root, requireReview: true);
                     var subject = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
                         subjectPath,
                         4 * 1024 * 1024,

@@ -149,17 +149,38 @@ internal static class AuditResultConformance
 
     internal static void ValidateOriginSpecificCombination(string? recordType, string? supportStatus, string? origin, string? skipReason)
     {
+        if (supportStatus == "support.unavailable-context")
+        {
+            if (skipReason == "skip.unavailable.generated-provenance")
+            {
+                Assert.Equal("origin.unknown", origin);
+            }
+            else if (skipReason is "skip.unavailable.documentation-comment-id" or "skip.unavailable.semantic-context")
+            {
+                Assert.Contains(origin, new[]
+                {
+                    "origin.source",
+                    "origin.source-generator",
+                    "origin.tool-generated",
+                    "origin.mixed"
+                });
+            }
+            else
+            {
+                Assert.Fail($"Invalid unavailable-context skip for {recordType}: {skipReason}");
+            }
+        }
+
         if (origin == "origin.unknown")
         {
             Assert.Equal("support.unavailable-context", supportStatus);
-            Assert.Contains(skipReason, new[] { "skip.unavailable.generated-provenance", "skip.unavailable.semantic-context" });
+            Assert.Equal("skip.unavailable.generated-provenance", skipReason);
         }
-
         if (origin == "origin.mixed")
         {
             Assert.True(
                 supportStatus == "support.ambiguous" && skipReason is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration"
-                || supportStatus == "support.unavailable-context" && skipReason is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context",
+                || supportStatus == "support.unavailable-context" && skipReason is "skip.unavailable.documentation-comment-id" or "skip.unavailable.semantic-context",
                 $"Invalid origin.mixed combination for {recordType}.");
         }
 
@@ -438,7 +459,7 @@ internal static class AuditResultConformance
         if (variants[0] == "repository")
         {
             var repository = locator.GetProperty("repository");
-            Assert.True(IsRepositoryRelativePath(repository.GetProperty("path").GetString()!));
+            Assert.True(IsCanonicalRepositoryPath(repository.GetProperty("path").GetString()!));
             ValidateSpan(repository);
         }
         else if (variants[0] == "generatedSource")
@@ -607,7 +628,7 @@ internal static class AuditResultConformance
 
     internal static string CandidateLocatorKey(JsonElement locator)
     {
-        if (locator.TryGetProperty("repository", out var repository)) return "repository|" + NormalizeRepositoryPath(repository.GetProperty("path").GetString()!) + "|" + SpanKey(repository);
+        if (locator.TryGetProperty("repository", out var repository)) return "repository|" + repository.GetProperty("path").GetString() + "|" + SpanKey(repository);
         if (locator.TryGetProperty("generatedSource", out var generated)) return "generatedSource|" + generated.GetProperty("generatorId").GetString() + "|" + generated.GetProperty("hintNameId").GetString() + "|" + SpanKey(generated);
         if (locator.TryGetProperty("toolGenerated", out var toolGenerated)) return "toolGenerated|" + toolGenerated.GetProperty("producerId").GetString() + "|" + toolGenerated.GetProperty("outputId").GetString() + "|" + SpanKey(toolGenerated);
         return "synthetic|" + locator.GetProperty("synthetic").GetProperty("fixtureId").GetString();
@@ -744,7 +765,7 @@ internal static class AuditResultConformance
     internal static ResultSortKey GetUnresolvedSortKey(JsonElement classification)
     {
         var locator = classification.GetProperty("candidateLocator");
-        if (locator.TryGetProperty("repository", out var repository)) return CreateUnresolvedKey(classification, 0, NormalizeRepositoryPath(repository.GetProperty("path").GetString()!), string.Empty, repository);
+        if (locator.TryGetProperty("repository", out var repository)) return CreateUnresolvedKey(classification, 0, repository.GetProperty("path").GetString()!, string.Empty, repository);
         if (locator.TryGetProperty("generatedSource", out var generated)) return CreateUnresolvedKey(classification, 1, generated.GetProperty("generatorId").GetString()!, generated.GetProperty("hintNameId").GetString()!, generated);
         if (locator.TryGetProperty("toolGenerated", out var toolGenerated)) return CreateUnresolvedKey(classification, 2, toolGenerated.GetProperty("producerId").GetString()!, toolGenerated.GetProperty("outputId").GetString()!, toolGenerated);
         return new ResultSortKey(2, classification.GetProperty("compilationContextRef").GetString()!, 3, locator.GetProperty("synthetic").GetProperty("fixtureId").GetString()!, string.Empty, false, 0, 0);
@@ -855,6 +876,9 @@ internal static class AuditResultConformance
     }
 
     internal static string NormalizeRepositoryPath(string value) => string.Join('/', value.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
+
+    internal static bool IsCanonicalRepositoryPath(string value) =>
+        IsRepositoryRelativePath(value) && value == NormalizeRepositoryPath(value);
 
     internal static bool IsCanonicalPolicyPath(string value) => IsRepositoryRelativePath(value) && value == NormalizeRepositoryPath(value);
 

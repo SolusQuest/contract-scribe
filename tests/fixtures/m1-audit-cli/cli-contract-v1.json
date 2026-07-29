@@ -6,7 +6,7 @@
     "envelopeVersion": 1,
     "protectedInputs": {
       "docs/20_architecture/contracts/policy-configuration-v1.md": "9d283f2ad5e25adb748fb4121625999b220ebf0901fd928b0d422da951c977cf",
-      "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "3a58e086fd5fe7f55693901614c800a8b7e3859ccaebe39980a05000b35dc8aa",
+      "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "d503d3b816d49cad6cb8f809e15e4ecf6ee3fcf8a2642eac3ff1e11e586280c5",
       "docs/20_architecture/contracts/audit-result-v1.md": "e324ea5cdf0c8778009842a01f2ebb8ca1cd3b0f434674b02c40edadf7ee223e",
       "schemas/policy-configuration/v1.schema.json": "cc3a56809705d74d8201044ece38d770cefae6e5e21fd2b9b4b39d1e3b7c4bf4",
       "schemas/symbol-evidence-taxonomy/v1.schema.json": "8468e294a45da32a0acbc2183cf3b0438ed31b47151f1abe5ade4597bf38e5f7",
@@ -22,8 +22,11 @@
       "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "400233855348335dbf4c64a87d68e0f2c84b8f9f6b85def5c9cf9414d8d446f6",
       "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "d19f43581d07af0143fd82c00af1bde7ccdecd6cef64d9208d08614e8765460c",
       "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "dd061be4adb1be35bd4b9691cc3c3b86e0cb5697bf7dc229ec04a21a693b7c1a",
-      "tests/ContractScribe.Tests/AuditResultConformance.cs": "4e333c7455e43a0199df5d38f1e535a4490db77f846a7996657369485499fc7a",
-      "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "921d2edbc07df2383f8f789c6eea64133363ab951ada07ab896d8272a1eec717"
+      "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json": "b40fce3c1c4bae876d1319bf1632c1406448b4850741fb06a6bd38a6ee993a33",
+      "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json": "f5502dc482429d094f83c7c59d015597c1e6e6cd250b034e850ff4a1c31e0ce8",
+      "tests/ContractScribe.Tests/AuditResultConformance.cs": "e511b41cf9366655b483ff935bd2ac655e3969ffc340470683279a7915c033d9",
+      "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "89db5e66a69ef89705c626e76caae2d6b39ada0fcae0158d434aec5378b8f79e",
+      "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs": "c6c97b3ab072f8614962c2140724c60eb9ab255300a5bc8275a2f2ae2892520e"
     },
     "oracleBindings": [
       {
@@ -35,9 +38,14 @@
         "path": "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
         "binding": "shared-usage",
         "role": "Canonical Audit Result byte implementation delegated to by the shared conformance oracle; pinned by SHA-256 in protectedInputs as part of the closed semantic input set."
+      },
+      {
+        "path": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+        "binding": "shared-usage",
+        "role": "Independent Taxonomy classification oracle cross-checking the origin and skip applicability boundary consumed by the Audit Result semantic oracle."
       }
     ],
-    "reconciliationGate": "Pins and canonical fixtures are regenerated when the accepted #35 baseline merges or when the shared oracle changes, in the same coordinated change or an immediately following reconciliation change; until then the checker enforces the pinned baseline. Run classification depends only on auditOutcome values."
+    "reconciliationGate": "Issue #55 PR1 pins the complete successor candidate. After PR1 is squash-merged, PR2 starts from exact S1 and records S1 as the main-reachable Host baseline before any production evidence operation is authorized. Run classification depends only on auditOutcome values."
   },
   "vocabularies": {
     "terminalLayers": ["usage", "preflight", "execution", "audit", "host-contract-error"],

@@ -163,7 +163,7 @@
       "classification": {
         "recordType": "UnresolvedClassification",
         "compilationContextRef": "synthetic.unresolved",
-        "origin": "origin.source-generator",
+        "origin": "origin.unknown",
         "supportStatus": "support.unavailable-context",
         "skipReason": "skip.unavailable.generated-provenance",
         "candidateLocator": {

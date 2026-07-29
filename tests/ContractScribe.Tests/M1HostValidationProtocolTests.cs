@@ -19,7 +19,19 @@ public sealed class M1HostValidationProtocolTests
         var context = BundleValidator.Validate(Root);
 
         Assert.Equal("m1-host-validation-v1", context.Protocol.ProtocolId);
-        Assert.Equal("bb4654edc180e2953dda6b89a29211b18778b78e", context.Protocol.Baseline.MergeCommit);
+        Assert.Equal(
+            "https://github.com/SolusQuest/contract-scribe/issues/55",
+            context.Protocol.Baseline.CoordinatingIssue);
+        Assert.Equal("pending", context.Protocol.Baseline.Disposition);
+        Assert.Null(context.Protocol.Baseline.MergeCommit);
+        Assert.Equal(
+            new PredecessorBaselineIdentity(
+                "https://github.com/SolusQuest/contract-scribe/issues/35",
+                "issue-35-pre-release-v1",
+                "bb4654edc180e2953dda6b89a29211b18778b78e",
+                "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+                "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"),
+            context.Protocol.Baseline.Predecessor);
         Assert.Matches("^m1hvp1\\.[0-9a-f]{64}$", context.Lock.BundleId);
         Assert.Equal(
             context.Protocol.ArtifactInventory.Order(StringComparer.Ordinal),
@@ -28,6 +40,136 @@ public sealed class M1HostValidationProtocolTests
             context.Lock.Entries,
             entry => File.ReadAllText(Path.Join(Root, entry.Path.Replace('/', Path.DirectorySeparatorChar)))
                 .Contains(context.Lock.BundleId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void HostValidation_PendingBaselineIsStructurallyClosedAndNonAuthorizing()
+    {
+        var context = BundleValidator.Validate(Root);
+        var review = BundleValidator.ValidateReviewStructure(
+            Root,
+            BundleValidator.ReviewRelativePath,
+            context.Lock.BundleId);
+        Assert.Equal("pending", review.Verdict);
+        Assert.Null(review.ReviewedHead);
+        Assert.Null(review.ReviewerKind);
+        Assert.Null(review.RelaySessionId);
+        Assert.Null(review.RelayTaskId);
+        Assert.Null(review.ReviewedAtUtc);
+        Assert.Equal(
+            new[] { "baseline.main-reconciliation-pending" },
+            review.BlockingFindingIds);
+        Assert.Equal(
+            "HV246_BASELINE_NOT_MAIN_REACHABLE",
+            Assert.Throws<ProtocolException>(() =>
+                BundleValidator.Validate(Root, requireReview: true)).Code);
+
+        var tempRoot = Path.Join(
+            Root,
+            "TestResults",
+            $"host-pending-review-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var reviewPath = Path.Join(tempRoot, "review.json");
+            var wrongBundle = review with
+            {
+                BundleId = $"m1hvp1.{new string('0', 64)}",
+                ReviewId = string.Empty
+            };
+            wrongBundle = wrongBundle with
+            {
+                ReviewId = BundleValidator.ComputeReviewId(wrongBundle)
+            };
+            CanonicalJson.WriteCanonical(reviewPath, wrongBundle);
+            Assert.Equal(
+                "HV247_PENDING_REVIEW_INVALID",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.ValidateReviewStructure(
+                        Root,
+                        reviewPath,
+                        context.Lock.BundleId)).Code);
+
+            var mutatedId = review with
+            {
+                ReviewId = $"review.{new string('f', 64)}"
+            };
+            CanonicalJson.WriteCanonical(reviewPath, mutatedId);
+            Assert.Equal(
+                "HV166_REVIEW_ID_MISMATCH",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.ValidateReviewStructure(
+                        Root,
+                        reviewPath,
+                        context.Lock.BundleId)).Code);
+
+            var forgedAccepted = review with
+            {
+                ReviewedHead = new string('1', 40),
+                ReviewerKind = "independent-relay",
+                RelaySessionId = "00000000-0000-0000-0000-000000000001",
+                RelayTaskId = "00000000-0000-0000-0000-000000000002",
+                Verdict = "accepted",
+                BlockingFindingIds = [],
+                ReviewedAtUtc = "2026-07-29T00:00:00Z",
+                ReviewId = string.Empty
+            };
+            forgedAccepted = forgedAccepted with
+            {
+                ReviewId = BundleValidator.ComputeReviewId(forgedAccepted)
+            };
+            CanonicalJson.WriteCanonical(reviewPath, forgedAccepted);
+            Assert.Equal(
+                "HV246_BASELINE_NOT_MAIN_REACHABLE",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        Root,
+                        requireReview: true,
+                        reviewPath)).Code);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HostValidation_PendingCommandMatrixRejectsBeforeOutputCreation()
+    {
+        var tempRoot = Path.Join(
+            Root,
+            "TestResults",
+            $"host-pending-commands-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var missing = Path.Join(tempRoot, "missing.json");
+            var output = Path.Join(tempRoot, "output.json");
+            var incomplete = Path.Join(tempRoot, "incomplete.json");
+            var commands = new[]
+            {
+                new[] { "validate-bundle", "--root", Root, "--require-review" },
+                new[] { "provision-fixtures", "--root", Root, "--subject-manifest", missing },
+                new[] { "run-cell", "--root", Root, "--subject-manifest", missing, "--review", missing, "--cell", "ubuntu-x64", "--incomplete-output", incomplete, "--output", output },
+                new[] { "validate-cell", "--root", Root, "--evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "validate-incomplete", "--root", Root, "--evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "aggregate", "--root", Root, "--evidence", missing, "--output", output, "--review", missing, "--subject-manifest", missing, "--matrix-result", "passed", "--publication-base-revision", new string('1', 40) },
+                new[] { "validate-aggregate", "--root", Root, "--evidence", missing, "--cell-evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "validate-publication-record", "--root", Root, "--record", missing, "--aggregate-evidence", missing, "--cell-evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "prepare-public", "--root", Root, "--source", missing, "--output", output, "--review", missing, "--subject-manifest", missing, "--kind", "cell" }
+            };
+
+            foreach (var command in commands)
+            {
+                Assert.Equal(2, await Program.Main(command));
+                Assert.False(File.Exists(output));
+                Assert.False(File.Exists(incomplete));
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
     }
 
     [Fact]
