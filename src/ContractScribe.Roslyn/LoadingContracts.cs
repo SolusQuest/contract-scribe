@@ -139,7 +139,8 @@ public sealed class LoadedProject
         LoadedProjectRole role,
         IReadOnlyList<string> projectReferences,
         Project project,
-        Compilation compilation)
+        Compilation compilation,
+        IReadOnlyDictionary<SyntaxTree, LoadedSourceTree> sourceTrees)
     {
         ProjectIdentity = projectIdentity;
         TargetFramework = targetFramework;
@@ -148,6 +149,7 @@ public sealed class LoadedProject
         ProjectReferences = projectReferences;
         Project = project;
         Compilation = compilation;
+        SourceTrees = sourceTrees;
     }
 
     public string ProjectIdentity { get; }
@@ -163,6 +165,8 @@ public sealed class LoadedProject
     internal Project Project { get; }
 
     internal Compilation Compilation { get; }
+
+    internal IReadOnlyDictionary<SyntaxTree, LoadedSourceTree> SourceTrees { get; }
 }
 
 public sealed record GeneratedSourceFact(
@@ -172,3 +176,20 @@ public sealed record GeneratedSourceFact(
     string OutputId,
     string SourceSha256,
     string SourceText);
+
+internal enum LoadedSourceKind
+{
+    Repository,
+    SourceGenerator,
+    ToolGenerated,
+}
+
+internal sealed record LoadedSourceTree(
+    LoadedSourceKind Kind,
+    string? RepositoryIdentity,
+    GeneratedSourceFact? GeneratedSource);
+
+internal sealed record GeneratedSourceBinding(
+    SyntaxTree SyntaxTree,
+    LoadedSourceKind Kind,
+    GeneratedSourceFact Fact);

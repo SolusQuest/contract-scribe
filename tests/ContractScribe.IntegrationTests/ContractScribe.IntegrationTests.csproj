@@ -14,6 +14,7 @@
     <PackageReference Include="Microsoft.Build.Tasks.Core" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" />
+    <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
@@ -28,5 +29,10 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
                       ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
+             Link="ClassificationConformanceOracle.cs" />
   </ItemGroup>
 </Project>

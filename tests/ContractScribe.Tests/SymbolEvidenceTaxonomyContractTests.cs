@@ -25,6 +25,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static readonly Lazy<JsonSchema> ManifestSchema = new(() => JsonSchema.FromText(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.manifest.schema.json"))));
     private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
     private static readonly Lazy<Dictionary<string, JsonElement>> RegistryEntries = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToDictionary(entry => entry.GetProperty("id").GetString()!, entry => entry.Clone(), StringComparer.Ordinal));
+    private static readonly Lazy<ClassificationConformanceOracle> ClassificationOracle = new(() => ClassificationConformanceOracle.Load(FindRepositoryRoot()));
     [Fact]
     public void Registry_UsesClosedUniqueDottedIdentifiers()
     {
@@ -110,7 +111,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.Equal(componentKeys.Length, componentKeys.Distinct(StringComparer.Ordinal).Count());
         foreach (var record in records)
         {
-            Assert.True(IsValidClassificationRecord(record));
+            Assert.True(
+                IsValidClassificationRecord(record),
+                record.GetRawText());
         }
         var scenarioIds = manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()!).ToArray();
         Assert.Equal(scenarioIds.Length, scenarioIds.Distinct(StringComparer.Ordinal).Count());
@@ -772,7 +775,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             {
                 ["recordType"] = "UnresolvedClassification",
                 ["compilationContextRef"] = context,
-                ["origin"] = skipReason == "skip.unavailable.documentation-comment-id" ? scenario.GetProperty("observedOrigin").GetString()! : "origin.unknown",
+                ["origin"] = skipReason == "skip.unavailable.generated-provenance"
+                    ? "origin.unknown"
+                    : scenario.GetProperty("observedOrigin").GetString()!,
                 ["supportStatus"] = "support.unavailable-context",
                 ["skipReason"] = skipReason,
                 ["candidateLocator"] = JsonSerializer.Deserialize<Dictionary<string, object>>(scenario.GetProperty("candidateLocator").GetRawText())!
@@ -1040,47 +1045,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
 
     private static bool Known(string section, string? id) => id is not null && RegistryIds.Value[section].Contains(id);
 
-    private static bool IsValidClassificationRecord(JsonElement record)
-    {
-        if (record.ValueKind != JsonValueKind.Object || !record.TryGetProperty("recordType", out var type)) return false;
-        var recordType = type.GetString();
-        return recordType switch
-        {
-            "TargetClassification" => HasOnlyProperties(record, "recordType", "symbolRef", "primaryKind", "traits", "origin", "supportStatus", "skipReason") && record.TryGetProperty("symbolRef", out var target) && IsSymbolRef(target)
-                && Known("primaryKinds", record.GetProperty("primaryKind").GetString())
-                && record.GetProperty("traits").EnumerateArray().All(value => Known("traits", value.GetString()))
-                && IsValidStatusAndSkip(record, "TargetClassification", record.GetProperty("primaryKind").GetString()!),
-            "ComponentClassification" => HasOnlyProperties(record, "recordType", "parentSymbolRef", "componentKind", "identity", "origin", "supportStatus", "skipReason") && record.TryGetProperty("parentSymbolRef", out var parent) && IsSymbolRef(parent)
-                && Known("componentKinds", record.GetProperty("componentKind").GetString())
-                && IsValidComponentIdentity(record.GetProperty("componentKind").GetString()!, record.GetProperty("identity").GetString())
-                && IsValidStatusAndSkip(record, "ComponentClassification", record.GetProperty("componentKind").GetString()!),
-            "RelationObservation" => HasOnlyProperties(record, "recordType", "relationKind", "sourceSymbolRef", "targetSymbolRef") && Known("relationKinds", record.GetProperty("relationKind").GetString())
-                && IsSymbolRef(record.GetProperty("sourceSymbolRef")) && IsSymbolRef(record.GetProperty("targetSymbolRef")),
-            "UnresolvedClassification" => HasOnlyProperties(record, "recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator") && record.GetProperty("supportStatus").GetString() == "support.unavailable-context"
-                && Known("origins", record.GetProperty("origin").GetString()) && Known("skipReasons", record.GetProperty("skipReason").GetString())
-                && (record.GetProperty("origin").GetString() != "origin.unknown" || record.GetProperty("skipReason").GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context")
-                && IsValidCandidateLocator(record.GetProperty("candidateLocator")),
-            _ => false
-        };
-    }
-
-    private static bool IsValidStatusAndSkip(JsonElement record, string recordType, string classifiedId)
-    {
-        var status = record.GetProperty("supportStatus").GetString();
-        var origin = record.GetProperty("origin").GetString();
-        if (!Known("supportStatuses", status) || !Known("origins", origin) || !AllowsRecord(RegistryEntries.Value[status!], recordType) || !AllowsRecord(RegistryEntries.Value[origin!], recordType)) return false;
-        if ((classifiedId == "symbol.unknown" || classifiedId == "component.unknown") != (status == "support.unsupported")) return false;
-        if (RegistryEntries.Value[classifiedId].TryGetProperty("allowedSupportStatuses", out var statuses) && !statuses.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal)) return false;
-        if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredOrigin", out var requiredOrigin) && origin != requiredOrigin.GetString()) return false;
-        if (status == "support.supported") return !record.TryGetProperty("skipReason", out _);
-        if (!record.TryGetProperty("skipReason", out var skip) || !Known("skipReasons", skip.GetString()) || !AllowsRecord(RegistryEntries.Value[skip.GetString()!], recordType)) return false;
-        if (origin == "origin.unknown" && (status != "support.unavailable-context" || skip.GetString() is not ("skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
-        if (origin == "origin.mixed" && !((status == "support.ambiguous" && skip.GetString() is "skip.ambiguous.mixed-origin" or "skip.ambiguous.partial-declaration") || (status == "support.unavailable-context" && skip.GetString() is "skip.unavailable.generated-provenance" or "skip.unavailable.semantic-context"))) return false;
-        if (RegistryEntries.Value[classifiedId].TryGetProperty("requiredSkip", out var requiredSkip) && skip.GetString() != requiredSkip.GetString()) return false;
-        return !RegistryEntries.Value[skip.GetString()!].TryGetProperty("allowedSupportStatuses", out var allowed) || allowed.EnumerateArray().Select(value => value.GetString()).Contains(status, StringComparer.Ordinal);
-    }
-
-    private static bool AllowsRecord(JsonElement entry, string recordType) => entry.GetProperty("recordTypes").EnumerateArray().Select(value => value.GetString()).Contains(recordType, StringComparer.Ordinal);
+    private static bool IsValidClassificationRecord(JsonElement record) =>
+        ClassificationOracle.Value.IsValidRecord(record);
 
     private static bool HasOnlyProperties(JsonElement value, params string[] properties) => value.EnumerateObject().All(property => properties.Contains(property.Name, StringComparer.Ordinal));
 

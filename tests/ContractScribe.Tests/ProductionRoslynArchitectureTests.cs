@@ -1,4 +1,9 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Xml.Linq;
+using ContractScribe.Core;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
@@ -43,9 +48,191 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.DoesNotContain(@"src\ContractScribe.Roslyn", fast, StringComparison.Ordinal);
         Assert.Contains(@"../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj", integration, StringComparison.Ordinal);
         Assert.DoesNotContain(@"tests/ContractScribe.Roslyn", integration, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ContractScribe.ContractBaselineProbe.csproj",
+            integration,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ClassificationConformanceOracle.cs",
+            integration,
+            StringComparison.Ordinal);
         Assert.Contains("Microsoft.NET.StringTools", integration, StringComparison.Ordinal);
         Assert.Equal(5, XDocument.Parse(integration).Descendants("PackageReference").Count(element =>
             element.Attribute("ExcludeAssets")?.Value == "runtime"));
+    }
+
+    [Fact]
+    public void CoreClassificationContractsRemainPlatformNeutral()
+    {
+        var root = FindRepositoryRoot();
+        var coreProject = XDocument.Load(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Core",
+            "ContractScribe.Core.csproj"));
+        Assert.Empty(coreProject.Descendants("PackageReference"));
+        Assert.Empty(coreProject.Descendants("ProjectReference"));
+
+        var contractTypes = typeof(ClassificationSet).Assembly
+            .GetExportedTypes()
+            .Where(type => type.Namespace == typeof(ClassificationSet).Namespace)
+            .Where(type =>
+                type.Name.Contains("Classification", StringComparison.Ordinal)
+                || type == typeof(SymbolRef)
+                || type == typeof(TargetProfile)
+                || type == typeof(PrimarySymbolKind)
+                || type == typeof(SymbolTrait)
+                || type == typeof(ComponentKind)
+                || type == typeof(RelationKind)
+                || type == typeof(SupportStatus)
+                || type == typeof(SkipReason)
+                || type == typeof(CandidateLocator)
+                || type == typeof(Utf16Span))
+            .ToArray();
+        var exposed = contractTypes
+            .SelectMany(type => type.GetProperties()
+                .Select(property => property.PropertyType)
+                .Append(type))
+            .SelectMany(ExpandType)
+            .Distinct()
+            .ToArray();
+        Assert.DoesNotContain(exposed, type =>
+            type.Assembly.GetName().Name is { } assemblyName
+            && (assemblyName.StartsWith(
+                    "Microsoft.CodeAnalysis",
+                    StringComparison.Ordinal)
+                || assemblyName.StartsWith(
+                    "Microsoft.Build",
+                    StringComparison.Ordinal)));
+
+        var probe = XDocument.Load(Path.Combine(
+            root,
+            "tests",
+            "ContractScribe.LoaderProbe",
+            "ContractScribe.LoaderProbe.csproj"));
+        Assert.Equal(
+            ["../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj"],
+            probe.Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include")!.Value));
+        Assert.DoesNotContain(
+            probe.ToString(),
+            "ContractScribe.Roslyn.Experiment",
+            StringComparison.Ordinal);
+
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Core",
+            "ClassificationNormalization.cs")));
+        Assert.False(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Roslyn",
+            "ClassificationNormalization.cs")));
+    }
+
+    [Fact]
+    public void ClassificationResultsCannotBeForgedThroughThePublicCoreApi()
+    {
+        var resultTypes = new[]
+        {
+            typeof(SymbolRef),
+            typeof(Utf16Span),
+            typeof(RepositoryCandidateLocator),
+            typeof(GeneratedSourceCandidateLocator),
+            typeof(ToolGeneratedCandidateLocator),
+            typeof(SyntheticCandidateLocator),
+            typeof(TargetClassification),
+            typeof(ComponentClassification),
+            typeof(RelationObservation),
+            typeof(UnresolvedClassification),
+            typeof(ClassificationSet),
+        };
+        Assert.All(resultTypes, type =>
+            Assert.Empty(type.GetConstructors(
+                BindingFlags.Instance | BindingFlags.Public)));
+
+        var locatorConstructors = typeof(CandidateLocator).GetConstructors(
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotEmpty(locatorConstructors);
+        Assert.All(locatorConstructors, constructor =>
+            Assert.True(
+                constructor.IsFamilyAndAssembly,
+                "CandidateLocator must remain closed to external subclasses."));
+
+        Assert.Null(typeof(ClassificationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.Public));
+        Assert.NotNull(typeof(ClassificationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.NonPublic));
+    }
+
+    [Fact]
+    public void CoreInternalsHaveNoProductionAssemblyFriends()
+    {
+        var friends = typeof(ClassificationSet).Assembly
+            .GetCustomAttributes<InternalsVisibleToAttribute>()
+            .Select(attribute =>
+                attribute.AssemblyName.Split(',', 2)[0])
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["ContractScribe.IntegrationTests"], friends);
+    }
+
+    [Fact]
+    public void ExternalAssembliesCannotDeriveCandidateLocators()
+    {
+        const string source = """
+            using ContractScribe.Core;
+
+            public sealed class ForeignLocator : CandidateLocator
+            {
+                public override int GetHashCode() => 0;
+
+                protected override bool EqualsCore(CandidateLocator other) => true;
+            }
+            """;
+        var platformReferences = ((string)AppContext.GetData(
+                "TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "ForeignCandidateLocator",
+            [CSharpSyntaxTree.ParseText(source)],
+            platformReferences.Append(MetadataReference.CreateFromFile(
+                typeof(CandidateLocator).Assembly.Location)),
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary));
+
+        var errors = compilation.GetDiagnostics()
+            .Where(diagnostic =>
+                diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+
+        Assert.Contains(errors, diagnostic =>
+            diagnostic.Id is "CS1729" or "CS0122");
+    }
+
+    private static IEnumerable<Type> ExpandType(Type type)
+    {
+        yield return type;
+        if (type.IsArray && type.GetElementType() is { } element)
+        {
+            foreach (var nested in ExpandType(element))
+            {
+                yield return nested;
+            }
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            foreach (var nested in ExpandType(argument))
+            {
+                yield return nested;
+            }
+        }
     }
 
     private static string FindRepositoryRoot()
