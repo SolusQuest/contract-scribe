@@ -653,7 +653,9 @@ public sealed class SymbolClassifier
                 traits.Add(SymbolTrait.Extension);
             }
 
-            if (method.IsAsync)
+            if (EnumerateLogicalDeclarations(method)
+                .OfType<IMethodSymbol>()
+                .Any(declaration => declaration.IsAsync))
             {
                 traits.Add(SymbolTrait.Async);
             }

@@ -388,10 +388,12 @@ public sealed class ClassificationTests
     {
         const string definitions = """
             using System;
+            using System.Threading.Tasks;
 
             public partial class PartialSurface
             {
                 public partial void Method();
+                public partial Task<int> Async();
                 public partial int Value { get; set; }
                 public partial int this[int index] { get; set; }
                 public partial event Action? Changed;
@@ -399,10 +401,16 @@ public sealed class ClassificationTests
             """;
         const string implementations = """
             using System;
+            using System.Threading.Tasks;
 
             public partial class PartialSurface
             {
                 public partial void Method() { }
+                public async partial Task<int> Async()
+                {
+                    await Task.Yield();
+                    return 1;
+                }
                 public partial int Value { get => 1; set { } }
                 public partial int this[int index] { get => index; set { } }
                 public partial event Action? Changed
@@ -455,6 +463,7 @@ public sealed class ClassificationTests
         var memberIds = new[]
         {
             "M:PartialSurface.Method",
+            "M:PartialSurface.Async",
             "P:PartialSurface.Value",
             "P:PartialSurface.Item(System.Int32)",
             "E:PartialSurface.Changed",
@@ -479,6 +488,17 @@ public sealed class ClassificationTests
             Assert.DoesNotContain(mixedSet.Components, component =>
                 component.ParentSymbolRef == mixedTarget.SymbolRef);
         }
+
+        Assert.Contains(
+            SymbolTrait.Async,
+            Assert.Single(repositorySet.Targets, target =>
+                target.SymbolRef.DocumentationCommentId
+                    == "M:PartialSurface.Async").Traits);
+        Assert.Contains(
+            SymbolTrait.Async,
+            Assert.Single(mixedSet.Targets, target =>
+                target.SymbolRef.DocumentationCommentId
+                    == "M:PartialSurface.Async").Traits);
     }
 
     [Fact]
