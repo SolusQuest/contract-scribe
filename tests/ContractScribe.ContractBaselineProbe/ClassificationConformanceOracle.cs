@@ -265,12 +265,6 @@ public sealed class ClassificationConformanceOracle
             return false;
         }
 
-        if ((classifiedId is "symbol.unknown" or "component.unknown")
-            != (status == "support.unsupported"))
-        {
-            return false;
-        }
-
         if (registryEntries[classifiedId].TryGetProperty(
                 "requiredOrigin",
                 out var requiredOrigin)
@@ -281,7 +275,8 @@ public sealed class ClassificationConformanceOracle
 
         if (status == "support.supported")
         {
-            return !record.TryGetProperty("skipReason", out _);
+            return !record.TryGetProperty("skipReason", out _)
+                && IsOrdinaryOrigin(origin);
         }
 
         if (!record.TryGetProperty("skipReason", out var skip)
@@ -295,32 +290,58 @@ public sealed class ClassificationConformanceOracle
             return false;
         }
 
-        if (origin == "origin.unknown"
-            && (status != "support.unavailable-context"
-                || skip.GetString() is not
-                    ("skip.unavailable.generated-provenance"
-                        or "skip.unavailable.semantic-context")))
+        var skipId = skip.GetString()!;
+        var valid = recordType switch
         {
-            return false;
-        }
-
-        if (origin == "origin.mixed"
-            && !((status == "support.ambiguous"
-                    && skip.GetString() is
-                        "skip.ambiguous.mixed-origin"
-                        or "skip.ambiguous.partial-declaration")
-                || (status == "support.unavailable-context"
-                    && skip.GetString() is
-                        "skip.unavailable.generated-provenance"
-                        or "skip.unavailable.semantic-context")))
-        {
-            return false;
-        }
-
-        return !registryEntries[classifiedId].TryGetProperty(
+            "TargetClassification" => status switch
+            {
+                "support.unsupported" =>
+                    classifiedId == "symbol.unknown"
+                    && skipId == "skip.unsupported.symbol-kind"
+                    && IsKnownNonSynthesizedOrigin(origin),
+                "support.ambiguous" =>
+                    classifiedId != "symbol.unknown"
+                    && IsKnownNonSynthesizedOrigin(origin)
+                    && (skipId == "skip.ambiguous.partial-declaration"
+                        || skipId == "skip.ambiguous.mixed-origin"
+                            && origin == "origin.mixed"),
+                "support.unavailable-context" =>
+                    skipId == "skip.unavailable.generated-provenance"
+                        && origin == "origin.unknown"
+                    || skipId == "skip.unavailable.semantic-context"
+                        && IsKnownNonSynthesizedOrigin(origin),
+                _ => false,
+            },
+            "ComponentClassification" => status switch
+            {
+                "support.unsupported" =>
+                    classifiedId == "component.unknown"
+                    && skipId == "skip.unsupported.component-kind"
+                    && IsKnownNonSynthesizedOrigin(origin),
+                "support.ambiguous" =>
+                    classifiedId != "component.unknown"
+                    && origin == "origin.mixed"
+                    && skipId == "skip.ambiguous.mixed-origin",
+                "support.not-applicable" =>
+                    skipId == "skip.not-applicable.synthesized-non-target"
+                        && origin == "origin.compiler-synthesized"
+                    || skipId
+                            == "skip.not-applicable.non-documentation-component"
+                        && IsOrdinaryOrigin(origin),
+                "support.unavailable-context" =>
+                    skipId == "skip.unavailable.generated-provenance"
+                        && origin == "origin.unknown"
+                    || skipId == "skip.unavailable.semantic-context"
+                        && IsKnownNonSynthesizedOrigin(origin),
+                _ => false,
+            },
+            _ => false,
+        };
+        return valid
+            && (!registryEntries[classifiedId].TryGetProperty(
                 "requiredSkip",
                 out var requiredSkip)
-            || skip.GetString() == requiredSkip.GetString();
+                || skipId == requiredSkip.GetString());
     }
 
     private bool IsValidUnresolved(JsonElement record)
@@ -333,12 +354,24 @@ public sealed class ClassificationConformanceOracle
             && Known("skipReasons", skip)
             && AllowsRecord(registryEntries[origin!], "UnresolvedClassification")
             && AllowsRecord(registryEntries[skip!], "UnresolvedClassification")
-            && (origin != "origin.unknown"
-                || skip is "skip.unavailable.generated-provenance"
-                    or "skip.unavailable.semantic-context")
+            && (skip == "skip.unavailable.documentation-comment-id"
+                    && IsKnownNonSynthesizedOrigin(origin)
+                || skip == "skip.unavailable.generated-provenance"
+                    && origin == "origin.unknown"
+                || skip == "skip.unavailable.semantic-context"
+                    && IsKnownNonSynthesizedOrigin(origin))
             && IsValidCandidateLocator(
                 record.GetProperty("candidateLocator"));
     }
+
+    private static bool IsOrdinaryOrigin(string? origin) =>
+        origin is "origin.source"
+            or "origin.source-generator"
+            or "origin.tool-generated";
+
+    private static bool IsKnownNonSynthesizedOrigin(string? origin) =>
+        IsOrdinaryOrigin(origin)
+        || origin == "origin.mixed";
 
     private bool Known(string section, string? id) =>
         id is not null && registryIds[section].Contains(id);
@@ -462,19 +495,18 @@ public sealed class ClassificationConformanceOracle
     {
         if (string.IsNullOrEmpty(path)
             || path.Contains('\0')
+            || path.Contains('\\')
             || path.StartsWith('/')
-            || path.StartsWith('\\')
-            || Regex.IsMatch(path, "^[A-Za-z]:"))
+            || path.EndsWith('/')
+            || path.Length >= 2
+                && (path[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z')
+                && path[1] == ':')
         {
             return false;
         }
 
-        var normalized = path.Replace('\\', '/')
-            .Split('/')
-            .Where(segment => segment is not "" and not ".")
-            .ToArray();
-        return normalized.Length > 0
-            && normalized.All(segment => segment != "..");
+        return path.Split('/').All(segment =>
+            segment is not "" and not "." and not "..");
     }
 
     private static bool IsGeneratedId(string? value, string prefix) =>
@@ -488,19 +520,18 @@ public sealed class ClassificationConformanceOracle
         record.GetProperty("recordType").GetString() switch
         {
             "TargetClassification" =>
-                "0|" + SymbolKey(record.GetProperty("symbolRef")),
+                "0" + SymbolKey(record.GetProperty("symbolRef")),
             "ComponentClassification" =>
-                "1|" + SymbolKey(record.GetProperty("parentSymbolRef"))
-                + "|" + record.GetProperty("componentKind").GetString()
-                + "|" + record.GetProperty("identity").GetString(),
+                "1" + SymbolKey(record.GetProperty("parentSymbolRef"))
+                + Frame(record.GetProperty("componentKind").GetString()!)
+                + Frame(record.GetProperty("identity").GetString()!),
             "RelationObservation" =>
-                "2|" + SymbolKey(record.GetProperty("sourceSymbolRef"))
-                + "|" + record.GetProperty("relationKind").GetString()
-                + "|" + SymbolKey(record.GetProperty("targetSymbolRef")),
+                "2" + SymbolKey(record.GetProperty("sourceSymbolRef"))
+                + Frame(record.GetProperty("relationKind").GetString()!)
+                + SymbolKey(record.GetProperty("targetSymbolRef")),
             "UnresolvedClassification" =>
-                "3|"
-                + record.GetProperty("compilationContextRef").GetString()
-                + "|"
+                "3"
+                + Frame(record.GetProperty("compilationContextRef").GetString()!)
                 + CandidateLocatorKey(
                     record.GetProperty("candidateLocator")),
             _ => throw new InvalidOperationException(),
@@ -512,51 +543,51 @@ public sealed class ClassificationConformanceOracle
         {
             if (!value.TryGetProperty("span", out var span))
             {
-                return "0";
+                return "span-absent";
             }
 
-            return "1|"
-                + span.GetProperty("start").GetInt32()
-                + "|"
-                + span.GetProperty("end").GetInt32();
+            return "span-present"
+                + Frame(span.GetProperty("start").GetInt32().ToString(
+                    System.Globalization.CultureInfo.InvariantCulture))
+                + Frame(span.GetProperty("end").GetInt32().ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (locator.TryGetProperty("repository", out var repository))
         {
-            return "repository|"
-                + repository.GetProperty("path").GetString()
-                + "|"
+            return "repository"
+                + Frame(repository.GetProperty("path").GetString()!)
                 + SpanKey(repository);
         }
 
         if (locator.TryGetProperty("generatedSource", out var generatedSource))
         {
-            return "generatedSource|"
-                + generatedSource.GetProperty("generatorId").GetString()
-                + "|"
-                + generatedSource.GetProperty("hintNameId").GetString()
-                + "|"
+            return "generatedSource"
+                + Frame(generatedSource.GetProperty("generatorId").GetString()!)
+                + Frame(generatedSource.GetProperty("hintNameId").GetString()!)
                 + SpanKey(generatedSource);
         }
 
         if (locator.TryGetProperty("toolGenerated", out var toolGenerated))
         {
-            return "toolGenerated|"
-                + toolGenerated.GetProperty("producerId").GetString()
-                + "|"
-                + toolGenerated.GetProperty("outputId").GetString()
-                + "|"
+            return "toolGenerated"
+                + Frame(toolGenerated.GetProperty("producerId").GetString()!)
+                + Frame(toolGenerated.GetProperty("outputId").GetString()!)
                 + SpanKey(toolGenerated);
         }
 
-        return "synthetic|"
-            + locator.GetProperty("synthetic")
+        return "synthetic"
+            + Frame(locator.GetProperty("synthetic")
                 .GetProperty("fixtureId")
-                .GetString();
+                .GetString()!);
     }
 
     private static string SymbolKey(JsonElement symbolRef) =>
-        symbolRef.GetProperty("compilationContextRef").GetString()
-        + "|"
-        + symbolRef.GetProperty("documentationCommentId").GetString();
+        Frame(symbolRef.GetProperty("compilationContextRef").GetString()!)
+        + Frame(symbolRef.GetProperty("documentationCommentId").GetString()!);
+
+    private static string Frame(string value) =>
+        value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + ":"
+        + value;
 }

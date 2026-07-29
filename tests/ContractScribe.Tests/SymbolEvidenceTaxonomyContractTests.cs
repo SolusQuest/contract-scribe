@@ -111,7 +111,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         Assert.Equal(componentKeys.Length, componentKeys.Distinct(StringComparer.Ordinal).Count());
         foreach (var record in records)
         {
-            Assert.True(IsValidClassificationRecord(record));
+            Assert.True(
+                IsValidClassificationRecord(record),
+                record.GetRawText());
         }
         var scenarioIds = manifest.RootElement.GetProperty("unresolvedScenarios").EnumerateArray().Select(scenario => scenario.GetProperty("scenarioId").GetString()!).ToArray();
         Assert.Equal(scenarioIds.Length, scenarioIds.Distinct(StringComparer.Ordinal).Count());
@@ -773,7 +775,9 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             {
                 ["recordType"] = "UnresolvedClassification",
                 ["compilationContextRef"] = context,
-                ["origin"] = skipReason == "skip.unavailable.documentation-comment-id" ? scenario.GetProperty("observedOrigin").GetString()! : "origin.unknown",
+                ["origin"] = skipReason == "skip.unavailable.generated-provenance"
+                    ? "origin.unknown"
+                    : scenario.GetProperty("observedOrigin").GetString()!,
                 ["supportStatus"] = "support.unavailable-context",
                 ["skipReason"] = skipReason,
                 ["candidateLocator"] = JsonSerializer.Deserialize<Dictionary<string, object>>(scenario.GetProperty("candidateLocator").GetRawText())!

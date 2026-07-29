@@ -12,9 +12,10 @@ public sealed class SymbolClassifier
     private readonly RelationEndpointResolver relationEndpointResolver;
     private readonly Action<ClassificationStage>? observer;
     private readonly Action<ClassificationStage, ClassificationCandidateBuffer>? candidateObserver;
+    private readonly Action? componentDiscoveryOperationObserver;
 
     public SymbolClassifier()
-        : this(null, null, null, null)
+        : this(null, null, null, null, null)
     {
     }
 
@@ -22,12 +23,14 @@ public sealed class SymbolClassifier
         Func<ISymbol, string?>? documentationId,
         RelationEndpointResolver? relationEndpointResolver,
         Action<ClassificationStage>? observer,
-        Action<ClassificationStage, ClassificationCandidateBuffer>? candidateObserver)
+        Action<ClassificationStage, ClassificationCandidateBuffer>? candidateObserver,
+        Action? componentDiscoveryOperationObserver = null)
     {
         this.documentationId = documentationId ?? DefaultDocumentationId;
         this.relationEndpointResolver = relationEndpointResolver ?? DefaultRelationEndpoint;
         this.observer = observer;
         this.candidateObserver = candidateObserver;
+        this.componentDiscoveryOperationObserver = componentDiscoveryOperationObserver;
     }
 
     public ClassificationOutcome Classify(
@@ -49,6 +52,8 @@ public sealed class SymbolClassifier
         {
             var candidates = new ClassificationCandidateBuffer();
             var discoveredTargets = new List<DiscoveredTarget>();
+            var discoveryIndex = new SymbolDiscoveryIndex(
+                componentDiscoveryOperationObserver);
             foreach (var project in session.Projects
                 .Where(project => project.Role == LoadedProjectRole.AuditRoot)
                 .OrderBy(project => project.CompilationContextRef, StringComparer.Ordinal))
@@ -58,6 +63,7 @@ public sealed class SymbolClassifier
                     project,
                     profile,
                     discoveredTargets,
+                    discoveryIndex,
                     cancellationToken);
             }
 
@@ -87,6 +93,7 @@ public sealed class SymbolClassifier
                     target.DocumentationCommentId!,
                     target.Provenance.Origin,
                     candidates,
+                    discoveryIndex,
                     cancellationToken);
             }
 
@@ -104,6 +111,7 @@ public sealed class SymbolClassifier
                     profile,
                     candidates,
                     diagnostics,
+                    discoveryIndex,
                     cancellationToken);
             }
 
@@ -150,12 +158,16 @@ public sealed class SymbolClassifier
         LoadedProject project,
         TargetProfile profile,
         List<DiscoveredTarget> targets,
+        SymbolDiscoveryIndex discoveryIndex,
         CancellationToken cancellationToken)
     {
         foreach (var symbol in EnumerateSymbols(project.Compilation.Assembly.GlobalNamespace))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsIndependentSourceCandidate(symbol)
+            if (!IsIndependentSourceCandidate(
+                    symbol,
+                    discoveryIndex,
+                    cancellationToken)
                 || !IsSelectedTargetSurface(symbol, profile))
             {
                 continue;
@@ -179,18 +191,25 @@ public sealed class SymbolClassifier
         TargetProfile profile,
         ClassificationCandidateBuffer candidates,
         List<ClassificationDiagnostic> diagnostics,
+        SymbolDiscoveryIndex discoveryIndex,
         CancellationToken cancellationToken)
     {
         foreach (var type in EnumerateTypes(project.Compilation.Assembly.GlobalNamespace))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var containingTypeSelected = IsIndependentSourceCandidate(type)
+            var containingTypeSelected = IsIndependentSourceCandidate(
+                    type,
+                    discoveryIndex,
+                    cancellationToken)
                 && IsSelectedTargetSurface(type, profile);
             foreach (var member in EnumerateLogicalMembers(type)
                 .Where(IsRelationMember))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (IsIndependentSourceCandidate(member)
+                if (IsIndependentSourceCandidate(
+                        member,
+                        discoveryIndex,
+                        cancellationToken)
                     && IsSelectedTargetSurface(member, profile)
                     && GetOverriddenMember(member) is { } overridden)
                 {
@@ -258,7 +277,9 @@ public sealed class SymbolClassifier
                     || !CanonicalPartialMember(implementation).Locations.Any(
                         location => location.IsInSource)
                     || !IsIndependentSourceCandidate(
-                        CanonicalPartialMember(implementation))
+                        CanonicalPartialMember(implementation),
+                        discoveryIndex,
+                        cancellationToken)
                     || !IsSelectedTargetSurface(
                         CanonicalPartialMember(implementation),
                         profile)
@@ -333,6 +354,7 @@ public sealed class SymbolClassifier
         string documentationCommentId,
         ClassificationOrigin origin,
         ClassificationCandidateBuffer candidates,
+        SymbolDiscoveryIndex discoveryIndex,
         CancellationToken cancellationToken)
     {
         void Add(ComponentKind kind, string identity, ClassificationOrigin? componentOrigin = null) =>
@@ -387,11 +409,7 @@ public sealed class SymbolClassifier
                     setter.IsInitOnly ? "accessor/init" : "accessor/set");
             }
 
-            if (property.ContainingType.GetMembers()
-                .OfType<IFieldSymbol>()
-                .Any(field => SymbolEqualityComparer.Default.Equals(
-                    field.AssociatedSymbol,
-                    property)))
+            if (discoveryIndex.HasBackingField(property, cancellationToken))
             {
                 Add(ComponentKind.BackingField, "backing-field");
             }
@@ -409,11 +427,7 @@ public sealed class SymbolClassifier
                 Add(ComponentKind.AccessorRemove, "accessor/remove");
             }
 
-            if (@event.ContainingType.GetMembers()
-                .OfType<IFieldSymbol>()
-                .Any(field => SymbolEqualityComparer.Default.Equals(
-                    field.AssociatedSymbol,
-                    @event)))
+            if (discoveryIndex.HasBackingField(@event, cancellationToken))
             {
                 Add(ComponentKind.BackingField, "backing-field");
             }
@@ -432,19 +446,25 @@ public sealed class SymbolClassifier
 
         if (type.IsRecord)
         {
-            foreach (var positionalProperty in type.GetMembers()
-                .OfType<IPropertySymbol>()
-                .Select(candidateProperty => (
-                    Property: candidateProperty,
-                    Parameter: GetRecordPositionalParameter(candidateProperty)))
-                .Where(pair =>
-                    pair.Parameter is not null
-                    && IsRecordPositionalProperty(pair.Property))
-                .OrderBy(pair => pair.Parameter!.Ordinal))
+            var positionalOrdinals = new List<int>();
+            foreach (var recordProperty in type.GetMembers()
+                .OfType<IPropertySymbol>())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (discoveryIndex.TryGetRecordPositionalOrdinal(
+                    recordProperty,
+                    cancellationToken,
+                    out var ordinal))
+                {
+                    positionalOrdinals.Add(ordinal);
+                }
+            }
+
+            foreach (var ordinal in positionalOrdinals.Distinct().Order())
             {
                 Add(
                     ComponentKind.SynthesizedRecordPositionalProperty,
-                    $"synthesized/record-positional-property/{positionalProperty.Parameter!.Ordinal}",
+                    $"synthesized/record-positional-property/{ordinal}",
                     ClassificationOrigin.CompilerSynthesized);
             }
         }
@@ -591,27 +611,59 @@ public sealed class SymbolClassifier
             true);
     }
 
-    private static PrimarySymbolKind? ClassifyPrimaryKind(ISymbol symbol) => symbol switch
+    private static PrimarySymbolKind? ClassifyPrimaryKind(ISymbol symbol)
     {
-        INamedTypeSymbol { TypeKind: TypeKind.Class } => PrimarySymbolKind.Class,
-        INamedTypeSymbol { TypeKind: TypeKind.Struct } => PrimarySymbolKind.Struct,
-        INamedTypeSymbol { TypeKind: TypeKind.Interface } => PrimarySymbolKind.Interface,
-        INamedTypeSymbol { TypeKind: TypeKind.Enum } => PrimarySymbolKind.Enum,
-        INamedTypeSymbol { TypeKind: TypeKind.Delegate } => PrimarySymbolKind.Delegate,
-        IMethodSymbol { MethodKind: MethodKind.Constructor } => PrimarySymbolKind.Constructor,
-        IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } => PrimarySymbolKind.Operator,
-        IMethodSymbol { MethodKind: MethodKind.Conversion } => PrimarySymbolKind.Conversion,
-        IMethodSymbol { MethodKind: MethodKind.Destructor } => PrimarySymbolKind.Method,
-        IMethodSymbol { MethodKind: MethodKind.Ordinary } => PrimarySymbolKind.Method,
-        IMethodSymbol { MethodKind: MethodKind.ExplicitInterfaceImplementation } =>
-            PrimarySymbolKind.Method,
-        IPropertySymbol { IsIndexer: true } => PrimarySymbolKind.Indexer,
-        IPropertySymbol => PrimarySymbolKind.Property,
-        IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } => PrimarySymbolKind.EnumMember,
-        IFieldSymbol => PrimarySymbolKind.Field,
-        IEventSymbol => PrimarySymbolKind.Event,
-        _ => null,
-    };
+        if (symbol is IMethodSymbol
+            {
+                MethodKind: MethodKind.ExplicitInterfaceImplementation,
+            } explicitImplementation)
+        {
+            var implementedKinds = explicitImplementation
+                .ExplicitInterfaceImplementations
+                .Select(ClassifyPrimaryKind)
+                .Where(kind => kind is not null)
+                .Distinct()
+                .ToArray();
+            if (implementedKinds is [{ } implementedKind])
+            {
+                return implementedKind;
+            }
+
+            return explicitImplementation.DeclaringSyntaxReferences
+                .Select(reference => reference.GetSyntax())
+                .Select(syntax => syntax switch
+                {
+                    OperatorDeclarationSyntax => PrimarySymbolKind.Operator,
+                    ConversionOperatorDeclarationSyntax => PrimarySymbolKind.Conversion,
+                    _ => PrimarySymbolKind.Method,
+                })
+                .Distinct()
+                .SingleOrDefault();
+        }
+
+        return symbol switch
+        {
+            INamedTypeSymbol { TypeKind: TypeKind.Class } => PrimarySymbolKind.Class,
+            INamedTypeSymbol { TypeKind: TypeKind.Struct } => PrimarySymbolKind.Struct,
+            INamedTypeSymbol { TypeKind: TypeKind.Interface } => PrimarySymbolKind.Interface,
+            INamedTypeSymbol { TypeKind: TypeKind.Enum } => PrimarySymbolKind.Enum,
+            INamedTypeSymbol { TypeKind: TypeKind.Delegate } => PrimarySymbolKind.Delegate,
+            IMethodSymbol { MethodKind: MethodKind.Constructor } => PrimarySymbolKind.Constructor,
+            IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } =>
+                PrimarySymbolKind.Operator,
+            IMethodSymbol { MethodKind: MethodKind.Conversion } =>
+                PrimarySymbolKind.Conversion,
+            IMethodSymbol { MethodKind: MethodKind.Destructor } => PrimarySymbolKind.Method,
+            IMethodSymbol { MethodKind: MethodKind.Ordinary } => PrimarySymbolKind.Method,
+            IPropertySymbol { IsIndexer: true } => PrimarySymbolKind.Indexer,
+            IPropertySymbol => PrimarySymbolKind.Property,
+            IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } =>
+                PrimarySymbolKind.EnumMember,
+            IFieldSymbol => PrimarySymbolKind.Field,
+            IEventSymbol => PrimarySymbolKind.Event,
+            _ => null,
+        };
+    }
 
     private static ImmutableArray<SymbolTrait> ClassifyTraits(
         ISymbol symbol,
@@ -665,7 +717,7 @@ public sealed class SymbolClassifier
                 .SelectMany(declaration => declaration.DeclaringSyntaxReferences)
                 .Any(reference =>
                     reference.GetSyntax(cancellationToken)
-                        is MethodDeclarationSyntax declaration
+                        is BaseMethodDeclarationSyntax declaration
                     && ContainsDirectYield(declaration)))
             {
                 traits.Add(SymbolTrait.Iterator);
@@ -713,13 +765,20 @@ public sealed class SymbolClassifier
             .ToImmutableArray();
     }
 
-    private static bool IsIndependentSourceCandidate(ISymbol symbol)
+    private static bool IsIndependentSourceCandidate(
+        ISymbol symbol,
+        SymbolDiscoveryIndex discoveryIndex,
+        CancellationToken cancellationToken)
     {
         symbol = CanonicalPartialMember(symbol);
         if (!symbol.Locations.Any(location => location.IsInSource)
             || symbol is IMethodSymbol { MethodKind: MethodKind.StaticConstructor }
             || GetExplicitInterfaceMembers(symbol).Any()
-            || symbol is IPropertySymbol property && IsRecordPositionalProperty(property))
+            || symbol is IPropertySymbol property
+                && discoveryIndex.TryGetRecordPositionalOrdinal(
+                    property,
+                    cancellationToken,
+                    out _))
         {
             return false;
         }
@@ -836,23 +895,6 @@ public sealed class SymbolClassifier
         type.TypeKind == TypeKind.Interface
         || type.TypeKind == TypeKind.Class && !type.IsSealed && !type.IsStatic;
 
-    private static bool IsRecordPositionalProperty(IPropertySymbol property) =>
-        !property.DeclaringSyntaxReferences.Any(reference =>
-            reference.GetSyntax() is PropertyDeclarationSyntax)
-        && GetRecordPositionalParameter(property) is not null;
-
-    private static IParameterSymbol? GetRecordPositionalParameter(IPropertySymbol property) =>
-        property.ContainingType.IsRecord
-            ? property.ContainingType.InstanceConstructors
-                .SelectMany(constructor => constructor.Parameters)
-                .SingleOrDefault(parameter =>
-                    parameter.Name == property.Name
-                    && SymbolEqualityComparer.Default.Equals(parameter.Type, property.Type)
-                    && parameter.DeclaringSyntaxReferences.Any(reference =>
-                        reference.GetSyntax() is ParameterSyntax syntax
-                        && syntax.Parent?.Parent is RecordDeclarationSyntax))
-            : null;
-
     private static bool IsPartialDeclaration(
         ISymbol symbol,
         CancellationToken cancellationToken)
@@ -863,11 +905,11 @@ public sealed class SymbolClassifier
             INamedTypeSymbol => symbol.DeclaringSyntaxReferences.Any(reference =>
                 reference.GetSyntax(cancellationToken) is TypeDeclarationSyntax declaration
                 && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
-            IMethodSymbol { MethodKind: MethodKind.Ordinary } method =>
+            IMethodSymbol method =>
                 method.PartialImplementationPart is not null
                 || method.DeclaringSyntaxReferences.Any(reference =>
                     reference.GetSyntax(cancellationToken)
-                        is MethodDeclarationSyntax declaration
+                        is BaseMethodDeclarationSyntax declaration
                     && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
             IPropertySymbol property =>
                 property.PartialImplementationPart is not null
@@ -891,12 +933,12 @@ public sealed class SymbolClassifier
     }
 
     private static bool ContainsDirectYield(
-        MethodDeclarationSyntax declaration) =>
+        BaseMethodDeclarationSyntax declaration) =>
         declaration.DescendantNodes()
             .OfType<YieldStatementSyntax>()
             .Any(statement => ReferenceEquals(
                 statement.Ancestors().First(node =>
-                    node is MethodDeclarationSyntax
+                    node is BaseMethodDeclarationSyntax
                         or LocalFunctionStatementSyntax
                         or AnonymousFunctionExpressionSyntax),
                 declaration));
@@ -985,7 +1027,7 @@ public sealed class SymbolClassifier
             IMethodSymbol method =>
                 method.PartialImplementationPart is null
                 && method.DeclaringSyntaxReferences.Any(reference =>
-                    reference.GetSyntax() is MethodDeclarationSyntax declaration
+                    reference.GetSyntax() is BaseMethodDeclarationSyntax declaration
                     && declaration.Modifiers.Any(SyntaxKind.PartialKeyword)),
             IPropertySymbol property =>
                 property.PartialImplementationPart is null
@@ -1091,6 +1133,100 @@ public sealed class SymbolClassifier
             .ThenBy(diagnostic => diagnostic.Severity, StringComparer.Ordinal)
             .Take(32)
             .ToImmutableArray();
+
+    private sealed class SymbolDiscoveryIndex(Action? operationObserver)
+    {
+        private readonly Dictionary<ISymbol, TypeDiscoveryData> types =
+            new(SymbolEqualityComparer.Default);
+
+        public bool HasBackingField(
+            ISymbol member,
+            CancellationToken cancellationToken)
+        {
+            operationObserver?.Invoke();
+            return GetTypeData(member.ContainingType, cancellationToken)
+                .BackingFieldOwners
+                .Contains(CanonicalPartialMember(member));
+        }
+
+        public bool TryGetRecordPositionalOrdinal(
+            IPropertySymbol property,
+            CancellationToken cancellationToken,
+            out int ordinal)
+        {
+            operationObserver?.Invoke();
+            return GetTypeData(property.ContainingType, cancellationToken)
+                .RecordPositionalOrdinals
+                .TryGetValue(CanonicalPartialMember(property), out ordinal);
+        }
+
+        private TypeDiscoveryData GetTypeData(
+            INamedTypeSymbol type,
+            CancellationToken cancellationToken)
+        {
+            if (types.TryGetValue(type, out var cached))
+            {
+                return cached;
+            }
+
+            var backingFieldOwners = new HashSet<ISymbol>(
+                SymbolEqualityComparer.Default);
+            foreach (var field in type.GetMembers().OfType<IFieldSymbol>())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                operationObserver?.Invoke();
+                if (field.AssociatedSymbol is { } associated)
+                {
+                    backingFieldOwners.Add(CanonicalPartialMember(associated));
+                }
+            }
+
+            var positionalOrdinals = new Dictionary<ISymbol, int>(
+                SymbolEqualityComparer.Default);
+            if (type.IsRecord)
+            {
+                foreach (var parameter in type.InstanceConstructors
+                    .SelectMany(constructor => constructor.Parameters))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    operationObserver?.Invoke();
+                    if (!parameter.DeclaringSyntaxReferences.Any(reference =>
+                        reference.GetSyntax(cancellationToken) is ParameterSyntax syntax
+                        && syntax.Parent?.Parent is RecordDeclarationSyntax))
+                    {
+                        continue;
+                    }
+
+                    foreach (var property in type.GetMembers(parameter.Name)
+                        .OfType<IPropertySymbol>())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        operationObserver?.Invoke();
+                        if (!property.DeclaringSyntaxReferences.Any(reference =>
+                                reference.GetSyntax(cancellationToken)
+                                    is PropertyDeclarationSyntax)
+                            && SymbolEqualityComparer.Default.Equals(
+                                parameter.Type,
+                                property.Type))
+                        {
+                            positionalOrdinals[
+                                CanonicalPartialMember(property)] = parameter.Ordinal;
+                        }
+                    }
+                }
+            }
+
+            var result = new TypeDiscoveryData(
+                backingFieldOwners,
+                positionalOrdinals);
+            types.Add(type, result);
+            return result;
+        }
+    }
+
+    private sealed record TypeDiscoveryData(
+        HashSet<ISymbol> BackingFieldOwners,
+        Dictionary<ISymbol, int> RecordPositionalOrdinals);
 
     private sealed record ProvenanceResult(
         ClassificationOrigin Origin,

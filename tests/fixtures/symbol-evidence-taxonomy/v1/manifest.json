@@ -3020,12 +3020,12 @@
     {
       "recordType": "UnresolvedClassification",
       "compilationContextRef": "synthetic.v1",
-      "origin": "origin.unknown",
+      "origin": "origin.source",
       "supportStatus": "support.unavailable-context",
       "skipReason": "skip.unavailable.semantic-context",
       "candidateLocator": {
         "repository": {
-          "path": "./fixtures//unavailable.cs",
+          "path": "fixtures/unavailable.cs",
           "span": {
             "start": 1,
             "end": 3
@@ -3127,7 +3127,7 @@
       "observedOrigin": "origin.source",
       "candidateLocator": {
         "repository": {
-          "path": "./fixtures//unavailable.cs",
+          "path": "fixtures/unavailable.cs",
           "span": {
             "start": 1,
             "end": 3

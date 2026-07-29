@@ -127,13 +127,13 @@ public sealed class ClassificationTests
             external,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["ctx-app|P:PublicApi.Value"] =
+                [Frame("ctx-app") + Frame("P:PublicApi.Value")] =
                     "symbol.member.property",
-                ["ctx-app|P:DependencyBase.Value"] =
+                [Frame("ctx-app") + Frame("P:DependencyBase.Value")] =
                     "symbol.member.property",
-                ["ctx-app|M:PublicApi.Call(System.Int32)"] =
+                [Frame("ctx-app") + Frame("M:PublicApi.Call(System.Int32)")] =
                     "symbol.member.method",
-                ["ctx-app|M:IDependency.Call(System.Int32)"] =
+                [Frame("ctx-app") + Frame("M:IDependency.Call(System.Int32)")] =
                     "symbol.member.method",
             });
 
@@ -346,6 +346,25 @@ public sealed class ClassificationTests
                         yield return 1;
                     }
                 }
+
+                public static IEnumerable<int> operator +(
+                    IteratorSurface left,
+                    IteratorSurface right)
+                {
+                    yield return 1;
+                }
+
+                public static IEnumerable<int> operator -(
+                    IteratorSurface left,
+                    IteratorSurface right)
+                {
+                    return Local();
+
+                    static IEnumerable<int> Local()
+                    {
+                        yield return 1;
+                    }
+                }
             }
             """;
         var compilation = Compile("SyntaxOwnership", [Source("SyntaxOwnership.cs", source)]);
@@ -379,8 +398,18 @@ public sealed class ClassificationTests
         var nestedOnly = Assert.Single(set.Targets, target =>
             target.SymbolRef.DocumentationCommentId
                 == "M:IteratorSurface.NestedOnly");
+        var directOperator = Assert.Single(set.Targets, target =>
+            target.SymbolRef.DocumentationCommentId.Contains(
+                "IteratorSurface.op_Addition",
+                StringComparison.Ordinal));
+        var nestedOnlyOperator = Assert.Single(set.Targets, target =>
+            target.SymbolRef.DocumentationCommentId.Contains(
+                "IteratorSurface.op_Subtraction",
+                StringComparison.Ordinal));
         Assert.Contains(SymbolTrait.Iterator, direct.Traits);
         Assert.DoesNotContain(SymbolTrait.Iterator, nestedOnly.Traits);
+        Assert.Contains(SymbolTrait.Iterator, directOperator.Traits);
+        Assert.DoesNotContain(SymbolTrait.Iterator, nestedOnlyOperator.Traits);
     }
 
     [Fact]
@@ -392,11 +421,17 @@ public sealed class ClassificationTests
 
             public partial class PartialSurface
             {
+                public partial PartialSurface(int value);
                 public partial void Method();
                 public partial Task<int> Async();
                 public partial int Value { get; set; }
                 public partial int this[int index] { get; set; }
                 public partial event Action? Changed;
+            }
+
+            internal partial class InternalPartialSurface
+            {
+                internal partial InternalPartialSurface(int value);
             }
             """;
         const string implementations = """
@@ -405,19 +440,29 @@ public sealed class ClassificationTests
 
             public partial class PartialSurface
             {
+                public partial PartialSurface(int value) { }
                 public partial void Method() { }
                 public async partial Task<int> Async()
                 {
                     await Task.Yield();
                     return 1;
                 }
-                public partial int Value { get => 1; set { } }
+                public partial int Value
+                {
+                    get => field;
+                    set => field = value;
+                }
                 public partial int this[int index] { get => index; set { } }
                 public partial event Action? Changed
                 {
                     add { }
                     remove { }
                 }
+            }
+
+            internal partial class InternalPartialSurface
+            {
+                internal partial InternalPartialSurface(int value) { }
             }
             """;
         var repository = Compile(
@@ -460,8 +505,13 @@ public sealed class ClassificationTests
         var mixedSet = AssertSuccess(new SymbolClassifier().Classify(
             mixedSession,
             TargetProfile.ExternalApi));
+        var repositoryAssemblySet = AssertSuccess(
+            new SymbolClassifier().Classify(
+                repositorySession,
+                TargetProfile.AssemblyVisible));
         var memberIds = new[]
         {
+            "M:PartialSurface.#ctor(System.Int32)",
             "M:PartialSurface.Method",
             "M:PartialSurface.Async",
             "P:PartialSurface.Value",
@@ -499,6 +549,88 @@ public sealed class ClassificationTests
             Assert.Single(mixedSet.Targets, target =>
                 target.SymbolRef.DocumentationCommentId
                     == "M:PartialSurface.Async").Traits);
+        Assert.Contains(repositorySet.Components, component =>
+            component.ParentSymbolRef.DocumentationCommentId
+                == "P:PartialSurface.Value"
+            && component.ComponentKind == ComponentKind.BackingField);
+        Assert.DoesNotContain(repositorySet.Targets, target =>
+            target.SymbolRef.DocumentationCommentId.Contains(
+                "InternalPartialSurface",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            SymbolTrait.Partial,
+            Assert.Single(repositoryAssemblySet.Targets, target =>
+                target.SymbolRef.DocumentationCommentId
+                    == "M:InternalPartialSurface.#ctor(System.Int32)").Traits);
+    }
+
+    [Fact]
+    public void ComponentDiscoveryIndexesScaleLinearlyAndObserveCancellation()
+    {
+        static (int Operations, ClassificationOutcome Outcome) Classify(
+            int count,
+            int? cancelAt = null)
+        {
+            var properties = string.Join(
+                Environment.NewLine,
+                Enumerable.Range(0, count)
+                    .Select(index =>
+                        $"public int P{index} {{ get; set; }}"));
+            var parameters = string.Join(
+                ", ",
+                Enumerable.Range(0, count)
+                    .Select(index => $"int P{index}"));
+            var source = $$"""
+                public class Dto
+                {
+                    {{properties}}
+                }
+
+                public record Row({{parameters}});
+                """;
+            var compilation = Compile(
+                $"ComponentScale{count}",
+                [Source($"ComponentScale{count}.cs", source)]);
+            using var session = CreateSession(new ProjectFixture(
+                $"ComponentScale{count}.csproj",
+                $"ctx-component-scale-{count}",
+                LoadedProjectRole.AuditRoot,
+                compilation));
+            using var cancellation = new CancellationTokenSource();
+            var operations = 0;
+            var classifier = new SymbolClassifier(
+                null,
+                null,
+                null,
+                null,
+                () =>
+                {
+                    operations++;
+                    if (operations == cancelAt)
+                    {
+                        cancellation.Cancel();
+                    }
+                });
+            var outcome = classifier.Classify(
+                session,
+                TargetProfile.ExternalApi,
+                cancellation.Token);
+            return (operations, outcome);
+        }
+
+        var small = Classify(32);
+        var large = Classify(64);
+        Assert.Equal(ClassificationRunStatus.Success, small.Outcome.Status);
+        Assert.Equal(ClassificationRunStatus.Success, large.Outcome.Status);
+        Assert.True(
+            large.Operations <= small.Operations * 2 + 16,
+            $"component discovery grew from {small.Operations} to {large.Operations}");
+
+        var cancelled = Classify(64, 10);
+        Assert.Equal(
+            ClassificationRunStatus.Cancelled,
+            cancelled.Outcome.Status);
+        Assert.Null(cancelled.Outcome.ClassificationSet);
     }
 
     [Fact]
@@ -611,6 +743,36 @@ public sealed class ClassificationTests
                 public static Value operator +(Value left, Value right) => left;
                 public static implicit operator int(Value value) => 0;
             }
+
+            public readonly struct ExplicitValue : IValue<ExplicitValue>
+            {
+                static ExplicitValue IValue<ExplicitValue>.operator +(
+                    ExplicitValue left,
+                    ExplicitValue right) => left;
+
+                static implicit IValue<ExplicitValue>.operator int(
+                    ExplicitValue value) => 0;
+            }
+
+            internal interface IInternalValue<TSelf>
+                where TSelf : IInternalValue<TSelf>
+            {
+                static abstract TSelf operator +(TSelf left, TSelf right);
+                static abstract implicit operator int(TSelf value);
+            }
+
+            internal readonly struct InternalExplicitValue
+                : IInternalValue<InternalExplicitValue>
+            {
+                static InternalExplicitValue
+                    IInternalValue<InternalExplicitValue>.operator +(
+                        InternalExplicitValue left,
+                        InternalExplicitValue right) => left;
+
+                static implicit
+                    IInternalValue<InternalExplicitValue>.operator int(
+                        InternalExplicitValue value) => 0;
+            }
             """;
         var compilation = Compile("StaticRelations", [Source("StaticRelations.cs", source)]);
         using var session = CreateSession(new ProjectFixture(
@@ -622,6 +784,9 @@ public sealed class ClassificationTests
         var set = AssertSuccess(new SymbolClassifier().Classify(
             session,
             TargetProfile.ExternalApi));
+        var assemblySet = AssertSuccess(new SymbolClassifier().Classify(
+            session,
+            TargetProfile.AssemblyVisible));
 
         Assert.Contains(set.Relations, relation =>
             relation.RelationKind == RelationKind.ImplicitInterfaceImplementation
@@ -651,6 +816,62 @@ public sealed class ClassificationTests
             && relation.TargetSymbolRef.DocumentationCommentId.Contains(
                 "op_Implicit",
                 StringComparison.Ordinal));
+        var explicitOperator = Assert.Single(set.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "ExplicitValue",
+                StringComparison.Ordinal)
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "op_Addition",
+                StringComparison.Ordinal));
+        var explicitConversion = Assert.Single(set.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "ExplicitValue",
+                StringComparison.Ordinal)
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "op_Implicit",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(set.Targets, target =>
+            target.SymbolRef == explicitOperator.SourceSymbolRef
+            || target.SymbolRef == explicitConversion.SourceSymbolRef);
+        Assert.DoesNotContain(set.Components, component =>
+            component.ParentSymbolRef == explicitOperator.SourceSymbolRef
+            || component.ParentSymbolRef == explicitConversion.SourceSymbolRef);
+        AssertOracleConforms(
+            ClassificationConformanceOracle.Load(FindRepositoryRoot()),
+            TargetProfile.ExternalApi,
+            set,
+            RelationEndpointKinds(set));
+        Assert.DoesNotContain(set.Relations, relation =>
+            relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "InternalExplicitValue",
+                StringComparison.Ordinal));
+        Assert.Single(assemblySet.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "InternalExplicitValue",
+                StringComparison.Ordinal)
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "op_Addition",
+                StringComparison.Ordinal));
+        Assert.Single(assemblySet.Relations, relation =>
+            relation.RelationKind
+                == RelationKind.ExplicitInterfaceImplementation
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "InternalExplicitValue",
+                StringComparison.Ordinal)
+            && relation.SourceSymbolRef.DocumentationCommentId.Contains(
+                "op_Implicit",
+                StringComparison.Ordinal));
+        AssertOracleConforms(
+            ClassificationConformanceOracle.Load(FindRepositoryRoot()),
+            TargetProfile.AssemblyVisible,
+            assemblySet,
+            RelationEndpointKinds(assemblySet));
     }
 
     [Fact]
@@ -941,6 +1162,26 @@ public sealed class ClassificationTests
             "T:Valid",
             Assert.Single(set.Targets)
                 .SymbolRef.DocumentationCommentId);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var emptyCancelled = new ClassificationCandidateBuffer().Normalize(
+            TargetProfile.ExternalApi,
+            cancellationToken: cancellation.Token);
+        Assert.Equal(
+            ClassificationRunStatus.Cancelled,
+            emptyCancelled.Status);
+        Assert.Null(emptyCancelled.ClassificationSet);
+        Assert.Null(emptyCancelled.PrimaryFailure);
+
+        var bufferedCancelled = valid.Normalize(
+            TargetProfile.ExternalApi,
+            cancellationToken: cancellation.Token);
+        Assert.Equal(
+            ClassificationRunStatus.Cancelled,
+            bufferedCancelled.Status);
+        Assert.Null(bufferedCancelled.ClassificationSet);
+        Assert.Null(bufferedCancelled.PrimaryFailure);
     }
 
     [Fact]
@@ -1601,11 +1842,11 @@ public sealed class ClassificationTests
             var endpointKinds = new Dictionary<string, string>(
                 StringComparer.Ordinal)
             {
-                ["ctx-conformance|P:Base.Value"] =
+                [Frame("ctx-conformance") + Frame("P:Base.Value")] =
                     "symbol.member.property",
-                ["ctx-conformance|P:Derived.Value"] =
+                [Frame("ctx-conformance") + Frame("P:Derived.Value")] =
                     "symbol.member.property",
-                ["ctx-conformance|P:IContract.Value"] =
+                [Frame("ctx-conformance") + Frame("P:IContract.Value")] =
                     "symbol.member.property",
             };
 
@@ -1824,14 +2065,278 @@ public sealed class ClassificationTests
             invalidRelation,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["ctx-oracle|T:Source"] = "symbol.type.class",
-                ["ctx-oracle|T:Target"] = "symbol.type.class",
+                [Frame("ctx-oracle") + Frame("T:Source")] = "symbol.type.class",
+                [Frame("ctx-oracle") + Frame("T:Target")] = "symbol.type.class",
             },
             out var relationError));
         Assert.Contains(
             "relation endpoint domain mismatch",
             relationError,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SemanticOracleEnforcesEveryStatusSkipAndOriginBranch()
+    {
+        static JsonElement Target(
+            string kind,
+            string origin,
+            string status,
+            string? skip = null)
+        {
+            var record = new JsonObject
+            {
+                ["recordType"] = "TargetClassification",
+                ["symbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = "ctx-truth-table",
+                    ["documentationCommentId"] = $"T:{kind}.{status}.{origin}",
+                },
+                ["primaryKind"] = kind,
+                ["traits"] = new JsonArray(),
+                ["origin"] = origin,
+                ["supportStatus"] = status,
+            };
+            if (skip is not null)
+            {
+                record["skipReason"] = skip;
+            }
+
+            return Element(record);
+        }
+
+        static JsonElement Component(
+            string kind,
+            string identity,
+            string origin,
+            string status,
+            string? skip = null)
+        {
+            var record = new JsonObject
+            {
+                ["recordType"] = "ComponentClassification",
+                ["parentSymbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = "ctx-truth-table",
+                    ["documentationCommentId"] = "T:Parent",
+                },
+                ["componentKind"] = kind,
+                ["identity"] = identity,
+                ["origin"] = origin,
+                ["supportStatus"] = status,
+            };
+            if (skip is not null)
+            {
+                record["skipReason"] = skip;
+            }
+
+            return Element(record);
+        }
+
+        static JsonElement Unresolved(string origin, string skip) =>
+            Element(new JsonObject
+            {
+                ["recordType"] = "UnresolvedClassification",
+                ["compilationContextRef"] = "ctx-truth-table",
+                ["origin"] = origin,
+                ["supportStatus"] = "support.unavailable-context",
+                ["skipReason"] = skip,
+                ["candidateLocator"] = new JsonObject
+                {
+                    ["synthetic"] = new JsonObject
+                    {
+                        ["fixtureId"] = "truth-table",
+                    },
+                },
+            });
+
+        var oracle = ClassificationConformanceOracle.Load(
+            FindRepositoryRoot());
+        var valid = new[]
+        {
+            Target(
+                "symbol.type.class",
+                "origin.source",
+                "support.supported"),
+            Target(
+                "symbol.unknown",
+                "origin.mixed",
+                "support.unsupported",
+                "skip.unsupported.symbol-kind"),
+            Target(
+                "symbol.type.class",
+                "origin.source",
+                "support.ambiguous",
+                "skip.ambiguous.partial-declaration"),
+            Target(
+                "symbol.type.class",
+                "origin.mixed",
+                "support.ambiguous",
+                "skip.ambiguous.mixed-origin"),
+            Target(
+                "symbol.type.class",
+                "origin.unknown",
+                "support.unavailable-context",
+                "skip.unavailable.generated-provenance"),
+            Target(
+                "symbol.type.class",
+                "origin.mixed",
+                "support.unavailable-context",
+                "skip.unavailable.semantic-context"),
+            Component(
+                "component.parameter",
+                "parameter/0",
+                "origin.source",
+                "support.supported"),
+            Component(
+                "component.unknown",
+                "unknown/0",
+                "origin.mixed",
+                "support.unsupported",
+                "skip.unsupported.component-kind"),
+            Component(
+                "component.parameter",
+                "parameter/0",
+                "origin.mixed",
+                "support.ambiguous",
+                "skip.ambiguous.mixed-origin"),
+            Component(
+                "component.synthesized.implicit-constructor",
+                "synthesized/implicit-constructor",
+                "origin.compiler-synthesized",
+                "support.not-applicable",
+                "skip.not-applicable.synthesized-non-target"),
+            Component(
+                "component.accessor.get",
+                "accessor/get",
+                "origin.source",
+                "support.not-applicable",
+                "skip.not-applicable.non-documentation-component"),
+            Component(
+                "component.parameter",
+                "parameter/0",
+                "origin.unknown",
+                "support.unavailable-context",
+                "skip.unavailable.generated-provenance"),
+            Component(
+                "component.parameter",
+                "parameter/0",
+                "origin.mixed",
+                "support.unavailable-context",
+                "skip.unavailable.semantic-context"),
+            Unresolved(
+                "origin.source",
+                "skip.unavailable.documentation-comment-id"),
+            Unresolved(
+                "origin.unknown",
+                "skip.unavailable.generated-provenance"),
+            Unresolved(
+                "origin.mixed",
+                "skip.unavailable.semantic-context"),
+        };
+        Assert.All(valid, record => Assert.True(oracle.IsValidRecord(record)));
+
+        var invalid = new[]
+        {
+            Target(
+                "symbol.type.class",
+                "origin.mixed",
+                "support.supported"),
+            Target(
+                "symbol.type.class",
+                "origin.source",
+                "support.ambiguous",
+                "skip.ambiguous.mixed-origin"),
+            Target(
+                "symbol.type.class",
+                "origin.source",
+                "support.unavailable-context",
+                "skip.unavailable.generated-provenance"),
+            Target(
+                "symbol.type.class",
+                "origin.unknown",
+                "support.unavailable-context",
+                "skip.unavailable.semantic-context"),
+            Component(
+                "component.accessor.get",
+                "accessor/get",
+                "origin.mixed",
+                "support.not-applicable",
+                "skip.not-applicable.non-documentation-component"),
+            Component(
+                "component.parameter",
+                "parameter/0",
+                "origin.source",
+                "support.ambiguous",
+                "skip.ambiguous.mixed-origin"),
+            Unresolved(
+                "origin.source",
+                "skip.unavailable.generated-provenance"),
+            Unresolved(
+                "origin.unknown",
+                "skip.unavailable.documentation-comment-id"),
+        };
+        Assert.All(invalid, record => Assert.False(oracle.IsValidRecord(record)));
+    }
+
+    [Fact]
+    public void SemanticOraclePreservesTypedLocatorIdentityAndExactPathGrammar()
+    {
+        static JsonElement RepositoryRecord(
+            string path,
+            bool includeSpan)
+        {
+            var repository = new JsonObject
+            {
+                ["path"] = path,
+            };
+            if (includeSpan)
+            {
+                repository["span"] = new JsonObject
+                {
+                    ["start"] = 0,
+                    ["end"] = 0,
+                };
+            }
+
+            return Element(new JsonObject
+            {
+                ["recordType"] = "UnresolvedClassification",
+                ["compilationContextRef"] = "ctx-locator-key",
+                ["origin"] = "origin.source",
+                ["supportStatus"] = "support.unavailable-context",
+                ["skipReason"] = "skip.unavailable.documentation-comment-id",
+                ["candidateLocator"] = new JsonObject
+                {
+                    ["repository"] = repository,
+                },
+            });
+        }
+
+        var oracle = ClassificationConformanceOracle.Load(
+            FindRepositoryRoot());
+        Assert.True(
+            oracle.TryValidateSet(
+                "profile.external-api",
+                [
+                    RepositoryRecord("a|1|0", false),
+                    RepositoryRecord("a", true),
+                ],
+                null,
+                out var identityError),
+            identityError);
+
+        foreach (var invalidPath in new[]
+                 {
+                     @"src\A.cs",
+                     "src//A.cs",
+                     "src/./A.cs",
+                     "src/A.cs/",
+                 })
+        {
+            Assert.False(oracle.IsValidRecord(
+                RepositoryRecord(invalidPath, false)));
+        }
     }
 
     [Fact]
@@ -2319,6 +2824,17 @@ public sealed class ClassificationTests
         documentationCommentId switch
         {
             ['T', ':', ..] => "symbol.type.interface",
+            ['M', ':', ..] when documentationCommentId.Contains(
+                "op_Implicit",
+                StringComparison.Ordinal)
+                || documentationCommentId.Contains(
+                    "op_Explicit",
+                    StringComparison.Ordinal) =>
+                "symbol.member.conversion",
+            ['M', ':', ..] when documentationCommentId.Contains(
+                "op_",
+                StringComparison.Ordinal) =>
+                "symbol.member.operator",
             ['M', ':', ..] => "symbol.member.method",
             ['E', ':', ..] => "symbol.member.event",
             ['P', ':', ..] when documentationCommentId.Contains(
@@ -2331,9 +2847,13 @@ public sealed class ClassificationTests
         };
 
     private static string SymbolKey(SymbolRef symbolRef) =>
-        symbolRef.CompilationContextRef
-        + "|"
-        + symbolRef.DocumentationCommentId;
+        Frame(symbolRef.CompilationContextRef)
+        + Frame(symbolRef.DocumentationCommentId);
+
+    private static string Frame(string value) =>
+        value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + ":"
+        + value;
 
     private static string FindRepositoryRoot()
     {

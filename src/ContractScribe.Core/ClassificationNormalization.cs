@@ -213,6 +213,10 @@ public sealed class ClassificationCandidateBuffer
         {
             return ClassificationOutcome.Failure(diagnostics);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return ClassificationOutcome.Cancelled(diagnostics);
+        }
     }
 }
 
