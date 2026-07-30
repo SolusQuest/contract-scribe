@@ -678,6 +678,50 @@
       "outcome": "reject"
     },
     {
+      "caseId": "unresolved.documentation-and-generated.documentation-selection.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable",
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-and-semantic.documentation-selection.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
       "caseId": "unresolved.documentation-comment-id.compiler-synthesized-origin.reject",
       "conditions": [
         "documentation-comment-id-unavailable"

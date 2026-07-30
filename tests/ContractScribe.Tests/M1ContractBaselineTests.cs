@@ -51,6 +51,8 @@ public sealed class M1ContractBaselineTests
         "target.semantic-context.source-origin.accept",
         "target.semantic-context.tool-generated-origin.accept",
         "target.semantic-context.unknown-origin.reject",
+        "unresolved.documentation-and-generated.documentation-selection.accept",
+        "unresolved.documentation-and-semantic.documentation-selection.accept",
         "unresolved.documentation-comment-id.compiler-synthesized-origin.reject",
         "unresolved.documentation-comment-id.mixed-origin.accept",
         "unresolved.documentation-comment-id.source-generator-origin.accept",
@@ -984,6 +986,18 @@ public sealed class M1ContractBaselineTests
                             "generated-provenance-unavailable",
                             "semantic-context-unavailable"
                         ],
+                        StringComparer.Ordinal)
+                    || conditions.SequenceEqual(
+                        [
+                            "documentation-comment-id-unavailable",
+                            "generated-provenance-unavailable"
+                        ],
+                        StringComparer.Ordinal)
+                    || conditions.SequenceEqual(
+                        [
+                            "documentation-comment-id-unavailable",
+                            "semantic-context-unavailable"
+                        ],
                         StringComparer.Ordinal);
                 var recordOutcome =
                     row["recordOutcome"]?.GetValue<string>();
@@ -1127,17 +1141,17 @@ public sealed class M1ContractBaselineTests
             .GetProperty("skipReason")
             .GetString();
         var expectedSkipReason = conditions.Contains(
-            "generated-provenance-unavailable",
+            "documentation-comment-id-unavailable",
             StringComparer.Ordinal)
-            ? "skip.unavailable.generated-provenance"
+            ? "skip.unavailable.documentation-comment-id"
             : conditions.Contains(
-                "semantic-context-unavailable",
+                "generated-provenance-unavailable",
                 StringComparer.Ordinal)
-                ? "skip.unavailable.semantic-context"
+                ? "skip.unavailable.generated-provenance"
                 : conditions.Contains(
-                    "documentation-comment-id-unavailable",
+                    "semantic-context-unavailable",
                     StringComparer.Ordinal)
-                    ? "skip.unavailable.documentation-comment-id"
+                    ? "skip.unavailable.semantic-context"
                     : null;
         return selectedSkipReason == expectedSkipReason;
     }

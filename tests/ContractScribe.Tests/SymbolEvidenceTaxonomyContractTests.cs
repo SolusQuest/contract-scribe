@@ -1206,17 +1206,17 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             .GetProperty("skipReason")
             .GetString();
         var expectedSkipReason = conditions.Contains(
-            "generated-provenance-unavailable",
+            "documentation-comment-id-unavailable",
             StringComparer.Ordinal)
-            ? "skip.unavailable.generated-provenance"
+            ? "skip.unavailable.documentation-comment-id"
             : conditions.Contains(
-                "semantic-context-unavailable",
+                "generated-provenance-unavailable",
                 StringComparer.Ordinal)
-                ? "skip.unavailable.semantic-context"
+                ? "skip.unavailable.generated-provenance"
                 : conditions.Contains(
-                    "documentation-comment-id-unavailable",
+                    "semantic-context-unavailable",
                     StringComparer.Ordinal)
-                    ? "skip.unavailable.documentation-comment-id"
+                    ? "skip.unavailable.semantic-context"
                     : null;
         return selectedSkipReason == expectedSkipReason;
     }

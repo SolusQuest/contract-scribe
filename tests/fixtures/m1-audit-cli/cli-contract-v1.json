@@ -22,7 +22,7 @@
       "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json": "400233855348335dbf4c64a87d68e0f2c84b8f9f6b85def5c9cf9414d8d446f6",
       "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json": "d19f43581d07af0143fd82c00af1bde7ccdecd6cef64d9208d08614e8765460c",
       "tests/fixtures/audit-result/v1/payloads/policy-conflict.json": "dd061be4adb1be35bd4b9691cc3c3b86e0cb5697bf7dc229ec04a21a693b7c1a",
-      "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json": "3c205a2519d96fbcfb7de65e3176ec2ef7ed4ebf35c63d1aab84a0e10849f36e",
+      "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json": "15c02928c8fed98c0ed6f9f85a167a538baad4c2bdb3f8bc114d7dcf173f968a",
       "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json": "aa1e27792844f3c9830e04f3c4bf7385a9f797f80e0bfc351cb55f831c740a6f",
       "tests/ContractScribe.Tests/AuditResultConformance.cs": "e511b41cf9366655b483ff935bd2ac655e3969ffc340470683279a7915c033d9",
       "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs": "ca94a1dbb769fc48ca0f078ed01f8ceaeb7ed8d001048b0c56a591bbd576d484",
