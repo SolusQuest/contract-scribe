@@ -159,7 +159,7 @@ public sealed class SymbolClassifier
         LoadedRepositorySession session,
         TargetProfile profile,
         CancellationToken cancellationToken = default) =>
-        new(
+        ClassifiedRepositorySession.Bind(
             session ?? throw new ArgumentNullException(nameof(session)),
             Classify(session, profile, cancellationToken));
 

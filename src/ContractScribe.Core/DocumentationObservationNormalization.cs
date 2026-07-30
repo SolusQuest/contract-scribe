@@ -4,6 +4,16 @@ using System.Text;
 
 namespace ContractScribe.Core;
 
+internal enum DocumentationObservationNormalizationStage
+{
+    ExpectedSubjectConstruction,
+    CandidateSorting,
+    DeclarationValidation,
+    Hashing,
+    Derivation,
+    TerminalConstruction,
+}
+
 public sealed class DocumentationDeclarationInput
 {
     internal DocumentationDeclarationInput(
@@ -131,13 +141,22 @@ public static class DocumentationObservationInput
 public sealed class DocumentationObservationCandidateBuffer
 {
     private readonly ClassificationSet classificationSet;
+    private readonly Action<DocumentationObservationNormalizationStage>? stageObserver;
     private readonly List<Candidate> candidates = [];
 
     public DocumentationObservationCandidateBuffer(
         ClassificationSet classificationSet)
+        : this(classificationSet, null)
+    {
+    }
+
+    internal DocumentationObservationCandidateBuffer(
+        ClassificationSet classificationSet,
+        Action<DocumentationObservationNormalizationStage>? stageObserver)
     {
         this.classificationSet =
             classificationSet ?? throw new ArgumentNullException(nameof(classificationSet));
+        this.stageObserver = stageObserver;
     }
 
     public void AddTarget(
@@ -173,23 +192,36 @@ public sealed class DocumentationObservationCandidateBuffer
     {
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            Observe(
+                DocumentationObservationNormalizationStage.ExpectedSubjectConstruction,
+                cancellationToken);
             var expected = ExpectedSubjects(classificationSet);
             var targets = classificationSet.Targets
                 .Where(target => target.SupportStatus == SupportStatus.Supported)
                 .ToDictionary(target => target.SymbolRef);
+            cancellationToken.ThrowIfCancellationRequested();
             var normalized = new List<DocumentationObservation>();
             var seen = new HashSet<DocumentationObservationSubject>();
-            foreach (var candidate in candidates
-                .OrderBy(candidate => SubjectKey(candidate.Subject), StringComparer.Ordinal))
+            Observe(
+                DocumentationObservationNormalizationStage.CandidateSorting,
+                cancellationToken);
+            var orderedCandidates = candidates
+                .OrderBy(candidate => SubjectKey(candidate.Subject), StringComparer.Ordinal)
+                .ToArray();
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var candidate in orderedCandidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!expected.Contains(candidate.Subject)
                     || !seen.Add(candidate.Subject)
                     || !targets.TryGetValue(
-                        candidate.Subject.ParentSymbolRef,
-                        out var target)
-                    || !TryNormalize(candidate, target, out var observation))
+                         candidate.Subject.ParentSymbolRef,
+                         out var target)
+                    || !TryNormalize(
+                        candidate,
+                        target,
+                        cancellationToken,
+                        out var observation))
                 {
                     return DocumentationObservationOutcome.Failure(diagnostics);
                 }
@@ -202,11 +234,14 @@ public sealed class DocumentationObservationCandidateBuffer
                 return DocumentationObservationOutcome.Failure(diagnostics);
             }
 
+            Observe(
+                DocumentationObservationNormalizationStage.TerminalConstruction,
+                cancellationToken);
             return DocumentationObservationOutcome.Success(
                 new DocumentationObservationSet(normalized.ToImmutableArray()),
                 diagnostics);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return DocumentationObservationOutcome.Cancelled(diagnostics);
         }
@@ -249,9 +284,10 @@ public sealed class DocumentationObservationCandidateBuffer
             or ComponentKind.Return
             or ComponentKind.Value;
 
-    private static bool TryNormalize(
+    private bool TryNormalize(
         Candidate candidate,
         TargetClassification target,
+        CancellationToken cancellationToken,
         out DocumentationObservation? observation)
     {
         observation = null;
@@ -278,9 +314,18 @@ public sealed class DocumentationObservationCandidateBuffer
         var declarationsByLocation = new Dictionary<
             string,
             DocumentationDeclarationInput>(StringComparer.Ordinal);
-        foreach (var declaration in candidate.Declarations
-            .OrderBy(DeclarationKey, StringComparer.Ordinal))
+        Observe(
+            DocumentationObservationNormalizationStage.CandidateSorting,
+            cancellationToken);
+        var orderedDeclarations = candidate.Declarations
+            .OrderBy(DeclarationKey, StringComparer.Ordinal)
+            .ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var declaration in orderedDeclarations)
         {
+            Observe(
+                DocumentationObservationNormalizationStage.DeclarationValidation,
+                cancellationToken);
             if (!Validate(candidate.Subject, target, declaration))
             {
                 return false;
@@ -304,21 +349,30 @@ public sealed class DocumentationObservationCandidateBuffer
 
             declarationsById.Add(declaration.DeclarationId, declaration);
             declarationsByLocation.Add(locationKey, declaration);
+            Observe(
+                DocumentationObservationNormalizationStage.Hashing,
+                cancellationToken);
+            var declarationSha256 = Sha256(declaration.DeclarationText);
+            cancellationToken.ThrowIfCancellationRequested();
+            var leadingTriviaSha256 = Sha256(declaration.LeadingTriviaText);
+            cancellationToken.ThrowIfCancellationRequested();
+            var documentationSha256 = declaration.DocumentationText is null
+                ? null
+                : Sha256(declaration.DocumentationText);
+            cancellationToken.ThrowIfCancellationRequested();
             facts.Add(new DocumentationDeclarationFact(
                 declaration.DeclarationId,
                 declaration.AuthorityRole,
                 declaration.Source,
                 declaration.DeclarationSpan,
                 declaration.DeclarationText,
-                Sha256(declaration.DeclarationText),
+                declarationSha256,
                 declaration.LeadingTriviaSpan,
                 declaration.LeadingTriviaText,
-                Sha256(declaration.LeadingTriviaText),
+                leadingTriviaSha256,
                 declaration.DocumentationSpan,
                 declaration.DocumentationText,
-                declaration.DocumentationText is null
-                    ? null
-                    : Sha256(declaration.DocumentationText),
+                documentationSha256,
                 declaration.BlockState,
                 declaration.ParentSubstantive,
                 declaration.ComponentLocalName,
@@ -329,11 +383,15 @@ public sealed class DocumentationObservationCandidateBuffer
             .Select(fact => fact.AuthorityRole)
             .Distinct()
             .ToArray();
-        if (authorityRoles.Length > 1)
+        if (authorityRoles.Length != 1
+            || !HasLegalAuthorityCardinality(authorityRoles[0], facts.Count))
         {
             return false;
         }
 
+        Observe(
+            DocumentationObservationNormalizationStage.Derivation,
+            cancellationToken);
         var isComponent = candidate.Subject.ComponentKind is not null;
         var positive = isComponent
             ? facts.Any(fact =>
@@ -357,8 +415,7 @@ public sealed class DocumentationObservationCandidateBuffer
             completeness = DocumentationAuthorityCompleteness.Incomplete;
             cause = DocumentationUnavailableCause.SourceUnavailable;
         }
-        else if (isComponent
-            && facts.Any(fact =>
+        else if (facts.Any(fact =>
                 fact.BlockState == DocumentationBlockState.Malformed))
         {
             value = DocumentationObservationValue.Unavailable;
@@ -378,6 +435,7 @@ public sealed class DocumentationObservationCandidateBuffer
             completeness,
             cause,
             facts.ToImmutableArray());
+        cancellationToken.ThrowIfCancellationRequested();
         return true;
     }
 
@@ -390,6 +448,7 @@ public sealed class DocumentationObservationCandidateBuffer
             || !Enum.IsDefined(declaration.AuthorityRole)
             || !IsLegalRole(target, declaration.AuthorityRole)
             || !Enum.IsDefined(declaration.BlockState)
+            || !SourceMatchesOrigin(target.Origin, declaration.Source.Kind)
             || !ValidateSource(declaration.Source)
             || !ValidateSpan(declaration.DeclarationSpan, declaration.DeclarationText)
             || !ValidateSpan(declaration.LeadingTriviaSpan, declaration.LeadingTriviaText)
@@ -397,6 +456,11 @@ public sealed class DocumentationObservationCandidateBuffer
                 != declaration.DeclarationSpan.Start
             || declaration.LeadingTriviaSpan.End
                 > declaration.DeclarationSpan.End
+            || !TextMatchesContainingSpan(
+                declaration.DeclarationSpan,
+                declaration.DeclarationText,
+                declaration.LeadingTriviaSpan,
+                declaration.LeadingTriviaText)
             || (declaration.DocumentationSpan is null)
                 != (declaration.DocumentationText is null)
             || declaration.DocumentationSpan is { } documentationSpan
@@ -406,7 +470,17 @@ public sealed class DocumentationObservationCandidateBuffer
                     || documentationSpan.Start
                         < declaration.LeadingTriviaSpan.Start
                     || documentationSpan.End
-                        > declaration.LeadingTriviaSpan.End)
+                        > declaration.LeadingTriviaSpan.End
+                    || !TextMatchesContainingSpan(
+                        declaration.DeclarationSpan,
+                        declaration.DeclarationText,
+                        documentationSpan,
+                        declaration.DocumentationText!)
+                    || !TextMatchesContainingSpan(
+                        declaration.LeadingTriviaSpan,
+                        declaration.LeadingTriviaText,
+                        documentationSpan,
+                        declaration.DocumentationText!))
             || declaration.BlockState == DocumentationBlockState.NoBlock
                 && declaration.DocumentationText is not null
             || declaration.BlockState != DocumentationBlockState.NoBlock
@@ -473,6 +547,34 @@ public sealed class DocumentationObservationCandidateBuffer
         };
     }
 
+    private static bool HasLegalAuthorityCardinality(
+        DocumentationAuthorityRole role,
+        int count) =>
+        role switch
+        {
+            DocumentationAuthorityRole.PartialTypePart => count >= 1,
+            DocumentationAuthorityRole.Ordinary
+                or DocumentationAuthorityRole.PartialMemberImplementing
+                or DocumentationAuthorityRole.PartialMemberDefiningFallback =>
+                count == 1,
+            _ => false,
+        };
+
+    private static bool SourceMatchesOrigin(
+        ClassificationOrigin origin,
+        DocumentationSourceKind sourceKind) =>
+        (origin, sourceKind) switch
+        {
+            (ClassificationOrigin.Source, DocumentationSourceKind.Repository) => true,
+            (
+                ClassificationOrigin.SourceGenerator,
+                DocumentationSourceKind.SourceGenerator) => true,
+            (
+                ClassificationOrigin.ToolGenerated,
+                DocumentationSourceKind.ToolGenerated) => true,
+            _ => false,
+        };
+
     private static bool ValidateSource(DocumentationSourceIdentity source)
     {
         if (!IsCanonicalRepositoryPath(source.ProjectIdentity)
@@ -504,14 +606,23 @@ public sealed class DocumentationObservationCandidateBuffer
         };
     }
 
-    private static bool IsCanonicalRepositoryPath(string path) =>
-        !string.IsNullOrWhiteSpace(path)
-        && !Path.IsPathRooted(path)
-        && !path.Contains('\\')
-        && path.All(character => !char.IsControl(character))
-        && path.Split('/').All(segment =>
+    private static bool IsCanonicalRepositoryPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path[0] is '/' or '\\'
+            || path.Contains('\\')
+            || path.All(character => !char.IsControl(character)) is false
+            || path.Length >= 2
+                && path[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
+                && path[1] == ':')
+        {
+            return false;
+        }
+
+        return path.Split('/').All(segment =>
             segment.Length > 0
             && segment is not "." and not "..");
+    }
 
     private static bool IsLocalName(string? value) =>
         !string.IsNullOrWhiteSpace(value)
@@ -532,6 +643,20 @@ public sealed class DocumentationObservationCandidateBuffer
         span.Start >= 0
         && span.End >= span.Start
         && span.End - span.Start == text.Length;
+
+    private static bool TextMatchesContainingSpan(
+        Utf16Span containingSpan,
+        string containingText,
+        Utf16Span nestedSpan,
+        string nestedText)
+    {
+        var offset = nestedSpan.Start - containingSpan.Start;
+        return offset >= 0
+            && nestedSpan.End <= containingSpan.End
+            && offset <= containingText.Length - nestedText.Length
+            && containingText.AsSpan(offset, nestedText.Length)
+                .SequenceEqual(nestedText.AsSpan());
+    }
 
     private static string Sha256(string value)
     {
@@ -603,6 +728,14 @@ public sealed class DocumentationObservationCandidateBuffer
             right.ComponentLocalName,
             StringComparison.Ordinal)
         && left.ComponentMatch == right.ComponentMatch;
+
+    private void Observe(
+        DocumentationObservationNormalizationStage stage,
+        CancellationToken cancellationToken)
+    {
+        stageObserver?.Invoke(stage);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
 
     private sealed record Candidate(
         DocumentationObservationSubject Subject,

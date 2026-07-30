@@ -101,23 +101,32 @@ public sealed class DocumentationObservationNormalizationTests
     [Fact]
     public void ComponentPositiveWinsOverSeparateMalformedIncompleteAuthority()
     {
-        var (set, target, component) = Classification(ComponentKind.Parameter);
+        var (set, target, component) = Classification(
+            ComponentKind.TypeParameter,
+            PrimarySymbolKind.Class,
+            [SymbolTrait.Generic, SymbolTrait.Partial]);
         var buffer = new DocumentationObservationCandidateBuffer(set);
-        buffer.AddTarget(target, true, [Declaration()]);
+        buffer.AddTarget(
+            target,
+            true,
+            [Declaration(
+                authorityRole: DocumentationAuthorityRole.PartialTypePart)]);
         buffer.AddComponent(
             component!,
             false,
             [
                 Declaration(
                     DocumentationBlockState.WellFormed,
-                    componentLocalName: "value",
-                    componentMatch: DocumentationComponentMatch.Present),
+                    componentLocalName: "T",
+                    componentMatch: DocumentationComponentMatch.Present,
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
                 Declaration(
                     DocumentationBlockState.Malformed,
-                    componentLocalName: "value",
+                    componentLocalName: "T",
                     componentMatch: null,
                     repositoryPath: "src/Other.cs",
-                    declarationIdCharacter: 'e'),
+                    declarationIdCharacter: 'e',
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
             ]);
 
         var observation = AssertSuccess(buffer.Normalize(), component: true);
@@ -193,22 +202,38 @@ public sealed class DocumentationObservationNormalizationTests
         var (set, target, _) = Classification(componentKind: null);
         var buffer = new DocumentationObservationCandidateBuffer(set);
         buffer.AddTarget(target, true, [Declaration()]);
-        var diagnostics = Enumerable.Range(0, 40)
+        var validDiagnostics = Enum
+            .GetValues<DocumentationObservationDiagnosticStage>()
+            .SelectMany(stage =>
+                Enum.GetValues<DocumentationObservationDiagnosticCode>()
+                    .SelectMany(code =>
+                        Enum.GetValues<DocumentationObservationDiagnosticSeverity>()
+                            .Select(severity =>
+                                new DocumentationObservationDiagnostic(
+                                    stage,
+                                    code,
+                                    severity))))
+            .Take(40)
+            .ToArray();
+        var diagnostics = validDiagnostics
             .Reverse()
-            .Select(index => new DocumentationObservationDiagnostic(
-                "stage",
-                $"code-{index:D2}",
-                "warning"))
+            .Append(validDiagnostics[0])
             .Append(new DocumentationObservationDiagnostic(
-                "stage",
-                "code-00",
-                "warning"));
+                (DocumentationObservationDiagnosticStage)int.MaxValue,
+                DocumentationObservationDiagnosticCode.Unrepresentable,
+                DocumentationObservationDiagnosticSeverity.Error));
 
         var outcome = buffer.Normalize(diagnostics);
         Assert.Equal(32, outcome.Diagnostics.Length);
         Assert.Equal(
-            outcome.Diagnostics.OrderBy(item => item.Code, StringComparer.Ordinal),
+            outcome.Diagnostics
+                .OrderBy(item => item.Stage)
+                .ThenBy(item => item.Code)
+                .ThenBy(item => item.Severity),
             outcome.Diagnostics);
+        Assert.DoesNotContain(
+            outcome.Diagnostics,
+            item => !Enum.IsDefined(item.Stage));
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -282,6 +307,238 @@ public sealed class DocumentationObservationNormalizationTests
         Assert.Null(outcome.ObservationSet);
     }
 
+    [Fact]
+    public void CompleteNonSubstantiveMalformedTargetIsUnavailable()
+    {
+        var (set, target, _) = Classification(componentKind: null);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(
+            target,
+            true,
+            [Declaration(
+                blockState: DocumentationBlockState.Malformed,
+                parentSubstantive: false)]);
+
+        var observation = AssertSuccess(buffer.Normalize());
+
+        Assert.Equal(DocumentationObservationValue.Unavailable, observation.Value);
+        Assert.Equal(
+            DocumentationUnavailableCause.MalformedXml,
+            observation.UnavailableCause);
+    }
+
+    [Fact]
+    public void ParentPositiveWinsOverSeparateMalformedAuthority()
+    {
+        var (set, target, _) = Classification(
+            componentKind: null,
+            primaryKind: PrimarySymbolKind.Class,
+            traits: [SymbolTrait.Partial]);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(
+            target,
+            true,
+            [
+                Declaration(
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
+                Declaration(
+                    blockState: DocumentationBlockState.Malformed,
+                    parentSubstantive: false,
+                    repositoryPath: "src/Other.cs",
+                    declarationIdCharacter: 'e',
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
+            ]);
+
+        var observation = AssertSuccess(buffer.Normalize());
+
+        Assert.Equal(DocumentationObservationValue.Present, observation.Value);
+        Assert.Equal(
+            DocumentationAuthorityCompleteness.Complete,
+            observation.Completeness);
+    }
+
+    [Theory]
+    [InlineData(DocumentationAuthorityRole.Ordinary, false)]
+    [InlineData(DocumentationAuthorityRole.PartialMemberImplementing, true)]
+    [InlineData(DocumentationAuthorityRole.PartialMemberDefiningFallback, true)]
+    public void SingularAuthorityModesRejectMultipleDistinctFacts(
+        DocumentationAuthorityRole role,
+        bool partial)
+    {
+        var (set, target, _) = Classification(
+            componentKind: null,
+            traits: partial ? [SymbolTrait.Partial] : []);
+        var valid = new DocumentationObservationCandidateBuffer(set);
+        valid.AddTarget(target, true, [Declaration(authorityRole: role)]);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Success,
+            valid.Normalize().Status);
+
+        var invalid = new DocumentationObservationCandidateBuffer(set);
+        invalid.AddTarget(
+            target,
+            true,
+            [
+                Declaration(authorityRole: role),
+                Declaration(
+                    repositoryPath: "src/Other.cs",
+                    declarationIdCharacter: 'e',
+                    authorityRole: role),
+            ]);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            invalid.Normalize().Status);
+    }
+
+    [Fact]
+    public void PartialTypeAuthorityAcceptsOneOrMoreFactsButNotAnEmptyCompleteUniverse()
+    {
+        var (set, target, _) = Classification(
+            componentKind: null,
+            primaryKind: PrimarySymbolKind.Class,
+            traits: [SymbolTrait.Partial]);
+        foreach (var facts in new[]
+        {
+            new[]
+            {
+                Declaration(
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
+            },
+            new[]
+            {
+                Declaration(
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
+                Declaration(
+                    repositoryPath: "src/Other.cs",
+                    declarationIdCharacter: 'e',
+                    authorityRole: DocumentationAuthorityRole.PartialTypePart),
+            },
+        })
+        {
+            var valid = new DocumentationObservationCandidateBuffer(set);
+            valid.AddTarget(target, true, facts);
+            Assert.Equal(
+                DocumentationObservationRunStatus.Success,
+                valid.Normalize().Status);
+        }
+
+        var empty = new DocumentationObservationCandidateBuffer(set);
+        empty.AddTarget(target, true, []);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            empty.Normalize().Status);
+    }
+
+    [Theory]
+    [InlineData("/rooted.cs")]
+    [InlineData("\\rooted.cs")]
+    [InlineData("C:relative.cs")]
+    [InlineData("C:/rooted.cs")]
+    [InlineData("//server/share.cs")]
+    [InlineData("src/../secret.cs")]
+    [InlineData("src//double.cs")]
+    public void RepositoryPathsUsePlatformIndependentLexicalValidation(
+        string repositoryPath)
+    {
+        var (set, target, _) = Classification(componentKind: null);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(target, true, [Declaration(repositoryPath: repositoryPath)]);
+
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            buffer.Normalize().Status);
+    }
+
+    [Fact]
+    public void NonDriveColonInARepositorySegmentRemainsValid()
+    {
+        var (set, target, _) = Classification(componentKind: null);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(
+            target,
+            true,
+            [Declaration(repositoryPath: "src/schema:generated/Fixture.cs")]);
+
+        Assert.Equal(
+            DocumentationObservationRunStatus.Success,
+            buffer.Normalize().Status);
+    }
+
+    [Theory]
+    [InlineData(ClassificationOrigin.Source, DocumentationSourceKind.SourceGenerator)]
+    [InlineData(ClassificationOrigin.Source, DocumentationSourceKind.ToolGenerated)]
+    [InlineData(ClassificationOrigin.SourceGenerator, DocumentationSourceKind.Repository)]
+    [InlineData(ClassificationOrigin.SourceGenerator, DocumentationSourceKind.ToolGenerated)]
+    [InlineData(ClassificationOrigin.ToolGenerated, DocumentationSourceKind.Repository)]
+    [InlineData(ClassificationOrigin.ToolGenerated, DocumentationSourceKind.SourceGenerator)]
+    public void SourceKindMustMatchTheClassifiedOrigin(
+        ClassificationOrigin origin,
+        DocumentationSourceKind sourceKind)
+    {
+        var (set, target, _) = Classification(
+            componentKind: null,
+            origin: origin);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(
+            target,
+            true,
+            [sourceKind == DocumentationSourceKind.Repository
+                ? Declaration()
+                : GeneratedDeclaration(sourceKind)]);
+
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            buffer.Normalize().Status);
+    }
+
+    [Fact]
+    public void NestedDeclarationRegionsMustContainTheExactSuppliedText()
+    {
+        var (set, target, _) = Classification(componentKind: null);
+        var inconsistentLeading = DocumentationObservationInput.RepositoryDeclaration(
+            "decl." + new string('d', 64),
+            DocumentationAuthorityRole.Ordinary,
+            "project." + new string('b', 64),
+            "src/Fixture.cs",
+            new string('c', 64),
+            DocumentationObservationInput.Span(0, 7),
+            "ABCbody",
+            DocumentationObservationInput.Span(0, 3),
+            "XYZ",
+            null,
+            null,
+            DocumentationBlockState.NoBlock,
+            false);
+        var inconsistentDocumentation =
+            DocumentationObservationInput.RepositoryDeclaration(
+                "decl." + new string('e', 64),
+                DocumentationAuthorityRole.Ordinary,
+                "project." + new string('b', 64),
+                "src/Fixture.cs",
+                new string('c', 64),
+                DocumentationObservationInput.Span(0, 12),
+                "/// abc\nbody",
+                DocumentationObservationInput.Span(0, 8),
+                "/// abc\n",
+                DocumentationObservationInput.Span(0, 8),
+                "/// xyz\n",
+                DocumentationBlockState.WellFormed,
+                true);
+
+        foreach (var declaration in new[]
+        {
+            inconsistentLeading,
+            inconsistentDocumentation,
+        })
+        {
+            var buffer = new DocumentationObservationCandidateBuffer(set);
+            buffer.AddTarget(target, true, [declaration]);
+            Assert.Equal(
+                DocumentationObservationRunStatus.Failure,
+                buffer.Normalize().Status);
+        }
+    }
+
     private static DocumentationObservation AssertSuccess(
         DocumentationObservationOutcome outcome,
         bool component = false)
@@ -299,16 +556,33 @@ public sealed class DocumentationObservationNormalizationTests
         ClassificationSet Set,
         TargetClassification Target,
         ComponentClassification? Component) Classification(
-        ComponentKind? componentKind)
+        ComponentKind? componentKind,
+        PrimarySymbolKind primaryKind = PrimarySymbolKind.Method,
+        IEnumerable<SymbolTrait>? traits = null,
+        ClassificationOrigin origin = ClassificationOrigin.Source)
     {
         var buffer = new ClassificationCandidateBuffer();
+        CandidateLocator[] locators = origin switch
+        {
+            ClassificationOrigin.Source =>
+                [ClassificationInput.RepositoryLocator("src/Fixture.cs")],
+            ClassificationOrigin.SourceGenerator =>
+                [ClassificationInput.GeneratedSourceLocator(
+                    "sgp." + new string('1', 64),
+                    "sgo." + new string('2', 64))],
+            ClassificationOrigin.ToolGenerated =>
+                [ClassificationInput.ToolGeneratedLocator(
+                    "tgp." + new string('3', 64),
+                    "tgo." + new string('4', 64))],
+            _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+        };
         buffer.AddTarget(
             "context." + new string('a', 64),
             "M:Fixture.Run(System.String)",
-            PrimarySymbolKind.Method,
-            ImmutableArray<SymbolTrait>.Empty,
-            ClassificationOrigin.Source,
-            [ClassificationInput.RepositoryLocator("src/Fixture.cs")]);
+            primaryKind,
+            traits?.ToImmutableArray() ?? [],
+            origin,
+            locators);
         if (componentKind is { } kind)
         {
             buffer.AddComponent(
@@ -323,7 +597,7 @@ public sealed class DocumentationObservationNormalizationTests
                     ComponentKind.Value => "value",
                     _ => "unsupported",
                 },
-                ClassificationOrigin.Source);
+                origin);
         }
 
         var outcome = buffer.Normalize(TargetProfile.ExternalApi);
@@ -341,7 +615,9 @@ public sealed class DocumentationObservationNormalizationTests
         string? componentLocalName = null,
         DocumentationComponentMatch? componentMatch = null,
         string repositoryPath = "src/Fixture.cs",
-        char declarationIdCharacter = 'd')
+        char declarationIdCharacter = 'd',
+        DocumentationAuthorityRole authorityRole =
+            DocumentationAuthorityRole.Ordinary)
     {
         const string bodyText = "public void Run(string value) { }";
         var leadingText = documentationText ?? string.Empty;
@@ -351,7 +627,7 @@ public sealed class DocumentationObservationNormalizationTests
             : DocumentationObservationInput.Span(0, documentationText.Length);
         return DocumentationObservationInput.RepositoryDeclaration(
             "decl." + new string(declarationIdCharacter, 64),
-            DocumentationAuthorityRole.Ordinary,
+            authorityRole,
             "project." + new string('b', 64),
             repositoryPath,
             new string('c', 64),
@@ -365,5 +641,33 @@ public sealed class DocumentationObservationNormalizationTests
             parentSubstantive,
             componentLocalName,
             componentMatch);
+    }
+
+    private static DocumentationDeclarationInput GeneratedDeclaration(
+        DocumentationSourceKind sourceKind)
+    {
+        const string documentationText = "/// <summary>Documented.</summary>\n";
+        const string bodyText = "public void Run(string value) { }";
+        var declarationText = documentationText + bodyText;
+        return DocumentationObservationInput.GeneratedDeclaration(
+            "decl." + new string('d', 64),
+            DocumentationAuthorityRole.Ordinary,
+            "project." + new string('b', 64),
+            sourceKind,
+            sourceKind == DocumentationSourceKind.SourceGenerator
+                ? "sgp." + new string('1', 64)
+                : "tgp." + new string('3', 64),
+            sourceKind == DocumentationSourceKind.SourceGenerator
+                ? "sgo." + new string('2', 64)
+                : "tgo." + new string('4', 64),
+            new string('c', 64),
+            DocumentationObservationInput.Span(0, declarationText.Length),
+            declarationText,
+            DocumentationObservationInput.Span(0, documentationText.Length),
+            documentationText,
+            DocumentationObservationInput.Span(0, documentationText.Length),
+            documentationText,
+            DocumentationBlockState.WellFormed,
+            true);
     }
 }

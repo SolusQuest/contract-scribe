@@ -59,11 +59,44 @@ public enum DocumentationSourceKind
     ToolGenerated,
 }
 
+public enum DocumentationObservationFailureStage
+{
+    Observation,
+}
+
+public enum DocumentationObservationFailureCode
+{
+    Unrepresentable,
+}
+
+public enum DocumentationObservationDiagnosticStage
+{
+    ContextBinding,
+    SymbolBinding,
+    DeclarationEnumeration,
+    SourceAccess,
+    TriviaExtraction,
+    XmlAnalysis,
+    Normalization,
+}
+
+public enum DocumentationObservationDiagnosticCode
+{
+    Unrepresentable,
+    SourceUnavailable,
+    InvalidSourceIdentity,
+    ConflictingAuthority,
+}
+
+public enum DocumentationObservationDiagnosticSeverity
+{
+    Info,
+    Warning,
+    Error,
+}
+
 public static class DocumentationObservationVocabulary
 {
-    public const string UnrepresentableRunFailure =
-        "run.documentation-observation.unrepresentable";
-
     public static string GetId(DocumentationObservationValue value) =>
         value switch
         {
@@ -387,12 +420,14 @@ public sealed record DocumentationObservationSet
     public ImmutableArray<DocumentationObservation> Observations { get; }
 }
 
-public sealed record DocumentationObservationFailure(string Stage, string Code);
+public sealed record DocumentationObservationFailure(
+    DocumentationObservationFailureStage Stage,
+    DocumentationObservationFailureCode Code);
 
 public sealed record DocumentationObservationDiagnostic(
-    string Stage,
-    string Code,
-    string Severity);
+    DocumentationObservationDiagnosticStage Stage,
+    DocumentationObservationDiagnosticCode Code,
+    DocumentationObservationDiagnosticSeverity Severity);
 
 public sealed class DocumentationObservationOutcome
 {
@@ -431,8 +466,8 @@ public sealed class DocumentationObservationOutcome
             DocumentationObservationRunStatus.Failure,
             null,
             new DocumentationObservationFailure(
-                "documentation-observation-normalization",
-                DocumentationObservationVocabulary.UnrepresentableRunFailure),
+                DocumentationObservationFailureStage.Observation,
+                DocumentationObservationFailureCode.Unrepresentable),
             NormalizeDiagnostics(diagnostics));
 
     public static DocumentationObservationOutcome Cancelled(
@@ -446,10 +481,14 @@ public sealed class DocumentationObservationOutcome
     private static ImmutableArray<DocumentationObservationDiagnostic> NormalizeDiagnostics(
         IEnumerable<DocumentationObservationDiagnostic>? diagnostics) =>
         diagnostics?
+            .Where(diagnostic =>
+                Enum.IsDefined(diagnostic.Stage)
+                && Enum.IsDefined(diagnostic.Code)
+                && Enum.IsDefined(diagnostic.Severity))
             .Distinct()
-            .OrderBy(diagnostic => diagnostic.Stage, StringComparer.Ordinal)
-            .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)
-            .ThenBy(diagnostic => diagnostic.Severity, StringComparer.Ordinal)
+            .OrderBy(diagnostic => diagnostic.Stage)
+            .ThenBy(diagnostic => diagnostic.Code)
+            .ThenBy(diagnostic => diagnostic.Severity)
             .Take(32)
             .ToImmutableArray()
         ?? [];

@@ -8,16 +8,44 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.Roslyn;
 
+internal enum DocumentationObservationStage
+{
+    ContextBinding,
+    SymbolBinding,
+    DeclarationEnumeration,
+    SourceAccess,
+    TriviaExtraction,
+    XmlAnalysis,
+    CoreNormalization,
+    TerminalConstruction,
+}
+
 public sealed class DocumentationObserver
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private readonly Func<string, Compilation, ImmutableArray<ISymbol>> symbolResolver;
+    private readonly Action<DocumentationObservationStage>? stageObserver;
+
+    public DocumentationObserver()
+        : this(null, null)
+    {
+    }
+
+    internal DocumentationObserver(
+        Func<string, Compilation, ImmutableArray<ISymbol>>? symbolResolver,
+        Action<DocumentationObservationStage>? stageObserver)
+    {
+        this.symbolResolver = symbolResolver ?? ResolveSymbols;
+        this.stageObserver = stageObserver;
+    }
 
     public DocumentationObservationOutcome Observe(
         ClassifiedRepositorySession session,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
-        if (session.Classification.Status != ClassificationRunStatus.Success
+        if (!session.IsBoundToClassificationSession
+            || session.Classification.Status != ClassificationRunStatus.Success
             || session.Classification.ClassificationSet is not { } classifications)
         {
             return DocumentationObservationOutcome.Failure();
@@ -25,7 +53,9 @@ public sealed class DocumentationObserver
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ObserveStage(
+                DocumentationObservationStage.ContextBinding,
+                cancellationToken);
             var projects = session.RepositorySession.Projects
                 .GroupBy(project => project.CompilationContextRef, StringComparer.Ordinal)
                 .ToDictionary(
@@ -34,9 +64,11 @@ public sealed class DocumentationObserver
                     StringComparer.Ordinal);
             var cache = new ObserverCache();
             var buffer = new DocumentationObservationCandidateBuffer(classifications);
-
-            foreach (var target in classifications.Targets
+            var supportedTargets = classifications.Targets
                 .Where(target => target.SupportStatus == SupportStatus.Supported)
+                .ToDictionary(target => target.SymbolRef);
+
+            foreach (var target in supportedTargets.Values
                 .OrderBy(target => SubjectKey(target.SymbolRef), StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -44,9 +76,15 @@ public sealed class DocumentationObserver
                     target.SymbolRef,
                     null,
                     null,
+                    target.Traits.Contains(SymbolTrait.Partial),
                     projects,
                     cache,
                     cancellationToken);
+                if (authorities.Status == AuthorityResolutionStatus.Unrepresentable)
+                {
+                    return DocumentationObservationOutcome.Failure();
+                }
+
                 buffer.AddTarget(target, authorities.Complete, authorities.Declarations);
             }
 
@@ -61,22 +99,42 @@ public sealed class DocumentationObserver
                     StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!supportedTargets.TryGetValue(
+                    component.ParentSymbolRef,
+                    out var parentTarget))
+                {
+                    return DocumentationObservationOutcome.Failure();
+                }
+
                 var authorities = ObserveAuthorities(
                     component.ParentSymbolRef,
                     component.ComponentKind,
                     component.Identity,
+                    parentTarget.Traits.Contains(SymbolTrait.Partial),
                     projects,
                     cache,
                     cancellationToken);
+                if (authorities.Status == AuthorityResolutionStatus.Unrepresentable)
+                {
+                    return DocumentationObservationOutcome.Failure();
+                }
+
                 buffer.AddComponent(
                     component,
                     authorities.Complete,
                     authorities.Declarations);
             }
 
-            return buffer.Normalize(cancellationToken: cancellationToken);
+            ObserveStage(
+                DocumentationObservationStage.CoreNormalization,
+                cancellationToken);
+            var outcome = buffer.Normalize(cancellationToken: cancellationToken);
+            ObserveStage(
+                DocumentationObservationStage.TerminalConstruction,
+                cancellationToken);
+            return outcome;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return DocumentationObservationOutcome.Cancelled();
         }
@@ -86,28 +144,34 @@ public sealed class DocumentationObserver
         }
     }
 
-    private static AuthorityResult ObserveAuthorities(
+    private AuthorityResult ObserveAuthorities(
         SymbolRef symbolRef,
         ComponentKind? componentKind,
         string? componentIdentity,
+        bool classifiedPartial,
         IReadOnlyDictionary<string, LoadedProject> projects,
         ObserverCache cache,
         CancellationToken cancellationToken)
     {
         if (!projects.TryGetValue(symbolRef.CompilationContextRef, out var project))
         {
-            return new AuthorityResult(false, []);
+            return AuthorityResult.Unrepresentable;
         }
 
-        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(
+        ObserveStage(
+            DocumentationObservationStage.SymbolBinding,
+            cancellationToken);
+        var symbols = cache.GetSymbols(
                 symbolRef.DocumentationCommentId,
-                project.Compilation)
+                project.Compilation,
+                symbolResolver,
+                cancellationToken)
             .Select(CanonicalPartialMember)
             .Distinct(SymbolEqualityComparer.Default)
             .ToImmutableArray();
         if (symbols.Length != 1)
         {
-            return new AuthorityResult(false, []);
+            return AuthorityResult.Unrepresentable;
         }
 
         var symbol = symbols[0];
@@ -140,7 +204,7 @@ public sealed class DocumentationObserver
         }
 
         var role = definition is INamedTypeSymbol
-            && definition.DeclaringSyntaxReferences.Length > 1
+            && classifiedPartial
             ? DocumentationAuthorityRole.PartialTypePart
             : DocumentationAuthorityRole.Ordinary;
         return ReadDeclarations(
@@ -153,7 +217,7 @@ public sealed class DocumentationObserver
             cancellationToken);
     }
 
-    private static AuthorityResult ReadDeclarations(
+    private AuthorityResult ReadDeclarations(
         LoadedProject project,
         ISymbol symbol,
         DocumentationAuthorityRole role,
@@ -164,21 +228,37 @@ public sealed class DocumentationObserver
     {
         var complete = true;
         var declarations = new List<DocumentationDeclarationInput>();
-        foreach (var reference in symbol.DeclaringSyntaxReferences
+        var references = symbol.DeclaringSyntaxReferences
             .OrderBy(reference => reference.SyntaxTree.FilePath, StringComparer.Ordinal)
             .ThenBy(reference => reference.Span.Start)
-            .ThenBy(reference => reference.Span.Length))
+            .ThenBy(reference => reference.Span.Length)
+            .ToArray();
+        if (references.Length == 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            return AuthorityResult.Unrepresentable;
+        }
+
+        foreach (var reference in references)
+        {
+            ObserveStage(
+                DocumentationObservationStage.DeclarationEnumeration,
+                cancellationToken);
             var syntax = reference.GetSyntax(cancellationToken);
             var owner = GetDocumentationOwner(syntax);
-            if (owner is null
-                || !project.SourceTrees.TryGetValue(owner.SyntaxTree, out var loadedSource))
+            if (owner is null)
+            {
+                return AuthorityResult.Unrepresentable;
+            }
+
+            if (!project.SourceTrees.TryGetValue(owner.SyntaxTree, out var loadedSource))
             {
                 complete = false;
                 continue;
             }
 
+            ObserveStage(
+                DocumentationObservationStage.SourceAccess,
+                cancellationToken);
             var sourceSnapshot = cache.GetSourceSnapshot(
                 owner.SyntaxTree,
                 cancellationToken);
@@ -192,11 +272,16 @@ public sealed class DocumentationObserver
                 sourceText,
                 sourceSha256);
 
-            var directBlock = cache.GetDirectBlock(owner);
+            ObserveStage(
+                DocumentationObservationStage.TriviaExtraction,
+                cancellationToken);
+            var directBlock = cache.GetDirectBlock(owner, cancellationToken);
             var leading = directBlock.Leading;
             var attached = directBlock.Attached;
             var analysis = directBlock.Analysis;
-            cancellationToken.ThrowIfCancellationRequested();
+            ObserveStage(
+                DocumentationObservationStage.XmlAnalysis,
+                cancellationToken);
             var componentLocalName = GetComponentLocalName(
                 owner,
                 componentKind,
@@ -205,8 +290,7 @@ public sealed class DocumentationObserver
                     or ComponentKind.TypeParameter
                 && componentLocalName is null)
             {
-                complete = false;
-                continue;
+                return AuthorityResult.Unrepresentable;
             }
 
             DocumentationComponentMatch? componentMatch = componentKind is null
@@ -259,7 +343,9 @@ public sealed class DocumentationObserver
                 componentMatch));
         }
 
-        return new AuthorityResult(complete, declarations.ToImmutableArray());
+        return complete
+            ? AuthorityResult.Resolved(declarations.ToImmutableArray())
+            : AuthorityResult.SourceUnavailable(declarations.ToImmutableArray());
     }
 
     private static SourceFactory CreateSource(
@@ -605,9 +691,46 @@ public sealed class DocumentationObserver
         return Sha256(preimage.ToString());
     }
 
+    private void ObserveStage(
+        DocumentationObservationStage stage,
+        CancellationToken cancellationToken)
+    {
+        stageObserver?.Invoke(stage);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static ImmutableArray<ISymbol> ResolveSymbols(
+        string documentationCommentId,
+        Compilation compilation) =>
+        DocumentationCommentId.GetSymbolsForDeclarationId(
+                documentationCommentId,
+                compilation)
+            .ToImmutableArray();
+
+    private enum AuthorityResolutionStatus
+    {
+        Resolved,
+        SourceUnavailable,
+        Unrepresentable,
+    }
+
     private sealed record AuthorityResult(
-        bool Complete,
-        ImmutableArray<DocumentationDeclarationInput> Declarations);
+        AuthorityResolutionStatus Status,
+        ImmutableArray<DocumentationDeclarationInput> Declarations)
+    {
+        public bool Complete => Status == AuthorityResolutionStatus.Resolved;
+
+        public static AuthorityResult Unrepresentable { get; } =
+            new(AuthorityResolutionStatus.Unrepresentable, []);
+
+        public static AuthorityResult Resolved(
+            ImmutableArray<DocumentationDeclarationInput> declarations) =>
+            new(AuthorityResolutionStatus.Resolved, declarations);
+
+        public static AuthorityResult SourceUnavailable(
+            ImmutableArray<DocumentationDeclarationInput> declarations) =>
+            new(AuthorityResolutionStatus.SourceUnavailable, declarations);
+    }
 
     private sealed record DocumentationAnalysis(
         DocumentationBlockState BlockState,
@@ -631,6 +754,28 @@ public sealed class DocumentationObserver
         private readonly Dictionary<SyntaxTree, SourceSnapshot> sources =
             new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<OwnerKey, DirectBlockSnapshot> blocks = [];
+        private readonly Dictionary<
+            (Compilation Compilation, string DocumentationCommentId),
+            ImmutableArray<ISymbol>> symbols = [];
+
+        public ImmutableArray<ISymbol> GetSymbols(
+            string documentationCommentId,
+            Compilation compilation,
+            Func<string, Compilation, ImmutableArray<ISymbol>> resolver,
+            CancellationToken cancellationToken)
+        {
+            var key = (compilation, documentationCommentId);
+            if (symbols.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var resolved = resolver(documentationCommentId, compilation);
+            cancellationToken.ThrowIfCancellationRequested();
+            symbols.Add(key, resolved);
+            return resolved;
+        }
 
         public SourceSnapshot GetSourceSnapshot(
             SyntaxTree syntaxTree,
@@ -648,7 +793,9 @@ public sealed class DocumentationObserver
             return snapshot;
         }
 
-        public DirectBlockSnapshot GetDirectBlock(SyntaxNode owner)
+        public DirectBlockSnapshot GetDirectBlock(
+            SyntaxNode owner,
+            CancellationToken cancellationToken)
         {
             var key = new OwnerKey(
                 owner.SyntaxTree,
@@ -661,11 +808,14 @@ public sealed class DocumentationObserver
             }
 
             var leading = owner.GetLeadingTrivia();
+            cancellationToken.ThrowIfCancellationRequested();
             var attached = GetAttachedDocumentation(leading);
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshot = new DirectBlockSnapshot(
                 leading,
                 attached,
                 Analyze(attached));
+            cancellationToken.ThrowIfCancellationRequested();
             blocks.Add(key, snapshot);
             return snapshot;
         }

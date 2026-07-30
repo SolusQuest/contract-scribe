@@ -86,6 +86,7 @@ public sealed class DocumentationObserverTests
 
                 /// <summary>Before attribute.</summary>
                 [System.Obsolete]
+                [System.CLSCompliant(true)]
                 public void Attributed() { }
             }
 
@@ -534,6 +535,69 @@ public sealed class DocumentationObserverTests
     }
 
     [Fact]
+    public void ReorderingPartialPartsAndGeneratedResultsDoesNotChangeProjection()
+    {
+        const string generatedText =
+            "/// <summary>Generated.</summary>\npublic class Generated { }";
+        var generatedFact = new GeneratedSourceFact(
+            ProjectIdentity,
+            Context,
+            "sgp." + new string('b', 64),
+            "sgo." + new string('c', 64),
+            Hash(generatedText),
+            generatedText);
+        var inputs = new[]
+        {
+            new SourceInput(
+                "src/A.cs",
+                "/// <summary>First.</summary>\npublic partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/B.cs",
+                "public partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "generator://opaque",
+                generatedText,
+                LoadedSourceKind.SourceGenerator,
+                generatedFact),
+        };
+        using var forward = CreateSession(inputs);
+        using var reverse = CreateSession(inputs.Reverse().ToArray());
+
+        var forwardOutcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                forward,
+                TargetProfile.ExternalApi));
+        var reverseOutcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                reverse,
+                TargetProfile.ExternalApi));
+
+        Assert.Equal(Project(forwardOutcome), Project(reverseOutcome));
+    }
+
+    [Fact]
+    public void ReorderingProjectsDoesNotChangeNormalizedProjection()
+    {
+        using var forward = CreateMultiProjectSession(reverse: false);
+        using var reverse = CreateMultiProjectSession(reverse: true);
+
+        var forwardOutcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                forward,
+                TargetProfile.ExternalApi));
+        var reverseOutcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                reverse,
+                TargetProfile.ExternalApi));
+
+        Assert.Equal(Project(forwardOutcome), Project(reverseOutcome));
+    }
+
+    [Fact]
     public void PairedPartialPropertyAndEventFollowImplementingAuthority()
     {
         var source = """
@@ -544,6 +608,9 @@ public sealed class DocumentationObserverTests
 
                 /// <summary>Event definition must not win.</summary>
                 public partial event System.Action Changed;
+
+                /// <summary>Malformed implementation is exclusive.</summary>
+                public partial void Malformed();
             }
 
             public partial class Paired
@@ -556,6 +623,9 @@ public sealed class DocumentationObserverTests
                     add { }
                     remove { }
                 }
+
+                /// <summary>broken
+                public partial void Malformed() { }
             }
             """.Replace(
                 "/// <whitespace-only>",
@@ -585,6 +655,15 @@ public sealed class DocumentationObserverTests
             DocumentationObservationValue.Absent);
         Assert.All(
             @event.Declarations,
+            declaration => Assert.Equal(
+                DocumentationAuthorityRole.PartialMemberImplementing,
+                declaration.AuthorityRole));
+        var malformed = AssertTarget(
+            observations,
+            "M:Paired.Malformed",
+            DocumentationObservationValue.Present);
+        Assert.All(
+            malformed.Declarations,
             declaration => Assert.Equal(
                 DocumentationAuthorityRole.PartialMemberImplementing,
                 declaration.AuthorityRole));
@@ -655,7 +734,7 @@ public sealed class DocumentationObserverTests
     {
         using var session = CreateSession(
             "public class Fixture { public void Run() { } }");
-        var classified = new ClassifiedRepositorySession(
+        var classified = ClassifiedRepositorySession.Bind(
             session,
             ClassificationOutcome.Failure());
 
@@ -712,6 +791,601 @@ public sealed class DocumentationObserverTests
             Assert.Single(observation.Declarations).Source);
         Assert.Equal("App/App.cs", source.Path);
         Assert.False(Path.IsPathRooted(source.Path));
+    }
+
+    [Fact]
+    public void NonSubstantiveMalformedTargetBlocksAreUnavailable()
+    {
+        var source = """
+            /// <!-- broken
+            public class MalformedComment { }
+
+            /// <?broken
+            public class MalformedProcessingInstruction { }
+            """;
+        using var session = CreateSession(source);
+
+        var outcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                session,
+                TargetProfile.ExternalApi));
+
+        Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+        foreach (var documentationId in new[]
+        {
+            "T:MalformedComment",
+            "T:MalformedProcessingInstruction",
+        })
+        {
+            var observation = AssertTarget(
+                outcome.ObservationSet!.Observations,
+                documentationId,
+                DocumentationObservationValue.Unavailable);
+            Assert.Equal(
+                DocumentationUnavailableCause.MalformedXml,
+                observation.UnavailableCause);
+        }
+    }
+
+    [Fact]
+    public void OneActivePartPartialTypesUsePartialTypeAuthority()
+    {
+        var source = """
+            /// <summary>Class.</summary>
+            /// <typeparam name="T">Type parameter.</typeparam>
+            /// <param name="value">Value.</param>
+            public partial class PartialClass<T>(string value) { }
+
+            #if NEVER
+            public partial class PartialClass<T> { }
+            #endif
+
+            /// <summary>Struct.</summary>
+            public partial struct PartialStruct { }
+
+            /// <summary>Interface.</summary>
+            /// <typeparam name="T">Type parameter.</typeparam>
+            public partial interface IPartial<T> { }
+
+            /// <summary>Record.</summary>
+            /// <param name="value">Value.</param>
+            public partial record PartialRecord(string value);
+            """;
+        using var session = CreateSession(source);
+
+        var outcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                session,
+                TargetProfile.ExternalApi));
+
+        Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+        var observations = outcome.ObservationSet!.Observations;
+        foreach (var documentationId in new[]
+        {
+            "T:PartialClass`1",
+            "T:PartialStruct",
+            "T:IPartial`1",
+            "T:PartialRecord",
+        })
+        {
+            var observation = AssertTarget(
+                observations,
+                documentationId,
+                DocumentationObservationValue.Present);
+            Assert.All(
+                observation.Declarations,
+                declaration => Assert.Equal(
+                    DocumentationAuthorityRole.PartialTypePart,
+                    declaration.AuthorityRole));
+        }
+
+        AssertComponent(
+            observations,
+            "T:PartialClass`1",
+            ComponentKind.TypeParameter,
+            DocumentationObservationValue.Present,
+            "T");
+        AssertComponent(
+            observations,
+            "M:PartialClass`1.#ctor(System.String)",
+            ComponentKind.Parameter,
+            DocumentationObservationValue.Present,
+            "value");
+        AssertComponent(
+            observations,
+            "T:IPartial`1",
+            ComponentKind.TypeParameter,
+            DocumentationObservationValue.Present,
+            "T");
+        AssertComponent(
+            observations,
+            "M:PartialRecord.#ctor(System.String)",
+            ComponentKind.Parameter,
+            DocumentationObservationValue.Present,
+            "value");
+    }
+
+    [Fact]
+    public void ForgedSessionAndSubjectBindingsFailInsteadOfBecomingUnavailable()
+    {
+        using var first = CreateSession(
+            """
+            /// <summary>First session.</summary>
+            public class Fixture { public void Run(string value) { } }
+            """);
+        using var second = CreateSession(
+            """
+            /// <summary>Second session.</summary>
+            public class Fixture { public void Run(string value) { } }
+            """);
+        var firstClassification = new SymbolClassifier().Classify(
+            first,
+            TargetProfile.ExternalApi);
+
+        var crossSession = new DocumentationObserver().Observe(
+            new ClassifiedRepositorySession(second, firstClassification));
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            crossSession.Status);
+        Assert.Null(crossSession.ObservationSet);
+
+        var missingContextCandidates = new ClassificationCandidateBuffer();
+        missingContextCandidates.AddTarget(
+            "context." + new string('9', 64),
+            "T:Fixture",
+            PrimarySymbolKind.Class,
+            [],
+            ClassificationOrigin.Source,
+            [ClassificationInput.RepositoryLocator("src/Fixture.cs")]);
+        var missingContextSet = Assert.IsType<ClassificationSet>(
+            missingContextCandidates.Normalize(TargetProfile.ExternalApi)
+                .ClassificationSet);
+        var missingContext = new DocumentationObserver().Observe(
+            ClassifiedRepositorySession.Bind(
+                second,
+                ClassificationOutcome.Success(missingContextSet)));
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            missingContext.Status);
+
+        var impossibleComponentCandidates = new ClassificationCandidateBuffer();
+        impossibleComponentCandidates.AddTarget(
+            Context,
+            "M:Fixture.Run(System.String)",
+            PrimarySymbolKind.Method,
+            [],
+            ClassificationOrigin.Source,
+            [ClassificationInput.RepositoryLocator("src/Fixture.cs")]);
+        impossibleComponentCandidates.AddComponent(
+            Context,
+            "M:Fixture.Run(System.String)",
+            ComponentKind.Parameter,
+            "parameter/99",
+            ClassificationOrigin.Source);
+        var impossibleComponentSet = Assert.IsType<ClassificationSet>(
+            impossibleComponentCandidates.Normalize(TargetProfile.ExternalApi)
+                .ClassificationSet);
+        var impossibleComponent = new DocumentationObserver().Observe(
+            ClassifiedRepositorySession.Bind(
+                second,
+                ClassificationOutcome.Success(impossibleComponentSet)));
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            impossibleComponent.Status);
+    }
+
+    [Fact]
+    public void NonUniqueAndUnsupportedSymbolBindingsFailTheRun()
+    {
+        using var session = CreateSession(
+            "public class First { } public class Second { }");
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var compilation = Assert.Single(session.Projects).Compilation;
+        var first = Assert.Single(
+            DocumentationCommentId.GetSymbolsForDeclarationId(
+                "T:First",
+                compilation));
+        var second = Assert.Single(
+            DocumentationCommentId.GetSymbolsForDeclarationId(
+                "T:Second",
+                compilation));
+
+        var nonUnique = new DocumentationObserver(
+            (_, _) => [first, second],
+            null).Observe(classified);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            nonUnique.Status);
+
+        var unsupportedOwner = new DocumentationObserver(
+            (_, _) => [compilation.Assembly.GlobalNamespace],
+            null).Observe(classified);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            unsupportedOwner.Status);
+
+        var unrelatedCancellation = new DocumentationObserver(
+            (_, _) => throw new OperationCanceledException(),
+            null).Observe(classified);
+        Assert.Equal(
+            DocumentationObservationRunStatus.Failure,
+            unrelatedCancellation.Status);
+    }
+
+    [Fact]
+    public void CancellationAtEveryObserverStagePublishesNoSuccess()
+    {
+        foreach (var stage in Enum.GetValues<DocumentationObservationStage>())
+        {
+            using var session = CreateSession(
+                "/// <summary>Docs.</summary>\npublic class Fixture { }");
+            var classified = new SymbolClassifier().ClassifySession(
+                session,
+                TargetProfile.ExternalApi);
+            using var cancellation = new CancellationTokenSource();
+            var observer = new DocumentationObserver(
+                null,
+                current =>
+                {
+                    if (current == stage)
+                    {
+                        cancellation.Cancel();
+                    }
+                });
+
+            var outcome = observer.Observe(classified, cancellation.Token);
+
+            Assert.Equal(
+                DocumentationObservationRunStatus.Cancelled,
+                outcome.Status);
+            Assert.Null(outcome.ObservationSet);
+        }
+    }
+
+    [Fact]
+    public void CancellationAtEveryCoreNormalizationStagePublishesNoSuccess()
+    {
+        using var session = CreateSession(
+            "/// <summary>Docs.</summary>\npublic class Fixture { }");
+        var classifications = Assert.IsType<ClassificationSet>(
+            new SymbolClassifier().Classify(
+                session,
+                TargetProfile.ExternalApi).ClassificationSet);
+        var target = Assert.Single(
+            classifications.Targets,
+            candidate => candidate.SymbolRef.DocumentationCommentId == "T:Fixture");
+        const string documentationText = "/// <summary>Docs.</summary>\n";
+        const string bodyText = "public class Fixture { }";
+        var declarationText = documentationText + bodyText;
+        var declaration = DocumentationObservationInput.RepositoryDeclaration(
+            "decl." + new string('d', 64),
+            DocumentationAuthorityRole.Ordinary,
+            ProjectIdentity,
+            "src/Fixture.cs",
+            Sha,
+            DocumentationObservationInput.Span(0, declarationText.Length),
+            declarationText,
+            DocumentationObservationInput.Span(0, documentationText.Length),
+            documentationText,
+            DocumentationObservationInput.Span(0, documentationText.Length),
+            documentationText,
+            DocumentationBlockState.WellFormed,
+            true);
+
+        foreach (var stage in Enum
+            .GetValues<DocumentationObservationNormalizationStage>())
+        {
+            using var cancellation = new CancellationTokenSource();
+            var buffer = new DocumentationObservationCandidateBuffer(
+                classifications,
+                current =>
+                {
+                    if (current == stage)
+                    {
+                        cancellation.Cancel();
+                    }
+                });
+            buffer.AddTarget(target, true, [declaration]);
+
+            var outcome = buffer.Normalize(cancellationToken: cancellation.Token);
+
+            Assert.Equal(
+                DocumentationObservationRunStatus.Cancelled,
+                outcome.Status);
+            Assert.Null(outcome.ObservationSet);
+        }
+    }
+
+    [Fact]
+    public void EveryComponentFamilyCoversPositiveNegativeAndMalformedProductionCases()
+    {
+        var source = """
+            public class Components
+            {
+                /// <param name="value">Documented.</param>
+                public void ParameterPositive(string value) { }
+
+                /// <summary>No parameter tag.</summary>
+                public void ParameterNegative(string value) { }
+
+                /// <param name="value">broken
+                public void ParameterMalformed(string value) { }
+
+                /// <typeparam name="T">Documented.</typeparam>
+                public void TypeParameterPositive<T>() { }
+
+                /// <summary>No type parameter tag.</summary>
+                public void TypeParameterNegative<T>() { }
+
+                /// <typeparam name="T">broken
+                public void TypeParameterMalformed<T>() { }
+
+                /// <returns>Documented.</returns>
+                public int ReturnPositive() => 1;
+
+                /// <summary>No returns tag.</summary>
+                public int ReturnNegative() => 1;
+
+                /// <returns>broken
+                public int ReturnMalformed() => 1;
+
+                /// <value>Documented.</value>
+                public int ValuePositive { get; set; }
+
+                /// <summary>No value tag.</summary>
+                public int ValueNegative { get; set; }
+
+                /// <value>broken
+                public int ValueMalformed { get; set; }
+            }
+            """;
+        using var session = CreateSession(source);
+
+        var outcome = new DocumentationObserver().Observe(
+            new SymbolClassifier().ClassifySession(
+                session,
+                TargetProfile.ExternalApi));
+
+        Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+        var observations = outcome.ObservationSet!.Observations;
+        foreach (var vector in new[]
+        {
+            ("M:Components.ParameterPositive(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Present, "value"),
+            ("M:Components.ParameterNegative(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Absent, "value"),
+            ("M:Components.ParameterMalformed(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Unavailable, "value"),
+            ("M:Components.TypeParameterPositive``1",
+                ComponentKind.TypeParameter, DocumentationObservationValue.Present, "T"),
+            ("M:Components.TypeParameterNegative``1",
+                ComponentKind.TypeParameter, DocumentationObservationValue.Absent, "T"),
+            ("M:Components.TypeParameterMalformed``1",
+                ComponentKind.TypeParameter, DocumentationObservationValue.Unavailable, "T"),
+            ("M:Components.ReturnPositive",
+                ComponentKind.Return, DocumentationObservationValue.Present, (string?)null),
+            ("M:Components.ReturnNegative",
+                ComponentKind.Return, DocumentationObservationValue.Absent, (string?)null),
+            ("M:Components.ReturnMalformed",
+                ComponentKind.Return, DocumentationObservationValue.Unavailable, (string?)null),
+            ("P:Components.ValuePositive",
+                ComponentKind.Value, DocumentationObservationValue.Present, (string?)null),
+            ("P:Components.ValueNegative",
+                ComponentKind.Value, DocumentationObservationValue.Absent, (string?)null),
+            ("P:Components.ValueMalformed",
+                ComponentKind.Value, DocumentationObservationValue.Unavailable, (string?)null),
+        })
+        {
+            AssertComponent(
+                observations,
+                vector.Item1,
+                vector.Item2,
+                vector.Item3,
+                vector.Item4);
+        }
+    }
+
+    [Fact]
+    public void GeneratedAbsenceAndUnavailableUseTheirOwnGeneratedSources()
+    {
+        const string generatorSource = "public class GeneratorAbsent { }";
+        const string toolSource = "public class ToolAbsent { }";
+        var generatorFact = new GeneratedSourceFact(
+            ProjectIdentity,
+            Context,
+            "sgp." + new string('b', 64),
+            "sgo." + new string('c', 64),
+            Hash(generatorSource),
+            generatorSource);
+        var toolFact = new GeneratedSourceFact(
+            ProjectIdentity,
+            Context,
+            "tgp." + new string('d', 64),
+            "tgo." + new string('e', 64),
+            Hash(toolSource),
+            toolSource);
+        using var session = CreateSession(
+            new SourceInput(
+                "generator://opaque",
+                generatorSource,
+                LoadedSourceKind.SourceGenerator,
+                generatorFact),
+            new SourceInput(
+                "tool://opaque",
+                toolSource,
+                LoadedSourceKind.ToolGenerated,
+                toolFact));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+
+        var complete = new DocumentationObserver().Observe(classified);
+        Assert.Equal(DocumentationObservationRunStatus.Success, complete.Status);
+        AssertTarget(
+            complete.ObservationSet!.Observations,
+            "T:GeneratorAbsent",
+            DocumentationObservationValue.Absent);
+        AssertTarget(
+            complete.ObservationSet.Observations,
+            "T:ToolAbsent",
+            DocumentationObservationValue.Absent);
+
+        var project = Assert.Single(session.Projects);
+        var mutableSources =
+            Assert.IsType<Dictionary<SyntaxTree, LoadedSourceTree>>(
+                project.SourceTrees);
+        var generatorTree = Assert.Single(
+            mutableSources,
+            pair => pair.Value.Kind == LoadedSourceKind.SourceGenerator).Key;
+        mutableSources.Remove(generatorTree);
+
+        var incomplete = new DocumentationObserver().Observe(classified);
+        Assert.Equal(DocumentationObservationRunStatus.Success, incomplete.Status);
+        var unavailable = AssertTarget(
+            incomplete.ObservationSet!.Observations,
+            "T:GeneratorAbsent",
+            DocumentationObservationValue.Unavailable);
+        Assert.Equal(
+            DocumentationUnavailableCause.SourceUnavailable,
+            unavailable.UnavailableCause);
+        AssertTarget(
+            incomplete.ObservationSet.Observations,
+            "T:ToolAbsent",
+            DocumentationObservationValue.Absent);
+    }
+
+    [Fact]
+    public void PartialUnreadabilityKeepsPositivePrecedenceAndRejectsFallback()
+    {
+        using (var positiveSession = CreateSession(
+            new SourceInput(
+                "src/Positive.cs",
+                "/// <summary>Readable.</summary>\npublic partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Unreadable.cs",
+                "public partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null)))
+        {
+            var classified = new SymbolClassifier().ClassifySession(
+                positiveSession,
+                TargetProfile.ExternalApi);
+            RemoveSourceBinding(positiveSession, "src/Unreadable.cs");
+
+            var outcome = new DocumentationObserver().Observe(classified);
+
+            Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+            var observation = AssertTarget(
+                outcome.ObservationSet!.Observations,
+                "T:Partial",
+                DocumentationObservationValue.Present);
+            Assert.Equal(
+                DocumentationAuthorityCompleteness.PositiveOnly,
+                observation.Completeness);
+        }
+
+        using (var negativeSession = CreateSession(
+            new SourceInput(
+                "src/Readable.cs",
+                "public partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Unreadable.cs",
+                "public partial class Partial { }",
+                LoadedSourceKind.Repository,
+                null)))
+        {
+            var classified = new SymbolClassifier().ClassifySession(
+                negativeSession,
+                TargetProfile.ExternalApi);
+            RemoveSourceBinding(negativeSession, "src/Unreadable.cs");
+
+            var outcome = new DocumentationObserver().Observe(classified);
+
+            Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+            AssertTarget(
+                outcome.ObservationSet!.Observations,
+                "T:Partial",
+                DocumentationObservationValue.Unavailable);
+        }
+
+        using (var malformedSession = CreateSession(
+            new SourceInput(
+                "src/Readable.cs",
+                """
+                /// <typeparam name="T">broken
+                public partial class Partial<T> { }
+                """,
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Unreadable.cs",
+                "public partial class Partial<T> { }",
+                LoadedSourceKind.Repository,
+                null)))
+        {
+            var classified = new SymbolClassifier().ClassifySession(
+                malformedSession,
+                TargetProfile.ExternalApi);
+            RemoveSourceBinding(malformedSession, "src/Unreadable.cs");
+
+            var outcome = new DocumentationObserver().Observe(classified);
+
+            Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+            var component = AssertComponent(
+                outcome.ObservationSet!.Observations,
+                "T:Partial`1",
+                ComponentKind.TypeParameter,
+                DocumentationObservationValue.Unavailable,
+                "T");
+            Assert.Equal(
+                DocumentationUnavailableCause.SourceUnavailable,
+                component.UnavailableCause);
+        }
+
+        using var partialMemberSession = CreateSession(
+            new SourceInput(
+                "src/Definition.cs",
+                """
+                public partial class Partial
+                {
+                    /// <summary>Fallback must not be used.</summary>
+                    public partial void Run();
+                }
+                """,
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Implementation.cs",
+                """
+                public partial class Partial
+                {
+                    public partial void Run() { }
+                }
+                """,
+                LoadedSourceKind.Repository,
+                null));
+        var partialMemberClassification = new SymbolClassifier().ClassifySession(
+            partialMemberSession,
+            TargetProfile.ExternalApi);
+        RemoveSourceBinding(partialMemberSession, "src/Implementation.cs");
+
+        var partialMemberOutcome = new DocumentationObserver().Observe(
+            partialMemberClassification);
+
+        Assert.Equal(
+            DocumentationObservationRunStatus.Success,
+            partialMemberOutcome.Status);
+        var partialMember = AssertTarget(
+            partialMemberOutcome.ObservationSet!.Observations,
+            "M:Partial.Run",
+            DocumentationObservationValue.Unavailable);
+        Assert.Empty(partialMember.Declarations);
     }
 
     private static DocumentationObservation AssertTarget(
@@ -807,6 +1481,92 @@ public sealed class DocumentationObserverTests
                 .Cast<GeneratedSourceFact>()
                 .ToArray(),
             workspace);
+    }
+
+    private static LoadedRepositorySession CreateMultiProjectSession(bool reverse)
+    {
+        var workspace = new AdhocWorkspace();
+        var projects = new List<LoadedProject>();
+        foreach (var descriptor in new[]
+        {
+            (
+                Name: "Alpha",
+                Context: "context." + new string('1', 64),
+                Project: "project." + new string('2', 64),
+                Path: "src/Alpha.cs",
+                Text: "/// <summary>Alpha.</summary>\npublic class Alpha { }"),
+            (
+                Name: "Beta",
+                Context: "context." + new string('3', 64),
+                Project: "project." + new string('4', 64),
+                Path: "src/Beta.cs",
+                Text: "public class Beta { }"),
+        })
+        {
+            var syntaxTree = CSharpSyntaxTree.ParseText(
+                descriptor.Text,
+                new CSharpParseOptions(
+                    LanguageVersion.Preview,
+                    documentationMode: DocumentationMode.Diagnose),
+                descriptor.Path,
+                Encoding.UTF8);
+            var compilation = CSharpCompilation.Create(
+                descriptor.Name,
+                [syntaxTree],
+                PlatformReferences(),
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    deterministic: true));
+            var project = workspace.AddProject(
+                descriptor.Name,
+                LanguageNames.CSharp);
+            projects.Add(new LoadedProject(
+                descriptor.Project,
+                "net10.0",
+                descriptor.Context,
+                LoadedProjectRole.AuditRoot,
+                [],
+                project,
+                compilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(
+                    ReferenceEqualityComparer.Instance)
+                {
+                    [syntaxTree] = new(
+                        LoadedSourceKind.Repository,
+                        descriptor.Path,
+                        null),
+                }));
+        }
+
+        if (reverse)
+        {
+            projects.Reverse();
+        }
+
+        return new LoadedRepositorySession(
+            ".",
+            ProjectIdentity,
+            new ToolchainIdentity("test", "test", "test", "test"),
+            projects,
+            [],
+            workspace);
+    }
+
+    private static void RemoveSourceBinding(
+        LoadedRepositorySession session,
+        string filePath)
+    {
+        var project = Assert.Single(session.Projects);
+        var mutableSources =
+            Assert.IsType<Dictionary<SyntaxTree, LoadedSourceTree>>(
+                project.SourceTrees);
+        var syntaxTree = Assert.Single(
+            mutableSources.Keys,
+            tree => string.Equals(
+                tree.FilePath,
+                filePath,
+                StringComparison.Ordinal));
+        mutableSources.Remove(syntaxTree);
     }
 
     private static string Hash(string value) =>
