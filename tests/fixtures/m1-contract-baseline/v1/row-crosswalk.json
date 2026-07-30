@@ -294,12 +294,12 @@
     },
     {
       "rowKey": "failureCases/failure.documentation-id-known-origin",
-      "disposition": "existing-v1",
-      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "oracle": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
       "downstreamIssue": null
     },
     {
@@ -307,20 +307,20 @@
       "disposition": "amended",
       "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
       "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
-      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
-      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
-      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
-      "downstreamIssue": null
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "oracle": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+      "downstreamIssue": 37
     },
     {
       "rowKey": "failureCases/failure.generated-provenance",
-      "disposition": "existing-v1",
-      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
-      "downstreamIssue": null
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "oracle": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+      "downstreamIssue": 37
     },
     {
       "rowKey": "failureCases/failure.missing-profile",
@@ -334,23 +334,23 @@
     },
     {
       "rowKey": "failureCases/failure.semantic-context",
-      "disposition": "existing-v1",
-      "normativeSection": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "schemaOrRegistry": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "validFixture": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "invalidOrMutation": "tests/fixtures/m1-target-observation/adr-0003-vectors.json",
-      "oracle": "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
-      "downstreamIssue": null
+      "disposition": "amended",
+      "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
+      "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "oracle": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+      "downstreamIssue": 37
     },
     {
       "rowKey": "failureCases/failure.unrepresentable-generated",
       "disposition": "amended",
       "normativeSection": "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
       "schemaOrRegistry": "schemas/symbol-evidence-taxonomy/v1.registry.json",
-      "validFixture": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
-      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/audit-authority-cases.json",
-      "oracle": "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs",
-      "downstreamIssue": null
+      "validFixture": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "invalidOrMutation": "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
+      "oracle": "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs",
+      "downstreamIssue": 37
     },
     {
       "rowKey": "generatedCases/generated.global-rule",

@@ -10,7 +10,29 @@ The project-boundary declaration for `ContractScribe.HostValidation` is recorded
 
 ## Frozen identities
 
-The protocol pins the coordinated pre-release v1 baseline merged by Issue #35 at `bb4654edc180e2953dda6b89a29211b18778b78e`. The protected-input manifest records the byte identities of the baseline contracts, schemas, fixtures, conformance code, ADR 0002, the security boundary, and project-structure rules.
+The protocol binds the Issue #55 successor baseline and its complete Issue #35 predecessor identity. In the Issue #55 PR1 candidate, `baseline.disposition` is `pending-main-reconciliation`, `mergeCommit` is JSON `null`, and the current review record is non-authorizing. A later reconciliation may change the disposition to `main-reachable` only after the exact successor manifest bytes exist in a 40-character lowercase commit that is an ancestor of the validating checkout. The validator reads those exact manifest bytes from that commit before any production evidence operation can proceed. The protected-input manifest records the byte identities of the baseline contracts, schemas, fixtures, conformance code, ADR 0002, the security boundary, and project-structure rules.
+
+Issue #55 closes after its corrected contract-content baseline and structurally valid pending candidate are main-reachable. It does not own the later accepted bundle. A separate M1 Host Validation certification Task waits until the production Host and every active protected-input producer required by the execution gate are stable, then owns the `main-reachable` reconciliation and independent accepted review before exact-revision production evidence execution.
+
+The protocol distinguishes three lifecycle conditions:
+
+- stale or invalid means current bytes do not match a structurally closed identity; it is a validator result and authorizes no operation;
+- candidate or `pending-main-reconciliation` means the exact current bundle and protected inputs are structurally closed with a matching pending review; only maintainer and structural operations are available;
+- accepted means a main-reachable exact bundle has a matching independent accepted review; only that identity can authorize production evidence operations.
+
+Every pre-release pull request that changes a protected input restores a current pending candidate in that same pull request. It regenerates `protected-inputs.json`, updates the direct `artifactInventory` when required, regenerates `artifact-lock.json` and the candidate bundle ID, regenerates the matching non-authorizing pending review and review ID, and passes structural validation, both deterministic dry-runs, self-test, and ordinary CI. A pull request that changes no protected input records a reviewed no-change disposition. Candidate maintenance does not require independent Relay bundle acceptance, and the replaced pending identity remains historical non-authorizing lineage.
+
+The certification identities are distinct:
+
+- `S1`, or contract baseline `C1`, is the Issue #55 squash commit and owns the exact successor `contractRevision`, manifest path, and manifest digest;
+- `Bc` is any structurally current pending candidate identity in the lineage after `S1`;
+- `P0` is the later stable main revision from which certification begins and is recorded as the promotion source, not substituted for the contract baseline;
+- `S2` is the squash commit containing the final main-reachable bundle candidate;
+- `S3` is the review-record-only squash commit containing the accepted independent review of exact `S2`.
+
+`baseline.mergeCommit` remains `S1` unless a separate later contract-amendment issue explicitly supersedes the contract baseline. The certification PR branches from `P0`, records `P0` in that PR and the immutable Task closure record, proves `S1` is an ancestor of `P0`, and recomputes the final bundle whenever any protected byte differs to produce `S2`. `P0` remains outside `baseline.mergeCommit`, the contract-manifest identity, the bundle-ID preimage, and the review-ID preimage. `independent-review.json` remains outside `artifactInventory`, protected-input roots, and the bundle-ID preimage. The accepted-review PR has an exact one-file diff containing only that review record and produces `S3`; closure proves `P0` is an ancestor of `S2`, `S2` is an ancestor of `S3`, and `S3` is an ancestor of exact `main`. Any bundle-member diff after `S2` restarts both certification stages.
+
+Promotion is required before Issue #41 begins evidence-consuming execution. Any protected-input or bundle-member drift after `S2`, after `S3`, or before or during Issue #41 invalidates the accepted review and bundle-currentness claim. Ordinary Host protected-input drift receives a regenerated pending candidate and repeated certification. Drift in an input owned by the `S1` contract manifest requires an explicit successor contract-amendment baseline before certification may retain or replace `baseline.mergeCommit = S1`. The certification Task is reopened or replaced by a specifically linked successor and restored as a native blocker of #41 before further execution. Affected #41 evidence and dependent #30 integration or smoke evidence are marked stale or superseded, and the complete candidate regeneration, independent review, closure readback, and downstream reruns occur in dependency order.
 
 The oracle artifact lock contains the ordinal path and SHA-256 of every protocol, schema, manifest, harness source, test, build-policy, and workflow artifact that can change validation behavior. The bundle ID is:
 
@@ -212,7 +234,9 @@ Failed, cancelled, timed-out, invalidated, or infrastructure-incomplete attempts
 
 ## Independent review
 
-An accepted review record is outside the bundle to avoid self-reference. It binds:
+The review record is outside the bundle to avoid self-reference. Both branches bind the exact bundle ID and a deterministic `reviewId`. A pending record has JSON `null` for `reviewedHead`, `reviewerKind`, `relaySessionId`, `relayTaskId`, and `reviewedAtUtc`; it has verdict `pending` and exactly one blocking finding ID, `baseline.main-reconciliation-pending`. It proves structural closure only and never authorizes evidence consumption or publication.
+
+An accepted review record binds:
 
 - the exact bundle ID;
 - the exact pushed repository head reviewed;
@@ -222,7 +246,9 @@ An accepted review record is outside the bundle to avoid self-reference. It bind
 - zero blocking finding IDs;
 - a bounded UTC review timestamp.
 
-Missing, pending, mismatched, stale, or blocking review records prevent production cell and aggregate acceptance. Dry-run and self-test commands do not require an accepted record because they are not host evidence.
+Every structural bundle validation checks the current review record's schema, canonical bytes, bundle binding, branch invariants, and `reviewId`. `HV247_PENDING_REVIEW_INVALID` identifies a schema-valid pending record with the wrong bundle or branch invariants; `HV166_REVIEW_ID_MISMATCH` identifies a mutated review identity. A pending baseline returns `HV246_BASELINE_NOT_MAIN_REACHABLE` before any authorizing command consumes inputs or writes outputs, even when a caller supplies a forged accepted review. Missing, pending, mismatched, stale, or blocking review records prevent production cell and aggregate acceptance.
+
+The pending command matrix is closed. `lock-protected-inputs`, `lock-bundle`, `validate-bundle` without `--require-review`, `dry-run`, and `self-test` are structural or maintainer operations and remain available. `validate-bundle --require-review`, `provision-fixtures`, `run-cell`, `validate-cell`, `validate-incomplete`, `aggregate`, `validate-aggregate`, `validate-publication-record`, and `prepare-public` reject with `HV246_BASELINE_NOT_MAIN_REACHABLE` before consuming or writing evidence.
 
 ## Commands
 
@@ -245,7 +271,7 @@ dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostVali
 dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release -- prepare-public --root . --review <review> --subject-manifest <execution-subject> --kind <cell|aggregate|incomplete|publication-record> --source <evidence> --aggregate-evidence <aggregate-when-publication-record> --cell-evidence <ubuntu>;<windows> --output <allowlisted-name>
 ```
 
-`lock-protected-inputs` and `lock-bundle` are maintainer commands. Any regenerated identity requires a new exact review. `provision-fixtures` writes only the frozen deterministic runtime fixture inventory and rejects any remaining extra or changed file through the recipe identity. The CI `validate-bundle`, `dry-run`, and `self-test` executions validate the oracle and harness on both operating systems; they are not production-host pass evidence.
+`lock-protected-inputs` and `lock-bundle` are maintainer commands. Any regenerated identity requires a new exact review. Once the baseline is main-reachable and the exact bundle has an accepted review, `provision-fixtures` writes only the frozen deterministic runtime fixture inventory and rejects any remaining extra or changed file through the recipe identity. The CI `validate-bundle`, `dry-run`, and `self-test` executions validate the oracle and harness on both operating systems; they are not production-host pass evidence.
 
 ## Forbidden adaptations
 

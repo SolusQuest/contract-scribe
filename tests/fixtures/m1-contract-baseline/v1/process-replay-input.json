@@ -175,7 +175,7 @@
           "classification": {
             "recordType": "UnresolvedClassification",
             "compilationContextRef": "synthetic.unresolved",
-            "origin": "origin.source-generator",
+            "origin": "origin.unknown",
             "supportStatus": "support.unavailable-context",
             "skipReason": "skip.unavailable.generated-provenance",
             "candidateLocator": {
@@ -650,7 +650,7 @@
             },
             "skipReason": "skip.unavailable.generated-provenance",
             "supportStatus": "support.unavailable-context",
-            "origin": "origin.source-generator",
+            "origin": "origin.unknown",
             "compilationContextRef": "synthetic.unresolved",
             "recordType": "UnresolvedClassification"
           }

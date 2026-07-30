@@ -26,25 +26,93 @@
       "type": "object",
       "required": [
         "coordinatingIssue",
+        "disposition",
         "mergeCommit",
         "contractManifest",
-        "contractManifestSha256"
+        "contractManifestSha256",
+        "predecessor"
       ],
       "properties": {
         "coordinatingIssue": {
-          "const": "https://github.com/SolusQuest/contract-scribe/issues/35"
+          "const": "https://github.com/SolusQuest/contract-scribe/issues/55"
+        },
+        "disposition": {
+          "enum": [
+            "pending-main-reconciliation",
+            "main-reachable"
+          ]
         },
         "mergeCommit": {
-          "const": "bb4654edc180e2953dda6b89a29211b18778b78e"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "contractManifest": {
           "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
         },
         "contractManifestSha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "predecessor": {
+          "type": "object",
+          "required": [
+            "coordinatingIssue",
+            "contractRevision",
+            "mergeCommit",
+            "contractManifest",
+            "contractManifestSha256"
+          ],
+          "properties": {
+            "coordinatingIssue": {
+              "const": "https://github.com/SolusQuest/contract-scribe/issues/35"
+            },
+            "contractRevision": {
+              "const": "issue-35-pre-release-v1"
+            },
+            "mergeCommit": {
+              "const": "bb4654edc180e2953dda6b89a29211b18778b78e"
+            },
+            "contractManifest": {
+              "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
+            },
+            "contractManifestSha256": {
+              "const": "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+            }
+          },
+          "additionalProperties": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "pending-main-reconciliation"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "mergeCommit": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "mergeCommit": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              }
+            }
+          }
+        }
+      ]
     },
     "artifactInventory": {
       "type": "array",

@@ -26,6 +26,49 @@ public sealed class SymbolEvidenceTaxonomyContractTests
     private static readonly Lazy<Dictionary<string, HashSet<string>>> RegistryIds = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().ToDictionary(section => section.Name, section => section.Value.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal));
     private static readonly Lazy<Dictionary<string, JsonElement>> RegistryEntries = new(() => JsonDocument.Parse(File.ReadAllText(Path.Combine(FindRepositoryRoot(), "schemas", "symbol-evidence-taxonomy", "v1.registry.json"))).RootElement.GetProperty("sections").EnumerateObject().SelectMany(section => section.Value.EnumerateArray()).ToDictionary(entry => entry.GetProperty("id").GetString()!, entry => entry.Clone(), StringComparer.Ordinal));
     private static readonly Lazy<ClassificationConformanceOracle> ClassificationOracle = new(() => ClassificationConformanceOracle.Load(FindRepositoryRoot()));
+
+    [Fact]
+    public void ClassificationOriginSkipMatrix_IsConsumedByTheTaxonomyOracle()
+    {
+        using var matrix = JsonDocument.Parse(File.ReadAllBytes(Path.Join(
+            FindRepositoryRoot(),
+            "tests",
+            "fixtures",
+            "m1-contract-baseline",
+            "v1",
+            "classification-origin-skip-vectors.json")));
+        var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("caseId").GetString()!,
+                row => row,
+                StringComparer.Ordinal);
+        foreach (var (caseId, row) in rows)
+        {
+            var recordAccepted = ClassificationOracle.Value.IsValidRecord(
+                row.GetProperty("record"));
+            Assert.True(
+                recordAccepted
+                    == (row.GetProperty("recordOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                ClassificationConditionsSelectRecord(row)
+                    == (row.GetProperty("selectionOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                (recordAccepted && ClassificationConditionsSelectRecord(row))
+                    == (row.GetProperty("outcome").GetString() == "accept"),
+                caseId);
+        }
+
+        foreach (var caseId in RepresentativeClassificationRejections)
+        {
+            Assert.False(
+                ClassificationOracle.Value.IsValidRecord(
+                    rows[caseId].GetProperty("record")),
+                caseId);
+        }
+    }
+
     [Fact]
     public void Registry_UsesClosedUniqueDottedIdentifiers()
     {
@@ -1089,7 +1132,8 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var kinds = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }.Where(name => locator.TryGetProperty(name, out _)).ToArray();
         return kinds.Length == 1 && kinds[0] switch
         {
-            "repository" => IsLexicalRepositoryPath(locator.GetProperty("repository").GetProperty("path").GetString())
+            "repository" => IsRawCandidateRepositoryPath(
+                    locator.GetProperty("repository").GetProperty("path").GetString())
                 && (!locator.GetProperty("repository").TryGetProperty("span", out var repositorySpan) || repositorySpan.GetProperty("start").GetInt32() <= repositorySpan.GetProperty("end").GetInt32()),
             "generatedSource" => locator.GetProperty("generatedSource").TryGetProperty("generatorId", out var generator) && locator.GetProperty("generatedSource").TryGetProperty("hintNameId", out var hint)
                 && IsGeneratedId(generator.GetString(), "sgp.") && IsGeneratedId(hint.GetString(), "sgo.")
@@ -1142,6 +1186,49 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var normalized = path.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not ".").ToArray();
         return normalized.Length > 0 && normalized.All(segment => segment != "..");
     }
+
+    private static bool IsRawCandidateRepositoryPath(string? path) =>
+        !string.IsNullOrEmpty(path)
+        && !path.Contains('\0')
+        && !path.Contains('\\')
+        && !path.StartsWith('/')
+        && !System.Text.RegularExpressions.Regex.IsMatch(path, "^[A-Za-z]:")
+        && path.Split('/').All(segment =>
+            segment.Length > 0
+            && segment is not ("." or ".."));
+
+    private static bool ClassificationConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
+            "documentation-comment-id-unavailable",
+            StringComparer.Ordinal)
+            ? "skip.unavailable.documentation-comment-id"
+            : conditions.Contains(
+                "generated-provenance-unavailable",
+                StringComparer.Ordinal)
+                ? "skip.unavailable.generated-provenance"
+                : conditions.Contains(
+                    "semantic-context-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.semantic-context"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
+    }
+
+    private static readonly string[] RepresentativeClassificationRejections =
+    [
+        "target.generated-provenance.source-origin.reject",
+        "target.semantic-context.unknown-origin.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject"
+    ];
 
     private static bool IsValidRepositoryLocator(JsonElement repository, IReadOnlyDictionary<string, string>? originalEvidenceTexts = null)
     {

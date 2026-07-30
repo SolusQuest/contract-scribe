@@ -1,0 +1,1147 @@
+{
+  "formatVersion": "contractscribe-m1-classification-origin-skip-v1",
+  "cases": [
+    {
+      "caseId": "component.generated-and-semantic.generated-selection.accept",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.generated-and-semantic.semantic-selection.reject",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.compiler-synthesized-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.mixed-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.source-generator-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.source-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.tool-generated-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.generated-provenance.unknown-origin.accept",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.compiler-synthesized-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.semantic-context.component.accessor.get.ineligible.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "P:Baseline.Widget.Value"
+        },
+        "componentKind": "component.accessor.get",
+        "identity": "accessor/get",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "component.semantic-context.component.return.eligible.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.return",
+        "identity": "return",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.component.type-parameter.eligible.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.type-parameter",
+        "identity": "type-parameter/0",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.component.value.eligible.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "P:Baseline.Widget.Value"
+        },
+        "componentKind": "component.value",
+        "identity": "value",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.mixed-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.source-generator-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.source-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.tool-generated-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "component.semantic-context.unknown-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "ComponentClassification",
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Baseline.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-and-semantic.generated-selection.accept",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.generated-and-semantic.semantic-selection.reject",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.compiler-synthesized-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.mixed-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.source-generator-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.source-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.tool-generated-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.generated-provenance.unknown-origin.accept",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.semantic-context.compiler-synthesized-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "target.semantic-context.mixed-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.semantic-context.source-generator-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.semantic-context.source-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.semantic-context.tool-generated-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "target.semantic-context.unknown-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "TargetClassification",
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "T:Baseline.Widget"
+        },
+        "primaryKind": "symbol.type.class",
+        "traits": [],
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context"
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.documentation-and-generated.documentation-selection.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable",
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-and-semantic.documentation-selection.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.compiler-synthesized-origin.reject",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.mixed-origin.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.source-generator-origin.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.source-origin.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.tool-generated-origin.accept",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.documentation-comment-id.unknown-origin.reject",
+      "conditions": [
+        "documentation-comment-id-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.documentation-comment-id",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-and-semantic.generated-selection.accept",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.generated-and-semantic.semantic-selection.reject",
+      "conditions": [
+        "generated-provenance-unavailable",
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "reject",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.compiler-synthesized-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.mixed-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.source-generator-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.source-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.tool-generated-origin.reject",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.generated-provenance.unknown-origin.accept",
+      "conditions": [
+        "generated-provenance-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.generated-provenance",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.semantic-context.compiler-synthesized-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.compiler-synthesized",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    },
+    {
+      "caseId": "unresolved.semantic-context.mixed-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.mixed",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.semantic-context.source-generator-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source-generator",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.semantic-context.source-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.source",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.semantic-context.tool-generated-origin.accept",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.tool-generated",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "accept",
+      "selectionOutcome": "accept",
+      "outcome": "accept"
+    },
+    {
+      "caseId": "unresolved.semantic-context.unknown-origin.reject",
+      "conditions": [
+        "semantic-context-unavailable"
+      ],
+      "record": {
+        "recordType": "UnresolvedClassification",
+        "compilationContextRef": "synthetic.v1",
+        "origin": "origin.unknown",
+        "supportStatus": "support.unavailable-context",
+        "skipReason": "skip.unavailable.semantic-context",
+        "candidateLocator": {
+          "synthetic": {
+            "fixtureId": "issue-55-origin-skip"
+          }
+        }
+      },
+      "recordOutcome": "reject",
+      "selectionOutcome": "accept",
+      "outcome": "reject"
+    }
+  ]
+}

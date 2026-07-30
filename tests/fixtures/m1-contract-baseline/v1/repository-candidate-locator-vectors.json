@@ -1,0 +1,177 @@
+{
+  "formatVersion": "contractscribe-m1-repository-candidate-locator-v1",
+  "cases": [
+    {
+      "caseId": "generated-source.accept",
+      "locator": {
+        "generatedSource": {
+          "generatorId": "sgp.1111111111111111111111111111111111111111111111111111111111111111",
+          "hintNameId": "sgo.2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "outcome": "accept"
+    },
+    {
+      "caseId": "repository.absolute.reject",
+      "locator": {
+        "repository": {
+          "path": "/src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.backslash.reject",
+      "locator": {
+        "repository": {
+          "path": "src\\Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.canonical.accept",
+      "locator": {
+        "repository": {
+          "path": "fixtures/unavailable.cs",
+          "span": {
+            "start": 0,
+            "end": 1
+          }
+        }
+      },
+      "outcome": "accept"
+    },
+    {
+      "caseId": "repository.dot-segment.reject",
+      "locator": {
+        "repository": {
+          "path": "src/./Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.double-separator.reject",
+      "locator": {
+        "repository": {
+          "path": "src//Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.drive-relative.reject",
+      "locator": {
+        "repository": {
+          "path": "C:src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.drive-root.reject",
+      "locator": {
+        "repository": {
+          "path": "C:/src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.empty.reject",
+      "locator": {
+        "repository": {
+          "path": ""
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.leading-dot-segment.reject",
+      "locator": {
+        "repository": {
+          "path": "./src/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.nul.reject",
+      "locator": {
+        "repository": {
+          "path": "src/\u0000/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.parent-segment.reject",
+      "locator": {
+        "repository": {
+          "path": "src/../Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.reversed-span.reject",
+      "locator": {
+        "repository": {
+          "path": "src/Missing.cs",
+          "span": {
+            "start": 2,
+            "end": 1
+          }
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.trailing-separator.reject",
+      "locator": {
+        "repository": {
+          "path": "src/"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.unc-like.reject",
+      "locator": {
+        "repository": {
+          "path": "//server/share/Missing.cs"
+        }
+      },
+      "outcome": "reject"
+    },
+    {
+      "caseId": "repository.whitespace-segment.accept",
+      "locator": {
+        "repository": {
+          "path": "src/ /Missing.cs"
+        }
+      },
+      "outcome": "accept"
+    },
+    {
+      "caseId": "synthetic.accept",
+      "locator": {
+        "synthetic": {
+          "fixtureId": "missing-documentation-id"
+        }
+      },
+      "outcome": "accept"
+    },
+    {
+      "caseId": "tool-generated.accept",
+      "locator": {
+        "toolGenerated": {
+          "producerId": "tgp.3333333333333333333333333333333333333333333333333333333333333333",
+          "outputId": "tgo.4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      },
+      "outcome": "accept"
+    }
+  ]
+}

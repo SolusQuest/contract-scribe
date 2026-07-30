@@ -17,6 +17,15 @@ public sealed record ProtocolManifest(
 
 public sealed record BaselineIdentity(
     string CoordinatingIssue,
+    string Disposition,
+    string? MergeCommit,
+    string ContractManifest,
+    string ContractManifestSha256,
+    PredecessorBaselineIdentity Predecessor);
+
+public sealed record PredecessorBaselineIdentity(
+    string CoordinatingIssue,
+    string ContractRevision,
     string MergeCommit,
     string ContractManifest,
     string ContractManifestSha256);
@@ -138,13 +147,13 @@ public sealed record ReviewRecord(
     string FormatVersion,
     string ReviewId,
     string BundleId,
-    string ReviewedHead,
-    string ReviewerKind,
-    string RelaySessionId,
-    string RelayTaskId,
+    string? ReviewedHead,
+    string? ReviewerKind,
+    string? RelaySessionId,
+    string? RelayTaskId,
     string Verdict,
     IReadOnlyList<string> BlockingFindingIds,
-    string ReviewedAtUtc);
+    string? ReviewedAtUtc);
 
 public sealed record SubjectRequest(
     string FormatVersion,

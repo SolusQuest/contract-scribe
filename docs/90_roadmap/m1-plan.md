@@ -22,13 +22,13 @@ ADR 0001 fixes the framework-dependent execution baseline. ADR 0002 fixes one in
 
 ### Target profiles
 
-The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. ADR 0003 accepted the exact semantics, and Issue #35 coordinates their pre-release v1 machine-contract baseline. The prior M0 baseline could not fully express the requirement because:
+The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. ADR 0003 accepted the exact semantics. Issue #35 established their first coordinated pre-release v1 machine-contract baseline, and Issue #55 owns the corrected successor after implementation exposed a classification-origin inconsistency. The prior M0 baseline could not fully express the requirement because:
 
 - Policy v1 selects by project and source path only.
 - Taxonomy v1 enumerates an externally reachable target surface.
 - Audit Result v1 composes those exact inputs.
 
-The coordinated Issue #35 contract set must merge before downstream production implementation fixes target behavior. The durable affected-artifact and downstream disposition record is the [pre-release v1 baseline inventory](../20_architecture/contracts/pre-release-v1-baseline.md).
+The corrected Issue #55 successor contract set must merge before downstream production implementation is accepted for the affected target behavior. The durable affected-artifact and downstream disposition record is the [pre-release v1 baseline inventory](../20_architecture/contracts/pre-release-v1-baseline.md).
 
 The decision must define:
 
@@ -119,7 +119,9 @@ The current v1 artifacts are pre-release drafts. The target-surface and observat
 
 The amendment retains version `1` unless incompatible revisions must coexist or a consumer compatibility condition in [Contract lifecycle](../00_project/contract-lifecycle.md) is met.
 
-M0 historical evidence remains pinned to its exact revision. The M1 amendment creates a new milestone baseline after validation.
+The corrected contract-content baseline and a structurally valid pending Host Validation candidate are sufficient to unblock focused production implementation that does not consume production Host evidence. Exact Issue #55 squash commit `S1`, also called contract baseline `C1`, owns the successor manifest identity. Independent acceptance of a main-reachable Host bundle is a later certification gate: it must occur after the active protected-input producers are stable and before exact-revision Host evidence execution begins.
+
+M0 and Issue #35 historical evidence remain pinned to their exact revisions. The Issue #55 amendment creates the corrected contract-content baseline after its contract conformance validation; independent Host bundle acceptance remains the later W5 certification gate.
 
 ## Workstreams
 
@@ -176,11 +178,15 @@ Use issue #30 for the thin CLI implementation and integration tests only. Its ex
 
 Refine issue #26 to one independently acceptable outcome: freeze the M1 validation protocol, matrix, expected observations, failure classification, evidence schema, and executable harness against the completed contracts and ADRs.
 
-Create a direct sibling M1 issue to execute the frozen protocol and publish bounded aggregate evidence against the exact implementation revision.
+Create one direct sibling M1 issue to promote the current structurally valid Host Validation candidate after the contracts, production Host, and active protected-input producers are stable. The promotion issue owns the main-reachable bundle and its independent accepted review. Create another direct sibling M1 issue to execute the accepted frozen protocol and publish bounded aggregate evidence against the exact implementation revision.
 
-The refocused #26 is independently acceptable because it creates the reviewed oracle for later execution. The execution issue is independently acceptable because it binds results to that frozen protocol and exact implementation revision. Each owns one focused pull request and its required validators. Neither issue is a second-level child; both are direct children of the M1 parent.
+The refocused #26 is independently acceptable because it creates the executable oracle and candidate lifecycle for later certification. The promotion issue is independently acceptable because it turns one stable candidate into an accepted, main-reachable bundle without executing production evidence. The execution issue is independently acceptable because it binds results to that accepted protocol and exact implementation revision. None is a second-level child; all are direct children of the M1 parent.
 
-The #26 protocol and its execution establish the validated host baseline; they are not described as final CLI-composition evidence. Final M1 evidence combines that host baseline, #30's exact-revision cross-platform CLI integration record, and the independent smoke, all bound to one compatible exact revision set. Host-protected input drift reopens the affected protocol execution, invalidates the #30 integration record and downstream smoke that reference the prior host revision, and requires those applicable evidence stages to rerun even when unchanged CLI-only checks remain green.
+Ordinary pre-release contract and implementation work maintains a structurally current pending candidate but does not repeat independent bundle acceptance after every protected-input change. Every pull request that changes a Host protected input regenerates the protected-input manifest, direct artifact inventory when required, artifact lock, candidate bundle ID, and matching non-authorizing pending review ID in that same pull request, then passes structural validation, both dry-runs, self-test, and ordinary CI. A pull request that changes no protected input records a reviewed no-change disposition. The superseded pending candidate remains non-authorizing historical lineage.
+
+The certification issue waits for those inputs to stabilize. Its initial literal protected-input owner set is #24 and #37-#40; Issue #55's repository outcome is complete after `S1`, even while fail-safe synchronization temporarily keeps the tracker issue open as the existing #41 gate, and #55 is not a native blocker of the certification Task. Before certification begins, every native blocker must be closed at an accepted exact commit. Any newly discovered protected-input owner is added as a native blocker and must also close before work begins. The certification PR and immutable Task closure record identify stable certification base `P0`, prove ancestry `S1 → P0 → S2 → S3`, and keep `P0` outside `baseline.mergeCommit`, the contract-manifest identity, the bundle-ID preimage, and the review-ID preimage. The Task preserves `S1/C1` as the contract baseline unless a later contract-amendment issue supersedes it, produces final bundle target `S2`, and lands the accepted review as a one-file review-record commit `S3`.
+
+The accepted protocol and its execution establish the validated host baseline; they are not described as final CLI-composition evidence. Final M1 evidence combines that host baseline, #30's exact-revision cross-platform CLI integration record, and the independent smoke, all bound to one compatible exact revision set. Host-protected input drift after `S2`, after `S3`, or before or during execution invalidates the accepted bundle, reopens the certification Task or a specifically linked successor, and restores it as a native blocker of #41 before further execution. Ordinary Host protected-input drift receives a pending-candidate refresh; drift in an input owned by the `S1` contract manifest first requires an explicit successor contract-amendment baseline before certification may retain or replace `baseline.mergeCommit = S1`. It also marks affected #41 evidence and the #30 integration record and downstream smoke that reference the prior host revision stale or superseded, and requires the applicable evidence stages to rerun in dependency order even when unchanged CLI-only checks remain green.
 
 The protocol covers:
 
@@ -230,6 +236,7 @@ The planned tracker graph uses the following ownership and expected review bound
 | #24 production host | Direct M1 child | One host-composition PR covering execution lifecycle, cancellation/failure precedence, stale-output invalidation, and atomic publication |
 | #25 CLI contract | Direct M1 child | One CLI-contract PR with executable acceptance fixtures where applicable |
 | #26 host-validation protocol | Direct M1 child | One frozen-protocol and executable-harness PR |
+| Host Validation accepted-bundle promotion | Direct sibling M1 child | One main-reachable bundle PR followed by one review-record-only PR for exact-main independent acceptance |
 | Host-validation execution | Direct sibling M1 child | One exact-revision aggregate-evidence PR against #26 |
 | #30 CLI implementation | Direct M1 child | One focused CLI implementation PR including integration tests |
 | Independent read-only smoke | Direct M1 child | One exact-revision evidence PR or bounded attestation PR |
@@ -239,16 +246,16 @@ Issues #18, #27, and #29 belong to release or research tracks and are not M1 chi
 
 ## Refinement status and non-binding sizing
 
-The current synchronization baseline contains fourteen M1 tracker nodes:
+The current synchronization baseline contains fifteen M1 tracker nodes:
 
 - one coordination-only M1 execution parent;
-- thirteen candidate executable direct children;
+- fourteen candidate executable direct children;
 - four refocused existing executable issues: #24, #25, #26, and #30;
-- nine proposed executable issues listed under [Current tracker disposition after docs merge](#current-tracker-disposition-after-docs-merge).
+- ten proposed executable issues listed under [Current tracker disposition after docs merge](#current-tracker-disposition-after-docs-merge).
 
 The completed process-topology decision #17 and the roadmap design gate are external prerequisites rather than executable M1 children and are not included in that count.
 
-The final synchronized graph is expected to contain approximately twelve to fifteen executable issues and a similar number of focused pull requests. This is a planning forecast, not an acceptance criterion or a required issue count. A candidate is combined or split only when the result satisfies [Issue workflow](../10_workflow/issue-workflow.md); file count, line count, elapsed time, or an estimate miss never substitutes for an independently acceptable outcome.
+The final synchronized graph is expected to contain approximately thirteen to sixteen executable issues and fourteen to eighteen focused pull requests because accepted-bundle promotion has two ordered review boundaries. This is a planning forecast, not an acceptance criterion or a required issue count. A candidate is combined or split only when the result satisfies [Issue workflow](../10_workflow/issue-workflow.md); file count, line count, elapsed time, or an estimate miss never substitutes for an independently acceptable outcome.
 
 Use these coarse sizing bands only to detect refinement risk:
 
@@ -262,13 +269,13 @@ Changed-line estimates include production code, tests, schemas, fixtures, script
 
 The current candidate sizing is:
 
-- S–M: target/observation decision, validation execution, and independent smoke;
+- S–M: target/observation decision, accepted-bundle promotion, validation execution, and independent smoke;
 - S: #25 CLI contract;
 - M: classification, documentation observation, policy/evidence, result aggregation, and #30 CLI implementation;
 - M–L: production loading/input, #24 host composition, and #26 validation protocol;
 - L: the coordinated v1 contract change.
 
-The full M1 milestone is provisionally expected to touch approximately 80–140 unique files and produce 9,000–17,000 changed lines across 12–15 pull requests. These aggregate figures are non-binding capacity estimates and must not be copied into issue acceptance criteria.
+The full M1 milestone is provisionally expected to touch approximately 80–140 unique files and produce 9,000–17,000 changed lines across 14–18 pull requests. These aggregate figures are non-binding capacity estimates and must not be copied into issue acceptance criteria.
 
 Four boundaries require explicit review while drafting the synchronization manifest:
 
@@ -291,7 +298,8 @@ Target/observation decision
     |
     +--> #25 CLI contract
 
-#24 host composition + #26 frozen protocol
+#24 host composition + focused implementation siblings + #26 frozen protocol
+    --> accepted-bundle promotion
     --> exact-revision validation execution
     --> validated host baseline
 
@@ -305,6 +313,19 @@ Every executable node in this diagram is a direct child of the M1 execution pare
 ## Current tracker disposition after docs merge
 
 The following updates are planned but must not occur until this documentation is merged and full-commit-SHA links exist:
+
+Issue #55 remains open and continues to block #37-#41 until `S1` is verified as reachable from `main`, exact-main validation and closure evidence pass, and a fully materialized synchronization manifest is reviewed. That manifest has one entry for every create, body update, closure record, state change, and native dependency add/remove/preserve operation affecting the certification Task and #33, #37-#41, and #55. Each entry includes the complete rendered body, exact operation, expected state, enabled native type, parent, milestone, dependencies, contract-bearing labels, and full `S1`-pinned repository links. Before the first write, the selected client must resolve the currently enabled native `Task` type and prove it can set and read back type, parent, milestone, dependencies, body, and state. Tracker synchronization is then fail-safe and ordered:
+
+1. Create the Host Validation certification Task as a direct child of #33 with native type `Task`, the M1 milestone, and its complete reviewed body; read every field back.
+2. Add literal native blockers #24 and #37-#40 to the certification Task and read every relationship back.
+3. Update #33's dependency graph and closure checklist to distinguish `S1/C1`, the current pending candidate, the accepted `S2` bundle at `S3`, and passing #41 evidence; read it back.
+4. Replace the bodies of #37, #38, #39, and #40 so each binds exact `S1`, `issue-55-classification-origin-closure-v1`, the successor manifest path and digest, its original sibling dependencies, the absence of an accepted-bundle requirement for implementation acceptance, and its candidate-maintenance duty when protected inputs change. Issue #37 also requires revalidation of merged PR #54 against exact `S1`.
+5. Replace #41's body while preserving #24 and #26 and add the certification Task as the accepted-bundle prerequisite, the pending-candidate versus accepted-bundle distinction, the exact `S2` reviewed target and `S3` main-reachable review-record gate, the prohibition on evidence execution before certification closure/readback, and the post-certification drift invalidation and re-blocking rule; read the complete body back.
+6. Add the certification Task as a native blocker of #41 and verify #41's complete native dependency set before removing or closing any existing #41 gate.
+7. Remove Issue #55 as a blocker only from #37-#40 after those bindings are verified. Retain Issue #55 as a #41 blocker until the certification Task to #41 relationship and #41 body have both been verified.
+8. Replace Issue #55's body and read it back, publish and read back the exact-main closure record, close #55 last, then read back its final state, native type, parent, milestone, body, and dependencies.
+
+If any mutation or readback fails, stop dependent writes, preserve the existing #41 blocker, and reconcile the partial tracker state against the reviewed synchronization manifest. Certification may begin only after the complete manifest succeeds, Issue #55's replacement body and closure record are read back, Issue #55 is closed, the certification Task and #41 body/native dependencies match the manifest, every native protected-input-owner blocker is closed at an accepted exact commit, and no later protected-input owner is omitted. A failed #55 closure readback must be reconciled or reopened while #41 remains blocked.
 
 | Issue | Planned disposition | Ownership after synchronization |
 | --- | --- | --- |
@@ -327,6 +348,7 @@ New M1 issues:
 - XML-documentation observation;
 - policy evaluation and bounded evidence binding;
 - canonical audit-result aggregation and serialization;
+- Host Validation accepted-bundle promotion;
 - exact-revision host-validation execution;
 - independent read-only smoke.
 
@@ -341,7 +363,7 @@ The M1 parent closes only when it links:
 - the merged target/observation decision;
 - the coordinated current v1 contract baseline;
 - production-host implementation revisions;
-- frozen validation protocol and passing aggregate evidence;
+- frozen validation protocol, accepted main-reachable bundle, and passing aggregate evidence;
 - CLI contract and implementation;
 - independent read-only smoke;
 - exact M1 baseline commit and toolchain;

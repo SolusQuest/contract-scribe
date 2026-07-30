@@ -5,7 +5,7 @@
   "targetProfile": "profile.external-api",
   "results": [
     {
-      "classification": { "recordType": "UnresolvedClassification", "compilationContextRef": "synthetic.v1", "origin": "origin.unknown", "supportStatus": "support.unavailable-context", "skipReason": "skip.unavailable.semantic-context", "candidateLocator": { "synthetic": { "fixtureId": "missing-doc-id" } } },
+      "classification": { "recordType": "UnresolvedClassification", "compilationContextRef": "synthetic.v1", "origin": "origin.source", "supportStatus": "support.unavailable-context", "skipReason": "skip.unavailable.semantic-context", "candidateLocator": { "synthetic": { "fixtureId": "missing-doc-id" } } },
       "policyContributions": [],
       "policyExpectation": null,
       "policyResolution": "unavailable",

@@ -11,6 +11,69 @@ using static ContractScribe.Tests.AuditResultConformance;
 public sealed class AuditResultContractTests
 {
     [Fact]
+    public void ClassificationOriginSkipMatrix_IsConsumedAsFullAuditDocuments()
+    {
+        using var matrix = ParseStrict(File.ReadAllBytes(Path.Join(
+            FindRepositoryRoot(),
+            "tests",
+            "fixtures",
+            "m1-contract-baseline",
+            "v1",
+            "classification-origin-skip-vectors.json")));
+        var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("caseId").GetString()!,
+                row => row,
+                StringComparer.Ordinal);
+        foreach (var (caseId, row) in rows)
+        {
+            using var document = BuildClassificationMatrixDocument(
+                row.GetProperty("record"));
+            var recordAccepted =
+                AuditSchema.Value.Evaluate(document.RootElement).IsValid
+                && IsSemanticallyValid(document.RootElement);
+            var selectionAccepted = AuditConditionsSelectRecord(row);
+            Assert.True(
+                recordAccepted
+                    == (row.GetProperty("recordOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                selectionAccepted
+                    == (row.GetProperty("selectionOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                (recordAccepted && selectionAccepted)
+                    == (row.GetProperty("outcome").GetString() == "accept"),
+                caseId);
+        }
+
+        foreach (var caseId in RepresentativeClassificationRejections)
+        {
+            using var document = BuildClassificationMatrixDocument(
+                rows[caseId].GetProperty("record"));
+            Assert.False(
+                AuditSchema.Value.Evaluate(document.RootElement).IsValid
+                    && IsSemanticallyValid(document.RootElement),
+                caseId);
+        }
+
+        var corrected = JsonNode.Parse(File.ReadAllText(
+            FixturePath("payloads", "unresolved-classification.json")))!
+            .AsObject();
+        using (var document = JsonDocument.Parse(
+            JsonSerializer.SerializeToUtf8Bytes(corrected)))
+        {
+            ValidateDocument(document.RootElement);
+        }
+
+        corrected["results"]![0]!["classification"]!["origin"] =
+            "origin.unknown";
+        using var mutation = JsonDocument.Parse(
+            JsonSerializer.SerializeToUtf8Bytes(corrected));
+        Assert.False(IsSemanticallyValid(mutation.RootElement));
+    }
+
+    [Fact]
     public void PublicFixtures_CoverMatrixAndPassSchemaAndSemanticOracle()
     {
         var root = FixtureRoot();
@@ -428,13 +491,13 @@ public sealed class AuditResultContractTests
     }
 
     [Fact]
-    public void UnresolvedSubjectKey_IsStructuralRatherThanRawJsonText()
+    public void UnresolvedSubjectKey_IsStructuralAndRejectsNonCanonicalRepositoryPaths()
     {
         using var first = JsonDocument.Parse("{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":0,\"end\":1}}}");
         using var second = JsonDocument.Parse("{\"repository\":{\"span\":{\"end\":1,\"start\":0},\"path\":\"src/Missing.cs\"}}");
         Assert.Equal(CandidateLocatorKey(first.RootElement), CandidateLocatorKey(second.RootElement));
         using var lexical = JsonDocument.Parse("{\"repository\":{\"path\":\"./src//Missing.cs\",\"span\":{\"start\":0,\"end\":1}}}");
-        Assert.Equal(CandidateLocatorKey(second.RootElement), CandidateLocatorKey(lexical.RootElement));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ValidateCandidateLocator(lexical.RootElement));
     }
 
     [Fact]
@@ -444,7 +507,7 @@ public sealed class AuditResultContractTests
         using var repository10 = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"src/Missing.cs\",\"span\":{\"start\":10,\"end\":11}}}}");
         using var generated = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"generatedSource\":{\"generatorId\":\"synthetic.generator\",\"hintNameId\":\"widget.g.cs\"}}}");
         using var synthetic = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"synthetic\":{\"fixtureId\":\"synthetic-fixture\"}}}");
-        using var lexicalZ = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"./z.cs\"}}}");
+        using var lexicalZ = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"z.cs\"}}}");
         using var plainA = JsonDocument.Parse("{\"recordType\":\"UnresolvedClassification\",\"compilationContextRef\":\"synthetic.order\",\"candidateLocator\":{\"repository\":{\"path\":\"a.cs\"}}}");
         Assert.True(GetResultSortKey(repository2.RootElement).CompareTo(GetResultSortKey(repository10.RootElement)) < 0);
         Assert.True(GetResultSortKey(plainA.RootElement).CompareTo(GetResultSortKey(lexicalZ.RootElement)) < 0);
@@ -464,6 +527,53 @@ public sealed class AuditResultContractTests
         Assert.True(fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), $"Fixture path escapes its root: {relativePath}");
         return fullPath;
     }
+
+    private static JsonDocument BuildClassificationMatrixDocument(
+        JsonElement classification)
+    {
+        var template = classification.GetProperty("recordType").GetString()
+            == "UnresolvedClassification"
+            ? "unresolved-classification.json"
+            : "classification-skipped.json";
+        var document = JsonNode.Parse(File.ReadAllText(
+            FixturePath("payloads", template)))!.AsObject();
+        document["results"]![0]!["classification"] =
+            JsonNode.Parse(classification.GetRawText());
+        return JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(document));
+    }
+
+    private static bool AuditConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
+            "documentation-comment-id-unavailable",
+            StringComparer.Ordinal)
+            ? "skip.unavailable.documentation-comment-id"
+            : conditions.Contains(
+                "generated-provenance-unavailable",
+                StringComparer.Ordinal)
+                ? "skip.unavailable.generated-provenance"
+                : conditions.Contains(
+                    "semantic-context-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.semantic-context"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
+    }
+
+    private static readonly string[] RepresentativeClassificationRejections =
+    [
+        "target.generated-provenance.source-origin.reject",
+        "target.semantic-context.unknown-origin.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject"
+    ];
 
     private static JsonDocument BuildEvidenceBoundaryDocument(int itemCount, int excerptLength)
     {

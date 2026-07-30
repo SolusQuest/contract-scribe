@@ -248,11 +248,25 @@ public static class AuditResultCanonicalizer
             .Where(name => locator.TryGetProperty(name, out _))
             .ToArray();
         Require(variants.Length == 1, "Candidate locator must contain exactly one variant.");
-        if (variants[0] == "toolGenerated")
+        if (variants[0] == "repository")
+        {
+            var repository = locator.GetProperty("repository");
+            Require(IsCanonicalRepositoryPath(repository.GetProperty("path").GetString()), "Repository candidate path must be canonical repository-relative form.");
+            ValidateLocatorSpan(repository);
+        }
+        else if (variants[0] == "generatedSource")
+        {
+            var generated = locator.GetProperty("generatedSource");
+            Require(IsGeneratedId(generated.GetProperty("generatorId").GetString(), "sgp."), "Invalid source generator ID.");
+            Require(IsGeneratedId(generated.GetProperty("hintNameId").GetString(), "sgo."), "Invalid generated source output ID.");
+            ValidateLocatorSpan(generated);
+        }
+        else if (variants[0] == "toolGenerated")
         {
             var generated = locator.GetProperty("toolGenerated");
             Require(IsGeneratedId(generated.GetProperty("producerId").GetString(), "tgp."), "Invalid tool producer ID.");
             Require(IsGeneratedId(generated.GetProperty("outputId").GetString(), "tgo."), "Invalid tool output ID.");
+            ValidateLocatorSpan(generated);
         }
     }
 
@@ -261,6 +275,17 @@ public static class AuditResultCanonicalizer
         && value.Length == prefix.Length + 64
         && value.StartsWith(prefix, StringComparison.Ordinal)
         && value[prefix.Length..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static void ValidateLocatorSpan(JsonElement locator)
+    {
+        if (locator.TryGetProperty("span", out var span))
+        {
+            Require(
+                span.GetProperty("start").GetInt32()
+                    <= span.GetProperty("end").GetInt32(),
+                "Candidate locator span is reversed.");
+        }
+    }
 
     private static void WriteValue(Utf8JsonWriter writer, JsonElement value, string? propertyName)
     {
@@ -379,7 +404,7 @@ public static class AuditResultCanonicalizer
         var locator = classification.GetProperty("candidateLocator");
         if (locator.TryGetProperty("repository", out var repository))
         {
-            return CreateUnresolvedKey(classification, 0, NormalizeRepositoryPath(repository.GetProperty("path").GetString()!), string.Empty, repository);
+            return CreateUnresolvedKey(classification, 0, repository.GetProperty("path").GetString()!, string.Empty, repository);
         }
         if (locator.TryGetProperty("generatedSource", out var generatedSource))
         {
@@ -419,6 +444,17 @@ public static class AuditResultCanonicalizer
 
     private static string NormalizeRepositoryPath(string value) =>
         string.Join('/', value.Replace('\\', '/').Split('/').Where(segment => segment is not "" and not "."));
+
+    private static bool IsCanonicalRepositoryPath(string? value) =>
+        !string.IsNullOrEmpty(value)
+        && !value.Contains('\0')
+        && !Path.IsPathRooted(value)
+        && !(value.Length >= 2
+            && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
+            && value[1] == ':')
+        && !value.Contains('\\', StringComparison.Ordinal)
+        && !value.Split('/').Any(segment => segment is "" or "." or "..")
+        && value == NormalizeRepositoryPath(value);
 
     private static void RejectUnpairedSurrogates(string value)
     {

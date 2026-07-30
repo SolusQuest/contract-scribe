@@ -19,7 +19,21 @@ public sealed class M1HostValidationProtocolTests
         var context = BundleValidator.Validate(Root);
 
         Assert.Equal("m1-host-validation-v1", context.Protocol.ProtocolId);
-        Assert.Equal("bb4654edc180e2953dda6b89a29211b18778b78e", context.Protocol.Baseline.MergeCommit);
+        Assert.Equal(
+            "https://github.com/SolusQuest/contract-scribe/issues/55",
+            context.Protocol.Baseline.CoordinatingIssue);
+        Assert.Equal(
+            "pending-main-reconciliation",
+            context.Protocol.Baseline.Disposition);
+        Assert.Null(context.Protocol.Baseline.MergeCommit);
+        Assert.Equal(
+            new PredecessorBaselineIdentity(
+                "https://github.com/SolusQuest/contract-scribe/issues/35",
+                "issue-35-pre-release-v1",
+                "bb4654edc180e2953dda6b89a29211b18778b78e",
+                "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+                "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"),
+            context.Protocol.Baseline.Predecessor);
         Assert.Matches("^m1hvp1\\.[0-9a-f]{64}$", context.Lock.BundleId);
         Assert.Equal(
             context.Protocol.ArtifactInventory.Order(StringComparer.Ordinal),
@@ -28,6 +42,415 @@ public sealed class M1HostValidationProtocolTests
             context.Lock.Entries,
             entry => File.ReadAllText(Path.Join(Root, entry.Path.Replace('/', Path.DirectorySeparatorChar)))
                 .Contains(context.Lock.BundleId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void HostValidation_PendingBaselineIsStructurallyClosedAndNonAuthorizing()
+    {
+        var context = BundleValidator.Validate(Root);
+        var review = BundleValidator.ValidateReviewStructure(
+            Root,
+            BundleValidator.ReviewRelativePath,
+            context.Lock.BundleId);
+        Assert.Equal("pending", review.Verdict);
+        Assert.Null(review.ReviewedHead);
+        Assert.Null(review.ReviewerKind);
+        Assert.Null(review.RelaySessionId);
+        Assert.Null(review.RelayTaskId);
+        Assert.Null(review.ReviewedAtUtc);
+        Assert.Equal(
+            new[] { "baseline.main-reconciliation-pending" },
+            review.BlockingFindingIds);
+        Assert.Equal(
+            "HV246_BASELINE_NOT_MAIN_REACHABLE",
+            Assert.Throws<ProtocolException>(() =>
+                BundleValidator.Validate(Root, requireReview: true)).Code);
+
+        var tempRoot = Path.Join(
+            Root,
+            "TestResults",
+            $"host-pending-review-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var reviewPath = Path.Join(tempRoot, "review.json");
+            var wrongBundle = review with
+            {
+                BundleId = $"m1hvp1.{new string('0', 64)}",
+                ReviewId = string.Empty
+            };
+            wrongBundle = wrongBundle with
+            {
+                ReviewId = BundleValidator.ComputeReviewId(wrongBundle)
+            };
+            CanonicalJson.WriteCanonical(reviewPath, wrongBundle);
+            Assert.Equal(
+                "HV247_PENDING_REVIEW_INVALID",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.ValidateReviewStructure(
+                        Root,
+                        reviewPath,
+                        context.Lock.BundleId)).Code);
+
+            var mutatedId = review with
+            {
+                ReviewId = $"review.{new string('f', 64)}"
+            };
+            CanonicalJson.WriteCanonical(reviewPath, mutatedId);
+            Assert.Equal(
+                "HV166_REVIEW_ID_MISMATCH",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.ValidateReviewStructure(
+                        Root,
+                        reviewPath,
+                        context.Lock.BundleId)).Code);
+
+            var forgedAccepted = review with
+            {
+                ReviewedHead = new string('1', 40),
+                ReviewerKind = "independent-relay",
+                RelaySessionId = "00000000-0000-0000-0000-000000000001",
+                RelayTaskId = "00000000-0000-0000-0000-000000000002",
+                Verdict = "accepted",
+                BlockingFindingIds = [],
+                ReviewedAtUtc = "2026-07-29T00:00:00Z",
+                ReviewId = string.Empty
+            };
+            forgedAccepted = forgedAccepted with
+            {
+                ReviewId = BundleValidator.ComputeReviewId(forgedAccepted)
+            };
+            CanonicalJson.WriteCanonical(reviewPath, forgedAccepted);
+            Assert.Equal(
+                "HV246_BASELINE_NOT_MAIN_REACHABLE",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        Root,
+                        requireReview: true,
+                        reviewPath)).Code);
+
+            var predecessorAccepted = new ReviewRecord(
+                "contractscribe-m1-host-validation-review-v1",
+                "review.5ac4ccffb8e481ebfa8f1b62cc10748125774201ba7f10e92f748266a753f863",
+                "m1hvp1.5ed72dbb528120424ef36ff83334801adf6fcb5d33799874e4822094c71655b9",
+                "0de7b3c51435f0dea69e8ca288c0fa6d8b0b0ca0",
+                "independent-relay",
+                "6a6769db-aab4-83ee-a41b-688ef866cfb9",
+                "7be49341-b416-49e9-aa70-6042610af130",
+                "accepted",
+                [],
+                "2026-07-29T05:10:53.554Z");
+            Assert.Equal(
+                predecessorAccepted.ReviewId,
+                BundleValidator.ComputeReviewId(
+                    predecessorAccepted with { ReviewId = string.Empty }));
+            CanonicalJson.WriteCanonical(reviewPath, predecessorAccepted);
+            Assert.Equal(
+                "HV246_BASELINE_NOT_MAIN_REACHABLE",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        Root,
+                        requireReview: true,
+                        reviewPath)).Code);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_MainReachableBaselineRequiresExactMergeAndReviewIdentities()
+    {
+        var tempRoot = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-main-reachable-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            CopyHostBundleClosure(tempRoot);
+            RunGit(tempRoot, "init");
+            RunGit(tempRoot, "config", "user.email", "host-validation@example.invalid");
+            RunGit(tempRoot, "config", "user.name", "Host Validation");
+            RunGit(tempRoot, "add", ".");
+            RunGit(tempRoot, "commit", "-m", "main-reachable baseline");
+            var mergeCommit = RunGit(tempRoot, "rev-parse", "HEAD").Trim();
+
+            var protocolPath = Path.Join(
+                tempRoot,
+                BundleValidator.ProtocolRelativePath.Replace(
+                    '/',
+                    Path.DirectorySeparatorChar));
+            var protocol = CanonicalJson.DeserializeStrict<ProtocolManifest>(
+                protocolPath,
+                2 * 1024 * 1024);
+            var mainReachableProtocol = protocol with
+            {
+                Baseline = protocol.Baseline with
+                {
+                    Disposition = "main-reachable",
+                    MergeCommit = mergeCommit
+                }
+            };
+            CanonicalJson.WriteCanonical(protocolPath, mainReachableProtocol);
+            BundleValidator.CreateProtectedInputs(tempRoot);
+            var artifactLock = BundleValidator.CreateLock(tempRoot);
+            RunGit(tempRoot, "add", ".");
+            RunGit(tempRoot, "commit", "-m", "candidate bundle");
+            var reviewedHead = RunGit(tempRoot, "rev-parse", "HEAD").Trim();
+            var reviewPath = Path.Join(
+                tempRoot,
+                BundleValidator.ReviewRelativePath.Replace(
+                    '/',
+                    Path.DirectorySeparatorChar));
+
+            var pendingReview = WithComputedReviewId(new ReviewRecord(
+                "contractscribe-m1-host-validation-review-v1",
+                string.Empty,
+                artifactLock.BundleId,
+                null,
+                null,
+                null,
+                null,
+                "pending",
+                ["baseline.main-reconciliation-pending"],
+                null));
+            CanonicalJson.WriteCanonical(reviewPath, pendingReview);
+            Assert.Equal(
+                "HV121_REVIEW_NOT_ACCEPTED",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+
+            var acceptedReview = CreateAcceptedReview(
+                artifactLock.BundleId,
+                reviewedHead);
+            CanonicalJson.WriteCanonical(reviewPath, acceptedReview);
+            var accepted = BundleValidator.Validate(
+                tempRoot,
+                requireReview: true);
+            Assert.Equal(artifactLock.BundleId, accepted.Lock.BundleId);
+
+            CanonicalJson.WriteCanonical(
+                protocolPath,
+                mainReachableProtocol with
+                {
+                    Baseline = mainReachableProtocol.Baseline with
+                    {
+                        MergeCommit = null
+                    }
+                });
+            Assert.Equal(
+                "HV111_SCHEMA_REJECTED",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+            CanonicalJson.WriteCanonical(protocolPath, mainReachableProtocol);
+
+            var tree = RunGit(
+                tempRoot,
+                "rev-parse",
+                "HEAD^{tree}").Trim();
+            var nonAncestor = RunGit(
+                tempRoot,
+                "commit-tree",
+                tree,
+                "-m",
+                "unrelated baseline").Trim();
+            CanonicalJson.WriteCanonical(
+                protocolPath,
+                mainReachableProtocol with
+                {
+                    Baseline = mainReachableProtocol.Baseline with
+                    {
+                        MergeCommit = nonAncestor
+                    }
+                });
+            Assert.Equal(
+                "HV246_BASELINE_NOT_MAIN_REACHABLE",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+            CanonicalJson.WriteCanonical(protocolPath, mainReachableProtocol);
+
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(
+                    $"m1hvp1.{new string('0', 64)}",
+                    reviewedHead));
+            Assert.Equal(
+                "HV121_REVIEW_NOT_ACCEPTED",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(
+                    artifactLock.BundleId,
+                    new string('f', 40)));
+            Assert.Equal(
+                "HV202_REVIEWED_COMMIT_INVALID",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+
+            var contractManifestPath = Path.Join(
+                tempRoot,
+                mainReachableProtocol.Baseline.ContractManifest.Replace(
+                    '/',
+                    Path.DirectorySeparatorChar));
+            var contractManifestBytes = File.ReadAllBytes(contractManifestPath);
+            File.WriteAllText(
+                contractManifestPath,
+                "{}\n",
+                new UTF8Encoding(false));
+            RunGit(
+                tempRoot,
+                "add",
+                mainReachableProtocol.Baseline.ContractManifest);
+            RunGit(tempRoot, "commit", "-m", "mismatched reviewed bundle");
+            var driftedHead = RunGit(tempRoot, "rev-parse", "HEAD").Trim();
+            File.WriteAllBytes(contractManifestPath, contractManifestBytes);
+
+            CanonicalJson.WriteCanonical(
+                protocolPath,
+                mainReachableProtocol with
+                {
+                    Baseline = mainReachableProtocol.Baseline with
+                    {
+                        MergeCommit = driftedHead
+                    }
+                });
+            Assert.Equal(
+                "HV246_BASELINE_NOT_MAIN_REACHABLE",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+            CanonicalJson.WriteCanonical(protocolPath, mainReachableProtocol);
+
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(
+                    artifactLock.BundleId,
+                    driftedHead));
+            Assert.Equal(
+                "HV203_REVIEWED_BUNDLE_MISMATCH",
+                Assert.Throws<ProtocolException>(() =>
+                    BundleValidator.Validate(
+                        tempRoot,
+                        requireReview: true)).Code);
+
+            CanonicalJson.WriteCanonical(reviewPath, acceptedReview);
+            _ = BundleValidator.Validate(tempRoot, requireReview: true);
+        }
+        finally
+        {
+            NormalizeFileAttributes(tempRoot);
+            Directory.Delete(tempRoot, recursive: true);
+        }
+
+        static ReviewRecord CreateAcceptedReview(
+            string bundleId,
+            string reviewedHead) =>
+            WithComputedReviewId(new ReviewRecord(
+                "contractscribe-m1-host-validation-review-v1",
+                string.Empty,
+                bundleId,
+                reviewedHead,
+                "independent-relay",
+                "00000000-0000-0000-0000-000000000001",
+                "00000000-0000-0000-0000-000000000002",
+                "accepted",
+                [],
+                "2026-07-29T00:00:00Z"));
+
+        static ReviewRecord WithComputedReviewId(ReviewRecord review) =>
+            review with
+            {
+                ReviewId = BundleValidator.ComputeReviewId(review)
+            };
+    }
+
+    [Fact]
+    public async Task HostValidation_PendingCommandMatrixRejectsBeforeOutputCreation()
+    {
+        var tempRoot = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-host-pending-commands-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var missing = Path.Join(tempRoot, "missing.json");
+            var output = Path.Join(tempRoot, "output.json");
+            var incomplete = Path.Join(tempRoot, "incomplete.json");
+            var commands = new[]
+            {
+                new[] { "validate-bundle", "--root", Root, "--require-review" },
+                new[] { "provision-fixtures", "--root", Root, "--subject-manifest", missing },
+                new[] { "run-cell", "--root", Root, "--subject-manifest", missing, "--review", missing, "--cell", "ubuntu-x64", "--incomplete-output", incomplete, "--output", output },
+                new[] { "validate-cell", "--root", Root, "--evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "validate-incomplete", "--root", Root, "--evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "aggregate", "--root", Root, "--evidence", missing, "--output", output, "--review", missing, "--subject-manifest", missing, "--matrix-result", "passed", "--publication-base-revision", new string('1', 40) },
+                new[] { "validate-aggregate", "--root", Root, "--evidence", missing, "--cell-evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "validate-publication-record", "--root", Root, "--record", missing, "--aggregate-evidence", missing, "--cell-evidence", missing, "--review", missing, "--subject-manifest", missing },
+                new[] { "prepare-public", "--root", Root, "--source", missing, "--output", output, "--review", missing, "--subject-manifest", missing, "--kind", "cell" }
+            };
+
+            foreach (var command in commands)
+            {
+                var result = await RunHostCommandAsync(command);
+                Assert.Equal(2, result.ExitCode);
+                Assert.Equal(string.Empty, result.Stdout);
+                Assert.Equal(
+                    "HV246_BASELINE_NOT_MAIN_REACHABLE\n",
+                    result.Stderr.Replace("\r\n", "\n", StringComparison.Ordinal));
+                Assert.False(File.Exists(output));
+                Assert.False(File.Exists(incomplete));
+            }
+
+            var isolatedRoot = Path.Join(tempRoot, "isolated-root");
+            CopyHostBundleClosure(isolatedRoot);
+            var protectedInputs = await RunHostCommandAsync(
+                "lock-protected-inputs",
+                "--root",
+                isolatedRoot);
+            Assert.Equal(0, protectedInputs.ExitCode);
+            Assert.Matches(
+                "^HV000_PROTECTED_INPUTS [1-9][0-9]*\\r?\\n$",
+                protectedInputs.Stdout);
+            Assert.Equal(string.Empty, protectedInputs.Stderr);
+
+            var bundle = await RunHostCommandAsync(
+                "lock-bundle",
+                "--root",
+                isolatedRoot);
+            Assert.Equal(0, bundle.ExitCode);
+            Assert.Matches(
+                "^HV000_OK m1hvp1\\.[0-9a-f]{64}\\r?\\n$",
+                bundle.Stdout);
+            Assert.Equal(string.Empty, bundle.Stderr);
+
+            var structural = await RunHostCommandAsync(
+                "validate-bundle",
+                "--root",
+                isolatedRoot);
+            Assert.True(
+                structural.ExitCode == 0,
+                $"Expected structural validation to succeed, but stderr was: {structural.Stderr}");
+            Assert.Equal(bundle.Stdout, structural.Stdout);
+            Assert.Equal(string.Empty, structural.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -1897,6 +2320,70 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_ConsumesClassificationOriginSkipMatrixAsFullDocuments()
+    {
+        using var matrix = CanonicalJson.ReadStrict(
+            Path.Join(
+                Root,
+                "tests",
+                "fixtures",
+                "m1-contract-baseline",
+                "v1",
+                "classification-origin-skip-vectors.json"),
+            2 * 1024 * 1024);
+        var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("caseId").GetString()!,
+                row => row,
+                StringComparer.Ordinal);
+        foreach (var (caseId, row) in rows)
+        {
+            var recordAccepted = HostAcceptsClassificationRecord(
+                row.GetProperty("record"));
+            var selectionAccepted = HostConditionsSelectRecord(row);
+            Assert.True(
+                recordAccepted
+                    == (row.GetProperty("recordOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                selectionAccepted
+                    == (row.GetProperty("selectionOutcome").GetString() == "accept"),
+                caseId);
+            Assert.True(
+                (recordAccepted && selectionAccepted)
+                    == (row.GetProperty("outcome").GetString() == "accept"),
+                caseId);
+        }
+
+        foreach (var caseId in RepresentativeClassificationRejections)
+        {
+            Assert.False(
+                HostAcceptsClassificationRecord(
+                    rows[caseId].GetProperty("record")),
+                caseId);
+        }
+
+        var correctedPath = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "unresolved-classification.json");
+        using (var corrected = CanonicalJson.ReadStrict(
+            correctedPath,
+            2 * 1024 * 1024))
+        {
+            AuditResultSemanticValidator.Validate(Root, corrected.RootElement);
+        }
+
+        AssertInvalidTaxonomyMutation(correctedPath, root =>
+            root["results"]![0]!["classification"]!["origin"] =
+                "origin.unknown");
+    }
+
+    [Fact]
     public void HostValidation_AuditResultSemanticClosureEnforcesTaxonomyRegistryConstraints()
     {
         var componentPath = Path.Join(
@@ -2925,6 +3412,77 @@ public sealed class M1HostValidationProtocolTests
                 AuditResultSemanticValidator.Validate(Root, document.RootElement)).Code);
     }
 
+    private static JsonDocument BuildHostClassificationMatrixDocument(
+        JsonElement classification)
+    {
+        var template = classification.GetProperty("recordType").GetString()
+            == "UnresolvedClassification"
+            ? "unresolved-classification.json"
+            : "classification-skipped.json";
+        var root = JsonNode.Parse(File.ReadAllText(Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            template)))!.AsObject();
+        root["results"]![0]!["classification"] =
+            JsonNode.Parse(classification.GetRawText());
+        return JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(root));
+    }
+
+    private static bool HostConditionsSelectRecord(JsonElement row)
+    {
+        var conditions = row.GetProperty("conditions").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        var selectedSkipReason = row.GetProperty("record")
+            .GetProperty("skipReason")
+            .GetString();
+        var expectedSkipReason = conditions.Contains(
+            "documentation-comment-id-unavailable",
+            StringComparer.Ordinal)
+            ? "skip.unavailable.documentation-comment-id"
+            : conditions.Contains(
+                "generated-provenance-unavailable",
+                StringComparer.Ordinal)
+                ? "skip.unavailable.generated-provenance"
+                : conditions.Contains(
+                    "semantic-context-unavailable",
+                    StringComparer.Ordinal)
+                    ? "skip.unavailable.semantic-context"
+                    : null;
+        return selectedSkipReason == expectedSkipReason;
+    }
+
+    private static bool HostAcceptsClassificationRecord(JsonElement classification)
+    {
+        using var document = BuildHostClassificationMatrixDocument(
+            classification);
+        try
+        {
+            AuditResultSemanticValidator.Validate(
+                Root,
+                document.RootElement);
+            return true;
+        }
+        catch (ProtocolException exception)
+            when (exception.Code == "HV230_AUDIT_RESULT_SEMANTICS")
+        {
+            return false;
+        }
+    }
+
+    private static readonly string[] RepresentativeClassificationRejections =
+    [
+        "target.generated-provenance.source-origin.reject",
+        "target.semantic-context.unknown-origin.reject",
+        "target.generated-provenance.compiler-synthesized-origin.reject",
+        "unresolved.documentation-comment-id.unknown-origin.reject",
+        "component.semantic-context.component.accessor.get.ineligible.reject"
+    ];
+
     private static ExecutionSubjectManifest EnableFixture(
         ExecutionSubjectManifest subject,
         string cellId,
@@ -3072,6 +3630,87 @@ public sealed class M1HostValidationProtocolTests
         throw new InvalidOperationException("Could not find the repository root.");
     }
 
+    private static async Task<HostCommandResult> RunHostCommandAsync(
+        params string[] arguments)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = Root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        start.ArgumentList.Add(typeof(Program).Assembly.Location);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException(
+                "Could not start Host Validation.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return new HostCommandResult(
+            process.ExitCode,
+            await stdout,
+            await stderr);
+    }
+
+    private static void CopyHostBundleClosure(string destinationRoot)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal)
+        {
+            ".gitattributes",
+            BundleValidator.ProtocolRelativePath,
+            BundleValidator.ProtectedInputsRelativePath,
+            BundleValidator.LockRelativePath,
+            BundleValidator.ReviewRelativePath
+        };
+        using (var protocol = JsonDocument.Parse(File.ReadAllBytes(Path.Join(
+            Root,
+            BundleValidator.ProtocolRelativePath.Replace(
+                '/',
+                Path.DirectorySeparatorChar)))))
+        {
+            paths.UnionWith(protocol.RootElement
+                .GetProperty("artifactInventory")
+                .EnumerateArray()
+                .Select(path => path.GetString()!));
+        }
+
+        using (var protectedInputs = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Join(
+                Root,
+                BundleValidator.ProtectedInputsRelativePath.Replace(
+                    '/',
+                    Path.DirectorySeparatorChar)))))
+        {
+            paths.UnionWith(protectedInputs.RootElement
+                .GetProperty("entries")
+                .EnumerateArray()
+                .Select(entry => entry.GetProperty("path").GetString()!));
+        }
+
+        foreach (var relativePath in paths)
+        {
+            var source = Path.Join(
+                Root,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            var destination = Path.Join(
+                destinationRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination);
+        }
+    }
+
+    private sealed record HostCommandResult(
+        int ExitCode,
+        string Stdout,
+        string Stderr);
+
     private static string RunGit(string workingDirectory, params string[] arguments)
     {
         var start = new ProcessStartInfo("git")
@@ -3087,9 +3726,11 @@ public sealed class M1HostValidationProtocolTests
         }
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException("Could not start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
+        var output = outputTask.GetAwaiter().GetResult();
+        var error = errorTask.GetAwaiter().GetResult();
         Assert.True(
             process.ExitCode == 0,
             $"git {string.Join(' ', arguments)} failed: {error}");
