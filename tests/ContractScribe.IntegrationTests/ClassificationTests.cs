@@ -1404,6 +1404,32 @@ public sealed class ClassificationTests
         var cases = new[]
         {
             new CollisionCase(
+                "unresolved.documentation-and-generated.documentation-selection.accept",
+                supported with
+                {
+                    DocumentationCommentId = null,
+                    CandidateLocators = [repositoryLocator],
+                    GeneratedProvenanceAvailable = false,
+                },
+                false,
+                null,
+                ClassificationOrigin.Source,
+                SupportStatus.UnavailableContext,
+                SkipReason.UnavailableDocumentationCommentId),
+            new CollisionCase(
+                "unresolved.documentation-and-semantic.documentation-selection.accept",
+                supported with
+                {
+                    DocumentationCommentId = null,
+                    CandidateLocators = [repositoryLocator],
+                    SemanticContextAvailable = false,
+                },
+                false,
+                null,
+                ClassificationOrigin.Source,
+                SupportStatus.UnavailableContext,
+                SkipReason.UnavailableDocumentationCommentId),
+            new CollisionCase(
                 "missing-id-beats-provenance-and-context",
                 supported with
                 {
@@ -1533,6 +1559,48 @@ public sealed class ClassificationTests
                 Assert.Equal(item.Skip, target.SkipReason);
             }
         }
+    }
+
+    [Fact]
+    public void ComponentUnavailableSelectionUsesGeneratedProvenanceBeforeSemanticContext()
+    {
+        var componentParent = new SymbolRef(
+            "ctx-collisions",
+            "M:Parent.Run(System.String)");
+        var componentBatch = new ClassificationCandidateBatch(
+            [
+                new TargetClassificationCandidate(
+                    componentParent.CompilationContextRef,
+                    componentParent.DocumentationCommentId,
+                    PrimarySymbolKind.Method,
+                    [],
+                    ClassificationOrigin.Source,
+                    []),
+            ],
+            [
+                new ComponentClassificationCandidate(
+                    componentParent,
+                    ComponentKind.Parameter,
+                    "parameter/0",
+                    ClassificationOrigin.Source,
+                    GeneratedProvenanceAvailable: false,
+                    SemanticContextAvailable: false),
+            ],
+            [],
+            []);
+
+        var componentResult = ClassificationNormalization.Normalize(
+            TargetProfile.ExternalApi,
+            componentBatch,
+            CancellationToken.None);
+        var component = Assert.Single(componentResult.Components);
+        Assert.Equal(ClassificationOrigin.Unknown, component.Origin);
+        Assert.Equal(
+            SupportStatus.UnavailableContext,
+            component.SupportStatus);
+        Assert.Equal(
+            SkipReason.UnavailableGeneratedProvenance,
+            component.SkipReason);
     }
 
     [Fact]
