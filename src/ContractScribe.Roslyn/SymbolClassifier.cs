@@ -155,6 +155,14 @@ public sealed class SymbolClassifier
         }
     }
 
+    public ClassifiedRepositorySession ClassifySession(
+        LoadedRepositorySession session,
+        TargetProfile profile,
+        CancellationToken cancellationToken = default) =>
+        new(
+            session ?? throw new ArgumentNullException(nameof(session)),
+            Classify(session, profile, cancellationToken));
+
     private void DiscoverTargets(
         LoadedProject project,
         TargetProfile profile,

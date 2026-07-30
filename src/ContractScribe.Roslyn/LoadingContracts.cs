@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn;
 
@@ -122,6 +123,21 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         Dispose();
         return ValueTask.CompletedTask;
     }
+}
+
+public sealed class ClassifiedRepositorySession
+{
+    internal ClassifiedRepositorySession(
+        LoadedRepositorySession repositorySession,
+        ClassificationOutcome classification)
+    {
+        RepositorySession = repositorySession;
+        Classification = classification;
+    }
+
+    public LoadedRepositorySession RepositorySession { get; }
+
+    public ClassificationOutcome Classification { get; }
 }
 
 public enum LoadedProjectRole
