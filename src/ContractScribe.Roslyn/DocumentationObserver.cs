@@ -530,8 +530,14 @@ public sealed class DocumentationObserver
             .OfType<XmlElementSyntax>())
         {
             if (element.ContainsDiagnostics
+                || element.StartTag.Name.Prefix is not null
+                || element.EndTag.Name.Prefix is not null
                 || !string.Equals(
                     element.StartTag.Name.LocalName.ValueText,
+                    expectedTag,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    element.EndTag.Name.LocalName.ValueText,
                     expectedTag,
                     StringComparison.Ordinal)
                 || componentKind is ComponentKind.Parameter
@@ -554,7 +560,8 @@ public sealed class DocumentationObserver
         SyntaxList<XmlAttributeSyntax> attributes,
         string expectedName) =>
         attributes.OfType<XmlNameAttributeSyntax>().Any(attribute =>
-            string.Equals(
+            attribute.Name.Prefix is null
+            && string.Equals(
                 attribute.Name.LocalName.ValueText,
                 "name",
                 StringComparison.Ordinal)

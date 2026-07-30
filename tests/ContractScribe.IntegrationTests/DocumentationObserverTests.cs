@@ -1113,6 +1113,15 @@ public sealed class DocumentationObserverTests
                 /// <param name="value">broken
                 public void ParameterMalformed(string value) { }
 
+                /// <inheritdoc/>
+                public void ParameterInheritdocOnly(string value) { }
+
+                /// <x:param xmlns:x="urn:custom" name="value">Custom.</x:param>
+                public void ParameterQualifiedElement(string value) { }
+
+                /// <param xmlns:x="urn:custom" x:name="value">Custom.</param>
+                public void ParameterQualifiedName(string value) { }
+
                 /// <typeparam name="T">Documented.</typeparam>
                 public void TypeParameterPositive<T>() { }
 
@@ -1121,6 +1130,12 @@ public sealed class DocumentationObserverTests
 
                 /// <typeparam name="T">broken
                 public void TypeParameterMalformed<T>() { }
+
+                /// <x:typeparam xmlns:x="urn:custom" name="T">Custom.</x:typeparam>
+                public void TypeParameterQualifiedElement<T>() { }
+
+                /// <typeparam xmlns:x="urn:custom" x:name="T">Custom.</typeparam>
+                public void TypeParameterQualifiedName<T>() { }
 
                 /// <returns>Documented.</returns>
                 public int ReturnPositive() => 1;
@@ -1131,6 +1146,9 @@ public sealed class DocumentationObserverTests
                 /// <returns>broken
                 public int ReturnMalformed() => 1;
 
+                /// <x:returns xmlns:x="urn:custom">Custom.</x:returns>
+                public int ReturnQualified() => 1;
+
                 /// <value>Documented.</value>
                 public int ValuePositive { get; set; }
 
@@ -1139,6 +1157,9 @@ public sealed class DocumentationObserverTests
 
                 /// <value>broken
                 public int ValueMalformed { get; set; }
+
+                /// <x:value xmlns:x="urn:custom">Custom.</x:value>
+                public int ValueQualified { get; set; }
             }
             """;
         using var session = CreateSession(source);
@@ -1158,24 +1179,38 @@ public sealed class DocumentationObserverTests
                 ComponentKind.Parameter, DocumentationObservationValue.Absent, "value"),
             ("M:Components.ParameterMalformed(System.String)",
                 ComponentKind.Parameter, DocumentationObservationValue.Unavailable, "value"),
+            ("M:Components.ParameterInheritdocOnly(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Absent, "value"),
+            ("M:Components.ParameterQualifiedElement(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Absent, "value"),
+            ("M:Components.ParameterQualifiedName(System.String)",
+                ComponentKind.Parameter, DocumentationObservationValue.Absent, "value"),
             ("M:Components.TypeParameterPositive``1",
                 ComponentKind.TypeParameter, DocumentationObservationValue.Present, "T"),
             ("M:Components.TypeParameterNegative``1",
                 ComponentKind.TypeParameter, DocumentationObservationValue.Absent, "T"),
             ("M:Components.TypeParameterMalformed``1",
                 ComponentKind.TypeParameter, DocumentationObservationValue.Unavailable, "T"),
+            ("M:Components.TypeParameterQualifiedElement``1",
+                ComponentKind.TypeParameter, DocumentationObservationValue.Absent, "T"),
+            ("M:Components.TypeParameterQualifiedName``1",
+                ComponentKind.TypeParameter, DocumentationObservationValue.Absent, "T"),
             ("M:Components.ReturnPositive",
                 ComponentKind.Return, DocumentationObservationValue.Present, (string?)null),
             ("M:Components.ReturnNegative",
                 ComponentKind.Return, DocumentationObservationValue.Absent, (string?)null),
             ("M:Components.ReturnMalformed",
                 ComponentKind.Return, DocumentationObservationValue.Unavailable, (string?)null),
+            ("M:Components.ReturnQualified",
+                ComponentKind.Return, DocumentationObservationValue.Absent, (string?)null),
             ("P:Components.ValuePositive",
                 ComponentKind.Value, DocumentationObservationValue.Present, (string?)null),
             ("P:Components.ValueNegative",
                 ComponentKind.Value, DocumentationObservationValue.Absent, (string?)null),
             ("P:Components.ValueMalformed",
                 ComponentKind.Value, DocumentationObservationValue.Unavailable, (string?)null),
+            ("P:Components.ValueQualified",
+                ComponentKind.Value, DocumentationObservationValue.Absent, (string?)null),
         })
         {
             AssertComponent(
@@ -1254,6 +1289,282 @@ public sealed class DocumentationObserverTests
             incomplete.ObservationSet.Observations,
             "T:ToolAbsent",
             DocumentationObservationValue.Absent);
+    }
+
+    [Fact]
+    public void ToolGeneratedComponentsCoverPresentAbsentAndUnavailable()
+    {
+        const string presentSource = """
+            public class ToolPresent
+            {
+                /// <param name="value">Direct tool documentation.</param>
+                public void Run(string value) { }
+            }
+            """;
+        const string absentSource = """
+            public class ToolAbsentComponent
+            {
+                /// <summary>No component tag.</summary>
+                public void Run(string value) { }
+            }
+            """;
+        const string unavailableSource = """
+            public class ToolUnavailable
+            {
+                /// <param name="value">Unavailable binding.</param>
+                public void Run(string value) { }
+            }
+            """;
+        var presentFact = ToolGeneratedFact(presentSource, 'b', 'c');
+        var absentFact = ToolGeneratedFact(absentSource, 'd', 'e');
+        var unavailableFact = ToolGeneratedFact(unavailableSource, 'f', '1');
+        using var session = CreateSession(
+            new SourceInput(
+                "tool://present",
+                presentSource,
+                LoadedSourceKind.ToolGenerated,
+                presentFact),
+            new SourceInput(
+                "tool://absent",
+                absentSource,
+                LoadedSourceKind.ToolGenerated,
+                absentFact),
+            new SourceInput(
+                "tool://unavailable",
+                unavailableSource,
+                LoadedSourceKind.ToolGenerated,
+                unavailableFact));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        RemoveSourceBinding(session, "tool://unavailable");
+
+        var outcome = new DocumentationObserver().Observe(classified);
+
+        Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+        var observations = outcome.ObservationSet!.Observations;
+        var present = AssertComponent(
+            observations,
+            "M:ToolPresent.Run(System.String)",
+            ComponentKind.Parameter,
+            DocumentationObservationValue.Present,
+            "value");
+        var absent = AssertComponent(
+            observations,
+            "M:ToolAbsentComponent.Run(System.String)",
+            ComponentKind.Parameter,
+            DocumentationObservationValue.Absent,
+            "value");
+        var unavailable = AssertComponent(
+            observations,
+            "M:ToolUnavailable.Run(System.String)",
+            ComponentKind.Parameter,
+            DocumentationObservationValue.Unavailable,
+            "value");
+        Assert.All(
+            present.Declarations.Concat(absent.Declarations),
+            declaration => Assert.Equal(
+                DocumentationSourceKind.ToolGenerated,
+                declaration.Source.Kind));
+        Assert.Empty(unavailable.Declarations);
+        Assert.Equal(
+            DocumentationUnavailableCause.SourceUnavailable,
+            unavailable.UnavailableCause);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DependencyAndMetadataEndpointDocumentationDoesNotPromote(
+        bool includeDependencyProject)
+    {
+        using var baselineSession = CreateReferencedRelationSession(
+            endpointDocumentation: false,
+            includeDependencyProject);
+        using var documentedSession = CreateReferencedRelationSession(
+            endpointDocumentation: true,
+            includeDependencyProject);
+        var baselineClassification = new SymbolClassifier().ClassifySession(
+            baselineSession,
+            TargetProfile.ExternalApi);
+        var documentedClassification = new SymbolClassifier().ClassifySession(
+            documentedSession,
+            TargetProfile.ExternalApi);
+        var documentedSet = Assert.IsType<ClassificationSet>(
+            documentedClassification.Classification.ClassificationSet);
+        Assert.Contains(
+            documentedSet.Relations,
+            relation => relation.RelationKind == RelationKind.Overrides
+                && relation.SourceSymbolRef.DocumentationCommentId
+                    == "M:Direct.Read(System.Int32)"
+                && relation.TargetSymbolRef.DocumentationCommentId
+                    == "M:EndpointBase.Read(System.Int32)");
+        Assert.Contains(
+            documentedSet.Relations,
+            relation => relation.RelationKind
+                    == RelationKind.ImplicitInterfaceImplementation
+                && relation.SourceSymbolRef.DocumentationCommentId
+                    == "M:Direct.Read(System.Int32)"
+                && relation.TargetSymbolRef.DocumentationCommentId
+                    == "M:IEndpoint.Read(System.Int32)");
+        var rootProject = Assert.Single(
+            documentedSession.Projects,
+            project => project.Role == LoadedProjectRole.AuditRoot);
+        var endpoint = Assert.Single(
+            rootProject.Compilation.GetTypeByMetadataName("EndpointBase")!
+                .GetMembers("Read"));
+        if (includeDependencyProject)
+        {
+            Assert.NotEmpty(endpoint.DeclaringSyntaxReferences);
+        }
+        else
+        {
+            Assert.Empty(endpoint.DeclaringSyntaxReferences);
+        }
+
+        Assert.Contains(
+            "Endpoint documentation.",
+            endpoint.GetDocumentationCommentXml(),
+            StringComparison.Ordinal);
+
+        var baseline = new DocumentationObserver().Observe(baselineClassification);
+        var documented = new DocumentationObserver().Observe(documentedClassification);
+
+        Assert.Equal(
+            ProjectSubjects(baseline, "M:Direct.Read(System.Int32)"),
+            ProjectSubjects(documented, "M:Direct.Read(System.Int32)"));
+        AssertTarget(
+            documented.ObservationSet!.Observations,
+            "M:Direct.Read(System.Int32)",
+            DocumentationObservationValue.Absent);
+        Assert.Equal(
+            includeDependencyProject ? 1 : 0,
+            documentedSession.Projects.Count(
+                project => project.Role == LoadedProjectRole.DependencyOnly));
+    }
+
+    [Fact]
+    public void GeneratedRelationEndpointDocumentationDoesNotPromote()
+    {
+        using var baselineSession = CreateGeneratedRelationSession(
+            endpointDocumentation: false);
+        using var documentedSession = CreateGeneratedRelationSession(
+            endpointDocumentation: true);
+        var baselineClassification = new SymbolClassifier().ClassifySession(
+            baselineSession,
+            TargetProfile.ExternalApi);
+        var documentedClassification = new SymbolClassifier().ClassifySession(
+            documentedSession,
+            TargetProfile.ExternalApi);
+        var documentedSet = Assert.IsType<ClassificationSet>(
+            documentedClassification.Classification.ClassificationSet);
+        Assert.Contains(
+            documentedSet.Targets,
+            target => target.SymbolRef.DocumentationCommentId
+                    == "T:GeneratedBase"
+                && target.Origin == ClassificationOrigin.ToolGenerated);
+        Assert.Contains(
+            documentedSet.Relations,
+            relation => relation.RelationKind == RelationKind.Overrides
+                && relation.SourceSymbolRef.DocumentationCommentId
+                    == "M:DirectGenerated.Read(System.Int32)"
+                && relation.TargetSymbolRef.DocumentationCommentId
+                    == "M:GeneratedBase.Read(System.Int32)");
+
+        var baseline = new DocumentationObserver().Observe(baselineClassification);
+        var documented = new DocumentationObserver().Observe(documentedClassification);
+
+        Assert.Equal(
+            ProjectSubjects(baseline, "M:DirectGenerated.Read(System.Int32)"),
+            ProjectSubjects(documented, "M:DirectGenerated.Read(System.Int32)"));
+        AssertTarget(
+            documented.ObservationSet!.Observations,
+            "M:DirectGenerated.Read(System.Int32)",
+            DocumentationObservationValue.Absent);
+    }
+
+    [Fact]
+    public void AmbiguousAndUnavailableRelationsDoNotChangeDirectObservations()
+    {
+        const string source = """
+            public interface IBase
+            {
+                /// <summary>Interface endpoint.</summary>
+                void Implemented();
+
+                /// <summary>Explicit endpoint.</summary>
+                void Explicit();
+
+                /// <summary>Inherited endpoint.</summary>
+                void Inherited();
+            }
+
+            public interface IDerived : IBase { }
+
+            public class Base
+            {
+                /// <summary>Base endpoint.</summary>
+                public virtual void Overridden() { }
+            }
+
+            public class Direct : Base, IBase
+            {
+                public override void Overridden() { }
+                public void Implemented() { }
+                public void Inherited() { }
+                void IBase.Explicit() { }
+            }
+            """;
+        using var session = CreateSession(source);
+        var baselineClassification = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var baselineSet = Assert.IsType<ClassificationSet>(
+            baselineClassification.Classification.ClassificationSet);
+        Assert.All(
+            Enum.GetValues<RelationKind>(),
+            kind => Assert.Contains(
+                baselineSet.Relations,
+                relation => relation.RelationKind == kind));
+        var baseline = new DocumentationObserver().Observe(baselineClassification);
+        var baselineProjection = Project(baseline);
+
+        foreach (var blockedKind in Enum.GetValues<RelationKind>())
+        {
+            foreach (var blockedStatus in new[]
+            {
+                RelationEndpointStatus.Ambiguous,
+                RelationEndpointStatus.Unavailable,
+            })
+            {
+                var classifier = new SymbolClassifier(
+                    null,
+                    (kind, symbol, isTarget, context) =>
+                        kind == blockedKind && isTarget
+                            ? new RelationEndpointResolution(
+                                blockedStatus,
+                                null,
+                                null)
+                            : new RelationEndpointResolution(
+                                RelationEndpointStatus.Available,
+                                context,
+                                symbol.GetDocumentationCommentId()!),
+                    null,
+                    null);
+                var classified = classifier.ClassifySession(
+                    session,
+                    TargetProfile.ExternalApi);
+                var set = Assert.IsType<ClassificationSet>(
+                    classified.Classification.ClassificationSet);
+                Assert.DoesNotContain(
+                    set.Relations,
+                    relation => relation.RelationKind == blockedKind);
+
+                var outcome = new DocumentationObserver().Observe(classified);
+
+                Assert.Equal(baselineProjection, Project(outcome));
+            }
+        }
     }
 
     [Fact]
@@ -1483,6 +1794,180 @@ public sealed class DocumentationObserverTests
             workspace);
     }
 
+    private static LoadedRepositorySession CreateReferencedRelationSession(
+        bool endpointDocumentation,
+        bool includeDependencyProject)
+    {
+        var endpointPrefix = endpointDocumentation
+            ? """
+                /// <summary>Endpoint documentation.</summary>
+                /// <param name="value">Endpoint parameter.</param>
+                /// <returns>Endpoint return.</returns>
+                """
+            : string.Empty;
+        var endpointSource = $$"""
+            public interface IEndpoint
+            {
+                {{endpointPrefix}}
+                int Read(int value);
+            }
+
+            public class EndpointBase
+            {
+                {{endpointPrefix}}
+                public virtual int Read(int value) => value;
+            }
+            """;
+        const string directSource = """
+            public class Direct : EndpointBase, IEndpoint
+            {
+                public override int Read(int value) => value;
+            }
+            """;
+        var parseOptions = new CSharpParseOptions(
+            LanguageVersion.Preview,
+            documentationMode: DocumentationMode.Diagnose);
+        var endpointTree = CSharpSyntaxTree.ParseText(
+            endpointSource,
+            parseOptions,
+            "dependency/Endpoint.cs",
+            Encoding.UTF8);
+        var endpointCompilation = CSharpCompilation.Create(
+            "Endpoint",
+            [endpointTree],
+            PlatformReferences(),
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                deterministic: true));
+        MetadataReference endpointReference;
+        if (includeDependencyProject)
+        {
+            endpointReference = endpointCompilation.ToMetadataReference();
+        }
+        else
+        {
+            using var image = new MemoryStream();
+            var emit = endpointCompilation.Emit(image);
+            Assert.True(
+                emit.Success,
+                string.Join(
+                    Environment.NewLine,
+                    emit.Diagnostics.Select(diagnostic => diagnostic.ToString())));
+            endpointReference = MetadataReference.CreateFromImage(
+                image.ToArray(),
+                documentation: new EndpointDocumentationProvider(
+                    endpointDocumentation));
+        }
+
+        var directTree = CSharpSyntaxTree.ParseText(
+            directSource,
+            parseOptions,
+            "src/Direct.cs",
+            Encoding.UTF8);
+        var directCompilation = CSharpCompilation.Create(
+            "Direct",
+            [directTree],
+            PlatformReferences().Concat(
+                [endpointReference]),
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                deterministic: true));
+        AssertNoCompilationErrors(endpointCompilation);
+        AssertNoCompilationErrors(directCompilation);
+        var workspace = new AdhocWorkspace();
+        var directProject = workspace.AddProject("Direct", LanguageNames.CSharp);
+        var dependencyIdentity = "project." + new string('2', 64);
+        var projects = new List<LoadedProject>
+        {
+            new(
+                ProjectIdentity,
+                "net10.0",
+                Context,
+                LoadedProjectRole.AuditRoot,
+                includeDependencyProject ? [dependencyIdentity] : [],
+                directProject,
+                directCompilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(
+                    ReferenceEqualityComparer.Instance)
+                {
+                    [directTree] = new(
+                        LoadedSourceKind.Repository,
+                        "src/Direct.cs",
+                        null),
+                }),
+        };
+        if (includeDependencyProject)
+        {
+            projects.Add(new LoadedProject(
+                dependencyIdentity,
+                "net10.0",
+                "context." + new string('3', 64),
+                LoadedProjectRole.DependencyOnly,
+                [],
+                workspace.AddProject("Endpoint", LanguageNames.CSharp),
+                endpointCompilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(
+                    ReferenceEqualityComparer.Instance)
+                {
+                    [endpointTree] = new(
+                        LoadedSourceKind.Repository,
+                        "dependency/Endpoint.cs",
+                        null),
+                }));
+        }
+
+        return new LoadedRepositorySession(
+            ".",
+            ProjectIdentity,
+            new ToolchainIdentity("test", "test", "test", "test"),
+            projects,
+            [],
+            workspace);
+    }
+
+    private static LoadedRepositorySession CreateGeneratedRelationSession(
+        bool endpointDocumentation)
+    {
+        var documentation = endpointDocumentation
+            ? """
+                /// <summary>Generated endpoint documentation.</summary>
+                /// <param name="value">Generated parameter.</param>
+                /// <returns>Generated return.</returns>
+                """
+            : string.Empty;
+        var generatedSource = $$"""
+            public interface IGenerated
+            {
+                {{documentation}}
+                int Read(int value);
+            }
+
+            public class GeneratedBase
+            {
+                {{documentation}}
+                public virtual int Read(int value) => value;
+            }
+            """;
+        const string directSource = """
+            public class DirectGenerated : GeneratedBase, IGenerated
+            {
+                public override int Read(int value) => value;
+            }
+            """;
+        var fact = ToolGeneratedFact(generatedSource, '4', '5');
+        return CreateSession(
+            new SourceInput(
+                "src/DirectGenerated.cs",
+                directSource,
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "tool://relation-endpoints",
+                generatedSource,
+                LoadedSourceKind.ToolGenerated,
+                fact));
+    }
+
     private static LoadedRepositorySession CreateMultiProjectSession(bool reverse)
     {
         var workspace = new AdhocWorkspace();
@@ -1569,6 +2054,28 @@ public sealed class DocumentationObserverTests
         mutableSources.Remove(syntaxTree);
     }
 
+    private static GeneratedSourceFact ToolGeneratedFact(
+        string source,
+        char producerHash,
+        char outputHash) =>
+        new(
+            ProjectIdentity,
+            Context,
+            "tgp." + new string(producerHash, 64),
+            "tgo." + new string(outputHash, 64),
+            Hash(source),
+            source);
+
+    private static void AssertNoCompilationErrors(Compilation compilation)
+    {
+        var errors = compilation.GetDiagnostics()
+            .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.True(
+            errors.Length == 0,
+            string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
+    }
+
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(new UTF8Encoding(false, true)
             .GetBytes(value)))
@@ -1596,6 +2103,19 @@ public sealed class DocumentationObserverTests
             .ToArray();
     }
 
+    private static string[] ProjectSubjects(
+        DocumentationObservationOutcome outcome,
+        params string[] documentationIds)
+    {
+        Assert.Equal(DocumentationObservationRunStatus.Success, outcome.Status);
+        var selected = outcome.ObservationSet!.Observations
+            .Where(observation => documentationIds.Contains(
+                observation.Subject.ParentSymbolRef.DocumentationCommentId,
+                StringComparer.Ordinal));
+        return Project(DocumentationObservationOutcome.Success(
+            new DocumentationObservationSet([.. selected])));
+    }
+
     private static IReadOnlyList<MetadataReference> PlatformReferences() =>
         ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
             .Split(Path.PathSeparator)
@@ -1607,4 +2127,37 @@ public sealed class DocumentationObserverTests
         string Text,
         LoadedSourceKind Kind,
         GeneratedSourceFact? GeneratedSource);
+
+    private sealed class EndpointDocumentationProvider : DocumentationProvider
+    {
+        private readonly bool documented;
+
+        public EndpointDocumentationProvider(bool documented)
+        {
+            this.documented = documented;
+        }
+
+        protected override string GetDocumentationForSymbol(
+            string documentationMemberID,
+            System.Globalization.CultureInfo? preferredCulture,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return documented
+                ? $"""
+                    <member name="{documentationMemberID}">
+                    <summary>Endpoint documentation.</summary>
+                    <param name="value">Endpoint parameter.</param>
+                    <returns>Endpoint return.</returns>
+                    </member>
+                    """
+                : string.Empty;
+        }
+
+        public override bool Equals(object? obj) =>
+            obj is EndpointDocumentationProvider other
+            && documented == other.documented;
+
+        public override int GetHashCode() => documented.GetHashCode();
+    }
 }
