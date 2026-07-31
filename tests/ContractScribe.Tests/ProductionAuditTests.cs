@@ -44,10 +44,12 @@ public sealed class ProductionAuditTests
         var root = FixtureRoot();
         using var manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Join(root, "invalid-cases.json")));
-        foreach (var entry in manifest.RootElement.GetProperty("cases").EnumerateArray())
+        foreach (var payload in manifest.RootElement
+                     .GetProperty("cases")
+                     .EnumerateArray()
+                     .Select(entry => entry.GetProperty("payloadFile").GetString()!)
+                     .Select(relative => File.ReadAllBytes(SafeFixturePath(root, relative))))
         {
-            var relative = entry.GetProperty("payloadFile").GetString()!;
-            var payload = File.ReadAllBytes(SafeFixturePath(root, relative));
             Assert.Throws<AuditValidationException>(
                 () => AuditParser.Parse(payload));
         }
@@ -133,9 +135,8 @@ public sealed class ProductionAuditTests
     [Fact]
     public void EvidenceSpans_AreAbsoluteAndMatchCompleteRegionLength()
     {
-        foreach (var payloadName in new[] { "required-present.json", "optional-absent.json" })
+        foreach (var payload in new[] { "required-present.json", "optional-absent.json" }.Select(LoadPayload))
         {
-            var payload = LoadPayload(payloadName);
             var item = payload["results"]![0]!["evidenceBundle"]!["items"]![0]!.AsObject();
             var excerpt = item["excerpt"]!.GetValue<string>();
             item["locator"]!["repository"]!["span"] = new JsonObject
