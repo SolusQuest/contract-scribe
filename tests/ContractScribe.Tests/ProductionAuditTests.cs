@@ -271,9 +271,8 @@ public sealed class ProductionAuditTests
     [Fact]
     public void Promotion_RejectsInvalidUnicodeInOmittedOriginalEvidence()
     {
-        foreach (var suffix in new[] { "\ud800", "\udc00" })
+        foreach (var original in new[] { "\ud800", "\udc00" }.Select(suffix => "x" + suffix))
         {
-            var original = "x" + suffix;
             var payload = LoadPayload("evidence-incomplete.json");
             var item = payload["results"]![0]!["evidenceBundle"]!["items"]![0]!.AsObject();
             item["excerpt"] = "x";
@@ -383,10 +382,9 @@ public sealed class ProductionAuditTests
             new byte[] { 0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d, 0x0a },
         };
 
-        foreach (var mutation in mutations)
+        foreach (var failure in mutations.Select(mutation =>
+                     Assert.Throws<AuditValidationException>(() => AuditParser.Parse(mutation))))
         {
-            var failure = Assert.Throws<AuditValidationException>(() =>
-                AuditParser.Parse(mutation));
             Assert.True(Enum.IsDefined(failure.Code));
         }
     }
