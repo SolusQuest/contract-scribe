@@ -465,6 +465,29 @@ public sealed class DocumentationObservationNormalizationTests
     }
 
     [Theory]
+    [InlineData("src/tab\tname.cs", "project/Fixture.cs")]
+    [InlineData("src/line\nname.cs", "project/Fixture.cs")]
+    [InlineData("src/Fixture.cs", "project/tab\tname.cs")]
+    [InlineData("src/Fixture.cs", "project/line\nname.cs")]
+    public void NonNulControlCharactersInRepositoryPathsRemainValid(
+        string repositoryPath,
+        string projectIdentity)
+    {
+        var (set, target, _) = Classification(componentKind: null);
+        var buffer = new DocumentationObservationCandidateBuffer(set);
+        buffer.AddTarget(
+            target,
+            true,
+            [Declaration(
+                repositoryPath: repositoryPath,
+                projectIdentity: projectIdentity)]);
+
+        Assert.Equal(
+            DocumentationObservationRunStatus.Success,
+            buffer.Normalize().Status);
+    }
+
+    [Theory]
     [InlineData(ClassificationOrigin.Source, DocumentationSourceKind.SourceGenerator)]
     [InlineData(ClassificationOrigin.Source, DocumentationSourceKind.ToolGenerated)]
     [InlineData(ClassificationOrigin.SourceGenerator, DocumentationSourceKind.Repository)]
@@ -617,7 +640,8 @@ public sealed class DocumentationObservationNormalizationTests
         string repositoryPath = "src/Fixture.cs",
         char declarationIdCharacter = 'd',
         DocumentationAuthorityRole authorityRole =
-            DocumentationAuthorityRole.Ordinary)
+            DocumentationAuthorityRole.Ordinary,
+        string? projectIdentity = null)
     {
         const string bodyText = "public void Run(string value) { }";
         var leadingText = documentationText ?? string.Empty;
@@ -628,7 +652,7 @@ public sealed class DocumentationObservationNormalizationTests
         return DocumentationObservationInput.RepositoryDeclaration(
             "decl." + new string(declarationIdCharacter, 64),
             authorityRole,
-            "project." + new string('b', 64),
+            projectIdentity ?? "project." + new string('b', 64),
             repositoryPath,
             new string('c', 64),
             DocumentationObservationInput.Span(0, declarationText.Length),

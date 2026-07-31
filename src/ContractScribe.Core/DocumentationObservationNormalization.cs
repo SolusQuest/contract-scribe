@@ -608,10 +608,10 @@ public sealed class DocumentationObservationCandidateBuffer
 
     private static bool IsCanonicalRepositoryPath(string path)
     {
-        if (string.IsNullOrWhiteSpace(path)
+        if (string.IsNullOrEmpty(path)
             || path[0] is '/' or '\\'
             || path.Contains('\\')
-            || path.All(character => !char.IsControl(character)) is false
+            || path.Contains('\0')
             || path.Length >= 2
                 && path[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
                 && path[1] == ':')
