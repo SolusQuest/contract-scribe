@@ -65,7 +65,7 @@ The decision covers:
 - declaration ambiguity;
 - evidence required for present and absent observations.
 
-Documentation quality beyond presence, such as incomplete `<param>` coverage or weak prose, is post-MVP unless required to make presence unambiguous.
+M1 observes the direct presence of each represented parameter, type-parameter, return, and value component. Effective resolution of `<inheritdoc/>` or `<include>`, rendered-document completeness, tag coverage beyond those represented components, and prose quality are Post-MVP unless required to make a direct observation unambiguous.
 
 ### Input and output
 

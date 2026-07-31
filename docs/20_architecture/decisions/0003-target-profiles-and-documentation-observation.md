@@ -171,6 +171,8 @@ This PR changes none of those surfaces.
 
 Prose quality, tag completeness beyond represented components, inherited-content quality, rendered documentation, proposals, and automated fixes are outside M1 deterministic audit semantics. Relation-derived context may be used by later proposal work but never changes this direct-observation decision.
 
+The [Post-MVP roadmap](../../90_roadmap/roadmap.md#post-mvp-candidates) may add a Post-M6 effective-documentation resolution and completeness layer. That layer must consume M1 direct observations as separate factual inputs rather than reinterpret them as already resolved effective documentation. Resolving `<inheritdoc/>` or `<include>`, judging delegation failures or cycles, and defining effective-completeness policy require a separately reviewed semantic decision and coordinated successor contracts before implementation.
+
 ## Consequences and risks
 
 The decision is deterministic and fail-closed, but the coordinated v1 amendment is intentionally incompatible with the pinned M0 draft baseline. Generated identity is canonical without publishing raw paths or names. Direct-presence existential evidence avoids turning one unreadable partial part into a false negative; absence remains more expensive because it requires a complete declaration universe. Malformed parent payload counts as direct documentation while component parsing remains fail-closed.

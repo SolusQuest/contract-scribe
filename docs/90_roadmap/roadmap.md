@@ -346,7 +346,14 @@ This track never counts toward M1 progress while it remains non-gating.
 
 ## Post-MVP candidates
 
-- documentation-quality audits for present-but-incomplete XML;
+These candidates begin after M6 unless a reviewed roadmap amendment explicitly promotes one into an earlier milestone. They do not retroactively change the direct-observation semantics or exit evidence of M1 through M6.
+
+- effective-documentation resolution and completeness audit:
+  - preserve M1 direct observations as a separate factual input rather than relabeling direct absence or marker presence as resolved effective documentation;
+  - resolve explicitly supported `<inheritdoc/>` and `<include>` forms within reviewed source, metadata, repository, and retrieval boundaries;
+  - distinguish effective presence, absence, incompleteness, broken or ambiguous delegation, cycles, and unavailable resolution without guessing compliance;
+  - evaluate summary and represented-component coverage, present-but-incomplete XML, and later documentation-quality rules through explicit policy and evidence;
+  - require a decision issue or ADR plus coordinated successor contracts, fixtures, compatibility disposition, and validation before implementation;
 - richer exception documentation;
 - analyzer, generator, custom-target, and multi-targeting support expansion;
 - additional private or specialized target profiles;
