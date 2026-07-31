@@ -108,6 +108,21 @@ public sealed class ProductionAuditTests
                 new Dictionary<AuditEvidenceKey, string>()));
         Assert.Equal(AuditValidationCode.MissingOriginalEvidence, missing.Code);
 
+        var nullValue = Assert.Throws<AuditValidationException>(() =>
+            AuditParser.Promote(
+                intrinsic,
+                new Dictionary<AuditEvidenceKey, string>
+                {
+                    [new(0, "evidence.partial")] = null!,
+                }));
+        Assert.Equal(AuditValidationCode.MissingOriginalEvidence, nullValue.Code);
+
+        var customNullValue = Assert.Throws<AuditValidationException>(() =>
+            AuditParser.Promote(
+                intrinsic,
+                new NullEvidenceDictionary(new(0, "evidence.partial"))));
+        Assert.Equal(AuditValidationCode.MissingOriginalEvidence, customNullValue.Code);
+
         var wrong = Assert.Throws<AuditValidationException>(() =>
             AuditParser.Promote(
                 intrinsic,
@@ -193,6 +208,20 @@ public sealed class ProductionAuditTests
                 var classification = payload["results"]![0]!["classification"]!.AsObject();
                 classification["skipReason"] = "skip.unsupported.component-kind";
             }),
+            ("classification-skipped.json", payload =>
+            {
+                var classification = payload["results"]![0]!["classification"]!.AsObject();
+                classification["origin"] = "origin.source";
+                classification["supportStatus"] = "support.unavailable-context";
+                classification["skipReason"] = "skip.unavailable.semantic-context";
+            }),
+            ("classification-skipped.json", payload =>
+            {
+                var classification = payload["results"]![0]!["classification"]!.AsObject();
+                classification["origin"] = "origin.unknown";
+                classification["supportStatus"] = "support.unavailable-context";
+                classification["skipReason"] = "skip.unavailable.generated-provenance";
+            }),
             ("required-present.json", payload =>
             {
                 var classification = payload["results"]![0]!["classification"]!.AsObject();
@@ -208,6 +237,15 @@ public sealed class ProductionAuditTests
                 AuditParser.Parse(Canonicalize(payload)));
             Assert.Equal(AuditValidationCode.InvalidClassification, failure.Code);
         }
+
+        var validUnknown = AuditParser.Parse(Canonicalize(LoadPayload("classification-skipped.json")));
+        Assert.Equal(TargetProfile.ExternalApi, validUnknown.TargetProfile);
+        AssertAcceptedUnavailableTarget(
+            "origin.source",
+            "skip.unavailable.semantic-context");
+        AssertAcceptedUnavailableTarget(
+            "origin.unknown",
+            "skip.unavailable.generated-provenance");
 
         var incompatibleComponent = LoadPayload("classification-not-applicable.json");
         var component = incompatibleComponent["results"]![0]!["classification"]!.AsObject();
@@ -447,6 +485,17 @@ public sealed class ProductionAuditTests
         Assert.Equal(canonical, AuditJson.Write(document));
     }
 
+    private static void AssertAcceptedUnavailableTarget(string origin, string skipReason)
+    {
+        var payload = LoadPayload("classification-skipped.json");
+        var classification = payload["results"]![0]!["classification"]!.AsObject();
+        classification["primaryKind"] = "symbol.type.class";
+        classification["origin"] = origin;
+        classification["supportStatus"] = "support.unavailable-context";
+        classification["skipReason"] = skipReason;
+        AuditParser.Parse(Canonicalize(payload));
+    }
+
 
     private static string SafeFixturePath(string root, string relativePath)
     {
@@ -464,4 +513,34 @@ public sealed class ProductionAuditTests
 
     private static string Sha256(string value) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private sealed class NullEvidenceDictionary(AuditEvidenceKey key)
+        : IReadOnlyDictionary<AuditEvidenceKey, string>
+    {
+        public string this[AuditEvidenceKey candidate] => candidate == key
+            ? null!
+            : throw new KeyNotFoundException();
+
+        public IEnumerable<AuditEvidenceKey> Keys => [key];
+
+        public IEnumerable<string> Values => [null!];
+
+        public int Count => 1;
+
+        public bool ContainsKey(AuditEvidenceKey candidate) => candidate == key;
+
+        public bool TryGetValue(AuditEvidenceKey candidate, out string value)
+        {
+            value = null!;
+            return candidate == key;
+        }
+
+        public IEnumerator<KeyValuePair<AuditEvidenceKey, string>> GetEnumerator()
+        {
+            yield return new(key, null!);
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            GetEnumerator();
+    }
 }

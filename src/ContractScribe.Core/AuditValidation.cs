@@ -235,11 +235,12 @@ internal static partial class AuditJsonModel
                         || target.SkipReason == SkipReason.AmbiguousMixedOrigin
                             && target.Origin == ClassificationOrigin.Mixed),
                 SupportStatus.UnavailableContext =>
-                    target.SkipReason == SkipReason.UnavailableGeneratedProvenance
-                        && target.Origin == ClassificationOrigin.Unknown
-                    || target.SkipReason == SkipReason.UnavailableSemanticContext
-                        && target.Origin is not ClassificationOrigin.Unknown
-                            and not ClassificationOrigin.CompilerSynthesized,
+                    target.PrimaryKind != PrimarySymbolKind.Unknown
+                    && (target.SkipReason == SkipReason.UnavailableGeneratedProvenance
+                            && target.Origin == ClassificationOrigin.Unknown
+                        || target.SkipReason == SkipReason.UnavailableSemanticContext
+                            && target.Origin is not ClassificationOrigin.Unknown
+                                and not ClassificationOrigin.CompilerSynthesized),
                 _ => false,
             };
             Require(
@@ -1123,7 +1124,7 @@ internal static partial class AuditJsonModel
                 var found = originalEvidence?.TryGetValue(
                     new AuditEvidenceKey(resultIndex, evidenceId),
                     out originalText) == true;
-                if (!found)
+                if (!found || originalText is null)
                 {
                     if (requireOriginalEvidence)
                     {
