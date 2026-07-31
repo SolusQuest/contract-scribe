@@ -243,6 +243,9 @@ public sealed class PolicyEvidenceExtractor
         foreach (var declaration in observation.Declarations)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var useDocumentation = RequiresDocumentationEvidence(
+                observation.Subject,
+                declaration);
             if (!TryResolveSource(project, declaration.Source, out var syntaxTree))
             {
                 return null;
@@ -269,21 +272,25 @@ public sealed class PolicyEvidenceExtractor
                 return null;
             }
 
-            var declarationEvidenceId = EvidenceId(
-                "declaration",
-                subject!,
-                declaration.DeclarationId,
-                declaration.Source,
-                declaration.DeclarationSpan,
-                declaration.DeclarationSha256);
-            candidates.Add(EvidenceInput.Candidate(
-                declarationEvidenceId,
-                subject!,
-                EvidenceKind.SourceDeclaration,
-                EvidenceRelation.Declares,
-                declarationRegion!,
-                CreateLocator(declaration.Source, declaration.DeclarationSpan),
-                declaration.DeclarationSha256));
+            string? declarationEvidenceId = null;
+            if (!useDocumentation)
+            {
+                declarationEvidenceId = EvidenceId(
+                    "declaration",
+                    subject!,
+                    declaration.DeclarationId,
+                    declaration.Source,
+                    declaration.DeclarationSpan,
+                    declaration.DeclarationSha256);
+                candidates.Add(EvidenceInput.Candidate(
+                    declarationEvidenceId,
+                    subject!,
+                    EvidenceKind.SourceDeclaration,
+                    EvidenceRelation.Declares,
+                    declarationRegion!,
+                    CreateLocator(declaration.Source, declaration.DeclarationSpan),
+                    declaration.DeclarationSha256));
+            }
 
             string? documentationEvidenceId = null;
             if (declaration.DocumentationSpan is { } documentationSpan
@@ -300,25 +307,33 @@ public sealed class PolicyEvidenceExtractor
                     return null;
                 }
 
-                documentationEvidenceId = EvidenceId(
-                    "documentation",
-                    subject!,
-                    declaration.DeclarationId,
-                    declaration.Source,
-                    documentationSpan,
-                    documentationSha256);
-                candidates.Add(EvidenceInput.Candidate(
-                    documentationEvidenceId,
-                    subject!,
-                    EvidenceKind.SourceXmlDocumentation,
-                    EvidenceRelation.Documents,
-                    documentationRegion!,
-                    CreateLocator(declaration.Source, documentationSpan),
-                    documentationSha256));
+                if (useDocumentation)
+                {
+                    documentationEvidenceId = EvidenceId(
+                        "documentation",
+                        subject!,
+                        declaration.DeclarationId,
+                        declaration.Source,
+                        documentationSpan,
+                        documentationSha256);
+                    candidates.Add(EvidenceInput.Candidate(
+                        documentationEvidenceId,
+                        subject!,
+                        EvidenceKind.SourceXmlDocumentation,
+                        EvidenceRelation.Documents,
+                        documentationRegion!,
+                        CreateLocator(declaration.Source, documentationSpan),
+                        documentationSha256));
+                }
             }
             else if (declaration.DocumentationSpan is not null
                 || declaration.DocumentationText is not null
                 || declaration.DocumentationSha256 is not null)
+            {
+                return null;
+            }
+
+            if (useDocumentation && documentationEvidenceId is null)
             {
                 return null;
             }
@@ -609,6 +624,15 @@ public sealed class PolicyEvidenceExtractor
 
     private static string SymbolKey(SymbolRef symbolRef) =>
         symbolRef.CompilationContextRef + "\0" + symbolRef.DocumentationCommentId;
+
+    private static bool RequiresDocumentationEvidence(
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration) =>
+        declaration.BlockState == DocumentationBlockState.Malformed
+        || (subject.ComponentKind is null
+            ? declaration.ParentSubstantive
+            : declaration.BlockState == DocumentationBlockState.WellFormed
+                && declaration.ComponentMatch == DocumentationComponentMatch.Present);
 
     private static string DomainSeparatedHash(string domain, params string[] fields)
     {

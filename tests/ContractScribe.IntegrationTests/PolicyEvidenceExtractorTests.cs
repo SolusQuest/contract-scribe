@@ -175,6 +175,280 @@ public sealed class PolicyEvidenceExtractorTests
     }
 
     [Fact]
+    public void LargeDocumentedDeclaration_BudgetsOnlyRequiredXmlEvidence()
+    {
+        var source = "/// <summary>Small complete documentation.</summary>\n"
+            + "public class HugeDocumented { private readonly string value = \""
+            + new string('x', 5000)
+            + "\"; }";
+        using var session = CreateSession(new SourceInput(
+            "src/HugeDocumented.cs",
+            source,
+            LoadedSourceKind.Repository,
+            null));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var target = FindTarget(outcome, "T:HugeDocumented");
+        Assert.Equal(DocumentationObservationValue.Present, target.Evidence.ObservationValue);
+        Assert.Equal(EvidenceAvailabilityStatus.Complete, target.Evidence.Bundle.AvailabilityStatus);
+        Assert.True(target.Evidence.SupportsOrdinaryResult);
+        var item = Assert.Single(target.Evidence.Bundle.Items);
+        Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind);
+        Assert.False(item.IsTruncated);
+    }
+
+    [Fact]
+    public void LargeMalformedDeclaration_BudgetsOnlyRequiredXmlEvidence()
+    {
+        var source = "/// <!-- broken\n"
+            + "public class HugeMalformed { private readonly string value = \""
+            + new string('x', 5000)
+            + "\"; }";
+        using var session = CreateSession(new SourceInput(
+            "src/HugeMalformed.cs",
+            source,
+            LoadedSourceKind.Repository,
+            null));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var target = FindTarget(outcome, "T:HugeMalformed");
+        Assert.Equal(
+            DocumentationObservationValue.Unavailable,
+            target.Evidence.ObservationValue);
+        Assert.Equal(EvidenceAvailabilityStatus.Complete, target.Evidence.Bundle.AvailabilityStatus);
+        Assert.False(target.Evidence.SupportsOrdinaryResult);
+        var item = Assert.Single(target.Evidence.Bundle.Items);
+        Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind);
+        Assert.False(item.IsTruncated);
+        Assert.Equal(item.EvidenceId, Assert.Single(target.Evidence.EvidenceIds));
+    }
+
+    [Fact]
+    public void SeventeenPositivePartialRows_StayWithinTheThirtyTwoItemBudget()
+    {
+        var sources = Enumerable.Range(0, 17)
+            .Select(index => new SourceInput(
+                $"src/Many.Part{index:D2}.cs",
+                $"/// <summary>Part {index}.</summary>\npublic partial class Many {{ }}",
+                LoadedSourceKind.Repository,
+                null))
+            .ToArray();
+        using var session = CreateSession(sources);
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var target = FindTarget(outcome, "T:Many");
+        Assert.Equal(EvidenceAvailabilityStatus.Complete, target.Evidence.Bundle.AvailabilityStatus);
+        Assert.True(target.Evidence.SupportsOrdinaryResult);
+        Assert.Equal(17, target.Evidence.Bundle.Items.Length);
+        Assert.Equal(17, target.Evidence.Authority!.Declarations.Length);
+        Assert.All(target.Evidence.Bundle.Items, item =>
+            Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind));
+    }
+
+    [Fact]
+    public void AbsentRows_RetainOnlyDeclarationEvidence()
+    {
+        const string source = "///   \npublic class Whitespace { }\n\n"
+            + "public class Components\n{\n"
+            + "    /// <summary>Method documentation.</summary>\n"
+            + "    /// <param name=\"other\">Unrelated parameter.</param>\n"
+            + "    public void Run(string value) { }\n}";
+        using var session = CreateSession(new SourceInput(
+            "src/AbsentRows.cs",
+            source,
+            LoadedSourceKind.Repository,
+            null));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var whitespace = FindTarget(outcome, "T:Whitespace");
+        Assert.Equal(DocumentationObservationValue.Absent, whitespace.Evidence.ObservationValue);
+        Assert.Equal(
+            EvidenceKind.SourceDeclaration,
+            Assert.Single(whitespace.Evidence.Bundle.Items).Kind);
+
+        var parameter = Assert.Single(outcome.Bindings, binding =>
+            binding.Subject.ParentSymbolRef.DocumentationCommentId
+                == "M:Components.Run(System.String)"
+            && binding.Subject.ComponentKind == ComponentKind.Parameter);
+        Assert.Equal(DocumentationObservationValue.Absent, parameter.Evidence.ObservationValue);
+        Assert.Equal(
+            EvidenceKind.SourceDeclaration,
+            Assert.Single(parameter.Evidence.Bundle.Items).Kind);
+    }
+
+    [Fact]
+    public void GeneratedAbsentRow_RetainsOnlyGeneratedDeclarationEvidence()
+    {
+        const string source = "///   \npublic class GeneratedWhitespace { }";
+        var generated = new GeneratedSourceFact(
+            ProjectPath,
+            Context,
+            "sgp." + new string('d', 64),
+            "sgo." + new string('e', 64),
+            Hash(source),
+            source);
+        using var session = CreateSession(new SourceInput(
+            "generator://GeneratedWhitespace.g.cs",
+            source,
+            LoadedSourceKind.SourceGenerator,
+            generated));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var target = FindTarget(outcome, "T:GeneratedWhitespace");
+        Assert.Equal(DocumentationObservationValue.Absent, target.Evidence.ObservationValue);
+        var item = Assert.Single(target.Evidence.Bundle.Items);
+        Assert.Equal(EvidenceKind.SourceDeclaration, item.Kind);
+        Assert.IsType<GeneratedOutputEvidenceLocator>(item.Locator);
+    }
+
+    [Fact]
+    public void PositiveAndMalformedPartialRows_BothBindExactXmlEvidence()
+    {
+        const string positive = """
+            /// <summary>Positive part.</summary>
+            /// <typeparam name="T">Type parameter.</typeparam>
+            public partial class Mixed<T> { }
+            """;
+        const string malformed = """
+            /// <!-- broken
+            public partial class Mixed<T> { }
+            """;
+        using var session = CreateSession(
+            new SourceInput("src/Mixed.Positive.cs", positive, LoadedSourceKind.Repository, null),
+            new SourceInput("src/Mixed.Malformed.cs", malformed, LoadedSourceKind.Repository, null));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Success, outcome.Status);
+        var target = FindTarget(outcome, "T:Mixed`1");
+        Assert.Equal(DocumentationObservationValue.Present, target.Evidence.ObservationValue);
+        Assert.Equal(2, target.Evidence.Authority!.Declarations.Length);
+        Assert.All(target.Evidence.Bundle.Items, item =>
+            Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind));
+        var targetMalformed = Assert.Single(
+            target.Evidence.Authority.Declarations,
+            row => row.BlockState == DocumentationBlockState.Malformed);
+        Assert.Equal(
+            EvidenceKind.SourceXmlDocumentation,
+            Assert.Single(target.Evidence.Bundle.Items, item =>
+                item.EvidenceId == targetMalformed.EvidenceId).Kind);
+
+        var component = Assert.Single(outcome.Bindings, binding =>
+            binding.Subject.ParentSymbolRef.DocumentationCommentId == "T:Mixed`1"
+            && binding.Subject.ComponentKind == ComponentKind.TypeParameter);
+        Assert.Equal(DocumentationObservationValue.Present, component.Evidence.ObservationValue);
+        Assert.Equal(2, component.Evidence.Authority!.Declarations.Length);
+        Assert.All(component.Evidence.Bundle.Items, item =>
+            Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind));
+        var componentMalformed = Assert.Single(
+            component.Evidence.Authority.Declarations,
+            row => row.BlockState == DocumentationBlockState.Malformed);
+        Assert.Equal(
+            EvidenceKind.SourceXmlDocumentation,
+            Assert.Single(component.Evidence.Bundle.Items, item =>
+                item.EvidenceId == componentMalformed.EvidenceId).Kind);
+    }
+
+    [Fact]
+    public void MalformedOnlyComponent_CannotBeForgedAsPresent()
+    {
+        const string source = """
+            public class Broken
+            {
+                /// <!-- broken
+                public void Run(string value) { }
+            }
+            """;
+        using var session = CreateSession(new SourceInput(
+            "src/Broken.cs",
+            source,
+            LoadedSourceKind.Repository,
+            null));
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        var observed = new DocumentationObserver().Observe(classified);
+        var observation = Assert.Single(observed.ObservationSet!.Observations, candidate =>
+            candidate.Subject.ParentSymbolRef.DocumentationCommentId
+                == "M:Broken.Run(System.String)"
+            && candidate.Subject.ComponentKind == ComponentKind.Parameter);
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            classified,
+            observed,
+            ParsePolicy(TargetProfile.ExternalApi));
+        var binding = Assert.Single(outcome.Bindings, candidate =>
+            candidate.Subject == observation.Subject);
+
+        Assert.Equal(
+            DocumentationObservationValue.Unavailable,
+            binding.Evidence.ObservationValue);
+        Assert.Equal(EvidenceAvailabilityStatus.Complete, binding.Evidence.Bundle.AvailabilityStatus);
+        var item = Assert.Single(binding.Evidence.Bundle.Items);
+        Assert.Equal(EvidenceKind.SourceXmlDocumentation, item.Kind);
+        var forged = new DocumentationObservation(
+            observation.Subject,
+            DocumentationObservationValue.Present,
+            observation.Completeness,
+            DocumentationUnavailableCause.None,
+            observation.Declarations);
+        var row = Assert.Single(binding.Evidence.Authority!.Declarations);
+
+        AssertBindingFailure(EvidenceObservationBinder.Bind(
+            forged,
+            binding.Evidence.Bundle,
+            [EvidenceBindingInput.Declaration(row.DeclarationId, null, row.EvidenceId)]));
+    }
+
+    [Fact]
     public void Extractor_FailsClosedForProfileDriftSourceDriftAndCancellation()
     {
         const string source = "public class Fixture { }";
@@ -275,6 +549,94 @@ public sealed class PolicyEvidenceExtractorTests
             observation,
             crossBundle,
             [validBinding]));
+
+        var originalCandidate = EvidenceInput.Candidate(
+            original.EvidenceId,
+            original.Subject,
+            original.Kind,
+            original.Relation,
+            original.Excerpt,
+            original.Locator,
+            original.Sha256);
+        var mixedSubjectBundles = new[]
+        {
+            EvidenceNormalizer.Normalize(
+            [
+                originalCandidate,
+                EvidenceInput.Candidate(
+                    "evidence.other-subject",
+                    EvidenceInput.TargetSubject(Context, "T:Other"),
+                    EvidenceKind.SourceDeclaration,
+                    EvidenceRelation.Declares,
+                    "other",
+                    EvidenceInput.SyntheticLocator("fixture.other-subject"))
+            ]).Bundle!,
+            EvidenceNormalizer.Normalize(
+            [
+                originalCandidate,
+                EvidenceInput.Candidate(
+                    "evidence.other-context",
+                    EvidenceInput.TargetSubject("context." + new string('b', 64), "T:Fixture"),
+                    EvidenceKind.SourceDeclaration,
+                    EvidenceRelation.Declares,
+                    "other",
+                    EvidenceInput.SyntheticLocator("fixture.other-context"))
+            ]).Bundle!,
+            EvidenceNormalizer.Normalize(
+            [
+                originalCandidate,
+                EvidenceInput.Candidate(
+                    "evidence.component-subject",
+                    EvidenceInput.ComponentSubject(
+                        Context,
+                        "T:Fixture",
+                        ComponentKind.TypeParameter,
+                        "type-parameter/0"),
+                    EvidenceKind.SourceDeclaration,
+                    EvidenceRelation.Declares,
+                    "other",
+                    EvidenceInput.SyntheticLocator("fixture.component-subject"))
+            ]).Bundle!,
+        };
+        Assert.All(mixedSubjectBundles, mixed =>
+            AssertBindingFailure(EvidenceObservationBinder.Bind(
+                observation,
+                mixed,
+                [validBinding])));
+
+        var contradictoryXmlBundle = EvidenceNormalizer.Normalize(
+        [
+            originalCandidate,
+            EvidenceInput.Candidate(
+                "evidence.contradictory-xml",
+                original.Subject,
+                EvidenceKind.SourceXmlDocumentation,
+                EvidenceRelation.Documents,
+                "/// <summary>Contradictory.</summary>",
+                EvidenceInput.SyntheticLocator("fixture.contradictory-xml"))
+        ]).Bundle!;
+        AssertBindingFailure(EvidenceObservationBinder.Bind(
+            observation,
+            contradictoryXmlBundle,
+            [validBinding]));
+
+        var homogeneousBundle = EvidenceNormalizer.Normalize(
+        [
+            originalCandidate,
+            EvidenceInput.Candidate(
+                "evidence.same-subject",
+                original.Subject,
+                EvidenceKind.SourceDeclaration,
+                EvidenceRelation.Declares,
+                "other",
+                EvidenceInput.SyntheticLocator("fixture.same-subject"))
+        ]).Bundle!;
+        var homogeneous = EvidenceObservationBinder.Bind(
+            observation,
+            homogeneousBundle,
+            [validBinding]);
+        Assert.Equal(EvidenceRunStatus.Success, homogeneous.Status);
+        Assert.True(homogeneous.Binding!.SupportsOrdinaryResult);
 
         const string mismatchedDeclaration = "public class Other { }";
         var mismatchedBundle = EvidenceNormalizer.Normalize(
