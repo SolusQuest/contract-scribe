@@ -65,7 +65,7 @@ The decision covers:
 - declaration ambiguity;
 - evidence required for present and absent observations.
 
-Documentation quality beyond presence, such as incomplete `<param>` coverage or weak prose, is post-MVP unless required to make presence unambiguous.
+M1 observes the direct presence of each represented parameter, type-parameter, return, and value component. It does not resolve `<inheritdoc/>` or `<include>` or treat their effective content as direct documentation. Effective-documentation resolution, rendered-document completeness, broader tag-coverage audits, and prose-quality audits are outside M1 through M6 and remain non-committed Post-M6 candidates. Only syntax and attachment handling needed to classify the directly attached documentation block under ADR 0003 belongs to M1.
 
 ### Input and output
 
