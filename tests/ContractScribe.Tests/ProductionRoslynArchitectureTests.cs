@@ -78,6 +78,27 @@ public sealed class ProductionRoslynArchitectureTests
             .Where(type => type.Namespace == typeof(ClassificationSet).Namespace)
             .Where(type =>
                 type.Name.Contains("Classification", StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationObservation",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationDeclaration",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationSource",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationAuthority",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationBlock",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationComponentMatch",
+                    StringComparison.Ordinal)
+                || type.Name.Contains(
+                    "DocumentationUnavailable",
+                    StringComparison.Ordinal)
                 || type == typeof(SymbolRef)
                 || type == typeof(TargetProfile)
                 || type == typeof(PrimarySymbolKind)
@@ -129,6 +150,16 @@ public sealed class ProductionRoslynArchitectureTests
             "src",
             "ContractScribe.Roslyn",
             "ClassificationNormalization.cs")));
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Core",
+            "DocumentationObservationNormalization.cs")));
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Roslyn",
+            "DocumentationObserver.cs")));
     }
 
     [Fact]
@@ -147,6 +178,12 @@ public sealed class ProductionRoslynArchitectureTests
             typeof(RelationObservation),
             typeof(UnresolvedClassification),
             typeof(ClassificationSet),
+            typeof(RepositoryDocumentationSourceIdentity),
+            typeof(GeneratedDocumentationSourceIdentity),
+            typeof(DocumentationObservationSubject),
+            typeof(DocumentationDeclarationFact),
+            typeof(DocumentationObservation),
+            typeof(DocumentationObservationSet),
         };
         Assert.All(resultTypes, type =>
             Assert.Empty(type.GetConstructors(
@@ -166,6 +203,21 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.NotNull(typeof(ClassificationOutcome).GetMethod(
             "Success",
             BindingFlags.Static | BindingFlags.NonPublic));
+        Assert.Null(typeof(DocumentationObservationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.Public));
+        Assert.NotNull(typeof(DocumentationObservationOutcome).GetMethod(
+            "Success",
+            BindingFlags.Static | BindingFlags.NonPublic));
+
+        var sourceConstructors =
+            typeof(DocumentationSourceIdentity).GetConstructors(
+                BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotEmpty(sourceConstructors);
+        Assert.All(sourceConstructors, constructor =>
+            Assert.True(
+                constructor.IsFamilyAndAssembly,
+                "DocumentationSourceIdentity must remain closed to external subclasses."));
     }
 
     [Fact]
@@ -179,6 +231,26 @@ public sealed class ProductionRoslynArchitectureTests
             .ToArray();
 
         Assert.Equal(["ContractScribe.IntegrationTests"], friends);
+    }
+
+    [Fact]
+    public void ProductionDocumentationObservationHasNoExpandedOrExternalRetrieval()
+    {
+        var root = FindRepositoryRoot();
+        var observer = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "ContractScribe.Roslyn",
+            "DocumentationObserver.cs"));
+
+        Assert.DoesNotContain(
+            "GetDocumentationCommentXml",
+            observer,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Xml", observer, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", observer, StringComparison.Ordinal);
+        Assert.DoesNotContain("File.Read", observer, StringComparison.Ordinal);
+        Assert.DoesNotContain("File.Open", observer, StringComparison.Ordinal);
     }
 
     [Fact]

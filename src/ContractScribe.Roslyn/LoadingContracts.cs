@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn;
 
@@ -122,6 +123,43 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         Dispose();
         return ValueTask.CompletedTask;
     }
+}
+
+public sealed class ClassifiedRepositorySession
+{
+    private readonly LoadedRepositorySession? classificationSession;
+
+    internal ClassifiedRepositorySession(
+        LoadedRepositorySession repositorySession,
+        ClassificationOutcome classification)
+        : this(repositorySession, classification, null)
+    {
+    }
+
+    private ClassifiedRepositorySession(
+        LoadedRepositorySession repositorySession,
+        ClassificationOutcome classification,
+        LoadedRepositorySession? classificationSession)
+    {
+        RepositorySession = repositorySession;
+        Classification = classification;
+        this.classificationSession = classificationSession;
+    }
+
+    public LoadedRepositorySession RepositorySession { get; }
+
+    public ClassificationOutcome Classification { get; }
+
+    internal bool IsBoundToClassificationSession =>
+        ReferenceEquals(RepositorySession, classificationSession);
+
+    internal static ClassifiedRepositorySession Bind(
+        LoadedRepositorySession repositorySession,
+        ClassificationOutcome classification) =>
+        new(
+            repositorySession,
+            classification,
+            repositorySession);
 }
 
 public enum LoadedProjectRole
