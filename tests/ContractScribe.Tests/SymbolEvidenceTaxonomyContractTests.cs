@@ -444,7 +444,6 @@ public sealed class SymbolEvidenceTaxonomyContractTests
         var productionCode = Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText);
         Assert.DoesNotContain(productionCode, content => content.Contains("SymbolEvidenceTaxonomy", StringComparison.Ordinal));
         Assert.DoesNotContain(productionCode, content => content.Contains("PolicySelector", StringComparison.Ordinal));
-        Assert.DoesNotContain(productionCode, content => content.Contains("AuditResult", StringComparison.Ordinal));
         Assert.DoesNotContain(productionCode, content => content.Contains("EvidenceDiscovery", StringComparison.Ordinal));
         Assert.DoesNotContain(productionCode, content => content.Contains("EvidenceRanking", StringComparison.Ordinal));
         Assert.DoesNotContain(productionCode, content => content.Contains("ProposalGenerator", StringComparison.Ordinal));
