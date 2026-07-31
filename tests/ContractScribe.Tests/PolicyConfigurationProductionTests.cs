@@ -85,6 +85,83 @@ public sealed class PolicyConfigurationProductionTests
     }
 
     [Theory]
+    [InlineData("-0.5", "minimum")]
+    [InlineData("-1e-1", "minimum")]
+    [InlineData("2147483647.5", "maximum")]
+    [InlineData("21474836471e-1", "maximum")]
+    [InlineData("0.5", "type")]
+    public void NonIntegralPriorityRangeFailures_MatchTheIndependentOracle(
+        string priority,
+        string expectedKeyword)
+    {
+        var payload = System.Text.Encoding.UTF8.GetBytes(
+            $$"""
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "optional",
+              "rules": [
+                {
+                  "id": "rule",
+                  "priority": {{priority}},
+                  "decision": "required"
+                }
+              ]
+            }
+            """);
+        var expected = PolicyConfigurationV1Conformance.EvaluateBytes(
+            payload,
+            LoadPolicySchema(FindRepositoryRoot()),
+            new EvaluationInput("projects/App/App.csproj", "src/App/File.cs")).Error;
+        var actual = PolicyConfigurationEvaluator.Parse(payload);
+
+        Assert.Equal("/rules/0/priority", expected!.Pointer);
+        Assert.Equal(expectedKeyword, expected.SchemaKeyword);
+        Assert.Equal(PolicyRunStatus.Failure, actual.Status);
+        Assert.Equal(
+            expected,
+            new ConformanceError(
+                actual.PrimaryFailure!.Code,
+                actual.PrimaryFailure.Pointer,
+                actual.PrimaryFailure.SchemaKeyword));
+    }
+
+    [Fact]
+    public void MultipleSchemaFailures_PreserveGlobalPointerAndKeywordOrdering()
+    {
+        var payload =
+            """
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "invalid",
+              "rules": [
+                {
+                  "id": "rule",
+                  "priority": -0.5,
+                  "decision": "required"
+                }
+              ]
+            }
+            """u8.ToArray();
+        var expected = PolicyConfigurationV1Conformance.EvaluateBytes(
+            payload,
+            LoadPolicySchema(FindRepositoryRoot()),
+            new EvaluationInput("projects/App/App.csproj", "src/App/File.cs")).Error;
+        var actual = PolicyConfigurationEvaluator.Parse(payload);
+
+        Assert.Equal("/defaultDecision", expected!.Pointer);
+        Assert.Equal("enum", expected.SchemaKeyword);
+        Assert.Equal(PolicyRunStatus.Failure, actual.Status);
+        Assert.Equal(
+            expected,
+            new ConformanceError(
+                actual.PrimaryFailure!.Code,
+                actual.PrimaryFailure.Pointer,
+                actual.PrimaryFailure.SchemaKeyword));
+    }
+
+    [Theory]
     [InlineData("1.0")]
     [InlineData("1e0")]
     [InlineData("2147483647.0")]

@@ -726,12 +726,17 @@ public static class PolicyConfigurationEvaluator
 
         if (rule.TryGetProperty("priority", out var priority))
         {
-            if (!TryGetJsonInteger(priority, out var numericPriority))
+            if (!TryGetJsonNumber(priority, out var numericPriority))
             {
                 failures.Add(new SchemaFailure(pointer + "/priority", "type"));
             }
             else
             {
+                if (!TryGetJsonInteger(numericPriority, out _))
+                {
+                    failures.Add(new SchemaFailure(pointer + "/priority", "type"));
+                }
+
                 if (numericPriority.Sign < 0)
                 {
                     failures.Add(new SchemaFailure(pointer + "/priority", "minimum"));
@@ -970,11 +975,57 @@ public static class PolicyConfigurationEvaluator
         return string.CompareOrdinal(normalized, maximumText);
     }
 
+    private static int CompareMagnitude(JsonNumberValue value, int maximum)
+    {
+        if (value.Sign == 0)
+        {
+            return 0;
+        }
+
+        var maximumText = maximum.ToString(CultureInfo.InvariantCulture);
+        var exponentAtEqualMagnitude = (long)maximumText.Length
+            - value.SignificantDigits.Length
+            + value.FractionDigits;
+        if (value.Exponent != exponentAtEqualMagnitude)
+        {
+            return value.Exponent < exponentAtEqualMagnitude ? -1 : 1;
+        }
+
+        for (var index = 0; index < maximumText.Length; index++)
+        {
+            var digit = index < value.SignificantDigits.Length
+                ? value.SignificantDigits[index]
+                : '0';
+            if (digit != maximumText[index])
+            {
+                return digit < maximumText[index] ? -1 : 1;
+            }
+        }
+
+        return value.SignificantDigits.Length > maximumText.Length
+            && value.SignificantDigits.AsSpan(maximumText.Length).IndexOfAnyExcept('0') >= 0
+                ? 1
+                : 0;
+    }
+
     private static bool TryGetJsonInteger(
         JsonElement value,
         out JsonIntegerValue integer)
     {
-        integer = default;
+        if (!TryGetJsonNumber(value, out var number))
+        {
+            integer = default;
+            return false;
+        }
+
+        return TryGetJsonInteger(number, out integer);
+    }
+
+    private static bool TryGetJsonNumber(
+        JsonElement value,
+        out JsonNumberValue number)
+    {
+        number = default;
         if (value.ValueKind != JsonValueKind.Number)
         {
             return false;
@@ -997,63 +1048,77 @@ public static class PolicyConfigurationEvaluator
         var significant = digits.TrimStart('0');
         if (significant.Length == 0)
         {
-            integer = new JsonIntegerValue(0, "0", 0);
+            number = new JsonNumberValue(0, "0", 0, 0);
             return true;
         }
 
         var exponent = exponentIndex >= 0
             ? ParseExponentSaturated(raw[(exponentIndex + 1)..])
             : 0;
-        long appendedZeroCount = 0;
-        if (exponent > fractionDigits)
+        number = new JsonNumberValue(
+            negative ? -1 : 1,
+            significant,
+            fractionDigits,
+            exponent);
+        return true;
+    }
+
+    private static bool TryGetJsonInteger(
+        JsonNumberValue number,
+        out JsonIntegerValue integer)
+    {
+        integer = default;
+        if (number.Sign == 0)
         {
-            appendedZeroCount = exponent - fractionDigits;
+            integer = new JsonIntegerValue(0, "0", 0);
+            return true;
+        }
+
+        if (number.Exponent >= number.FractionDigits)
+        {
+            integer = new JsonIntegerValue(
+                number.Sign,
+                number.SignificantDigits,
+                number.Exponent - number.FractionDigits);
+            return true;
+        }
+
+        long requiredTrailingZeros;
+        if (number.Exponent >= 0)
+        {
+            requiredTrailingZeros = number.FractionDigits - number.Exponent;
+        }
+        else if (number.Exponent == long.MinValue)
+        {
+            return false;
         }
         else
         {
-            long requiredTrailingZeros;
-            if (exponent >= 0)
-            {
-                requiredTrailingZeros = fractionDigits - exponent;
-            }
-            else if (exponent == long.MinValue)
-            {
-                return false;
-            }
-            else
-            {
-                var exponentMagnitude = -exponent;
-                if (exponentMagnitude > digits.Length)
-                {
-                    return false;
-                }
-
-                requiredTrailingZeros = fractionDigits + exponentMagnitude;
-            }
-
-            if (requiredTrailingZeros > digits.Length)
+            var exponentMagnitude = -number.Exponent;
+            if (exponentMagnitude > number.SignificantDigits.Length)
             {
                 return false;
             }
 
-            var retainedDigitCount = digits.Length - checked((int)requiredTrailingZeros);
-            if (digits.AsSpan(retainedDigitCount).IndexOfAnyExcept('0') >= 0)
-            {
-                return false;
-            }
+            requiredTrailingZeros = number.FractionDigits + exponentMagnitude;
+        }
 
-            significant = digits[..retainedDigitCount].TrimStart('0');
-            if (significant.Length == 0)
-            {
-                integer = new JsonIntegerValue(0, "0", 0);
-                return true;
-            }
+        if (requiredTrailingZeros > number.SignificantDigits.Length)
+        {
+            return false;
+        }
+
+        var retainedDigitCount = number.SignificantDigits.Length
+            - checked((int)requiredTrailingZeros);
+        if (number.SignificantDigits.AsSpan(retainedDigitCount).IndexOfAnyExcept('0') >= 0)
+        {
+            return false;
         }
 
         integer = new JsonIntegerValue(
-            negative ? -1 : 1,
-            significant,
-            appendedZeroCount);
+            number.Sign,
+            number.SignificantDigits[..retainedDigitCount],
+            0);
         return true;
     }
 
@@ -1091,6 +1156,12 @@ public static class PolicyConfigurationEvaluator
         int Sign,
         string SignificantDigits,
         long AppendedZeroCount);
+
+    private readonly record struct JsonNumberValue(
+        int Sign,
+        string SignificantDigits,
+        int FractionDigits,
+        long Exponent);
 
     private static string? FindDuplicatePropertyPointer(byte[] payload)
     {
