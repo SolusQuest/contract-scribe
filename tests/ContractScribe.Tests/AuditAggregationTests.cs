@@ -178,144 +178,259 @@ public sealed class AuditAggregationTests
     [Fact]
     public void PrecedenceCatalog_IsClosedAndProjectsExactSkippedShapes()
     {
-        var expected = new HashSet<string>(StringComparer.Ordinal)
+        var classificationStates = Enum.GetValues<PrecedenceClassificationState>();
+        var policyStates = Enum.GetValues<PrecedencePolicyState>();
+        var evidenceStates = Enum.GetValues<PrecedenceEvidenceState>();
+        var expectedCaseIds = (
+            from classification in classificationStates
+            from policy in policyStates
+            from evidence in evidenceStates
+            select CaseId(classification, policy, evidence))
+            .ToHashSet(StringComparer.Ordinal);
+        var executedCaseIds = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var classificationState in classificationStates)
+            foreach (var policyState in policyStates)
+                foreach (var evidenceState in evidenceStates)
+                {
+                    var caseId = CaseId(classificationState, policyState, evidenceState);
+                    Assert.True(executedCaseIds.Add(caseId));
+                    if (evidenceState is PrecedenceEvidenceState.Malformed
+                        or PrecedenceEvidenceState.PartialMalformed)
+                    {
+                        AssertComponentPrecedenceCase(
+                            classificationState,
+                            policyState,
+                            evidenceState,
+                            caseId);
+                        continue;
+                    }
+
+                    var evidenceTarget = CreateSupportedTarget();
+                    var target = classificationState == PrecedenceClassificationState.Supported
+                        ? evidenceTarget
+                        : CreateUnsupportedTarget();
+                    var (policy, contributions, contributionExpectations) = CreatePolicyState(policyState);
+                    var evidence = evidenceState switch
+                    {
+                        PrecedenceEvidenceState.OrdinaryPresent => CreateBoundEvidence(
+                            evidenceTarget,
+                            DocumentationObservationValue.Present),
+                        PrecedenceEvidenceState.SourceUnavailable =>
+                            CreateSourceUnavailableEvidence(evidenceTarget),
+                        PrecedenceEvidenceState.Partial => CreatePartialEvidence(evidenceTarget),
+                        PrecedenceEvidenceState.Missing => null,
+                        _ => throw new ArgumentOutOfRangeException(nameof(evidenceState)),
+                    };
+                    var mustFail = classificationState == PrecedenceClassificationState.Supported
+                        && policyState == PrecedencePolicyState.Usable
+                        && evidenceState == PrecedenceEvidenceState.Missing;
+
+                    if (mustFail)
+                    {
+                        var failure = Assert.Throws<AuditValidationException>(() =>
+                            AuditAggregator.Aggregate(
+                                TargetProfile.ExternalApi,
+                                target.Classifications,
+                                policy,
+                                [AuditInput.Target(target.Target, contributions, evidence)]));
+                        Assert.Equal(AuditValidationCode.InvalidEvidence, failure.Code);
+                        continue;
+                    }
+
+                    var document = AuditAggregator.Aggregate(
+                        TargetProfile.ExternalApi,
+                        target.Classifications,
+                        policy,
+                        [AuditInput.Target(target.Target, contributions, evidence)]);
+                    using var parsed = JsonDocument.Parse(AuditJson.Write(document));
+                    AssertClosedProjection(
+                        parsed.RootElement.GetProperty("results")[0],
+                        ExpectedProjection(classificationState, policyState, evidenceState),
+                        contributionExpectations,
+                        caseId);
+                }
+
+        Assert.True(expectedCaseIds.SetEquals(executedCaseIds));
+    }
+
+    private static void AssertComponentPrecedenceCase(
+        PrecedenceClassificationState classificationState,
+        PrecedencePolicyState policyState,
+        PrecedenceEvidenceState evidenceState,
+        string caseId)
+    {
+        var evidenceScenario = CreateSupportedComponent();
+        var scenario = classificationState == PrecedenceClassificationState.Supported
+            ? evidenceScenario
+            : CreateSkippedComponent();
+        var (policy, contributions, contributionExpectations) = CreatePolicyState(policyState);
+        var targetContributions = Evaluate(policy, []);
+        var evidence = evidenceState == PrecedenceEvidenceState.Malformed
+            ? CreateMalformedComponentEvidence(evidenceScenario)
+            : CreatePartialMalformedComponentEvidence(evidenceScenario);
+        var document = AuditAggregator.Aggregate(
+            TargetProfile.ExternalApi,
+            scenario.Classifications,
+            policy,
+            [
+                AuditInput.Target(scenario.Target, targetContributions),
+                AuditInput.Component(scenario.Component, contributions, evidence),
+            ]);
+        using var parsed = JsonDocument.Parse(AuditJson.Write(document));
+        var componentResult = Assert.Single(
+            parsed.RootElement.GetProperty("results").EnumerateArray(),
+            result => result.GetProperty("classification").GetProperty("recordType")
+                .GetString() == "ComponentClassification");
+        AssertClosedProjection(
+            componentResult,
+            ExpectedProjection(classificationState, policyState, evidenceState),
+            contributionExpectations,
+            caseId);
+    }
+
+    private static string CaseId(
+        PrecedenceClassificationState classification,
+        PrecedencePolicyState policy,
+        PrecedenceEvidenceState evidence) =>
+        $"classification-{classification.ToString().ToLowerInvariant()}__policy-{policy.ToString().ToLowerInvariant()}__evidence-{evidence.ToString().ToLowerInvariant()}";
+
+    private static (
+        PolicyDocumentV1 Policy,
+        PolicyContributionSet Contributions,
+        string[] ContributionExpectations) CreatePolicyState(PrecedencePolicyState state)
+    {
+        if (state == PrecedencePolicyState.Conflict)
         {
-            "classification-over-policy-conflict",
-            "policy-conflict-over-ordinary",
-            "policy-unavailable-over-ordinary",
-            "documentation-unavailable",
-            "evidence-incomplete",
-            "ordinary-matrix",
+            var conflict = CreateConflictPolicy();
+            return (
+                conflict,
+                Evaluate(conflict, [
+                    PolicyConfigurationInput.Repository("src/Audit.csproj", "src/A.cs"),
+                    PolicyConfigurationInput.Repository("src/Audit.csproj", "src/B.cs"),
+                ]),
+                ["required", "forbidden"]);
+        }
+
+        var required = CreatePolicy(PolicyExpectation.Required, TargetProfile.ExternalApi);
+        return state == PrecedencePolicyState.Usable
+            ? (
+                required,
+                Evaluate(required, [
+                    PolicyConfigurationInput.Repository("src/Audit.csproj", "src/Widget.cs"),
+                ]),
+                ["required"])
+            : (required, Evaluate(required, []), []);
+    }
+
+    private static ClosedProjection ExpectedProjection(
+        PrecedenceClassificationState classification,
+        PrecedencePolicyState policy,
+        PrecedenceEvidenceState evidence)
+    {
+        if (classification == PrecedenceClassificationState.Skipped)
+        {
+            return ClosedProjection.Skipped(
+                "audit.reason.classification-skipped",
+                "unavailable");
+        }
+
+        if (policy == PrecedencePolicyState.Conflict)
+        {
+            return ClosedProjection.Skipped("audit.reason.policy-conflict", "conflict");
+        }
+
+        if (policy == PrecedencePolicyState.Unavailable)
+        {
+            return ClosedProjection.Skipped("audit.reason.policy-unavailable", "unavailable");
+        }
+
+        return evidence switch
+        {
+            PrecedenceEvidenceState.OrdinaryPresent => new ClosedProjection(
+                "audit.outcome.compliant",
+                "audit.reason.required-present",
+                "single",
+                "required",
+                "documentation.present",
+                "evidence.bundle.complete",
+                null,
+                EvidenceIdCount: 1,
+                EvidenceItemCount: 1,
+                HasAuthority: true),
+            PrecedenceEvidenceState.SourceUnavailable => new ClosedProjection(
+                "audit.outcome.skipped",
+                "audit.reason.documentation-unavailable",
+                "single",
+                "required",
+                "documentation.unavailable",
+                "evidence.bundle.unavailable",
+                "evidence.omission.source-unavailable",
+                EvidenceIdCount: 0,
+                EvidenceItemCount: 0,
+                HasAuthority: false),
+            PrecedenceEvidenceState.Partial or PrecedenceEvidenceState.PartialMalformed =>
+                new ClosedProjection(
+                    "audit.outcome.skipped",
+                    "audit.reason.evidence-incomplete",
+                    "single",
+                    "required",
+                    "documentation.unavailable",
+                    "evidence.bundle.partial",
+                    "evidence.omission.budget-exhausted",
+                    EvidenceIdCount: 0,
+                    EvidenceItemCount: 1,
+                    HasAuthority: false),
+            PrecedenceEvidenceState.Malformed => new ClosedProjection(
+                "audit.outcome.skipped",
+                "audit.reason.documentation-unavailable.malformed-xml",
+                "single",
+                "required",
+                "documentation.unavailable",
+                "evidence.bundle.complete",
+                null,
+                EvidenceIdCount: 1,
+                EvidenceItemCount: 1,
+                HasAuthority: true),
+            _ => throw new InvalidOperationException("Missing evidence is the closed failure row."),
         };
-        var executed = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+    }
 
-        var supported = CreateSupportedTarget();
-        var ordinaryEvidence = CreateBoundEvidence(
-            supported,
-            DocumentationObservationValue.Present);
-        var requiredPolicy = CreatePolicy(
-            PolicyExpectation.Required,
-            TargetProfile.ExternalApi);
-        var required = Evaluate(requiredPolicy, [
-            PolicyConfigurationInput.Repository("src/Audit.csproj", "src/Widget.cs"),
-        ]);
-        Add(
-            "ordinary-matrix",
-            supported,
-            requiredPolicy,
-            required,
-            ordinaryEvidence);
-
-        var unavailableEvidence = CreateSourceUnavailableEvidence(supported);
-        Add(
-            "documentation-unavailable",
-            supported,
-            requiredPolicy,
-            required,
-            unavailableEvidence);
-
-        var partialEvidence = CreatePartialEvidence(supported);
-        Add(
-            "evidence-incomplete",
-            supported,
-            requiredPolicy,
-            required,
-            partialEvidence);
-
-        var empty = Evaluate(requiredPolicy, []);
-        Add(
-            "policy-unavailable-over-ordinary",
-            supported,
-            requiredPolicy,
-            empty,
-            ordinaryEvidence);
-
-        var conflictPolicy = CreateConflictPolicy();
-        var conflict = Evaluate(conflictPolicy, [
-            PolicyConfigurationInput.Repository("src/Audit.csproj", "src/A.cs"),
-            PolicyConfigurationInput.Repository("src/Audit.csproj", "src/B.cs"),
-        ]);
-        Add(
-            "policy-conflict-over-ordinary",
-            supported,
-            conflictPolicy,
-            conflict,
-            ordinaryEvidence);
-
-        var unsupported = CreateUnsupportedTarget();
-        Add(
-            "classification-over-policy-conflict",
-            unsupported,
-            conflictPolicy,
-            conflict,
-            ordinaryEvidence);
-
-        Assert.True(expected.SetEquals(executed.Keys));
-        AssertProjection(
-            executed["classification-over-policy-conflict"],
-            "audit.reason.classification-skipped",
-            "unavailable",
-            null,
-            null,
-            "evidence.bundle.unavailable",
-            "evidence.omission.not-provided");
-        AssertProjection(
-            executed["policy-conflict-over-ordinary"],
-            "audit.reason.policy-conflict",
-            "conflict",
-            null,
-            null,
-            "evidence.bundle.unavailable",
-            "evidence.omission.not-provided");
-        AssertProjection(
-            executed["policy-unavailable-over-ordinary"],
-            "audit.reason.policy-unavailable",
-            "unavailable",
-            null,
-            null,
-            "evidence.bundle.unavailable",
-            "evidence.omission.not-provided");
-        AssertProjection(
-            executed["documentation-unavailable"],
-            "audit.reason.documentation-unavailable",
-            "single",
-            "required",
-            "documentation.unavailable",
-            "evidence.bundle.unavailable",
-            "evidence.omission.source-unavailable");
-        AssertProjection(
-            executed["evidence-incomplete"],
-            "audit.reason.evidence-incomplete",
-            "single",
-            "required",
-            "documentation.unavailable",
-            "evidence.bundle.partial",
-            "evidence.omission.budget-exhausted");
-        AssertProjection(
-            executed["ordinary-matrix"],
-            "audit.reason.required-present",
-            "single",
-            "required",
-            "documentation.present",
-            "evidence.bundle.complete",
-            null);
-
-        void Add(
-            string caseId,
-            TargetScenario target,
-            PolicyDocumentV1 policy,
-            PolicyContributionSet contributions,
-            BoundObservationEvidence? evidence)
+    private static void AssertClosedProjection(
+        JsonElement result,
+        ClosedProjection expected,
+        IReadOnlyList<string> contributionExpectations,
+        string caseId)
+    {
+        var actualOutcome = result.GetProperty("auditOutcome").GetString();
+        Assert.True(
+            string.Equals(expected.Outcome, actualOutcome, StringComparison.Ordinal),
+            $"{caseId}: expected outcome {expected.Outcome}, actual {actualOutcome}.");
+        Assert.Equal(expected.Reason, result.GetProperty("reasonCode").GetString());
+        Assert.Equal(expected.Resolution, result.GetProperty("policyResolution").GetString());
+        AssertNullableString(expected.Expectation, result.GetProperty("policyExpectation"));
+        AssertNullableString(expected.Observation, result.GetProperty("documentationObservation"));
+        Assert.Equal(
+            contributionExpectations,
+            result.GetProperty("policyContributions").EnumerateArray()
+                .Select(item => item.GetProperty("policyExpectation").GetString()!)
+                .ToArray());
+        var evidenceIds = result.GetProperty("evidenceIds").EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToArray();
+        Assert.Equal(expected.EvidenceIdCount, evidenceIds.Length);
+        Assert.Equal(evidenceIds.Order(StringComparer.Ordinal), evidenceIds);
+        Assert.Equal(expected.HasAuthority, result.TryGetProperty("evidenceAuthority", out _));
+        var bundle = result.GetProperty("evidenceBundle");
+        Assert.Equal(expected.BundleStatus, bundle.GetProperty("availabilityStatus").GetString());
+        Assert.Equal(
+            expected.EvidenceItemCount,
+            bundle.GetProperty("items").GetArrayLength());
+        Assert.Equal(expected.HasAuthority, bundle.TryGetProperty("observationSubject", out _));
+        Assert.Equal(expected.Omission is not null, bundle.TryGetProperty("omissionReason", out var omission));
+        if (expected.Omission is not null)
         {
-            var document = AuditAggregator.Aggregate(
-                TargetProfile.ExternalApi,
-                target.Classifications,
-                policy,
-                [AuditInput.Target(target.Target, contributions, evidence)]);
-            using var parsed = JsonDocument.Parse(AuditJson.Write(document));
-            Assert.True(executed.TryAdd(
-                caseId,
-                parsed.RootElement.GetProperty("results")[0].Clone()));
+            Assert.Equal(expected.Omission, omission.GetString());
         }
     }
 
@@ -507,6 +622,32 @@ public sealed class AuditAggregationTests
             EvidenceObservationBinder.Bind(observation, bundle, []).Binding);
     }
 
+    private static ComponentScenario CreateSkippedComponent()
+    {
+        const string context = "synthetic.v1";
+        const string documentationCommentId = "P:AuditFixtures.Widget.Value";
+        var buffer = new ClassificationCandidateBuffer();
+        buffer.AddTarget(
+            context,
+            documentationCommentId,
+            PrimarySymbolKind.Property,
+            ImmutableArray<SymbolTrait>.Empty,
+            ClassificationOrigin.Source,
+            [ClassificationInput.RepositoryLocator("src/Widget.cs")]);
+        buffer.AddComponent(
+            context,
+            documentationCommentId,
+            ComponentKind.AccessorGet,
+            "accessor/get",
+            ClassificationOrigin.Source);
+        var set = Assert.IsType<ClassificationSet>(
+            buffer.Normalize(TargetProfile.ExternalApi).ClassificationSet);
+        return new ComponentScenario(
+            set,
+            Assert.Single(set.Targets),
+            Assert.Single(set.Components));
+    }
+
     private static BoundObservationEvidence CreateMalformedComponentEvidence(
         ComponentScenario scenario)
     {
@@ -567,6 +708,61 @@ public sealed class AuditAggregationTests
                     documentationEvidenceId: evidenceId)]).Binding);
     }
 
+    private static BoundObservationEvidence CreatePartialMalformedComponentEvidence(
+        ComponentScenario scenario)
+    {
+        const string documentation = "/// <summary>Malformed\n";
+        const string body = "public void Run(string value) { }";
+        var declarationText = documentation + body;
+        var declaration = DocumentationObservationInput.RepositoryDeclaration(
+            "decl." + new string('e', 64),
+            DocumentationAuthorityRole.Ordinary,
+            "project." + new string('b', 64),
+            "src/Widget.cs",
+            Sha256(declarationText),
+            DocumentationObservationInput.Span(100, 100 + declarationText.Length),
+            declarationText,
+            DocumentationObservationInput.Span(100, 100 + documentation.Length),
+            documentation,
+            DocumentationObservationInput.Span(100, 100 + documentation.Length),
+            documentation,
+            DocumentationBlockState.Malformed,
+            parentSubstantive: true,
+            componentLocalName: "value",
+            componentMatch: null);
+        var observationBuffer = new DocumentationObservationCandidateBuffer(
+            scenario.Classifications);
+        observationBuffer.AddTarget(
+            scenario.Target,
+            true,
+            [CreateDeclaration(DocumentationObservationValue.Absent)]);
+        observationBuffer.AddComponent(scenario.Component, true, [declaration]);
+        var observation = Assert.Single(
+            Assert.IsType<DocumentationObservationSet>(
+                observationBuffer.Normalize().ObservationSet).Observations,
+            value => value.Subject.ComponentKind is not null);
+        var bundle = Assert.IsType<EvidenceBundle>(EvidenceNormalizer.Normalize(
+            [
+                EvidenceInput.Candidate(
+                    "evidence.partial-malformed",
+                    EvidenceInput.ComponentSubject(
+                        "synthetic.v1",
+                        "M:AuditFixtures.Widget.Run(System.String)",
+                        ComponentKind.Parameter,
+                        "parameter/0"),
+                    EvidenceKind.SourceXmlDocumentation,
+                    EvidenceRelation.Documents,
+                    documentation,
+                    EvidenceInput.RepositoryLocator(
+                        "src/Widget.cs",
+                        100,
+                        100 + documentation.Length)),
+            ],
+            budgets: EvidenceInput.Budgets(32, 4, 32768)).Bundle);
+        return Assert.IsType<BoundObservationEvidence>(
+            EvidenceObservationBinder.Bind(observation, bundle, []).Binding);
+    }
+
     private static DocumentationDeclarationInput CreateDeclaration(
         DocumentationObservationValue value)
     {
@@ -593,6 +789,54 @@ public sealed class AuditAggregationTests
 
     private static string Sha256(string value) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private enum PrecedenceClassificationState
+    {
+        Supported,
+        Skipped,
+    }
+
+    private enum PrecedencePolicyState
+    {
+        Usable,
+        Conflict,
+        Unavailable,
+    }
+
+    private enum PrecedenceEvidenceState
+    {
+        OrdinaryPresent,
+        SourceUnavailable,
+        Partial,
+        Malformed,
+        PartialMalformed,
+        Missing,
+    }
+
+    private sealed record ClosedProjection(
+        string Outcome,
+        string Reason,
+        string Resolution,
+        string? Expectation,
+        string? Observation,
+        string BundleStatus,
+        string? Omission,
+        int EvidenceIdCount,
+        int EvidenceItemCount,
+        bool HasAuthority)
+    {
+        public static ClosedProjection Skipped(string reason, string resolution) => new(
+            "audit.outcome.skipped",
+            reason,
+            resolution,
+            null,
+            null,
+            "evidence.bundle.unavailable",
+            "evidence.omission.not-provided",
+            EvidenceIdCount: 0,
+            EvidenceItemCount: 0,
+            HasAuthority: false);
+    }
 
     private sealed record TargetScenario(
         ClassificationSet Classifications,

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,6 +11,9 @@ namespace ContractScribe.Core;
 
 internal static partial class AuditJsonModel
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
     private static readonly HashSet<string> TargetProfiles =
         ["profile.external-api", "profile.assembly-visible"];
     private static readonly HashSet<string> PolicyExpectations =
@@ -166,6 +170,7 @@ internal static partial class AuditJsonModel
         ParseTargetProfile(GetString(document, "targetProfile"));
         var results = GetArray(document, "results");
         var subjects = new HashSet<string>(StringComparer.Ordinal);
+        var classifications = new List<object>();
         var resultIndex = 0;
         foreach (var result in results.EnumerateArray())
         {
@@ -176,6 +181,7 @@ internal static partial class AuditJsonModel
                 AuditValidationCode.InvalidShape);
             var classification = result.GetProperty("classification");
             ValidateClassification(classification);
+            classifications.Add(ParseClassification(classification));
             Require(
                 subjects.Add(GetSubjectKey(classification)),
                 AuditValidationCode.InvalidClassification,
@@ -192,7 +198,339 @@ internal static partial class AuditJsonModel
             ValidateOutcome(result);
             resultIndex++;
         }
+
+        ValidateAcceptedClassifications(classifications);
     }
+
+    private static void ValidateAcceptedClassifications(IReadOnlyList<object> classifications)
+    {
+        var targets = classifications.OfType<TargetClassification>().ToArray();
+        var components = classifications.OfType<ComponentClassification>().ToArray();
+        var unresolved = classifications.OfType<UnresolvedClassification>().ToArray();
+        Require(
+            targets.Length + components.Length + unresolved.Length == classifications.Count,
+            AuditValidationCode.InvalidClassification,
+            "The embedded classification record type is invalid.");
+
+        foreach (var target in targets)
+        {
+            var valid = target.SupportStatus switch
+            {
+                SupportStatus.Supported =>
+                    target.SkipReason is null
+                    && target.PrimaryKind != PrimarySymbolKind.Unknown
+                    && target.Origin is ClassificationOrigin.Source
+                        or ClassificationOrigin.SourceGenerator
+                        or ClassificationOrigin.ToolGenerated,
+                SupportStatus.Unsupported =>
+                    target.PrimaryKind == PrimarySymbolKind.Unknown
+                    && target.SkipReason == SkipReason.UnsupportedSymbolKind
+                    && target.Origin is not ClassificationOrigin.Unknown
+                        and not ClassificationOrigin.CompilerSynthesized,
+                SupportStatus.Ambiguous =>
+                    target.PrimaryKind != PrimarySymbolKind.Unknown
+                    && target.Origin != ClassificationOrigin.Unknown
+                    && target.Origin != ClassificationOrigin.CompilerSynthesized
+                    && (target.SkipReason == SkipReason.AmbiguousPartialDeclaration
+                        || target.SkipReason == SkipReason.AmbiguousMixedOrigin
+                            && target.Origin == ClassificationOrigin.Mixed),
+                SupportStatus.UnavailableContext =>
+                    target.SkipReason == SkipReason.UnavailableGeneratedProvenance
+                        && target.Origin == ClassificationOrigin.Unknown
+                    || target.SkipReason == SkipReason.UnavailableSemanticContext
+                        && target.Origin is not ClassificationOrigin.Unknown
+                            and not ClassificationOrigin.CompilerSynthesized,
+                _ => false,
+            };
+            Require(
+                valid,
+                AuditValidationCode.InvalidClassification,
+                "A target classification violates the closed Taxonomy registry constraints.");
+        }
+
+        var parents = targets.ToDictionary(target => target.SymbolRef);
+        foreach (var component in components)
+        {
+            var statusAllowed = component.ComponentKind switch
+            {
+                ComponentKind.Parameter
+                    or ComponentKind.TypeParameter
+                    or ComponentKind.Return
+                    or ComponentKind.Value => component.SupportStatus is
+                        SupportStatus.Supported
+                        or SupportStatus.UnavailableContext
+                        or SupportStatus.Ambiguous,
+                ComponentKind.AccessorGet
+                    or ComponentKind.AccessorSet
+                    or ComponentKind.AccessorInit
+                    or ComponentKind.AccessorAdd
+                    or ComponentKind.AccessorRemove
+                    or ComponentKind.BackingField => component.SupportStatus is
+                        SupportStatus.NotApplicable
+                        or SupportStatus.Ambiguous,
+                ComponentKind.SynthesizedRecordPositionalProperty
+                    or ComponentKind.SynthesizedImplicitConstructor
+                    or ComponentKind.SynthesizedRecordCopyConstructor
+                    or ComponentKind.SynthesizedDelegateInvoke
+                    or ComponentKind.SynthesizedDelegateBeginInvoke
+                    or ComponentKind.SynthesizedDelegateEndInvoke =>
+                        component.SupportStatus == SupportStatus.NotApplicable,
+                ComponentKind.Unknown => component.SupportStatus == SupportStatus.Unsupported,
+                _ => false,
+            };
+            var valid = statusAllowed && component.SupportStatus switch
+            {
+                SupportStatus.Supported =>
+                    component.SkipReason is null
+                    && IsOrdinaryDocumentationComponent(component.ComponentKind)
+                    && component.Origin is ClassificationOrigin.Source
+                        or ClassificationOrigin.SourceGenerator
+                        or ClassificationOrigin.ToolGenerated,
+                SupportStatus.Unsupported =>
+                    component.ComponentKind == ComponentKind.Unknown
+                    && component.SkipReason == SkipReason.UnsupportedComponentKind
+                    && component.Origin is not ClassificationOrigin.Unknown
+                        and not ClassificationOrigin.CompilerSynthesized,
+                SupportStatus.Ambiguous =>
+                    component.ComponentKind != ComponentKind.Unknown
+                    && component.Origin == ClassificationOrigin.Mixed
+                    && component.SkipReason == SkipReason.AmbiguousMixedOrigin,
+                SupportStatus.NotApplicable =>
+                    IsSynthesizedComponent(component.ComponentKind)
+                        && component.Origin == ClassificationOrigin.CompilerSynthesized
+                        && component.SkipReason == SkipReason.NotApplicableSynthesizedNonTarget
+                    || IsNonDocumentationComponent(component.ComponentKind)
+                        && component.Origin is not ClassificationOrigin.Unknown
+                            and not ClassificationOrigin.CompilerSynthesized
+                        && component.SkipReason ==
+                            SkipReason.NotApplicableNonDocumentationComponent,
+                SupportStatus.UnavailableContext =>
+                    component.SkipReason == SkipReason.UnavailableGeneratedProvenance
+                        && component.Origin == ClassificationOrigin.Unknown
+                    || component.SkipReason == SkipReason.UnavailableSemanticContext
+                        && component.Origin is not ClassificationOrigin.Unknown
+                            and not ClassificationOrigin.CompilerSynthesized,
+                _ => false,
+            };
+            Require(
+                valid,
+                AuditValidationCode.InvalidClassification,
+                "A component classification violates the closed Taxonomy registry constraints.");
+
+            var compatible = parents.TryGetValue(component.ParentSymbolRef, out var parent)
+                ? parent.SupportStatus == SupportStatus.Supported
+                    && AllowsComponentParent(component.ComponentKind, parent.PrimaryKind)
+                : PossibleParentKinds(component.ParentSymbolRef.DocumentationCommentId)
+                    .Any(kind => AllowsComponentParent(component.ComponentKind, kind));
+            Require(
+                compatible,
+                AuditValidationCode.InvalidClassification,
+                "A component classification has an absent, unsupported, or incompatible parent.");
+        }
+
+        foreach (var record in unresolved)
+        {
+            var valid = record.SupportStatus == SupportStatus.UnavailableContext
+                && (record.SkipReason == SkipReason.UnavailableDocumentationCommentId
+                    && record.Origin is not ClassificationOrigin.Unknown
+                        and not ClassificationOrigin.CompilerSynthesized
+                    || record.SkipReason == SkipReason.UnavailableGeneratedProvenance
+                        && record.Origin == ClassificationOrigin.Unknown
+                    || record.SkipReason == SkipReason.UnavailableSemanticContext
+                        && record.Origin is not ClassificationOrigin.Unknown
+                            and not ClassificationOrigin.CompilerSynthesized);
+            Require(
+                valid,
+                AuditValidationCode.InvalidClassification,
+                "An unresolved classification violates the closed Taxonomy registry constraints.");
+        }
+    }
+
+    private static bool IsOrdinaryDocumentationComponent(ComponentKind kind) =>
+        kind is ComponentKind.Parameter
+            or ComponentKind.TypeParameter
+            or ComponentKind.Return
+            or ComponentKind.Value;
+
+    private static bool IsSynthesizedComponent(ComponentKind kind) =>
+        kind is ComponentKind.SynthesizedRecordPositionalProperty
+            or ComponentKind.SynthesizedImplicitConstructor
+            or ComponentKind.SynthesizedRecordCopyConstructor
+            or ComponentKind.SynthesizedDelegateInvoke
+            or ComponentKind.SynthesizedDelegateBeginInvoke
+            or ComponentKind.SynthesizedDelegateEndInvoke;
+
+    private static bool IsNonDocumentationComponent(ComponentKind kind) =>
+        kind is ComponentKind.AccessorGet
+            or ComponentKind.AccessorSet
+            or ComponentKind.AccessorInit
+            or ComponentKind.AccessorAdd
+            or ComponentKind.AccessorRemove
+            or ComponentKind.BackingField;
+
+    private static bool AllowsComponentParent(
+        ComponentKind componentKind,
+        PrimarySymbolKind parentKind) => componentKind switch
+        {
+            ComponentKind.Parameter => parentKind is PrimarySymbolKind.Constructor
+                or PrimarySymbolKind.Method
+                or PrimarySymbolKind.Operator
+                or PrimarySymbolKind.Conversion
+                or PrimarySymbolKind.Indexer
+                or PrimarySymbolKind.Delegate,
+            ComponentKind.TypeParameter => parentKind is PrimarySymbolKind.Class
+                or PrimarySymbolKind.Struct
+                or PrimarySymbolKind.Interface
+                or PrimarySymbolKind.Delegate
+                or PrimarySymbolKind.Method,
+            ComponentKind.Return => parentKind is PrimarySymbolKind.Method
+                or PrimarySymbolKind.Operator
+                or PrimarySymbolKind.Conversion
+                or PrimarySymbolKind.Delegate,
+            ComponentKind.Value
+                or ComponentKind.AccessorGet
+                or ComponentKind.AccessorSet
+                or ComponentKind.AccessorInit => parentKind is PrimarySymbolKind.Property
+                    or PrimarySymbolKind.Indexer,
+            ComponentKind.AccessorAdd or ComponentKind.AccessorRemove =>
+                parentKind == PrimarySymbolKind.Event,
+            ComponentKind.BackingField => parentKind is PrimarySymbolKind.Property
+                or PrimarySymbolKind.Event,
+            ComponentKind.SynthesizedRecordPositionalProperty
+                or ComponentKind.SynthesizedImplicitConstructor
+                or ComponentKind.SynthesizedRecordCopyConstructor => parentKind is
+                    PrimarySymbolKind.Class or PrimarySymbolKind.Struct,
+            ComponentKind.SynthesizedDelegateInvoke
+                or ComponentKind.SynthesizedDelegateBeginInvoke
+                or ComponentKind.SynthesizedDelegateEndInvoke =>
+                    parentKind == PrimarySymbolKind.Delegate,
+            ComponentKind.Unknown => true,
+            _ => false,
+        };
+
+    private static IReadOnlySet<PrimarySymbolKind> PossibleParentKinds(
+        string documentationCommentId)
+    {
+        Require(
+            documentationCommentId.Length >= 3 && documentationCommentId[1] == ':',
+            AuditValidationCode.InvalidClassification,
+            "A component parent documentation comment ID cannot identify its kind.");
+        if (documentationCommentId[0] == 'M')
+        {
+            var member = documentationCommentId[
+                (documentationCommentId.LastIndexOf('.') + 1)..];
+            return member.StartsWith("#ctor", StringComparison.Ordinal)
+                    || member.StartsWith("#cctor", StringComparison.Ordinal)
+                ? new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Constructor])
+                : member.StartsWith("op_Implicit", StringComparison.Ordinal)
+                    || member.StartsWith("op_Explicit", StringComparison.Ordinal)
+                    ? new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Conversion])
+                    : member.StartsWith("op_", StringComparison.Ordinal)
+                        ? new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Operator])
+                        : new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Method]);
+        }
+
+        return documentationCommentId[0] switch
+        {
+            'T' => new HashSet<PrimarySymbolKind>([
+                PrimarySymbolKind.Class,
+                PrimarySymbolKind.Struct,
+                PrimarySymbolKind.Interface,
+                PrimarySymbolKind.Enum,
+                PrimarySymbolKind.Delegate,
+            ]),
+            'P' when documentationCommentId.Contains('(', StringComparison.Ordinal) =>
+                new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Indexer]),
+            'P' => new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Property]),
+            'F' => new HashSet<PrimarySymbolKind>([
+                PrimarySymbolKind.Field,
+                PrimarySymbolKind.EnumMember,
+            ]),
+            'E' => new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Event]),
+            _ => new HashSet<PrimarySymbolKind>([PrimarySymbolKind.Unknown]),
+        };
+    }
+
+    private static object ParseClassification(JsonElement classification)
+    {
+        var origin = ParseOrigin(GetString(classification, "origin"));
+        var status = ParseSupportStatus(GetString(classification, "supportStatus"));
+        var skip = classification.TryGetProperty("skipReason", out var skipElement)
+            ? ParseSkipReason(RequireStringValue(
+                skipElement,
+                AuditValidationCode.InvalidClassification))
+            : (SkipReason?)null;
+        return GetString(classification, "recordType") switch
+        {
+            "TargetClassification" => new TargetClassification(
+                ParseSymbolRef(classification.GetProperty("symbolRef")),
+                ParsePrimaryKind(GetString(classification, "primaryKind")),
+                GetArray(classification, "traits").EnumerateArray()
+                    .Select(item => ParseTrait(RequireStringValue(
+                        item,
+                        AuditValidationCode.InvalidClassification)))
+                    .ToImmutableArray(),
+                origin,
+                status,
+                skip),
+            "ComponentClassification" => new ComponentClassification(
+                ParseSymbolRef(classification.GetProperty("parentSymbolRef")),
+                ParseComponentKind(GetString(classification, "componentKind")),
+                GetString(classification, "identity"),
+                origin,
+                status,
+                skip),
+            "UnresolvedClassification" => new UnresolvedClassification(
+                GetString(classification, "compilationContextRef"),
+                origin,
+                status,
+                skip ?? throw Failure(
+                    AuditValidationCode.InvalidClassification,
+                    "Unresolved classifications require a skip reason."),
+                ParseCandidateLocator(classification.GetProperty("candidateLocator"))),
+            _ => throw Failure(
+                AuditValidationCode.InvalidClassification,
+                "The embedded classification record type is invalid."),
+        };
+    }
+
+    private static SymbolRef ParseSymbolRef(JsonElement value) => new(
+        GetString(value, "compilationContextRef"),
+        GetString(value, "documentationCommentId"));
+
+    private static CandidateLocator ParseCandidateLocator(JsonElement locator)
+    {
+        if (locator.TryGetProperty("repository", out var repository))
+        {
+            return new RepositoryCandidateLocator(
+                GetString(repository, "path"),
+                ParseSpan(repository));
+        }
+
+        if (locator.TryGetProperty("generatedSource", out var generatedSource))
+        {
+            return new GeneratedSourceCandidateLocator(
+                GetString(generatedSource, "generatorId"),
+                GetString(generatedSource, "hintNameId"),
+                ParseSpan(generatedSource));
+        }
+
+        if (locator.TryGetProperty("toolGenerated", out var toolGenerated))
+        {
+            return new ToolGeneratedCandidateLocator(
+                GetString(toolGenerated, "producerId"),
+                GetString(toolGenerated, "outputId"),
+                ParseSpan(toolGenerated));
+        }
+
+        return new SyntheticCandidateLocator(
+            GetString(locator.GetProperty("synthetic"), "fixtureId"));
+    }
+
+    private static Utf16Span? ParseSpan(JsonElement parent) =>
+        parent.TryGetProperty("span", out var span)
+            ? new Utf16Span(GetInt32(span, "start"), GetInt32(span, "end"))
+            : null;
 
     internal static TargetProfile ParseTargetProfile(string? value) => value switch
     {
@@ -201,6 +539,122 @@ internal static partial class AuditJsonModel
         _ => throw Failure(
             AuditValidationCode.InvalidVocabulary,
             "The Audit Result target profile is absent or unknown."),
+    };
+
+    private static PrimarySymbolKind ParsePrimaryKind(string value) => value switch
+    {
+        "symbol.type.class" => PrimarySymbolKind.Class,
+        "symbol.type.struct" => PrimarySymbolKind.Struct,
+        "symbol.type.interface" => PrimarySymbolKind.Interface,
+        "symbol.type.enum" => PrimarySymbolKind.Enum,
+        "symbol.type.delegate" => PrimarySymbolKind.Delegate,
+        "symbol.member.constructor" => PrimarySymbolKind.Constructor,
+        "symbol.member.method" => PrimarySymbolKind.Method,
+        "symbol.member.operator" => PrimarySymbolKind.Operator,
+        "symbol.member.conversion" => PrimarySymbolKind.Conversion,
+        "symbol.member.property" => PrimarySymbolKind.Property,
+        "symbol.member.indexer" => PrimarySymbolKind.Indexer,
+        "symbol.member.field" => PrimarySymbolKind.Field,
+        "symbol.member.enum-member" => PrimarySymbolKind.EnumMember,
+        "symbol.member.event" => PrimarySymbolKind.Event,
+        "symbol.unknown" => PrimarySymbolKind.Unknown,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The primary classification kind is unknown."),
+    };
+
+    private static ComponentKind ParseComponentKind(string value) => value switch
+    {
+        "component.parameter" => ComponentKind.Parameter,
+        "component.type-parameter" => ComponentKind.TypeParameter,
+        "component.return" => ComponentKind.Return,
+        "component.value" => ComponentKind.Value,
+        "component.accessor.get" => ComponentKind.AccessorGet,
+        "component.accessor.set" => ComponentKind.AccessorSet,
+        "component.accessor.init" => ComponentKind.AccessorInit,
+        "component.accessor.add" => ComponentKind.AccessorAdd,
+        "component.accessor.remove" => ComponentKind.AccessorRemove,
+        "component.backing-field" => ComponentKind.BackingField,
+        "component.synthesized.record-positional-property" =>
+            ComponentKind.SynthesizedRecordPositionalProperty,
+        "component.synthesized.implicit-constructor" =>
+            ComponentKind.SynthesizedImplicitConstructor,
+        "component.synthesized.record-copy-constructor" =>
+            ComponentKind.SynthesizedRecordCopyConstructor,
+        "component.synthesized.delegate-invoke" => ComponentKind.SynthesizedDelegateInvoke,
+        "component.synthesized.delegate-begin-invoke" =>
+            ComponentKind.SynthesizedDelegateBeginInvoke,
+        "component.synthesized.delegate-end-invoke" =>
+            ComponentKind.SynthesizedDelegateEndInvoke,
+        "component.unknown" => ComponentKind.Unknown,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The component classification kind is unknown."),
+    };
+
+    private static SymbolTrait ParseTrait(string value) => value switch
+    {
+        "trait.generic" => SymbolTrait.Generic,
+        "trait.record-class" => SymbolTrait.RecordClass,
+        "trait.record-struct" => SymbolTrait.RecordStruct,
+        "trait.ref-struct" => SymbolTrait.RefStruct,
+        "trait.static" => SymbolTrait.Static,
+        "trait.abstract" => SymbolTrait.Abstract,
+        "trait.virtual" => SymbolTrait.Virtual,
+        "trait.sealed" => SymbolTrait.Sealed,
+        "trait.extension" => SymbolTrait.Extension,
+        "trait.async" => SymbolTrait.Async,
+        "trait.iterator" => SymbolTrait.Iterator,
+        "trait.required" => SymbolTrait.Required,
+        "trait.init-only" => SymbolTrait.InitOnly,
+        "trait.partial" => SymbolTrait.Partial,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The classification trait is unknown."),
+    };
+
+    private static ClassificationOrigin ParseOrigin(string value) => value switch
+    {
+        "origin.source" => ClassificationOrigin.Source,
+        "origin.source-generator" => ClassificationOrigin.SourceGenerator,
+        "origin.tool-generated" => ClassificationOrigin.ToolGenerated,
+        "origin.compiler-synthesized" => ClassificationOrigin.CompilerSynthesized,
+        "origin.mixed" => ClassificationOrigin.Mixed,
+        "origin.unknown" => ClassificationOrigin.Unknown,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The classification origin is unknown."),
+    };
+
+    private static SupportStatus ParseSupportStatus(string value) => value switch
+    {
+        "support.supported" => SupportStatus.Supported,
+        "support.unsupported" => SupportStatus.Unsupported,
+        "support.ambiguous" => SupportStatus.Ambiguous,
+        "support.not-applicable" => SupportStatus.NotApplicable,
+        "support.unavailable-context" => SupportStatus.UnavailableContext,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The classification support status is unknown."),
+    };
+
+    private static SkipReason ParseSkipReason(string value) => value switch
+    {
+        "skip.unsupported.symbol-kind" => SkipReason.UnsupportedSymbolKind,
+        "skip.unsupported.component-kind" => SkipReason.UnsupportedComponentKind,
+        "skip.ambiguous.partial-declaration" => SkipReason.AmbiguousPartialDeclaration,
+        "skip.ambiguous.mixed-origin" => SkipReason.AmbiguousMixedOrigin,
+        "skip.not-applicable.synthesized-non-target" =>
+            SkipReason.NotApplicableSynthesizedNonTarget,
+        "skip.not-applicable.non-documentation-component" =>
+            SkipReason.NotApplicableNonDocumentationComponent,
+        "skip.unavailable.documentation-comment-id" =>
+            SkipReason.UnavailableDocumentationCommentId,
+        "skip.unavailable.generated-provenance" => SkipReason.UnavailableGeneratedProvenance,
+        "skip.unavailable.semantic-context" => SkipReason.UnavailableSemanticContext,
+        _ => throw Failure(
+            AuditValidationCode.InvalidClassification,
+            "The classification skip reason is unknown."),
     };
 
     internal static void RejectDuplicateProperties(JsonElement value)
@@ -418,7 +872,7 @@ internal static partial class AuditJsonModel
             }
             else
             {
-                ValidateGeneratedOutput(generated, requireHashIdentifiers: false);
+                ValidateGeneratedOutput(generated, evidenceLocator: false);
             }
 
             var expectation = GetString(contribution, "policyExpectation");
@@ -532,6 +986,10 @@ internal static partial class AuditJsonModel
         var referenced = GetArray(result, "evidenceIds").EnumerateArray()
             .Select(item => RequireStringValue(item, AuditValidationCode.InvalidEvidence))
             .ToArray();
+        foreach (var id in referenced)
+        {
+            ValidateEvidenceId(id, AuditValidationCode.InvalidEvidence);
+        }
         Require(
             referenced.Distinct(StringComparer.Ordinal).Count() == referenced.Length,
             AuditValidationCode.InvalidEvidence,
@@ -633,14 +1091,12 @@ internal static partial class AuditJsonModel
             [],
             AuditValidationCode.InvalidEvidence);
         var evidenceId = GetString(item, "evidenceId");
-        Require(
-            EvidenceIdPattern().IsMatch(evidenceId),
-            AuditValidationCode.InvalidEvidence,
-            "The evidence ID is invalid.");
+        ValidateEvidenceId(evidenceId, AuditValidationCode.InvalidEvidence);
         ValidateEvidenceSubject(item.GetProperty("subject"));
         RequireKnown(EvidenceKinds, GetString(item, "kind"), AuditValidationCode.InvalidEvidence);
         RequireKnown(EvidenceRelations, GetString(item, "relation"), AuditValidationCode.InvalidEvidence);
         var excerpt = GetString(item, "excerpt");
+        RejectUnpairedSurrogates(excerpt);
         var hash = GetString(item, "sha256");
         Require(
             Sha256Pattern().IsMatch(hash),
@@ -651,7 +1107,7 @@ internal static partial class AuditJsonModel
         var omittedCount = GetNonNegativeInt32(item, "omittedUtf8ByteCount");
         var truncated = GetBoolean(item, "isTruncated");
         Require(
-            Encoding.UTF8.GetByteCount(excerpt) == includedCount
+            StrictUtf8.GetByteCount(excerpt) == includedCount
             && checked(includedCount + omittedCount) == originalCount
             && includedCount <= 4096
             && (omittedCount > 0) == truncated
@@ -682,6 +1138,7 @@ internal static partial class AuditJsonModel
 
             if (originalText is not null)
             {
+                RejectUnpairedSurrogates(originalText);
                 Require(
                     originalText.StartsWith(excerpt, StringComparison.Ordinal)
                     && !(originalText.Length > excerpt.Length
@@ -695,7 +1152,7 @@ internal static partial class AuditJsonModel
         if (originalText is not null)
         {
             Require(
-                Encoding.UTF8.GetByteCount(originalText) == originalCount
+                StrictUtf8.GetByteCount(originalText) == originalCount
                 && ComputeSha256(originalText) == hash,
                 AuditValidationCode.OriginalEvidenceMismatch,
                 "The original evidence does not match its byte count or SHA-256.");
@@ -774,6 +1231,7 @@ internal static partial class AuditJsonModel
                 AuditValidationCode.InvalidAuthority);
             var declarationId = GetString(declaration, "declarationId");
             var evidenceId = GetString(declaration, "evidenceId");
+            ValidateEvidenceId(evidenceId, AuditValidationCode.InvalidAuthority);
             Require(
                 DeclarationIdPattern().IsMatch(declarationId)
                 && declarationIds.Add(declarationId)
@@ -1170,7 +1628,12 @@ internal static partial class AuditJsonModel
         }
         else if (variants[0] == "generatedOutput")
         {
-            ValidateGeneratedOutput(locator.GetProperty("generatedOutput"), requireHashIdentifiers: true);
+            ValidateGeneratedOutput(
+                locator.GetProperty("generatedOutput"),
+                evidenceLocator: true,
+                excerpt,
+                originalText,
+                truncated);
         }
         else if (variants[0] == "metadata")
         {
@@ -1194,14 +1657,19 @@ internal static partial class AuditJsonModel
         }
     }
 
-    private static void ValidateGeneratedOutput(JsonElement generated, bool requireHashIdentifiers)
+    private static void ValidateGeneratedOutput(
+        JsonElement generated,
+        bool evidenceLocator,
+        string? excerpt = null,
+        string? originalText = null,
+        bool truncated = false)
     {
         RequireObject(
             generated,
-            requireHashIdentifiers
+            evidenceLocator
                 ? ["producerKind", "producerId", "outputId", "sourceSha256"]
                 : ["producerKind", "producerId", "outputId"],
-            requireHashIdentifiers ? ["span"] : [],
+            evidenceLocator ? ["span"] : [],
             AuditValidationCode.InvalidEvidence);
         var kind = GetString(generated, "producerKind");
         Require(
@@ -1213,11 +1681,8 @@ internal static partial class AuditJsonModel
         var producer = GetString(generated, "producerId");
         var output = GetString(generated, "outputId");
         Require(
-            requireHashIdentifiers
-                ? HashIdPattern(producerPrefix).IsMatch(producer)
-                    && HashIdPattern(outputPrefix).IsMatch(output)
-                : producer.StartsWith(producerPrefix, StringComparison.Ordinal)
-                    && output.StartsWith(outputPrefix, StringComparison.Ordinal),
+            HashIdPattern(producerPrefix).IsMatch(producer)
+            && HashIdPattern(outputPrefix).IsMatch(output),
             AuditValidationCode.InvalidEvidence,
             "Generated-output identifiers do not match the producer kind.");
         if (generated.TryGetProperty("sourceSha256", out var hash))
@@ -1229,7 +1694,7 @@ internal static partial class AuditJsonModel
                 "Generated-output source hash is invalid.");
         }
 
-        ValidateSpan(generated, null, null, false);
+        ValidateSpan(generated, excerpt, originalText, truncated);
     }
 
     private static void ValidateCandidateLocator(JsonElement locator)
@@ -1294,12 +1759,13 @@ internal static partial class AuditJsonModel
             start <= end,
             AuditValidationCode.InvalidEvidence,
             "A UTF-16 span is reversed.");
-        if (excerpt is not null && (!truncated || originalText is not null))
+        var completeText = originalText ?? (!truncated ? excerpt : null);
+        if (completeText is not null)
         {
             Require(
-                end <= (truncated ? originalText!.Length : excerpt.Length),
+                checked(end - start) == completeText.Length,
                 AuditValidationCode.OriginalEvidenceMismatch,
-                "The evidence span exceeds its original text.");
+                "The absolute evidence span length does not match its complete original region.");
         }
     }
 
@@ -1680,7 +2146,13 @@ internal static partial class AuditJsonModel
     }
 
     private static string ComputeSha256(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(value))).ToLowerInvariant();
+
+    private static void ValidateEvidenceId(string value, AuditValidationCode code) =>
+        Require(
+            value.Length <= 128 && EvidenceIdPattern().IsMatch(value),
+            code,
+            "The evidence ID is invalid.");
 
     internal static AuditValidationException Failure(
         AuditValidationCode code,
