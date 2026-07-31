@@ -34,7 +34,7 @@ public enum AuditReason
     EvidenceIncomplete,
 }
 
-public enum AuditResultValidationCode
+public enum AuditValidationCode
 {
     InvalidUtf8OrJson,
     DuplicateProperty,
@@ -52,10 +52,10 @@ public enum AuditResultValidationCode
     TargetProfileMismatch,
 }
 
-public sealed class AuditResultValidationException : FormatException
+public sealed class AuditValidationException : FormatException
 {
-    internal AuditResultValidationException(
-        AuditResultValidationCode code,
+    internal AuditValidationException(
+        AuditValidationCode code,
         string message,
         Exception? innerException = null)
         : base(message, innerException)
@@ -63,14 +63,14 @@ public sealed class AuditResultValidationException : FormatException
         Code = code;
     }
 
-    public AuditResultValidationCode Code { get; }
+    public AuditValidationCode Code { get; }
 }
 
 public readonly record struct AuditEvidenceKey(int ResultIndex, string EvidenceId);
 
-public static class AuditResultVocabulary
+public static class AuditVocabulary
 {
-    public const int AuditResultVersion = 1;
+    public const int AuditVersion = 1;
     public const int PolicyConfigurationVersion = 1;
     public const int TaxonomyRegistryVersion = 1;
 
@@ -114,14 +114,14 @@ public static class AuditResultVocabulary
         new(nameof(value), value, "The value is outside the closed Audit Result vocabulary.");
 }
 
-public sealed class IntrinsicAuditResultDocument
+public sealed class IntrinsicAuditDocument
 {
     private readonly JsonElement root;
 
-    internal IntrinsicAuditResultDocument(JsonElement root)
+    internal IntrinsicAuditDocument(JsonElement root)
     {
         this.root = root;
-        TargetProfile = AuditResultJsonModel.ParseTargetProfile(
+        TargetProfile = AuditJsonModel.ParseTargetProfile(
             root.GetProperty("targetProfile").GetString());
         ResultCount = root.GetProperty("results").GetArrayLength();
     }
@@ -133,14 +133,14 @@ public sealed class IntrinsicAuditResultDocument
     internal JsonElement Root => root;
 }
 
-public sealed class AuditResultDocument
+public sealed class AuditDocument
 {
     private readonly JsonElement root;
 
-    internal AuditResultDocument(JsonElement root)
+    internal AuditDocument(JsonElement root)
     {
         this.root = root;
-        TargetProfile = AuditResultJsonModel.ParseTargetProfile(
+        TargetProfile = AuditJsonModel.ParseTargetProfile(
             root.GetProperty("targetProfile").GetString());
         ResultCount = root.GetProperty("results").GetArrayLength();
     }
@@ -152,17 +152,17 @@ public sealed class AuditResultDocument
     internal JsonElement Root => root;
 }
 
-public static class AuditResultParser
+public static class AuditParser
 {
-    public static IntrinsicAuditResultDocument Parse(ReadOnlySpan<byte> payload)
+    public static IntrinsicAuditDocument Parse(ReadOnlySpan<byte> payload)
     {
         if (payload.Length >= 3
             && payload[0] == 0xef
             && payload[1] == 0xbb
             && payload[2] == 0xbf)
         {
-            throw AuditResultJsonModel.Failure(
-                AuditResultValidationCode.NonCanonicalBytes,
+            throw AuditJsonModel.Failure(
+                AuditValidationCode.NonCanonicalBytes,
                 "A UTF-8 BOM is not canonical.");
         }
 
@@ -179,8 +179,8 @@ public static class AuditResultParser
         }
         catch (JsonException exception)
         {
-            throw AuditResultJsonModel.Failure(
-                AuditResultValidationCode.InvalidUtf8OrJson,
+            throw AuditJsonModel.Failure(
+                AuditValidationCode.InvalidUtf8OrJson,
                 "The Audit Result is not valid strict UTF-8 JSON.",
                 exception);
         }
@@ -188,44 +188,44 @@ public static class AuditResultParser
         using (parsed)
         {
             var root = parsed.RootElement.Clone();
-            AuditResultJsonModel.RejectDuplicateProperties(root);
-            AuditResultJsonModel.Validate(root, null, requireOriginalEvidence: false);
-            var canonical = AuditResultCanonicalJson.Canonicalize(root);
+            AuditJsonModel.RejectDuplicateProperties(root);
+            AuditJsonModel.Validate(root, null, requireOriginalEvidence: false);
+            var canonical = AuditCanonicalJson.Canonicalize(root);
             if (!payload.SequenceEqual(canonical))
             {
-                throw AuditResultJsonModel.Failure(
-                    AuditResultValidationCode.NonCanonicalBytes,
+                throw AuditJsonModel.Failure(
+                    AuditValidationCode.NonCanonicalBytes,
                     "The Audit Result byte stream is not canonical.");
             }
 
-            return new IntrinsicAuditResultDocument(root);
+            return new IntrinsicAuditDocument(root);
         }
     }
 
-    public static AuditResultDocument Promote(
-        IntrinsicAuditResultDocument document,
+    public static AuditDocument Promote(
+        IntrinsicAuditDocument document,
         IReadOnlyDictionary<AuditEvidenceKey, string> originalEvidence)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(originalEvidence);
-        AuditResultJsonModel.Validate(
+        AuditJsonModel.Validate(
             document.Root,
             originalEvidence,
             requireOriginalEvidence: true);
-        return new AuditResultDocument(document.Root.Clone());
+        return new AuditDocument(document.Root.Clone());
     }
 }
 
-public static class AuditResultJson
+public static class AuditJson
 {
-    public static byte[] Write(AuditResultDocument document)
+    public static byte[] Write(AuditDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        AuditResultJsonModel.Validate(
+        AuditJsonModel.Validate(
             document.Root,
             ImmutableDictionary<AuditEvidenceKey, string>.Empty,
             requireOriginalEvidence: false,
             trustSourceValidatedTruncation: true);
-        return AuditResultCanonicalJson.Canonicalize(document.Root);
+        return AuditCanonicalJson.Canonicalize(document.Root);
     }
 }

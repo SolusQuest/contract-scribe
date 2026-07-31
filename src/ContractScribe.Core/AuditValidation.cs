@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 
 namespace ContractScribe.Core;
 
-internal static partial class AuditResultJsonModel
+internal static partial class AuditJsonModel
 {
     private static readonly HashSet<string> TargetProfiles =
         ["profile.external-api", "profile.assembly-visible"];
@@ -130,7 +130,7 @@ internal static partial class AuditResultJsonModel
                 requireOriginalEvidence,
                 trustSourceValidatedTruncation);
         }
-        catch (AuditResultValidationException)
+        catch (AuditValidationException)
         {
             throw;
         }
@@ -140,7 +140,7 @@ internal static partial class AuditResultJsonModel
             or ArgumentException)
         {
             throw Failure(
-                AuditResultValidationCode.InvalidShape,
+                AuditValidationCode.InvalidShape,
                 "The Audit Result has an invalid JSON shape.",
                 exception);
         }
@@ -156,12 +156,12 @@ internal static partial class AuditResultJsonModel
             document,
             ["auditResultVersion", "policyConfigurationVersion", "taxonomyRegistryVersion", "targetProfile", "results"],
             [],
-            AuditResultValidationCode.InvalidShape);
+            AuditValidationCode.InvalidShape);
         Require(
-            GetInt32(document, "auditResultVersion") == AuditResultVocabulary.AuditResultVersion
-            && GetInt32(document, "policyConfigurationVersion") == AuditResultVocabulary.PolicyConfigurationVersion
-            && GetInt32(document, "taxonomyRegistryVersion") == AuditResultVocabulary.TaxonomyRegistryVersion,
-            AuditResultValidationCode.UnsupportedVersion,
+            GetInt32(document, "auditResultVersion") == AuditVocabulary.AuditVersion
+            && GetInt32(document, "policyConfigurationVersion") == AuditVocabulary.PolicyConfigurationVersion
+            && GetInt32(document, "taxonomyRegistryVersion") == AuditVocabulary.TaxonomyRegistryVersion,
+            AuditValidationCode.UnsupportedVersion,
             "The Audit Result contains an unsupported contract version.");
         ParseTargetProfile(GetString(document, "targetProfile"));
         var results = GetArray(document, "results");
@@ -173,12 +173,12 @@ internal static partial class AuditResultJsonModel
                 result,
                 ["classification", "policyContributions", "policyExpectation", "policyResolution", "documentationObservation", "auditOutcome", "reasonCode", "evidenceIds", "evidenceBundle"],
                 ["evidenceAuthority"],
-                AuditResultValidationCode.InvalidShape);
+                AuditValidationCode.InvalidShape);
             var classification = result.GetProperty("classification");
             ValidateClassification(classification);
             Require(
                 subjects.Add(GetSubjectKey(classification)),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Audit Result subjects must be unique.");
             ValidatePolicy(result);
             ValidateEvidence(
@@ -199,7 +199,7 @@ internal static partial class AuditResultJsonModel
         "profile.external-api" => TargetProfile.ExternalApi,
         "profile.assembly-visible" => TargetProfile.AssemblyVisible,
         _ => throw Failure(
-            AuditResultValidationCode.InvalidVocabulary,
+            AuditValidationCode.InvalidVocabulary,
             "The Audit Result target profile is absent or unknown."),
     };
 
@@ -212,7 +212,7 @@ internal static partial class AuditResultJsonModel
             {
                 Require(
                     names.Add(property.Name),
-                    AuditResultValidationCode.DuplicateProperty,
+                    AuditValidationCode.DuplicateProperty,
                     $"Duplicate JSON property '{property.Name}'.");
                 RejectDuplicateProperties(property.Value);
             }
@@ -230,7 +230,7 @@ internal static partial class AuditResultJsonModel
     {
         Require(
             classification.ValueKind == JsonValueKind.Object,
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Classification must be an object.");
         var recordType = GetString(classification, "recordType");
         var required = recordType switch
@@ -248,19 +248,19 @@ internal static partial class AuditResultJsonModel
                 "recordType", "compilationContextRef", "origin", "supportStatus", "skipReason", "candidateLocator",
             },
             _ => throw Failure(
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Audit Result v1 embeds only target, component, or unresolved classifications."),
         };
         RequireObject(
             classification,
             required,
             recordType == "UnresolvedClassification" ? [] : ["skipReason"],
-            AuditResultValidationCode.InvalidClassification);
+            AuditValidationCode.InvalidClassification);
 
         var supportStatus = GetString(classification, "supportStatus");
         var origin = GetString(classification, "origin");
-        RequireKnown(SupportStatuses, supportStatus, AuditResultValidationCode.InvalidClassification);
-        RequireKnown(Origins, origin, AuditResultValidationCode.InvalidClassification);
+        RequireKnown(SupportStatuses, supportStatus, AuditValidationCode.InvalidClassification);
+        RequireKnown(Origins, origin, AuditValidationCode.InvalidClassification);
 
         if (recordType == "TargetClassification")
         {
@@ -268,52 +268,52 @@ internal static partial class AuditResultJsonModel
             RequireKnown(
                 PrimaryKinds,
                 GetString(classification, "primaryKind"),
-                AuditResultValidationCode.InvalidClassification);
+                AuditValidationCode.InvalidClassification);
             var traits = GetArray(classification, "traits").EnumerateArray()
-                .Select(item => RequireStringValue(item, AuditResultValidationCode.InvalidClassification))
+                .Select(item => RequireStringValue(item, AuditValidationCode.InvalidClassification))
                 .ToArray();
             Require(
                 traits.All(Traits.Contains)
                 && traits.Distinct(StringComparer.Ordinal).Count() == traits.Length,
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Classification traits are unknown or duplicated.");
         }
         else if (recordType == "ComponentClassification")
         {
             ValidateSymbolRef(classification.GetProperty("parentSymbolRef"));
             var componentKind = GetString(classification, "componentKind");
-            RequireKnown(ComponentKinds, componentKind, AuditResultValidationCode.InvalidClassification);
+            RequireKnown(ComponentKinds, componentKind, AuditValidationCode.InvalidClassification);
             Require(
                 IsValidComponentIdentity(componentKind, GetString(classification, "identity")),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "The component identity does not match its kind.");
         }
         else
         {
             RequireOpaqueId(
                 GetString(classification, "compilationContextRef"),
-                AuditResultValidationCode.InvalidClassification);
+                AuditValidationCode.InvalidClassification);
             Require(
                 supportStatus == "support.unavailable-context",
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Unresolved classifications require unavailable context.");
             ValidateCandidateLocator(classification.GetProperty("candidateLocator"));
         }
 
         var hasSkip = classification.TryGetProperty("skipReason", out var skipElement);
-        var skipReason = hasSkip ? RequireStringValue(skipElement, AuditResultValidationCode.InvalidClassification) : null;
+        var skipReason = hasSkip ? RequireStringValue(skipElement, AuditValidationCode.InvalidClassification) : null;
         if (supportStatus == "support.supported")
         {
             Require(
                 !hasSkip,
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Supported classifications cannot carry a skip reason.");
         }
         else
         {
             Require(
                 hasSkip && SkipReasons.Contains(skipReason!),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Non-supported classifications require a known skip reason.");
             var prefix = supportStatus switch
             {
@@ -325,7 +325,7 @@ internal static partial class AuditResultJsonModel
             };
             Require(
                 skipReason!.StartsWith(prefix, StringComparison.Ordinal),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Classification status and skip reason disagree.");
         }
 
@@ -350,7 +350,7 @@ internal static partial class AuditResultJsonModel
             };
             Require(
                 valid,
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Unavailable classification origin and skip reason disagree.");
         }
 
@@ -359,7 +359,7 @@ internal static partial class AuditResultJsonModel
             Require(
                 supportStatus == "support.unavailable-context"
                 && skipReason == "skip.unavailable.generated-provenance",
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Unknown origin requires unavailable generated provenance.");
         }
 
@@ -372,7 +372,7 @@ internal static partial class AuditResultJsonModel
                 || supportStatus == "support.unavailable-context"
                     && skipReason is "skip.unavailable.documentation-comment-id" or
                         "skip.unavailable.semantic-context",
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Mixed origin has an invalid status or skip reason.");
         }
 
@@ -380,7 +380,7 @@ internal static partial class AuditResultJsonModel
         {
             Require(
                 origin == "origin.mixed",
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Mixed-origin skip requires mixed origin.");
         }
     }
@@ -398,7 +398,7 @@ internal static partial class AuditResultJsonModel
             var hasGenerated = contribution.TryGetProperty("generatedOutput", out var generated);
             Require(
                 hasSource != hasGenerated,
-                AuditResultValidationCode.InvalidPolicy,
+                AuditValidationCode.InvalidPolicy,
                 "A policy contribution requires exactly one source identity.");
             RequireObject(
                 contribution,
@@ -406,15 +406,15 @@ internal static partial class AuditResultJsonModel
                     ? ["projectPath", "sourcePath", "policyExpectation", "matchedRuleId"]
                     : ["projectPath", "generatedOutput", "policyExpectation", "matchedRuleId"],
                 [],
-                AuditResultValidationCode.InvalidPolicy);
+                AuditValidationCode.InvalidPolicy);
             RequireCanonicalPath(
                 GetString(contribution, "projectPath"),
-                AuditResultValidationCode.InvalidPolicy);
+                AuditValidationCode.InvalidPolicy);
             if (hasSource)
             {
                 RequireCanonicalPath(
-                    RequireStringValue(source, AuditResultValidationCode.InvalidPolicy),
-                    AuditResultValidationCode.InvalidPolicy);
+                    RequireStringValue(source, AuditValidationCode.InvalidPolicy),
+                    AuditValidationCode.InvalidPolicy);
             }
             else
             {
@@ -422,34 +422,34 @@ internal static partial class AuditResultJsonModel
             }
 
             var expectation = GetString(contribution, "policyExpectation");
-            RequireKnown(PolicyExpectations, expectation, AuditResultValidationCode.InvalidPolicy);
+            RequireKnown(PolicyExpectations, expectation, AuditValidationCode.InvalidPolicy);
             expectations.Add(expectation);
             Require(
                 keys.Add(PolicyContributionKey(contribution)),
-                AuditResultValidationCode.InvalidPolicy,
+                AuditValidationCode.InvalidPolicy,
                 "Policy contribution keys must be unique.");
             var rule = contribution.GetProperty("matchedRuleId");
             Require(
                 rule.ValueKind == JsonValueKind.Null
                 || rule.ValueKind == JsonValueKind.String
                     && RuleIdPattern().IsMatch(rule.GetString()!),
-                AuditResultValidationCode.InvalidPolicy,
+                AuditValidationCode.InvalidPolicy,
                 "The matched rule ID is invalid.");
         }
 
         var resolution = GetString(result, "policyResolution");
-        RequireKnown(PolicyResolutions, resolution, AuditResultValidationCode.InvalidPolicy);
+        RequireKnown(PolicyResolutions, resolution, AuditValidationCode.InvalidPolicy);
         var expectationValue = result.GetProperty("policyExpectation");
         Require(
             expectationValue.ValueKind is JsonValueKind.Null or JsonValueKind.String,
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "Policy expectation must be a known string or null.");
         if (expectationValue.ValueKind == JsonValueKind.String)
         {
             RequireKnown(
                 PolicyExpectations,
                 expectationValue.GetString()!,
-                AuditResultValidationCode.InvalidPolicy);
+                AuditValidationCode.InvalidPolicy);
         }
 
         var supported = result.GetProperty("classification")
@@ -464,20 +464,20 @@ internal static partial class AuditResultJsonModel
                     : "all-declarations-agree";
         Require(
             resolution == expectedResolution,
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "The aggregate policy resolution is incorrect.");
         if (resolution is "conflict" or "unavailable")
         {
             Require(
                 expectationValue.ValueKind == JsonValueKind.Null,
-                AuditResultValidationCode.InvalidPolicy,
+                AuditValidationCode.InvalidPolicy,
                 "Conflict and unavailable policy rows require a null expectation.");
         }
         else
         {
             Require(
                 expectationValue.GetString() == expectations.Single(),
-                AuditResultValidationCode.InvalidPolicy,
+                AuditValidationCode.InvalidPolicy,
                 "The aggregate policy expectation is incorrect.");
         }
     }
@@ -495,17 +495,17 @@ internal static partial class AuditResultJsonModel
             bundle,
             ["evidenceBundleVersion", "availabilityStatus", "items"],
             ["omissionReason", "observationSubject"],
-            AuditResultValidationCode.InvalidEvidence);
+            AuditValidationCode.InvalidEvidence);
         Require(
             GetInt32(bundle, "evidenceBundleVersion") == 1,
-            AuditResultValidationCode.UnsupportedVersion,
+            AuditValidationCode.UnsupportedVersion,
             "The evidence bundle version is unsupported.");
         var status = GetString(bundle, "availabilityStatus");
-        RequireKnown(BundleStatuses, status, AuditResultValidationCode.InvalidEvidence);
+        RequireKnown(BundleStatuses, status, AuditValidationCode.InvalidEvidence);
         var items = GetArray(bundle, "items").EnumerateArray().ToArray();
         Require(
             items.Length <= 32,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "An evidence bundle exceeds the item budget.");
         var byId = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         long includedTotal = 0;
@@ -520,28 +520,28 @@ internal static partial class AuditResultJsonModel
             var id = GetString(item, "evidenceId");
             Require(
                 byId.TryAdd(id, item),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Evidence IDs must be unique within a result.");
             includedTotal = checked(includedTotal + GetInt32(item, "includedUtf8ByteCount"));
         }
 
         Require(
             includedTotal <= 32768,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "An evidence bundle exceeds the UTF-8 byte budget.");
         var referenced = GetArray(result, "evidenceIds").EnumerateArray()
-            .Select(item => RequireStringValue(item, AuditResultValidationCode.InvalidEvidence))
+            .Select(item => RequireStringValue(item, AuditValidationCode.InvalidEvidence))
             .ToArray();
         Require(
             referenced.Distinct(StringComparer.Ordinal).Count() == referenced.Length,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Evidence references must be unique.");
         foreach (var id in referenced)
         {
             Require(
                 byId.TryGetValue(id, out var evidence)
                 && !GetBoolean(evidence, "isTruncated"),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Evidence references must resolve to untruncated items.");
         }
 
@@ -550,15 +550,15 @@ internal static partial class AuditResultJsonModel
         {
             RequireKnown(
                 OmissionReasons,
-                RequireStringValue(omission, AuditResultValidationCode.InvalidEvidence),
-                AuditResultValidationCode.InvalidEvidence);
+                RequireStringValue(omission, AuditValidationCode.InvalidEvidence),
+                AuditValidationCode.InvalidEvidence);
         }
 
         if (status == "evidence.bundle.unavailable")
         {
             Require(
                 items.Length == 0 && hasOmission,
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Unavailable evidence requires an omission and no items.");
         }
         else if (status == "evidence.bundle.complete")
@@ -566,7 +566,7 @@ internal static partial class AuditResultJsonModel
             Require(
                 items.Length > 0 && !hasOmission
                 && items.All(item => !GetBoolean(item, "isTruncated")),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Complete evidence requires non-empty untruncated items and no omission.");
         }
         else
@@ -577,34 +577,34 @@ internal static partial class AuditResultJsonModel
                 && omission.GetString() == "evidence.omission.budget-exhausted"
                 && referenced.Length == 0
                 && GetString(result, "reasonCode") == "audit.reason.evidence-incomplete",
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Partial evidence has an invalid result projection.");
         }
 
         var recordType = GetString(classification, "recordType");
         Require(
             recordType != "UnresolvedClassification" || referenced.Length == 0,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Unresolved classifications cannot reference evidence.");
         var outcome = GetString(result, "auditOutcome");
         if (outcome is "audit.outcome.compliant" or "audit.outcome.violation")
         {
             Require(
                 status == "evidence.bundle.complete",
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Compliant and violation rows require complete evidence.");
             var expectedSubject = GetExpectedEvidenceSubject(classification);
             var relevant = referenced.Select(id => byId[id]).ToArray();
             Require(
                 relevant.All(item => JsonElement.DeepEquals(item.GetProperty("subject"), expectedSubject)),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Referenced evidence is bound to a different subject.");
             if (GetString(result, "documentationObservation") == "documentation.present")
             {
                 Require(
                     relevant.Any(item => GetString(item, "kind") == "evidence.source.xml-documentation"
                         && GetString(item, "relation") == "evidence.documents"),
-                    AuditResultValidationCode.InvalidEvidence,
+                    AuditValidationCode.InvalidEvidence,
                     "Present documentation requires direct XML-documentation evidence.");
             }
             else
@@ -614,7 +614,7 @@ internal static partial class AuditResultJsonModel
                         && GetString(item, "relation") == "evidence.declares")
                     && !items.Any(item => JsonElement.DeepEquals(item.GetProperty("subject"), expectedSubject)
                         && GetString(item, "kind") == "evidence.source.xml-documentation"),
-                    AuditResultValidationCode.InvalidEvidence,
+                    AuditValidationCode.InvalidEvidence,
                     "Absent documentation requires declaration evidence and forbids contradictory XML evidence.");
             }
         }
@@ -631,20 +631,20 @@ internal static partial class AuditResultJsonModel
             item,
             ["evidenceId", "subject", "kind", "relation", "excerpt", "sha256", "originalUtf8ByteCount", "includedUtf8ByteCount", "omittedUtf8ByteCount", "isTruncated", "locator"],
             [],
-            AuditResultValidationCode.InvalidEvidence);
+            AuditValidationCode.InvalidEvidence);
         var evidenceId = GetString(item, "evidenceId");
         Require(
             EvidenceIdPattern().IsMatch(evidenceId),
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "The evidence ID is invalid.");
         ValidateEvidenceSubject(item.GetProperty("subject"));
-        RequireKnown(EvidenceKinds, GetString(item, "kind"), AuditResultValidationCode.InvalidEvidence);
-        RequireKnown(EvidenceRelations, GetString(item, "relation"), AuditResultValidationCode.InvalidEvidence);
+        RequireKnown(EvidenceKinds, GetString(item, "kind"), AuditValidationCode.InvalidEvidence);
+        RequireKnown(EvidenceRelations, GetString(item, "relation"), AuditValidationCode.InvalidEvidence);
         var excerpt = GetString(item, "excerpt");
         var hash = GetString(item, "sha256");
         Require(
             Sha256Pattern().IsMatch(hash),
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "The evidence SHA-256 is invalid.");
         var originalCount = GetNonNegativeInt32(item, "originalUtf8ByteCount");
         var includedCount = GetNonNegativeInt32(item, "includedUtf8ByteCount");
@@ -656,7 +656,7 @@ internal static partial class AuditResultJsonModel
             && includedCount <= 4096
             && (omittedCount > 0) == truncated
             && (originalCount == 0 || excerpt.Length > 0),
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Evidence byte counts, truncation, or excerpt budget are inconsistent.");
 
         string? originalText = truncated ? null : excerpt;
@@ -672,7 +672,7 @@ internal static partial class AuditResultJsonModel
                     if (requireOriginalEvidence)
                     {
                         throw Failure(
-                            AuditResultValidationCode.MissingOriginalEvidence,
+                            AuditValidationCode.MissingOriginalEvidence,
                             $"Truncated evidence '{evidenceId}' requires its original text.");
                     }
 
@@ -687,7 +687,7 @@ internal static partial class AuditResultJsonModel
                     && !(originalText.Length > excerpt.Length
                         && excerpt.Length > 0
                         && char.IsHighSurrogate(excerpt[^1])),
-                    AuditResultValidationCode.OriginalEvidenceMismatch,
+                    AuditValidationCode.OriginalEvidenceMismatch,
                     "The original evidence does not match the canonical excerpt.");
             }
         }
@@ -697,7 +697,7 @@ internal static partial class AuditResultJsonModel
             Require(
                 Encoding.UTF8.GetByteCount(originalText) == originalCount
                 && ComputeSha256(originalText) == hash,
-                AuditResultValidationCode.OriginalEvidenceMismatch,
+                AuditValidationCode.OriginalEvidenceMismatch,
                 "The original evidence does not match its byte count or SHA-256.");
         }
 
@@ -720,7 +720,7 @@ internal static partial class AuditResultJsonModel
                 "audit.reason.documentation-unavailable.malformed-xml";
         Require(
             hasAuthority == requiresAuthority && hasObservationSubject == requiresAuthority,
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Evidence authority and observation subject presence do not match the result.");
         if (!requiresAuthority)
         {
@@ -731,16 +731,16 @@ internal static partial class AuditResultJsonModel
             authority,
             ["declarationSetId", "completeness", "declarations"],
             [],
-            AuditResultValidationCode.InvalidAuthority);
+            AuditValidationCode.InvalidAuthority);
         var completeness = GetString(authority, "completeness");
         Require(
             completeness is "complete" or "positive-only",
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Evidence authority completeness is invalid.");
         var declarations = GetArray(authority, "declarations");
         Require(
             declarations.GetArrayLength() > 0,
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Evidence authority requires declarations.");
         ValidateObservationSubject(observation);
         var digest = ComputeDeclarationDigest(declarations);
@@ -748,14 +748,14 @@ internal static partial class AuditResultJsonModel
             GetString(authority, "declarationSetId") == $"dset.{digest}"
             && GetString(observation, "authoritativeDeclarationSetDigest") == digest
             && GetInt32(observation, "authoritativeDeclarationCount") == declarations.GetArrayLength(),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Declaration authority commitments do not match.");
         var classification = result.GetProperty("classification");
         Require(
             GetString(observation, "compilationContextRef") == GetClassificationContext(classification)
             && ObservationSubjectMatchesClassification(observation.GetProperty("subject"), classification)
             && GetString(observation, "observationSubjectRef") == ComputeObservationSubjectRef(observation),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "The observation subject commitment does not match the classification.");
 
         var evidenceItems = bundle.GetProperty("items").EnumerateArray()
@@ -771,28 +771,28 @@ internal static partial class AuditResultJsonModel
                 declaration,
                 ["declarationId", "authorityRole", "blockState", "evidenceId"],
                 ["componentLocalName", "componentMatch"],
-                AuditResultValidationCode.InvalidAuthority);
+                AuditValidationCode.InvalidAuthority);
             var declarationId = GetString(declaration, "declarationId");
             var evidenceId = GetString(declaration, "evidenceId");
             Require(
                 DeclarationIdPattern().IsMatch(declarationId)
                 && declarationIds.Add(declarationId)
                 && declarationEvidenceIds.Add(evidenceId),
-                AuditResultValidationCode.InvalidAuthority,
+                AuditValidationCode.InvalidAuthority,
                 "Authority declaration identity or evidence reference is invalid.");
             Require(
                 evidenceItems.TryGetValue(evidenceId, out var evidence),
-                AuditResultValidationCode.InvalidAuthority,
+                AuditValidationCode.InvalidAuthority,
                 "Authority declaration evidence does not resolve within the result bundle.");
             RequireKnown(
                 AuthorityRoles,
                 GetString(declaration, "authorityRole"),
-                AuditResultValidationCode.InvalidAuthority);
+                AuditValidationCode.InvalidAuthority);
             var blockState = GetString(declaration, "blockState");
-            RequireKnown(BlockStates, blockState, AuditResultValidationCode.InvalidAuthority);
+            RequireKnown(BlockStates, blockState, AuditValidationCode.InvalidAuthority);
             Require(
                 JsonElement.DeepEquals(evidence.GetProperty("subject"), observation.GetProperty("subject")),
-                AuditResultValidationCode.InvalidAuthority,
+                AuditValidationCode.InvalidAuthority,
                 "Authority evidence is bound to another subject.");
             var hasLocalName = declaration.TryGetProperty("componentLocalName", out var localName);
             var hasMatch = declaration.TryGetProperty("componentMatch", out var componentMatch);
@@ -801,23 +801,23 @@ internal static partial class AuditResultJsonModel
             {
                 Require(
                     !hasLocalName && !hasMatch,
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Target authority rows forbid component fields.");
             }
             else if (componentKind is "component.parameter" or "component.type-parameter")
             {
                 Require(
                     hasLocalName
-                    && !string.IsNullOrEmpty(RequireStringValue(localName, AuditResultValidationCode.InvalidAuthority))
+                    && !string.IsNullOrEmpty(RequireStringValue(localName, AuditValidationCode.InvalidAuthority))
                     && hasMatch == !malformed,
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Named component authority fields are inconsistent.");
             }
             else
             {
                 Require(
                     !hasLocalName && hasMatch == !malformed,
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Component authority fields are inconsistent.");
             }
 
@@ -826,7 +826,7 @@ internal static partial class AuditResultJsonModel
                 Require(
                     componentMatch.ValueKind == JsonValueKind.String
                     && componentMatch.GetString() is "present" or "absent",
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Component match is invalid.");
             }
 
@@ -837,14 +837,14 @@ internal static partial class AuditResultJsonModel
                     GetString(evidence, "kind") == "evidence.source.xml-documentation"
                     && GetString(evidence, "relation") == "evidence.documents"
                     && !GetBoolean(evidence, "isTruncated"),
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Malformed authority requires exact untruncated XML evidence.");
             }
         }
 
         Require(
             HasValidAuthorityMode(declarations.EnumerateArray().ToArray()),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Authority declarations do not form one closed selection mode.");
         var referenced = result.GetProperty("evidenceIds").EnumerateArray()
             .Select(item => item.GetString()!)
@@ -852,24 +852,24 @@ internal static partial class AuditResultJsonModel
         Require(
             referenced.SetEquals(declarationEvidenceIds)
             && malformedEvidenceIds.IsSubsetOf(referenced),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Evidence references do not exactly cover the authority declarations.");
         var derived = DeriveDocumentationObservation(observation.GetProperty("subject"), authority);
         Require(
             result.GetProperty("documentationObservation").GetString() == derived,
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "The claimed documentation observation contradicts authority.");
         var malformedReason = GetString(result, "reasonCode") ==
             "audit.reason.documentation-unavailable.malformed-xml";
         Require(
             malformedReason == (derived == "documentation.unavailable" && malformedEvidenceIds.Count > 0),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Malformed XML reason and authority disagree.");
         if (derived != "documentation.present")
         {
             Require(
                 completeness == "complete",
-                AuditResultValidationCode.InvalidAuthority,
+                AuditValidationCode.InvalidAuthority,
                 "Absence and malformed XML require complete authority.");
         }
     }
@@ -878,25 +878,25 @@ internal static partial class AuditResultJsonModel
     {
         var outcome = GetString(result, "auditOutcome");
         var reason = GetString(result, "reasonCode");
-        RequireKnown(Outcomes, outcome, AuditResultValidationCode.InvalidOutcome);
-        RequireKnown(Reasons, reason, AuditResultValidationCode.InvalidOutcome);
+        RequireKnown(Outcomes, outcome, AuditValidationCode.InvalidOutcome);
+        RequireKnown(Reasons, reason, AuditValidationCode.InvalidOutcome);
         var expectationElement = result.GetProperty("policyExpectation");
         var observationElement = result.GetProperty("documentationObservation");
         Require(
             observationElement.ValueKind is JsonValueKind.Null or JsonValueKind.String,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "Documentation observation must be a known string or null.");
         if (observationElement.ValueKind == JsonValueKind.String)
         {
             RequireKnown(
                 DocumentationObservations,
                 observationElement.GetString()!,
-                AuditResultValidationCode.InvalidOutcome);
+                AuditValidationCode.InvalidOutcome);
         }
 
         Require(
             DerivePrimaryReason(result) == reason,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "The selected primary reason violates precedence.");
         if (reason == "audit.reason.classification-skipped")
         {
@@ -909,7 +909,7 @@ internal static partial class AuditResultJsonModel
             Require(
                 result.GetProperty("policyContributions").GetArrayLength() > 0
                 && GetString(result, "policyResolution") == "conflict",
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "Policy conflict projection is invalid.");
             RequireSkippedProjection(result, "conflict", "evidence.omission.not-provided");
             return;
@@ -919,7 +919,7 @@ internal static partial class AuditResultJsonModel
         {
             Require(
                 result.GetProperty("policyContributions").GetArrayLength() == 0,
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "Policy unavailable projection retains contributions.");
             RequireSkippedProjection(result, "unavailable", "evidence.omission.not-provided");
             return;
@@ -932,7 +932,7 @@ internal static partial class AuditResultJsonModel
                 && expectationElement.ValueKind == JsonValueKind.String
                 && observationElement.GetString() == "documentation.unavailable"
                 && result.GetProperty("evidenceIds").GetArrayLength() == 0,
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "Documentation unavailable projection is invalid.");
             RequireUnavailableBundle(result, "evidence.omission.source-unavailable");
             return;
@@ -946,7 +946,7 @@ internal static partial class AuditResultJsonModel
                 && result.GetProperty("evidenceIds").GetArrayLength() > 0
                 && GetString(result.GetProperty("evidenceBundle"), "availabilityStatus") ==
                     "evidence.bundle.complete",
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "Malformed XML projection is invalid.");
             return;
         }
@@ -962,7 +962,7 @@ internal static partial class AuditResultJsonModel
                     "evidence.bundle.partial"
                 && GetString(result.GetProperty("evidenceBundle"), "omissionReason") ==
                     "evidence.omission.budget-exhausted",
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "Evidence incomplete projection is invalid.");
             return;
         }
@@ -970,7 +970,7 @@ internal static partial class AuditResultJsonModel
         Require(
             expectationElement.ValueKind == JsonValueKind.String
             && observationElement.ValueKind == JsonValueKind.String,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "Ordinary audit rows require policy and observation values.");
         var matrix = (expectationElement.GetString(), observationElement.GetString()) switch
         {
@@ -987,14 +987,14 @@ internal static partial class AuditResultJsonModel
             ("forbidden", "documentation.absent") =>
                 ("audit.outcome.compliant", "audit.reason.forbidden-absent"),
             _ => throw Failure(
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "The policy/observation matrix combination is invalid."),
         };
         Require(
             matrix.Item1 == outcome
             && matrix.Item2 == reason
             && result.GetProperty("evidenceIds").GetArrayLength() > 0,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "The audit outcome matrix projection is invalid.");
     }
 
@@ -1050,7 +1050,7 @@ internal static partial class AuditResultJsonModel
             ("forbidden", "documentation.present") => "audit.reason.forbidden-present",
             ("forbidden", "documentation.absent") => "audit.reason.forbidden-absent",
             _ => throw Failure(
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "A primary audit reason cannot be derived."),
         };
     }
@@ -1066,7 +1066,7 @@ internal static partial class AuditResultJsonModel
             && GetString(result, "policyResolution") == policyResolution
             && result.GetProperty("documentationObservation").ValueKind == JsonValueKind.Null
             && result.GetProperty("evidenceIds").GetArrayLength() == 0,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "The skipped-result projection is invalid.");
         RequireUnavailableBundle(result, omissionReason);
     }
@@ -1078,7 +1078,7 @@ internal static partial class AuditResultJsonModel
             GetString(bundle, "availabilityStatus") == "evidence.bundle.unavailable"
             && GetString(bundle, "omissionReason") == omissionReason
             && bundle.GetProperty("items").GetArrayLength() == 0,
-            AuditResultValidationCode.InvalidOutcome,
+            AuditValidationCode.InvalidOutcome,
             "The unavailable evidence bundle projection is invalid.");
     }
 
@@ -1090,13 +1090,13 @@ internal static partial class AuditResultJsonModel
                 subject,
                 ["parentSymbolRef", "componentKind", "identity"],
                 [],
-                AuditResultValidationCode.InvalidEvidence);
+                AuditValidationCode.InvalidEvidence);
             ValidateSymbolRef(subject.GetProperty("parentSymbolRef"));
             var componentKind = GetString(subject, "componentKind");
-            RequireKnown(ComponentKinds, componentKind, AuditResultValidationCode.InvalidEvidence);
+            RequireKnown(ComponentKinds, componentKind, AuditValidationCode.InvalidEvidence);
             Require(
                 IsValidComponentIdentity(componentKind, GetString(subject, "identity")),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "The evidence component subject is invalid.");
         }
         else
@@ -1111,13 +1111,13 @@ internal static partial class AuditResultJsonModel
             symbolRef,
             ["compilationContextRef", "documentationCommentId"],
             [],
-            AuditResultValidationCode.InvalidClassification);
+            AuditValidationCode.InvalidClassification);
         RequireOpaqueId(
             GetString(symbolRef, "compilationContextRef"),
-            AuditResultValidationCode.InvalidClassification);
+            AuditValidationCode.InvalidClassification);
         Require(
             !string.IsNullOrEmpty(GetString(symbolRef, "documentationCommentId")),
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Documentation comment IDs cannot be empty.");
     }
 
@@ -1127,16 +1127,16 @@ internal static partial class AuditResultJsonModel
             observation,
             ["observationSubjectRef", "compilationContextRef", "subject", "authoritativeDeclarationSetDigest", "authoritativeDeclarationCount"],
             [],
-            AuditResultValidationCode.InvalidAuthority);
+            AuditValidationCode.InvalidAuthority);
         Require(
             ObservationRefPattern().IsMatch(GetString(observation, "observationSubjectRef"))
             && Sha256Pattern().IsMatch(GetString(observation, "authoritativeDeclarationSetDigest"))
             && GetNonNegativeInt32(observation, "authoritativeDeclarationCount") > 0,
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "The observation subject commitment has an invalid identity, digest, or count.");
         RequireOpaqueId(
             GetString(observation, "compilationContextRef"),
-            AuditResultValidationCode.InvalidAuthority);
+            AuditValidationCode.InvalidAuthority);
         ValidateEvidenceSubject(observation.GetProperty("subject"));
     }
 
@@ -1148,14 +1148,14 @@ internal static partial class AuditResultJsonModel
     {
         Require(
             locator.ValueKind == JsonValueKind.Object,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Evidence locator must be an object.");
         var variants = new[] { "repository", "generatedOutput", "metadata", "synthetic" }
             .Where(name => locator.TryGetProperty(name, out _))
             .ToArray();
         Require(
             variants.Length == 1 && locator.EnumerateObject().Count() == 1,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Evidence locator requires exactly one variant.");
         if (variants[0] == "repository")
         {
@@ -1164,8 +1164,8 @@ internal static partial class AuditResultJsonModel
                 repository,
                 ["path"],
                 ["span"],
-                AuditResultValidationCode.InvalidEvidence);
-            RequireCanonicalPath(GetString(repository, "path"), AuditResultValidationCode.InvalidEvidence);
+                AuditValidationCode.InvalidEvidence);
+            RequireCanonicalPath(GetString(repository, "path"), AuditValidationCode.InvalidEvidence);
             ValidateSpan(repository, excerpt, originalText, truncated);
         }
         else if (variants[0] == "generatedOutput")
@@ -1179,18 +1179,18 @@ internal static partial class AuditResultJsonModel
                 metadata,
                 ["assemblyIdentity", "documentationCommentId"],
                 [],
-                AuditResultValidationCode.InvalidEvidence);
-            RequireOpaqueId(GetString(metadata, "assemblyIdentity"), AuditResultValidationCode.InvalidEvidence);
+                AuditValidationCode.InvalidEvidence);
+            RequireOpaqueId(GetString(metadata, "assemblyIdentity"), AuditValidationCode.InvalidEvidence);
             Require(
                 !string.IsNullOrEmpty(GetString(metadata, "documentationCommentId")),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Metadata documentation comment ID cannot be empty.");
         }
         else
         {
             var synthetic = locator.GetProperty("synthetic");
-            RequireObject(synthetic, ["fixtureId"], [], AuditResultValidationCode.InvalidEvidence);
-            RequireOpaqueId(GetString(synthetic, "fixtureId"), AuditResultValidationCode.InvalidEvidence);
+            RequireObject(synthetic, ["fixtureId"], [], AuditValidationCode.InvalidEvidence);
+            RequireOpaqueId(GetString(synthetic, "fixtureId"), AuditValidationCode.InvalidEvidence);
         }
     }
 
@@ -1202,11 +1202,11 @@ internal static partial class AuditResultJsonModel
                 ? ["producerKind", "producerId", "outputId", "sourceSha256"]
                 : ["producerKind", "producerId", "outputId"],
             requireHashIdentifiers ? ["span"] : [],
-            AuditResultValidationCode.InvalidEvidence);
+            AuditValidationCode.InvalidEvidence);
         var kind = GetString(generated, "producerKind");
         Require(
             kind is "source-generator" or "tool-generated",
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Generated-output producer kind is invalid.");
         var producerPrefix = kind == "source-generator" ? "sgp." : "tgp.";
         var outputPrefix = kind == "source-generator" ? "sgo." : "tgo.";
@@ -1218,14 +1218,14 @@ internal static partial class AuditResultJsonModel
                     && HashIdPattern(outputPrefix).IsMatch(output)
                 : producer.StartsWith(producerPrefix, StringComparison.Ordinal)
                     && output.StartsWith(outputPrefix, StringComparison.Ordinal),
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Generated-output identifiers do not match the producer kind.");
         if (generated.TryGetProperty("sourceSha256", out var hash))
         {
             Require(
                 hash.ValueKind == JsonValueKind.String
                 && Sha256Pattern().IsMatch(hash.GetString()!),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Generated-output source hash is invalid.");
         }
 
@@ -1236,20 +1236,20 @@ internal static partial class AuditResultJsonModel
     {
         Require(
             locator.ValueKind == JsonValueKind.Object,
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Candidate locator must be an object.");
         var variants = new[] { "repository", "generatedSource", "toolGenerated", "synthetic" }
             .Where(name => locator.TryGetProperty(name, out _))
             .ToArray();
         Require(
             variants.Length == 1 && locator.EnumerateObject().Count() == 1,
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Candidate locator requires exactly one variant.");
         var value = locator.GetProperty(variants[0]);
         if (variants[0] == "repository")
         {
-            RequireObject(value, ["path"], ["span"], AuditResultValidationCode.InvalidClassification);
-            RequireCanonicalPath(GetString(value, "path"), AuditResultValidationCode.InvalidClassification);
+            RequireObject(value, ["path"], ["span"], AuditValidationCode.InvalidClassification);
+            RequireCanonicalPath(GetString(value, "path"), AuditValidationCode.InvalidClassification);
             ValidateSpan(value, null, null, false);
         }
         else if (variants[0] is "generatedSource" or "toolGenerated")
@@ -1261,18 +1261,18 @@ internal static partial class AuditResultJsonModel
                 value,
                 [producerName, outputName],
                 ["span"],
-                AuditResultValidationCode.InvalidClassification);
+                AuditValidationCode.InvalidClassification);
             Require(
                 HashIdPattern(generatedSource ? "sgp." : "tgp.").IsMatch(GetString(value, producerName))
                 && HashIdPattern(generatedSource ? "sgo." : "tgo.").IsMatch(GetString(value, outputName)),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Candidate generated identifiers are invalid.");
             ValidateSpan(value, null, null, false);
         }
         else
         {
-            RequireObject(value, ["fixtureId"], [], AuditResultValidationCode.InvalidClassification);
-            RequireOpaqueId(GetString(value, "fixtureId"), AuditResultValidationCode.InvalidClassification);
+            RequireObject(value, ["fixtureId"], [], AuditValidationCode.InvalidClassification);
+            RequireOpaqueId(GetString(value, "fixtureId"), AuditValidationCode.InvalidClassification);
         }
     }
 
@@ -1287,18 +1287,18 @@ internal static partial class AuditResultJsonModel
             return;
         }
 
-        RequireObject(span, ["start", "end"], [], AuditResultValidationCode.InvalidEvidence);
+        RequireObject(span, ["start", "end"], [], AuditValidationCode.InvalidEvidence);
         var start = GetNonNegativeInt32(span, "start");
         var end = GetNonNegativeInt32(span, "end");
         Require(
             start <= end,
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "A UTF-16 span is reversed.");
         if (excerpt is not null && (!truncated || originalText is not null))
         {
             Require(
                 end <= (truncated ? originalText!.Length : excerpt.Length),
-                AuditResultValidationCode.OriginalEvidenceMismatch,
+                AuditValidationCode.OriginalEvidenceMismatch,
                 "The evidence span exceeds its original text.");
         }
     }
@@ -1342,7 +1342,7 @@ internal static partial class AuditResultJsonModel
 
     private static string ComputeDeclarationDigest(JsonElement declarations) =>
         Convert.ToHexString(
-            SHA256.HashData(AuditResultCanonicalJson.CanonicalizeDeclarations(declarations)))
+            SHA256.HashData(AuditCanonicalJson.CanonicalizeDeclarations(declarations)))
         .ToLowerInvariant();
 
     private static string ComputeObservationSubjectRef(JsonElement observation)
@@ -1384,7 +1384,7 @@ internal static partial class AuditResultJsonModel
         var declarations = authority.GetProperty("declarations").EnumerateArray().ToArray();
         Require(
             HasValidAuthorityMode(declarations),
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Authority declarations do not form one closed selection mode.");
         var component = subject.TryGetProperty("parentSymbolRef", out _);
         if (!component)
@@ -1461,7 +1461,7 @@ internal static partial class AuditResultJsonModel
                 + "\0"
                 + CandidateLocatorKey(classification.GetProperty("candidateLocator")),
             _ => throw Failure(
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Unknown classification record type."),
         };
 
@@ -1522,14 +1522,14 @@ internal static partial class AuditResultJsonModel
             {
                 Require(
                     index + 1 < value.Length && char.IsLowSurrogate(value[index + 1]),
-                    AuditResultValidationCode.InvalidUtf8OrJson,
+                    AuditValidationCode.InvalidUtf8OrJson,
                     "The Audit Result contains an unpaired UTF-16 surrogate.");
                 index++;
             }
             else if (char.IsLowSurrogate(value[index]))
             {
                 throw Failure(
-                    AuditResultValidationCode.InvalidUtf8OrJson,
+                    AuditValidationCode.InvalidUtf8OrJson,
                     "The Audit Result contains an unpaired UTF-16 surrogate.");
             }
         }
@@ -1547,7 +1547,7 @@ internal static partial class AuditResultJsonModel
             start < raw.Length
             && raw[start] != '0'
             && raw[start..].All(character => character is >= '0' and <= '9'),
-            AuditResultValidationCode.NonCanonicalBytes,
+            AuditValidationCode.NonCanonicalBytes,
             "JSON numbers must be canonical integers.");
     }
 
@@ -1582,7 +1582,7 @@ internal static partial class AuditResultJsonModel
         JsonElement value,
         IReadOnlyCollection<string> required,
         IReadOnlyCollection<string> optional,
-        AuditResultValidationCode code)
+        AuditValidationCode code)
     {
         Require(value.ValueKind == JsonValueKind.Object, code, "A required object is absent.");
         var names = value.EnumerateObject().Select(property => property.Name).ToArray();
@@ -1599,15 +1599,15 @@ internal static partial class AuditResultJsonModel
         var value = parent.GetProperty(property);
         Require(
             value.ValueKind == JsonValueKind.Array,
-            AuditResultValidationCode.InvalidShape,
+            AuditValidationCode.InvalidShape,
             $"'{property}' must be an array.");
         return value;
     }
 
     private static string GetString(JsonElement parent, string property) =>
-        RequireStringValue(parent.GetProperty(property), AuditResultValidationCode.InvalidShape);
+        RequireStringValue(parent.GetProperty(property), AuditValidationCode.InvalidShape);
 
-    private static string RequireStringValue(JsonElement value, AuditResultValidationCode code)
+    private static string RequireStringValue(JsonElement value, AuditValidationCode code)
     {
         Require(value.ValueKind == JsonValueKind.String, code, "A required string is absent.");
         var text = value.GetString()!;
@@ -1621,7 +1621,7 @@ internal static partial class AuditResultJsonModel
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var number))
         {
             throw Failure(
-                AuditResultValidationCode.InvalidShape,
+                AuditValidationCode.InvalidShape,
                 $"'{property}' must be a 32-bit integer.");
         }
 
@@ -1634,7 +1634,7 @@ internal static partial class AuditResultJsonModel
         var value = GetInt32(parent, property);
         Require(
             value >= 0,
-            AuditResultValidationCode.InvalidShape,
+            AuditValidationCode.InvalidShape,
             $"'{property}' cannot be negative.");
         return value;
     }
@@ -1644,7 +1644,7 @@ internal static partial class AuditResultJsonModel
         var value = parent.GetProperty(property);
         Require(
             value.ValueKind is JsonValueKind.True or JsonValueKind.False,
-            AuditResultValidationCode.InvalidShape,
+            AuditValidationCode.InvalidShape,
             $"'{property}' must be a boolean.");
         return value.GetBoolean();
     }
@@ -1652,16 +1652,16 @@ internal static partial class AuditResultJsonModel
     private static void RequireKnown(
         IReadOnlySet<string> values,
         string value,
-        AuditResultValidationCode code) =>
+        AuditValidationCode code) =>
         Require(values.Contains(value), code, $"Unknown closed-vocabulary value '{value}'.");
 
-    private static void RequireOpaqueId(string value, AuditResultValidationCode code) =>
+    private static void RequireOpaqueId(string value, AuditValidationCode code) =>
         Require(
             OpaqueIdPattern().IsMatch(value),
             code,
             "A closed-boundary opaque identifier is invalid.");
 
-    private static void RequireCanonicalPath(string value, AuditResultValidationCode code)
+    private static void RequireCanonicalPath(string value, AuditValidationCode code)
     {
         var driveLike = value.Length >= 2
             && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
@@ -1682,15 +1682,15 @@ internal static partial class AuditResultJsonModel
     private static string ComputeSha256(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    internal static AuditResultValidationException Failure(
-        AuditResultValidationCode code,
+    internal static AuditValidationException Failure(
+        AuditValidationCode code,
         string message,
         Exception? innerException = null) =>
         new(code, message, innerException);
 
     private static void Require(
         bool condition,
-        AuditResultValidationCode code,
+        AuditValidationCode code,
         string message)
     {
         if (!condition)

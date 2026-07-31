@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace ContractScribe.Core;
 
-internal static class AuditResultCanonicalJson
+internal static class AuditCanonicalJson
 {
     internal static byte[] Canonicalize(JsonElement root)
     {
@@ -85,11 +85,11 @@ internal static class AuditResultCanonicalJson
                 break;
             case JsonValueKind.String:
                 var text = value.GetString()!;
-                AuditResultJsonModel.RejectUnpairedSurrogates(text);
+                AuditJsonModel.RejectUnpairedSurrogates(text);
                 writer.WriteRawValue(EscapeJsonString(text), skipInputValidation: false);
                 break;
             case JsonValueKind.Number:
-                AuditResultJsonModel.ValidateCanonicalInteger(value.GetRawText());
+                AuditJsonModel.ValidateCanonicalInteger(value.GetRawText());
                 writer.WriteRawValue(value.GetRawText(), skipInputValidation: false);
                 break;
             case JsonValueKind.True:
@@ -102,8 +102,8 @@ internal static class AuditResultCanonicalJson
                 writer.WriteNullValue();
                 break;
             default:
-                throw AuditResultJsonModel.Failure(
-                    AuditResultValidationCode.InvalidShape,
+                throw AuditJsonModel.Failure(
+                    AuditValidationCode.InvalidShape,
                     "The Audit Result contains an unsupported JSON value.");
         }
     }
@@ -155,7 +155,7 @@ internal static class AuditResultCanonicalJson
             "results" => items.OrderBy(item =>
                 GetResultSortKey(item.GetProperty("classification"))),
             "policyContributions" => items.OrderBy(
-                AuditResultJsonModel.PolicyContributionKey,
+                AuditJsonModel.PolicyContributionKey,
                 StringComparer.Ordinal),
             "evidenceIds" => items.OrderBy(item => item.GetString(), StringComparer.Ordinal),
             "declarations" => items.OrderBy(
@@ -192,8 +192,8 @@ internal static class AuditResultCanonicalJson
                 0,
                 classification.GetProperty("identity").GetString()!),
             "UnresolvedClassification" => GetUnresolvedSortKey(classification),
-            _ => throw AuditResultJsonModel.Failure(
-                AuditResultValidationCode.InvalidClassification,
+            _ => throw AuditJsonModel.Failure(
+                AuditValidationCode.InvalidClassification,
                 "Unknown Audit Result classification type."),
         };
 
@@ -205,7 +205,7 @@ internal static class AuditResultCanonicalJson
             return CreateUnresolvedKey(
                 classification,
                 0,
-                AuditResultJsonModel.NormalizeRepositoryPath(
+                AuditJsonModel.NormalizeRepositoryPath(
                     repository.GetProperty("path").GetString()!),
                 string.Empty,
                 repository);

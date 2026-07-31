@@ -7,7 +7,7 @@ using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
-public sealed class ProductionAuditResultTests
+public sealed class ProductionAuditTests
 {
     [Fact]
     public void PublicValidCorpus_RoundTripsThroughProductionCore()
@@ -23,15 +23,15 @@ public sealed class ProductionAuditResultTests
             AuditResultConformance.ValidateDocument(logical.RootElement);
             var canonical = AuditResultConformance.Canonicalize(logical.RootElement);
 
-            var intrinsic = AuditResultParser.Parse(canonical);
-            var validated = AuditResultParser.Promote(
+            var intrinsic = AuditParser.Parse(canonical);
+            var validated = AuditParser.Promote(
                 intrinsic,
                 new Dictionary<AuditEvidenceKey, string>());
 
             Assert.Equal(
                 logical.RootElement.GetProperty("results").GetArrayLength(),
                 validated.ResultCount);
-            Assert.Equal(canonical, AuditResultJson.Write(validated));
+            Assert.Equal(canonical, AuditJson.Write(validated));
             Assert.Equal(
                 caseId == "empty-results" ? 0 : logical.RootElement.GetProperty("results").GetArrayLength(),
                 intrinsic.ResultCount);
@@ -48,8 +48,8 @@ public sealed class ProductionAuditResultTests
         {
             var relative = entry.GetProperty("payloadFile").GetString()!;
             var payload = File.ReadAllBytes(SafeFixturePath(root, relative));
-            Assert.Throws<AuditResultValidationException>(
-                () => AuditResultParser.Parse(payload));
+            Assert.Throws<AuditValidationException>(
+                () => AuditParser.Parse(payload));
         }
     }
 
@@ -58,13 +58,13 @@ public sealed class ProductionAuditResultTests
     {
         var canonical = File.ReadAllBytes(
             Path.Join(FixtureRoot(), "golden", "required-present.canonical.json"));
-        Assert.Equal(TargetProfile.ExternalApi, AuditResultParser.Parse(canonical).TargetProfile);
+        Assert.Equal(TargetProfile.ExternalApi, AuditParser.Parse(canonical).TargetProfile);
 
         var pretty = File.ReadAllBytes(
             Path.Join(FixtureRoot(), "payloads", "required-present.json"));
-        var failure = Assert.Throws<AuditResultValidationException>(
-            () => AuditResultParser.Parse(pretty));
-        Assert.Equal(AuditResultValidationCode.NonCanonicalBytes, failure.Code);
+        var failure = Assert.Throws<AuditValidationException>(
+            () => AuditParser.Parse(pretty));
+        Assert.Equal(AuditValidationCode.NonCanonicalBytes, failure.Code);
 
         var assemblyVisible = JsonNode.Parse(
             File.ReadAllText(Path.Join(FixtureRoot(), "payloads", "empty-results.json")))!
@@ -75,7 +75,7 @@ public sealed class ProductionAuditResultTests
         var bytes = AuditResultConformance.Canonicalize(logical.RootElement);
         Assert.Equal(
             TargetProfile.AssemblyVisible,
-            AuditResultParser.Parse(bytes).TargetProfile);
+            AuditParser.Parse(bytes).TargetProfile);
     }
 
     [Fact]
@@ -93,36 +93,36 @@ public sealed class ProductionAuditResultTests
         item["isTruncated"] = true;
         using var logical = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
         var canonical = AuditResultConformance.Canonicalize(logical.RootElement);
-        var intrinsic = AuditResultParser.Parse(canonical);
+        var intrinsic = AuditParser.Parse(canonical);
 
-        var missing = Assert.Throws<AuditResultValidationException>(() =>
-            AuditResultParser.Promote(
+        var missing = Assert.Throws<AuditValidationException>(() =>
+            AuditParser.Promote(
                 intrinsic,
                 new Dictionary<AuditEvidenceKey, string>()));
-        Assert.Equal(AuditResultValidationCode.MissingOriginalEvidence, missing.Code);
+        Assert.Equal(AuditValidationCode.MissingOriginalEvidence, missing.Code);
 
-        var wrong = Assert.Throws<AuditResultValidationException>(() =>
-            AuditResultParser.Promote(
+        var wrong = Assert.Throws<AuditValidationException>(() =>
+            AuditParser.Promote(
                 intrinsic,
                 new Dictionary<AuditEvidenceKey, string>
                 {
                     [new(0, "evidence.partial")] = "xz",
                 }));
-        Assert.Equal(AuditResultValidationCode.OriginalEvidenceMismatch, wrong.Code);
+        Assert.Equal(AuditValidationCode.OriginalEvidenceMismatch, wrong.Code);
 
-        var validated = AuditResultParser.Promote(
+        var validated = AuditParser.Promote(
             intrinsic,
             new Dictionary<AuditEvidenceKey, string>
             {
                 [new(0, "evidence.partial")] = "xy",
             });
-        Assert.Equal(canonical, AuditResultJson.Write(validated));
+        Assert.Equal(canonical, AuditJson.Write(validated));
 
         Assert.DoesNotContain(
-            typeof(AuditResultJson).GetMethods(BindingFlags.Public | BindingFlags.Static),
+            typeof(AuditJson).GetMethods(BindingFlags.Public | BindingFlags.Static),
             method => method.GetParameters().Any(parameter =>
-                parameter.ParameterType == typeof(IntrinsicAuditResultDocument)));
-        Assert.Empty(typeof(AuditResultDocument).GetConstructors());
+                parameter.ParameterType == typeof(IntrinsicAuditDocument)));
+        Assert.Empty(typeof(AuditDocument).GetConstructors());
     }
 
     [Fact]
@@ -140,10 +140,10 @@ public sealed class ProductionAuditResultTests
         using var logical = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(payload));
         var canonical = AuditResultConformance.Canonicalize(logical.RootElement);
 
-        var validated = AuditResultParser.Promote(
-            AuditResultParser.Parse(canonical),
+        var validated = AuditParser.Promote(
+            AuditParser.Parse(canonical),
             new Dictionary<AuditEvidenceKey, string>());
-        var roundTrip = Encoding.UTF8.GetString(AuditResultJson.Write(validated));
+        var roundTrip = Encoding.UTF8.GetString(AuditJson.Write(validated));
 
         Assert.Contains("\u00e9", roundTrip, StringComparison.Ordinal);
         Assert.Contains("e\u0301", roundTrip, StringComparison.Ordinal);
@@ -182,8 +182,8 @@ public sealed class ProductionAuditResultTests
 
         foreach (var mutation in mutations)
         {
-            var failure = Assert.Throws<AuditResultValidationException>(() =>
-                AuditResultParser.Parse(mutation));
+            var failure = Assert.Throws<AuditValidationException>(() =>
+                AuditParser.Parse(mutation));
             Assert.True(Enum.IsDefined(failure.Code));
         }
     }
@@ -203,21 +203,21 @@ public sealed class ProductionAuditResultTests
                 .Select(item => item.GetProperty("id").GetString()!)
                 .ToHashSet(StringComparer.Ordinal),
             Enum.GetValues<AuditOutcome>()
-                .Select(AuditResultVocabulary.GetId)
+                .Select(AuditVocabulary.GetId)
                 .ToHashSet(StringComparer.Ordinal));
         Assert.Equal(
             sections.GetProperty("policyResolutions").EnumerateArray()
                 .Select(item => item.GetProperty("id").GetString()!)
                 .ToHashSet(StringComparer.Ordinal),
             Enum.GetValues<AuditPolicyResolution>()
-                .Select(AuditResultVocabulary.GetId)
+                .Select(AuditVocabulary.GetId)
                 .ToHashSet(StringComparer.Ordinal));
         Assert.Equal(
             sections.GetProperty("reasons").EnumerateArray()
                 .Select(item => item.GetProperty("id").GetString()!)
                 .ToHashSet(StringComparer.Ordinal),
             Enum.GetValues<AuditReason>()
-                .Select(AuditResultVocabulary.GetId)
+                .Select(AuditVocabulary.GetId)
                 .ToHashSet(StringComparer.Ordinal));
     }
 

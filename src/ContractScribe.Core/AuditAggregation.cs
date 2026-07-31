@@ -4,9 +4,9 @@ using System.Text.Json.Nodes;
 
 namespace ContractScribe.Core;
 
-public abstract class AuditResultRecordInput
+public abstract class AuditRecordInput
 {
-    private protected AuditResultRecordInput(
+    private protected AuditRecordInput(
         object classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence)
@@ -23,9 +23,9 @@ public abstract class AuditResultRecordInput
     internal object ClassificationRecord { get; }
 }
 
-public sealed class TargetAuditResultInput : AuditResultRecordInput
+public sealed class TargetAuditInput : AuditRecordInput
 {
-    internal TargetAuditResultInput(
+    internal TargetAuditInput(
         TargetClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence)
@@ -37,9 +37,9 @@ public sealed class TargetAuditResultInput : AuditResultRecordInput
     public TargetClassification Classification { get; }
 }
 
-public sealed class ComponentAuditResultInput : AuditResultRecordInput
+public sealed class ComponentAuditInput : AuditRecordInput
 {
-    internal ComponentAuditResultInput(
+    internal ComponentAuditInput(
         ComponentClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence)
@@ -51,9 +51,9 @@ public sealed class ComponentAuditResultInput : AuditResultRecordInput
     public ComponentClassification Classification { get; }
 }
 
-public sealed class UnresolvedAuditResultInput : AuditResultRecordInput
+public sealed class UnresolvedAuditInput : AuditRecordInput
 {
-    internal UnresolvedAuditResultInput(
+    internal UnresolvedAuditInput(
         UnresolvedClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence)
@@ -65,9 +65,9 @@ public sealed class UnresolvedAuditResultInput : AuditResultRecordInput
     public UnresolvedClassification Classification { get; }
 }
 
-public static class AuditResultInput
+public static class AuditInput
 {
-    public static TargetAuditResultInput Target(
+    public static TargetAuditInput Target(
         TargetClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence = null) =>
@@ -76,7 +76,7 @@ public static class AuditResultInput
             policyContributions ?? throw new ArgumentNullException(nameof(policyContributions)),
             evidence);
 
-    public static ComponentAuditResultInput Component(
+    public static ComponentAuditInput Component(
         ComponentClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence = null) =>
@@ -85,7 +85,7 @@ public static class AuditResultInput
             policyContributions ?? throw new ArgumentNullException(nameof(policyContributions)),
             evidence);
 
-    public static UnresolvedAuditResultInput Unresolved(
+    public static UnresolvedAuditInput Unresolved(
         UnresolvedClassification classification,
         PolicyContributionSet policyContributions,
         BoundObservationEvidence? evidence = null) =>
@@ -95,13 +95,13 @@ public static class AuditResultInput
             evidence);
 }
 
-public static class AuditResultAggregator
+public static class AuditAggregator
 {
-    public static AuditResultDocument Aggregate(
+    public static AuditDocument Aggregate(
         TargetProfile requestedTargetProfile,
         ClassificationSet classifications,
         PolicyDocumentV1 acceptedPolicy,
-        IEnumerable<AuditResultRecordInput> inputs)
+        IEnumerable<AuditRecordInput> inputs)
     {
         ArgumentNullException.ThrowIfNull(classifications);
         ArgumentNullException.ThrowIfNull(acceptedPolicy);
@@ -110,23 +110,23 @@ public static class AuditResultAggregator
             Enum.IsDefined(requestedTargetProfile)
             && classifications.TargetProfile == requestedTargetProfile
             && acceptedPolicy.TargetProfile == requestedTargetProfile,
-            AuditResultValidationCode.TargetProfileMismatch,
+            AuditValidationCode.TargetProfileMismatch,
             "Policy, classification, and requested Audit Result target profiles must match.");
 
         var expected = ExpectedClassifications(classifications);
-        var materialized = new Dictionary<string, AuditResultRecordInput>(StringComparer.Ordinal);
+        var materialized = new Dictionary<string, AuditRecordInput>(StringComparer.Ordinal);
         foreach (var input in inputs)
         {
             if (input is null)
             {
                 throw Failure(
-                    AuditResultValidationCode.InvalidShape,
+                    AuditValidationCode.InvalidShape,
                     "Audit Result inputs cannot contain null records.");
             }
 
             Require(
                 input.PolicyContributions.TargetProfile == requestedTargetProfile,
-                AuditResultValidationCode.TargetProfileMismatch,
+                AuditValidationCode.TargetProfileMismatch,
                 "A Policy contribution set has a different target profile.");
             RequireAcceptedPolicyContributions(
                 acceptedPolicy,
@@ -135,18 +135,18 @@ public static class AuditResultAggregator
             Require(
                 expected.TryGetValue(key, out var classification)
                 && Equals(classification, input.ClassificationRecord),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "An aggregation input is not a member of the accepted ClassificationSet.");
             Require(
                 materialized.TryAdd(key, input),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "A classification has more than one aggregation input.");
         }
 
         Require(
             materialized.Count == expected.Count
             && expected.Keys.All(materialized.ContainsKey),
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Every accepted classification must produce exactly one Audit Result input.");
 
         var results = new JsonArray();
@@ -157,7 +157,7 @@ public static class AuditResultAggregator
 
         var root = new JsonObject
         {
-            ["auditResultVersion"] = AuditResultVocabulary.AuditResultVersion,
+            ["auditResultVersion"] = AuditVocabulary.AuditVersion,
             ["policyConfigurationVersion"] = PolicyConfigurationVocabulary.SchemaVersion,
             ["taxonomyRegistryVersion"] = 1,
             ["targetProfile"] = ClassificationVocabulary.GetId(requestedTargetProfile),
@@ -165,12 +165,12 @@ public static class AuditResultAggregator
         };
         using var parsed = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(root));
         var document = parsed.RootElement.Clone();
-        AuditResultJsonModel.Validate(
+        AuditJsonModel.Validate(
             document,
             originalEvidence: null,
             requireOriginalEvidence: false,
             trustSourceValidatedTruncation: true);
-        return new AuditResultDocument(document);
+        return new AuditDocument(document);
     }
 
     private static void RequireAcceptedPolicyContributions(
@@ -179,7 +179,7 @@ public static class AuditResultAggregator
     {
         Require(
             !contributionSet.Contributions.IsDefault,
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "The Policy contribution set is not initialized.");
         var inputs = contributionSet.Contributions.Select<
             PolicyContribution,
@@ -197,7 +197,7 @@ public static class AuditResultAggregator
                         generated.GeneratedOutput.ProducerId,
                         generated.GeneratedOutput.OutputId),
                 _ => throw Failure(
-                    AuditResultValidationCode.InvalidPolicy,
+                    AuditValidationCode.InvalidPolicy,
                     "Unknown Policy contribution type."),
             });
         var reevaluated = PolicyConfigurationEvaluator.Evaluate(
@@ -209,16 +209,16 @@ public static class AuditResultAggregator
             && accepted.TargetProfile == contributionSet.TargetProfile
             && accepted.Contributions.SequenceEqual(
                 contributionSet.Contributions),
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "Policy contributions were not produced by the accepted Policy document.");
     }
 
-    private static JsonObject CreateResult(AuditResultRecordInput input)
+    private static JsonObject CreateResult(AuditRecordInput input)
     {
         var contributions = input.PolicyContributions.Contributions;
         Require(
             !contributions.IsDefault,
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "The Policy contribution set is not initialized.");
         var expectations = contributions
             .Select(contribution => contribution.Expectation)
@@ -227,7 +227,7 @@ public static class AuditResultAggregator
         Require(
             contributions.All(contribution => contribution is not null)
             && contributions.All(contribution => Enum.IsDefined(contribution.Expectation)),
-            AuditResultValidationCode.InvalidPolicy,
+            AuditValidationCode.InvalidPolicy,
             "The Policy contribution set contains an invalid contribution.");
 
         var supported = input.ClassificationRecord switch
@@ -236,7 +236,7 @@ public static class AuditResultAggregator
             ComponentClassification component => component.SupportStatus == SupportStatus.Supported,
             UnresolvedClassification => false,
             _ => throw Failure(
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "Unknown classification record type."),
         };
         var resolution = !supported || contributions.IsEmpty
@@ -280,13 +280,13 @@ public static class AuditResultAggregator
         {
             Require(
                 input.Evidence is not null,
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "A supported classification with usable Policy requires bounded observation evidence.");
             var evidence = input.Evidence!;
             Require(
                 Enum.IsDefined(evidence.ObservationValue)
                 && Enum.IsDefined(evidence.Bundle.AvailabilityStatus),
-                AuditResultValidationCode.InvalidEvidence,
+                AuditValidationCode.InvalidEvidence,
                 "Bound observation evidence contains an unknown value.");
             selectedEvidence = evidence;
             if (evidence.Bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Unavailable)
@@ -311,7 +311,7 @@ public static class AuditResultAggregator
             {
                 Require(
                     evidence.SupportsOrdinaryResult,
-                    AuditResultValidationCode.InvalidEvidence,
+                    AuditValidationCode.InvalidEvidence,
                     "Bound evidence does not authorize an ordinary audit outcome.");
                 observation = evidence.ObservationValue;
                 (outcome, reason) = DeriveMatrix(expectation!.Value, observation.Value);
@@ -325,12 +325,12 @@ public static class AuditResultAggregator
             ["policyExpectation"] = expectation is { } policyExpectation
                 ? PolicyConfigurationVocabulary.GetId(policyExpectation)
                 : null,
-            ["policyResolution"] = AuditResultVocabulary.GetId(resolution),
+            ["policyResolution"] = AuditVocabulary.GetId(resolution),
             ["documentationObservation"] = observation is { } observationValue
                 ? DocumentationObservationVocabulary.GetId(observationValue)
                 : null,
-            ["auditOutcome"] = AuditResultVocabulary.GetId(outcome),
-            ["reasonCode"] = AuditResultVocabulary.GetId(reason),
+            ["auditOutcome"] = AuditVocabulary.GetId(outcome),
+            ["reasonCode"] = AuditVocabulary.GetId(reason),
         };
 
         if (selectedEvidence is null)
@@ -371,7 +371,7 @@ public static class AuditResultAggregator
             (PolicyExpectation.Forbidden, DocumentationObservationValue.Absent) =>
                 (AuditOutcome.Compliant, AuditReason.ForbiddenAbsent),
             _ => throw Failure(
-                AuditResultValidationCode.InvalidOutcome,
+                AuditValidationCode.InvalidOutcome,
                 "The ordinary Policy/observation matrix combination is invalid."),
         };
 
@@ -381,7 +381,7 @@ public static class AuditResultAggregator
         ComponentClassification component => SerializeComponentClassification(component),
         UnresolvedClassification unresolved => SerializeUnresolvedClassification(unresolved),
         _ => throw Failure(
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Unknown classification record type."),
     };
 
@@ -473,7 +473,7 @@ public static class AuditResultAggregator
             ["synthetic"] = new JsonObject { ["fixtureId"] = synthetic.FixtureId },
         },
         _ => throw Failure(
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Unknown candidate locator type."),
     };
 
@@ -503,7 +503,7 @@ public static class AuditResultAggregator
                     break;
                 default:
                     throw Failure(
-                        AuditResultValidationCode.InvalidPolicy,
+                        AuditValidationCode.InvalidPolicy,
                         "Unknown Policy contribution type.");
             }
 
@@ -551,7 +551,7 @@ public static class AuditResultAggregator
                     DocumentationComponentMatch.Present => "present",
                     DocumentationComponentMatch.Absent => "absent",
                     _ => throw Failure(
-                        AuditResultValidationCode.InvalidAuthority,
+                        AuditValidationCode.InvalidAuthority,
                         "Unknown authority component match."),
                 };
             }
@@ -567,7 +567,7 @@ public static class AuditResultAggregator
                 EvidenceAuthorityCompleteness.Complete => "complete",
                 EvidenceAuthorityCompleteness.PositiveOnly => "positive-only",
                 _ => throw Failure(
-                    AuditResultValidationCode.InvalidAuthority,
+                    AuditValidationCode.InvalidAuthority,
                     "Unknown evidence authority completeness."),
             },
             ["declarations"] = declarations,
@@ -646,7 +646,7 @@ public static class AuditResultAggregator
             ["identity"] = component.Identity,
         },
         _ => throw Failure(
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Unknown evidence subject type."),
     };
 
@@ -684,7 +684,7 @@ public static class AuditResultAggregator
             ["synthetic"] = new JsonObject { ["fixtureId"] = synthetic.FixtureId },
         },
         _ => throw Failure(
-            AuditResultValidationCode.InvalidEvidence,
+            AuditValidationCode.InvalidEvidence,
             "Unknown evidence locator type."),
     };
 
@@ -719,7 +719,7 @@ public static class AuditResultAggregator
         {
             Require(
                 expected.TryAdd(SubjectKey(classification), classification),
-                AuditResultValidationCode.InvalidClassification,
+                AuditValidationCode.InvalidClassification,
                 "The accepted ClassificationSet contains duplicate result subjects.");
         }
 
@@ -746,7 +746,7 @@ public static class AuditResultAggregator
             unresolved.CompilationContextRef,
             CandidateLocatorKey(unresolved.CandidateLocator)),
         _ => throw Failure(
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Unknown classification record type."),
     };
 
@@ -771,7 +771,7 @@ public static class AuditResultAggregator
             SpanKey(generated.Span)),
         SyntheticCandidateLocator synthetic => "synthetic\0" + synthetic.FixtureId,
         _ => throw Failure(
-            AuditResultValidationCode.InvalidClassification,
+            AuditValidationCode.InvalidClassification,
             "Unknown candidate locator type."),
     };
 
@@ -790,7 +790,7 @@ public static class AuditResultAggregator
         DocumentationAuthorityRole.PartialMemberDefiningFallback =>
             "partial-member-defining-fallback",
         _ => throw Failure(
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Unknown documentation authority role."),
     };
 
@@ -801,17 +801,17 @@ public static class AuditResultAggregator
         DocumentationBlockState.WellFormed => "well-formed",
         DocumentationBlockState.Malformed => "malformed",
         _ => throw Failure(
-            AuditResultValidationCode.InvalidAuthority,
+            AuditValidationCode.InvalidAuthority,
             "Unknown documentation block state."),
     };
 
-    private static AuditResultValidationException Failure(
-        AuditResultValidationCode code,
-        string message) => AuditResultJsonModel.Failure(code, message);
+    private static AuditValidationException Failure(
+        AuditValidationCode code,
+        string message) => AuditJsonModel.Failure(code, message);
 
     private static void Require(
         bool condition,
-        AuditResultValidationCode code,
+        AuditValidationCode code,
         string message)
     {
         if (!condition)

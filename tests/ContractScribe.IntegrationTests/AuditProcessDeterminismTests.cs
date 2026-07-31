@@ -5,7 +5,7 @@ using ContractScribe.Core;
 
 namespace ContractScribe.IntegrationTests;
 
-public sealed class AuditResultProcessDeterminismTests
+public sealed class AuditProcessDeterminismTests
 {
     [Fact]
     public async Task CanonicalBytes_AreStableAcrossFreshCultureAndTimeZoneProcesses()
@@ -55,10 +55,10 @@ public sealed class AuditResultProcessDeterminismTests
                 CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(args[0]);
                 CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(args[0]);
                 var bytes = Convert.FromBase64String(args[1]);
-                var document = AuditResultParser.Promote(
-                    AuditResultParser.Parse(bytes),
+                var document = AuditParser.Promote(
+                    AuditParser.Parse(bytes),
                     new Dictionary<AuditEvidenceKey, string>());
-                Console.Write(Convert.ToBase64String(AuditResultJson.Write(document)));
+                Console.Write(Convert.ToBase64String(AuditJson.Write(document)));
                 """,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 

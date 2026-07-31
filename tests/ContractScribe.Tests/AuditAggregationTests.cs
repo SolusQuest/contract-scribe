@@ -6,7 +6,7 @@ using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
-public sealed class AuditResultAggregationTests
+public sealed class AuditAggregationTests
 {
     [Theory]
     [InlineData(PolicyExpectation.Required, DocumentationObservationValue.Present, "audit.outcome.compliant", "audit.reason.required-present")]
@@ -28,12 +28,12 @@ public sealed class AuditResultAggregationTests
         ]);
         var evidence = CreateBoundEvidence(scenario, observation);
 
-        var document = AuditResultAggregator.Aggregate(
+        var document = AuditAggregator.Aggregate(
             TargetProfile.ExternalApi,
             scenario.Classifications,
             policy,
-            [AuditResultInput.Target(scenario.Target, contributions, evidence)]);
-        using var parsed = JsonDocument.Parse(AuditResultJson.Write(document));
+            [AuditInput.Target(scenario.Target, contributions, evidence)]);
+        using var parsed = JsonDocument.Parse(AuditJson.Write(document));
         var result = parsed.RootElement.GetProperty("results")[0];
 
         Assert.Equal(expectedOutcome, result.GetProperty("auditOutcome").GetString());
@@ -60,13 +60,13 @@ public sealed class AuditResultAggregationTests
         var assemblyContributions = Evaluate(
             assemblyPolicy,
             [PolicyConfigurationInput.Repository("src/Audit.csproj", "src/Widget.cs")]);
-        var failure = Assert.Throws<AuditResultValidationException>(() =>
-            AuditResultAggregator.Aggregate(
+        var failure = Assert.Throws<AuditValidationException>(() =>
+            AuditAggregator.Aggregate(
                 TargetProfile.ExternalApi,
                 external.Classifications,
                 assemblyPolicy,
-                [AuditResultInput.Target(external.Target, assemblyContributions)]));
-        Assert.Equal(AuditResultValidationCode.TargetProfileMismatch, failure.Code);
+                [AuditInput.Target(external.Target, assemblyContributions)]));
+        Assert.Equal(AuditValidationCode.TargetProfileMismatch, failure.Code);
 
         var emptyBuffer = new ClassificationCandidateBuffer();
         var empty = Assert.IsType<ClassificationSet>(
@@ -74,15 +74,15 @@ public sealed class AuditResultAggregationTests
         var externalPolicy = CreatePolicy(
             PolicyExpectation.Required,
             TargetProfile.ExternalApi);
-        var reverse = Assert.Throws<AuditResultValidationException>(() =>
-            AuditResultAggregator.Aggregate(
+        var reverse = Assert.Throws<AuditValidationException>(() =>
+            AuditAggregator.Aggregate(
                 TargetProfile.AssemblyVisible,
                 empty,
                 externalPolicy,
                 []));
-        Assert.Equal(AuditResultValidationCode.TargetProfileMismatch, reverse.Code);
+        Assert.Equal(AuditValidationCode.TargetProfileMismatch, reverse.Code);
 
-        var document = AuditResultAggregator.Aggregate(
+        var document = AuditAggregator.Aggregate(
             TargetProfile.ExternalApi,
             empty,
             externalPolicy,
@@ -104,19 +104,19 @@ public sealed class AuditResultAggregationTests
             PolicyConfigurationInput.Repository("src/Audit.csproj", "src/Widget.cs"),
         ]);
 
-        var failure = Assert.Throws<AuditResultValidationException>(() =>
-            AuditResultAggregator.Aggregate(
+        var failure = Assert.Throws<AuditValidationException>(() =>
+            AuditAggregator.Aggregate(
                 TargetProfile.ExternalApi,
                 scenario.Classifications,
                 accepted,
-                [AuditResultInput.Target(
+                [AuditInput.Target(
                     scenario.Target,
                     contributions,
                     CreateBoundEvidence(
                         scenario,
                         DocumentationObservationValue.Present))]));
 
-        Assert.Equal(AuditResultValidationCode.InvalidPolicy, failure.Code);
+        Assert.Equal(AuditValidationCode.InvalidPolicy, failure.Code);
     }
 
     [Fact]
@@ -131,20 +131,20 @@ public sealed class AuditResultAggregationTests
             PolicyConfigurationInput.Repository("src/Audit.csproj", "src/Widget.cs"),
         ]);
         var evidence = CreateMalformedComponentEvidence(scenario);
-        var target = AuditResultInput.Target(
+        var target = AuditInput.Target(
             scenario.Target,
             targetContributions);
-        var component = AuditResultInput.Component(
+        var component = AuditInput.Component(
             scenario.Component,
             componentContributions,
             evidence);
 
-        var forward = AuditResultJson.Write(AuditResultAggregator.Aggregate(
+        var forward = AuditJson.Write(AuditAggregator.Aggregate(
             TargetProfile.ExternalApi,
             scenario.Classifications,
             policy,
             [target, component]));
-        var reverse = AuditResultJson.Write(AuditResultAggregator.Aggregate(
+        var reverse = AuditJson.Write(AuditAggregator.Aggregate(
             TargetProfile.ExternalApi,
             scenario.Classifications,
             policy,
@@ -307,12 +307,12 @@ public sealed class AuditResultAggregationTests
             PolicyContributionSet contributions,
             BoundObservationEvidence? evidence)
         {
-            var document = AuditResultAggregator.Aggregate(
+            var document = AuditAggregator.Aggregate(
                 TargetProfile.ExternalApi,
                 target.Classifications,
                 policy,
-                [AuditResultInput.Target(target.Target, contributions, evidence)]);
-            using var parsed = JsonDocument.Parse(AuditResultJson.Write(document));
+                [AuditInput.Target(target.Target, contributions, evidence)]);
+            using var parsed = JsonDocument.Parse(AuditJson.Write(document));
             Assert.True(executed.TryAdd(
                 caseId,
                 parsed.RootElement.GetProperty("results")[0].Clone()));

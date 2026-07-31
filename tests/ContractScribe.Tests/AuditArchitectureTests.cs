@@ -4,10 +4,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.Tests;
 
-public sealed class AuditResultArchitectureTests
+public sealed class AuditArchitectureTests
 {
     [Fact]
-    public void ProductionAuditResultImplementation_HasNoForbiddenInfrastructureDependencies()
+    public void ProductionAuditImplementation_HasNoForbiddenInfrastructureDependencies()
     {
         var coreDirectory = Path.Join(
             AuditResultConformance.FindRepositoryRoot(),
@@ -15,7 +15,7 @@ public sealed class AuditResultArchitectureTests
             "ContractScribe.Core");
         var sources = Directory.EnumerateFiles(
                 coreDirectory,
-                "AuditResult*.cs",
+                "Audit*.cs",
                 SearchOption.TopDirectoryOnly)
             .ToDictionary(path => path, File.ReadAllText, StringComparer.Ordinal);
 
@@ -56,7 +56,7 @@ public sealed class AuditResultArchitectureTests
             .Select(group => group.First())
             .ToArray();
         var compilation = CSharpCompilation.Create(
-            "AuditResultArchitectureInspection",
+            "AuditArchitectureInspection",
             trees,
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
