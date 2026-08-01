@@ -1,5 +1,6 @@
-using Microsoft.CodeAnalysis;
+using System.Collections.Immutable;
 using ContractScribe.Core;
+using Microsoft.CodeAnalysis;
 
 namespace ContractScribe.Roslyn;
 
@@ -160,6 +161,46 @@ public sealed class ClassifiedRepositorySession
             repositorySession,
             classification,
             repositorySession);
+}
+
+public sealed class ObservedRepositorySession
+{
+    private readonly ClassifiedRepositorySession observationSession;
+
+    private ObservedRepositorySession(
+        ClassifiedRepositorySession observationSession,
+        DocumentationObservationOutcome observation)
+    {
+        this.observationSession = observationSession;
+        Observation = observation;
+    }
+
+    public DocumentationObservationOutcome Observation { get; }
+
+    public DocumentationObservationRunStatus Status => Observation.Status;
+
+    public DocumentationObservationSet? ObservationSet => Observation.ObservationSet;
+
+    public DocumentationObservationFailure? PrimaryFailure => Observation.PrimaryFailure;
+
+    public ImmutableArray<DocumentationObservationDiagnostic> Diagnostics =>
+        Observation.Diagnostics;
+
+    internal bool IsBoundToObservationSession(
+        ClassifiedRepositorySession session) =>
+        ReferenceEquals(observationSession, session);
+
+    internal static ObservedRepositorySession Bind(
+        ClassifiedRepositorySession observationSession,
+        DocumentationObservationOutcome observation) =>
+        new(observationSession, observation);
+
+    public static implicit operator DocumentationObservationOutcome(
+        ObservedRepositorySession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Observation;
+    }
 }
 
 public enum LoadedProjectRole

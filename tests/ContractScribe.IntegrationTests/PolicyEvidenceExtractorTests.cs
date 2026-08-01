@@ -493,6 +493,93 @@ public sealed class PolicyEvidenceExtractorTests
     }
 
     [Fact]
+    public void Extractor_RejectsObservationSetFromStrictSubsetSnapshot()
+    {
+        const string firstSource = "public class First { }";
+        using var previousSession = CreateSession(new SourceInput(
+            "src/First.cs",
+            firstSource,
+            LoadedSourceKind.Repository,
+            null));
+        var previousClassification = new SymbolClassifier().ClassifySession(
+            previousSession,
+            TargetProfile.ExternalApi);
+        var previousObservations = new DocumentationObserver().Observe(
+            previousClassification);
+
+        using var currentSession = CreateSession(
+            new SourceInput(
+                "src/First.cs",
+                firstSource,
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Second.cs",
+                "public class Second { }",
+                LoadedSourceKind.Repository,
+                null));
+        var currentClassification = new SymbolClassifier().ClassifySession(
+            currentSession,
+            TargetProfile.ExternalApi);
+
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            currentClassification,
+            previousObservations,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Failure, outcome.Status);
+        Assert.Empty(outcome.Bindings);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Extractor_RejectsObservationSetFromEarlierPartialDeclarationSnapshot(
+        bool addedDeclarationIsDocumented)
+    {
+        const string firstSource = "public partial class Widget { }";
+        using var previousSession = CreateSession(new SourceInput(
+            "src/Widget.Part1.cs",
+            firstSource,
+            LoadedSourceKind.Repository,
+            null));
+        var previousClassification = new SymbolClassifier().ClassifySession(
+            previousSession,
+            TargetProfile.ExternalApi);
+        var previousObservations = new DocumentationObserver().Observe(
+            previousClassification);
+
+        var addedSource = addedDeclarationIsDocumented
+            ? """
+              /// <summary>Documentation added in the new part.</summary>
+              public partial class Widget { }
+              """
+            : "public partial class Widget { }";
+        using var currentSession = CreateSession(
+            new SourceInput(
+                "src/Widget.Part1.cs",
+                firstSource,
+                LoadedSourceKind.Repository,
+                null),
+            new SourceInput(
+                "src/Widget.Part2.cs",
+                addedSource,
+                LoadedSourceKind.Repository,
+                null));
+        var currentClassification = new SymbolClassifier().ClassifySession(
+            currentSession,
+            TargetProfile.ExternalApi);
+
+        var outcome = new PolicyEvidenceExtractor().Extract(
+            currentClassification,
+            previousObservations,
+            ParsePolicy(TargetProfile.ExternalApi));
+
+        Assert.Equal(PolicyEvidenceExtractionStatus.Failure, outcome.Status);
+        Assert.Empty(outcome.Bindings);
+    }
+
+    [Fact]
     public void Binder_RejectsDanglingDuplicateCrossSubjectAndContradictoryEvidence()
     {
         const string source = "public class Fixture { }";
