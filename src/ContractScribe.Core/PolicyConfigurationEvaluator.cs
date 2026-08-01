@@ -69,8 +69,8 @@ public static class PolicyConfigurationEvaluator
                 var root = parsed.RootElement;
                 if (root.ValueKind == JsonValueKind.Object
                     && root.TryGetProperty("schemaVersion", out var version)
-                    && version.ValueKind == JsonValueKind.Number
-                    && IsIntegerOtherThanOne(version.GetRawText()))
+                    && TryGetJsonInteger(version, out var integerVersion)
+                    && !IsIntegerOne(integerVersion))
                 {
                     return Failure(
                         "policy.schema.unsupported-version",
@@ -220,7 +220,7 @@ public static class PolicyConfigurationEvaluator
             cancellationToken.ThrowIfCancellationRequested();
             builder.Add(new PolicyRuleV1(
                 rule.GetProperty("id").GetString()!,
-                rule.GetProperty("priority").GetInt32(),
+                GetNormalizedPriority(rule.GetProperty("priority")),
                 ParseExpectation(rule.GetProperty("decision").GetString()!),
                 ParseSelector(rule, "projectPaths"),
                 ParseSelector(rule, "sourcePaths")));
@@ -579,7 +579,8 @@ public static class PolicyConfigurationEvaluator
         foreach (var rule in rules.EnumerateArray())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!seenPriorities.Add(rule.GetProperty("priority").GetInt32()))
+            if (!seenPriorities.Add(GetNormalizedPriority(
+                rule.GetProperty("priority"))))
             {
                 return new PolicyFailure(
                     "policy.semantic.duplicate-priority",
@@ -725,18 +726,23 @@ public static class PolicyConfigurationEvaluator
 
         if (rule.TryGetProperty("priority", out var priority))
         {
-            if (!IsJsonInteger(priority))
+            if (!TryGetJsonNumber(priority, out var numericPriority))
             {
                 failures.Add(new SchemaFailure(pointer + "/priority", "type"));
             }
-            else if (TryGetDecimal(priority, out var numericPriority))
+            else
             {
-                if (numericPriority < 0)
+                if (!TryGetJsonInteger(numericPriority, out _))
+                {
+                    failures.Add(new SchemaFailure(pointer + "/priority", "type"));
+                }
+
+                if (numericPriority.Sign < 0)
                 {
                     failures.Add(new SchemaFailure(pointer + "/priority", "minimum"));
                 }
 
-                if (numericPriority > int.MaxValue)
+                else if (CompareMagnitude(numericPriority, int.MaxValue) > 0)
                 {
                     failures.Add(new SchemaFailure(pointer + "/priority", "maximum"));
                 }
@@ -913,86 +919,249 @@ public static class PolicyConfigurationEvaluator
         path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':';
 
     private static bool IsJsonInteger(JsonElement value) =>
-        value.ValueKind == JsonValueKind.Number
-        && TryGetDecimal(value, out var number)
-        && decimal.Truncate(number) == number;
+        TryGetJsonInteger(value, out _);
 
     private static bool IsIntegerOne(JsonElement value) =>
-        IsJsonInteger(value)
-        && TryGetDecimal(value, out var number)
-        && number == 1;
+        TryGetJsonInteger(value, out var number)
+        && IsIntegerOne(number);
 
-    private static bool TryGetDecimal(JsonElement value, out decimal number)
+    private static bool IsIntegerOne(JsonIntegerValue value) =>
+        value.Sign == 1
+        && value.SignificantDigits == "1"
+        && value.AppendedZeroCount == 0;
+
+    private static int GetNormalizedPriority(JsonElement value)
     {
-        number = default;
-        return value.ValueKind == JsonValueKind.Number
-            && decimal.TryParse(
-                value.GetRawText(),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out number);
+        if (!TryGetJsonInteger(value, out var number)
+            || number.Sign < 0
+            || CompareMagnitude(number, int.MaxValue) > 0)
+        {
+            throw new InvalidOperationException(
+                "Schema-valid Policy contains an invalid priority.");
+        }
+
+        if (number.Sign == 0)
+        {
+            return 0;
+        }
+
+        var normalized = number.SignificantDigits
+            + new string('0', checked((int)number.AppendedZeroCount));
+        return int.Parse(normalized, NumberStyles.None, CultureInfo.InvariantCulture);
     }
 
-    private static bool IsIntegerOtherThanOne(string number)
+    private static int CompareMagnitude(JsonIntegerValue value, int maximum)
     {
-        var exponentIndex = number.IndexOfAny(['e', 'E']);
-        var mantissa = exponentIndex >= 0 ? number[..exponentIndex] : number;
-        var exponentText = exponentIndex >= 0 ? number[(exponentIndex + 1)..] : "0";
-        var decimalIndex = mantissa.IndexOf('.');
-        var fractionDigits = decimalIndex >= 0 ? mantissa.Length - decimalIndex - 1 : 0;
-        var digits = mantissa
-            .Replace("-", string.Empty, StringComparison.Ordinal)
-            .Replace(".", string.Empty, StringComparison.Ordinal);
-        var isZero = digits.All(character => character == '0');
-        if (isZero)
+        if (value.Sign == 0)
         {
-            return true;
+            return 0;
         }
 
-        if (!long.TryParse(
-            exponentText,
-            NumberStyles.AllowLeadingSign,
-            CultureInfo.InvariantCulture,
-            out var exponent))
+        var maximumText = maximum.ToString(CultureInfo.InvariantCulture);
+        if (value.AppendedZeroCount > maximumText.Length)
         {
-            return !exponentText.StartsWith("-", StringComparison.Ordinal);
+            return 1;
         }
 
-        int requiredTrailingZeros;
-        if (exponent < 0)
+        var magnitudeLength = value.SignificantDigits.Length
+            + value.AppendedZeroCount;
+        if (magnitudeLength != maximumText.Length)
         {
-            if (exponent == long.MinValue || -exponent >= digits.Length)
+            return magnitudeLength < maximumText.Length ? -1 : 1;
+        }
+
+        var normalized = value.SignificantDigits
+            + new string('0', checked((int)value.AppendedZeroCount));
+        return string.CompareOrdinal(normalized, maximumText);
+    }
+
+    private static int CompareMagnitude(JsonNumberValue value, int maximum)
+    {
+        if (value.Sign == 0)
+        {
+            return 0;
+        }
+
+        var maximumText = maximum.ToString(CultureInfo.InvariantCulture);
+        var exponentAtEqualMagnitude = (long)maximumText.Length
+            - value.SignificantDigits.Length
+            + value.FractionDigits;
+        if (value.Exponent != exponentAtEqualMagnitude)
+        {
+            return value.Exponent < exponentAtEqualMagnitude ? -1 : 1;
+        }
+
+        for (var index = 0; index < maximumText.Length; index++)
+        {
+            var digit = index < value.SignificantDigits.Length
+                ? value.SignificantDigits[index]
+                : '0';
+            if (digit != maximumText[index])
             {
-                return false;
+                return digit < maximumText[index] ? -1 : 1;
             }
-
-            requiredTrailingZeros = (int)-exponent + fractionDigits;
-        }
-        else if (exponent > fractionDigits)
-        {
-            return true;
-        }
-        else
-        {
-            requiredTrailingZeros = fractionDigits - (int)exponent;
         }
 
-        var trailingZeros = digits.Reverse()
-            .TakeWhile(character => character == '0')
-            .Count();
-        if (trailingZeros < requiredTrailingZeros)
+        return value.SignificantDigits.Length > maximumText.Length
+            && value.SignificantDigits.AsSpan(maximumText.Length).IndexOfAnyExcept('0') >= 0
+                ? 1
+                : 0;
+    }
+
+    private static bool TryGetJsonInteger(
+        JsonElement value,
+        out JsonIntegerValue integer)
+    {
+        if (!TryGetJsonNumber(value, out var number))
+        {
+            integer = default;
+            return false;
+        }
+
+        return TryGetJsonInteger(number, out integer);
+    }
+
+    private static bool TryGetJsonNumber(
+        JsonElement value,
+        out JsonNumberValue number)
+    {
+        number = default;
+        if (value.ValueKind != JsonValueKind.Number)
         {
             return false;
         }
 
-        if (number.StartsWith("-", StringComparison.Ordinal))
+        var raw = value.GetRawText();
+        var negative = raw[0] == '-';
+        var numberStart = negative ? 1 : 0;
+        var exponentIndex = raw.IndexOfAny(['e', 'E'], numberStart);
+        var mantissaEnd = exponentIndex >= 0 ? exponentIndex : raw.Length;
+        var decimalIndex = raw.IndexOf('.', numberStart, mantissaEnd - numberStart);
+        var fractionDigits = decimalIndex >= 0
+            ? mantissaEnd - decimalIndex - 1
+            : 0;
+        var digits = decimalIndex >= 0
+            ? string.Concat(
+                raw.AsSpan(numberStart, decimalIndex - numberStart),
+                raw.AsSpan(decimalIndex + 1, mantissaEnd - decimalIndex - 1))
+            : raw[numberStart..mantissaEnd];
+        var significant = digits.TrimStart('0');
+        if (significant.Length == 0)
         {
+            number = new JsonNumberValue(0, "0", 0, 0);
             return true;
         }
 
-        var retainedDigitCount = digits.Length - requiredTrailingZeros;
-        return digits[..retainedDigitCount].TrimStart('0') != "1";
+        var exponent = exponentIndex >= 0
+            ? ParseExponentSaturated(raw[(exponentIndex + 1)..])
+            : 0;
+        number = new JsonNumberValue(
+            negative ? -1 : 1,
+            significant,
+            fractionDigits,
+            exponent);
+        return true;
     }
+
+    private static bool TryGetJsonInteger(
+        JsonNumberValue number,
+        out JsonIntegerValue integer)
+    {
+        integer = default;
+        if (number.Sign == 0)
+        {
+            integer = new JsonIntegerValue(0, "0", 0);
+            return true;
+        }
+
+        if (number.Exponent >= number.FractionDigits)
+        {
+            integer = new JsonIntegerValue(
+                number.Sign,
+                number.SignificantDigits,
+                number.Exponent - number.FractionDigits);
+            return true;
+        }
+
+        long requiredTrailingZeros;
+        if (number.Exponent >= 0)
+        {
+            requiredTrailingZeros = number.FractionDigits - number.Exponent;
+        }
+        else if (number.Exponent == long.MinValue)
+        {
+            return false;
+        }
+        else
+        {
+            var exponentMagnitude = -number.Exponent;
+            if (exponentMagnitude > number.SignificantDigits.Length)
+            {
+                return false;
+            }
+
+            requiredTrailingZeros = number.FractionDigits + exponentMagnitude;
+        }
+
+        if (requiredTrailingZeros > number.SignificantDigits.Length)
+        {
+            return false;
+        }
+
+        var retainedDigitCount = number.SignificantDigits.Length
+            - checked((int)requiredTrailingZeros);
+        if (number.SignificantDigits.AsSpan(retainedDigitCount).IndexOfAnyExcept('0') >= 0)
+        {
+            return false;
+        }
+
+        integer = new JsonIntegerValue(
+            number.Sign,
+            number.SignificantDigits[..retainedDigitCount],
+            0);
+        return true;
+    }
+
+    private static long ParseExponentSaturated(string text)
+    {
+        var negative = text[0] == '-';
+        var digitsStart = text[0] is '+' or '-' ? 1 : 0;
+        var digits = text[digitsStart..].TrimStart('0');
+        if (digits.Length == 0)
+        {
+            return 0;
+        }
+
+        if (digits.Length > 19
+            || !ulong.TryParse(
+                digits,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var magnitude))
+        {
+            return negative ? long.MinValue : long.MaxValue;
+        }
+
+        if (!negative)
+        {
+            return magnitude > long.MaxValue ? long.MaxValue : (long)magnitude;
+        }
+
+        return magnitude >= (1UL << 63)
+            ? long.MinValue
+            : -(long)magnitude;
+    }
+
+    private readonly record struct JsonIntegerValue(
+        int Sign,
+        string SignificantDigits,
+        long AppendedZeroCount);
+
+    private readonly record struct JsonNumberValue(
+        int Sign,
+        string SignificantDigits,
+        int FractionDigits,
+        long Exponent);
 
     private static string? FindDuplicatePropertyPointer(byte[] payload)
     {

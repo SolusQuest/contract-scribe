@@ -450,6 +450,14 @@ public static class EvidenceObservationBinder
                 return EvidenceBindingOutcome.Failure(InvalidBinding);
             }
 
+            if (bundle.Items.Any(item => !Equals(item.Subject, subject))
+                || observation.Value == DocumentationObservationValue.Absent
+                    && bundle.Items.Any(item =>
+                        item.Kind == EvidenceKind.SourceXmlDocumentation))
+            {
+                return EvidenceBindingOutcome.Failure(InvalidBinding);
+            }
+
             var bindings = new Dictionary<
                 string,
                 EvidenceDeclarationBindingInput>(StringComparer.Ordinal);
@@ -482,11 +490,19 @@ public static class EvidenceObservationBinder
                     return EvidenceBindingOutcome.Failure(InvalidBinding);
                 }
 
-                var useDocumentation = RequiresDocumentationEvidence(
-                    observation,
+                var provesPresence = ProvesPresence(
+                    observation.Subject,
                     declaration);
-                hasPositive |= useDocumentation
-                    && observation.Value == DocumentationObservationValue.Present;
+                if (observation.Value == DocumentationObservationValue.Absent
+                    && provesPresence)
+                {
+                    return EvidenceBindingOutcome.Failure(InvalidBinding);
+                }
+
+                var useDocumentation = RequiresDocumentationEvidence(
+                    observation.Subject,
+                    declaration);
+                hasPositive |= provesPresence;
                 var evidenceId = useDocumentation
                     ? binding.DocumentationEvidenceId
                     : binding.DeclarationEvidenceId;
@@ -636,31 +652,18 @@ public static class EvidenceObservationBinder
             && observation.UnavailableCause == DocumentationUnavailableCause.MalformedXml;
 
     private static bool RequiresDocumentationEvidence(
-        DocumentationObservation observation,
-        DocumentationDeclarationFact declaration)
-    {
-        if (observation.Value == DocumentationObservationValue.Absent)
-        {
-            if (declaration.ParentSubstantive
-                || declaration.ComponentMatch == DocumentationComponentMatch.Present)
-            {
-                throw new InvalidOperationException(
-                    "Absent authority contradicts applicable documentation evidence.");
-            }
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration) =>
+        declaration.BlockState == DocumentationBlockState.Malformed
+        || ProvesPresence(subject, declaration);
 
-            return false;
-        }
-
-        if (observation.Value == DocumentationObservationValue.Unavailable)
-        {
-            return declaration.BlockState == DocumentationBlockState.Malformed;
-        }
-
-        return observation.Subject.ComponentKind is null
+    private static bool ProvesPresence(
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration) =>
+        subject.ComponentKind is null
             ? declaration.ParentSubstantive
             : declaration.BlockState == DocumentationBlockState.WellFormed
                 && declaration.ComponentMatch == DocumentationComponentMatch.Present;
-    }
 
     private static bool TryCreateSubject(
         DocumentationObservationSubject observationSubject,

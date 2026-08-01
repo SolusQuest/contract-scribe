@@ -55,6 +55,9 @@ public sealed class PolicyConfigurationProductionTests
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":-1,"decision":"required"}]}""",
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":2147483648,"decision":"required"}]}""",
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":1.5,"decision":"required"}]}""",
+            """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":1e100,"decision":"required"}]}""",
+            """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":-1e100,"decision":"required"}]}""",
+            """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":1e-100,"decision":"required"}]}""",
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":0,"decision":0}]}""",
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":0,"decision":"required","sourcePaths":{"unknown":[]}}]}""",
             """{"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"rule","priority":0,"decision":"required","sourcePaths":{"include":{}}}]}""",
@@ -79,6 +82,137 @@ public sealed class PolicyConfigurationProductionTests
                     actual.PrimaryFailure.Pointer,
                     actual.PrimaryFailure.SchemaKeyword));
         }
+    }
+
+    [Theory]
+    [InlineData("-0.5", "minimum")]
+    [InlineData("-1e-1", "minimum")]
+    [InlineData("2147483647.5", "maximum")]
+    [InlineData("21474836471e-1", "maximum")]
+    [InlineData("0.5", "type")]
+    public void NonIntegralPriorityRangeFailures_MatchTheIndependentOracle(
+        string priority,
+        string expectedKeyword)
+    {
+        var payload = System.Text.Encoding.UTF8.GetBytes(
+            $$"""
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "optional",
+              "rules": [
+                {
+                  "id": "rule",
+                  "priority": {{priority}},
+                  "decision": "required"
+                }
+              ]
+            }
+            """);
+        var expected = PolicyConfigurationV1Conformance.EvaluateBytes(
+            payload,
+            LoadPolicySchema(FindRepositoryRoot()),
+            new EvaluationInput("projects/App/App.csproj", "src/App/File.cs")).Error;
+        var actual = PolicyConfigurationEvaluator.Parse(payload);
+
+        Assert.Equal("/rules/0/priority", expected!.Pointer);
+        Assert.Equal(expectedKeyword, expected.SchemaKeyword);
+        Assert.Equal(PolicyRunStatus.Failure, actual.Status);
+        Assert.Equal(
+            expected,
+            new ConformanceError(
+                actual.PrimaryFailure!.Code,
+                actual.PrimaryFailure.Pointer,
+                actual.PrimaryFailure.SchemaKeyword));
+    }
+
+    [Fact]
+    public void MultipleSchemaFailures_PreserveGlobalPointerAndKeywordOrdering()
+    {
+        var payload =
+            """
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "invalid",
+              "rules": [
+                {
+                  "id": "rule",
+                  "priority": -0.5,
+                  "decision": "required"
+                }
+              ]
+            }
+            """u8.ToArray();
+        var expected = PolicyConfigurationV1Conformance.EvaluateBytes(
+            payload,
+            LoadPolicySchema(FindRepositoryRoot()),
+            new EvaluationInput("projects/App/App.csproj", "src/App/File.cs")).Error;
+        var actual = PolicyConfigurationEvaluator.Parse(payload);
+
+        Assert.Equal("/defaultDecision", expected!.Pointer);
+        Assert.Equal("enum", expected.SchemaKeyword);
+        Assert.Equal(PolicyRunStatus.Failure, actual.Status);
+        Assert.Equal(
+            expected,
+            new ConformanceError(
+                actual.PrimaryFailure!.Code,
+                actual.PrimaryFailure.Pointer,
+                actual.PrimaryFailure.SchemaKeyword));
+    }
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1e0")]
+    [InlineData("2147483647.0")]
+    public void MathematicalIntegerPriorityEncodings_AreAcceptedAndApplied(
+        string priority)
+    {
+        var policy = ParsePolicy(
+            $$"""
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "optional",
+              "rules": [
+                {
+                  "id": "normalized-priority",
+                  "priority": {{priority}},
+                  "decision": "required"
+                }
+              ]
+            }
+            """);
+
+        var evaluated = PolicyConfigurationEvaluator.Evaluate(
+            policy,
+            PolicyConfigurationInput.Repository("App.csproj", "App.cs"));
+
+        Assert.Equal(PolicyRunStatus.Success, evaluated.Status);
+        var contribution = Assert.Single(evaluated.ContributionSet!.Contributions);
+        Assert.Equal(PolicyExpectation.Required, contribution.Expectation);
+        Assert.Equal("normalized-priority", contribution.MatchedRuleId);
+    }
+
+    [Fact]
+    public void EquivalentIntegerPriorityEncodings_AreSemanticDuplicates()
+    {
+        var outcome = PolicyConfigurationEvaluator.Parse(
+            """
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "optional",
+              "rules": [
+                { "id": "first", "priority": 1, "decision": "required" },
+                { "id": "second", "priority": 1.0, "decision": "optional" }
+              ]
+            }
+            """u8.ToArray());
+
+        Assert.Equal(PolicyRunStatus.Failure, outcome.Status);
+        Assert.Equal("policy.semantic.duplicate-priority", outcome.PrimaryFailure!.Code);
+        Assert.Equal("/rules/1/priority", outcome.PrimaryFailure.Pointer);
     }
 
     [Fact]
