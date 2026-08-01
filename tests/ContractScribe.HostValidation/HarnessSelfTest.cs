@@ -905,6 +905,7 @@ public static class HarnessSelfTest
                 File.Delete(publicationResultPath);
             }
         }
+        CellExecutor.PublicationResultObservation? preRunPublication = null;
         CanonicalResultCommitment? preRunCanonical = null;
         if (publicationBehavior)
         {
@@ -913,12 +914,13 @@ public static class HarnessSelfTest
                 repository,
                 expectResult: expectsPriorResult,
                 expectStaging: false);
-            preRunCanonical = expectsPriorResult
-                ? CellExecutor.ObserveCanonicalResult(
+            preRunPublication = expectsPriorResult
+                ? CellExecutor.ObservePublicationResult(
                     context.Root,
                     repository,
-                    "TestResults/audit-result.json").Commitment
+                    "TestResults/audit-result.json")
                 : null;
+            preRunCanonical = preRunPublication?.Commitment;
         }
         TemporaryDiskHighWaterObserver? temporaryDiskObserver =
             behavior is "temporary-over-limit" or "temporary-cleanup-before-gate"
@@ -966,12 +968,12 @@ public static class HarnessSelfTest
                         repository,
                         expectResult: false,
                         expectStaging: true);
-                    return (await CellExecutor.ObserveCanonicalResultAsync(
+                    return (await CellExecutor.ObservePublicationResultAsync(
                         context.Root,
                         repository,
                         FrozenFixtureRegistry.StagingPath,
                         remaining,
-                        token).ConfigureAwait(false)).Commitment
+                        token).ConfigureAwait(false))?.Commitment
                             ?? throw new ProtocolException(
                                 "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION");
                 }),
@@ -1080,12 +1082,20 @@ public static class HarnessSelfTest
                     expectResult: behavior == "publication-failure-invalidation",
                     expectStaging: false);
             }
-            var (postRunCanonical, _) = publicationBehavior
-                ? CellExecutor.ObserveCanonicalResult(
+            var postRunPublication = publicationBehavior
+                ? CellExecutor.ObservePublicationResult(
                     context.Root,
                     repository,
                     "TestResults/audit-result.json")
-                : (null, null);
+                : null;
+            if (behavior == "publication-failure-invalidation"
+                && (preRunPublication is null
+                    || postRunPublication is null
+                    || !preRunPublication.HasSameStableIdentity(postRunPublication)))
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            var postRunCanonical = postRunPublication?.Commitment;
             var publicationObservation = behavior switch
             {
                 "publication-failure-invalidation" =>
