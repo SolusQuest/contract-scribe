@@ -301,7 +301,6 @@ public sealed class AuditProcessDeterminismTests
         var boundEvidence = CreateBoundEvidence(
             classifications,
             target,
-            method,
             sourceProducer,
             sourceOutput,
             reverse);
@@ -326,7 +325,6 @@ public sealed class AuditProcessDeterminismTests
         static BoundObservationEvidence CreateBoundEvidence(
             ClassificationSet classifications,
             TargetClassification target,
-            TargetClassification otherTarget,
             string sourceProducer,
             string sourceOutput,
             bool reverse)
@@ -405,8 +403,8 @@ public sealed class AuditProcessDeterminismTests
                 EvidenceInput.Candidate(
                     "evidence.m-extra",
                     EvidenceInput.TargetSubject(
-                        otherTarget.SymbolRef.CompilationContextRef,
-                        otherTarget.SymbolRef.DocumentationCommentId),
+                        target.SymbolRef.CompilationContextRef,
+                        target.SymbolRef.DocumentationCommentId),
                     EvidenceKind.PublicContract,
                     EvidenceRelation.Constrains,
                     "契約 😀",
