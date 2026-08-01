@@ -448,6 +448,26 @@ public static class Program
                     request.ResponsePath,
                     PublicationFailureResponse(request, finalization: true));
                 return 0;
+            case "toolchain-cancelled-preselection":
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    ToolchainStateResponse(request, "cancelled", selected: false));
+                return 0;
+            case "toolchain-timeout-preselection":
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    ToolchainStateResponse(request, "timeout", selected: false));
+                return 0;
+            case "toolchain-cancelled-postselection":
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    ToolchainStateResponse(request, "cancelled", selected: true));
+                return 0;
+            case "toolchain-timeout-postselection":
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    ToolchainStateResponse(request, "timeout", selected: true));
+                return 0;
             case "exception-before-response":
                 throw new ProtocolException("HV921_SYNTHETIC_PRE_RESPONSE");
             case "exception-after-response":
@@ -457,17 +477,7 @@ public static class Program
                 await ReachGateAsync(request).ConfigureAwait(false);
                 CanonicalJson.WriteCanonical(
                     request.ResponsePath,
-                    response with
-                    {
-                        AuditOutcome = null,
-                        ExecutionOutcome = "cancelled",
-                        FailureRegistryIdentity = new string('1', 64),
-                        FailureCode = "host.cancelled",
-                        FailureStage = "audit",
-                        TerminalState = "committed",
-                        ArtifactState = "absent",
-                        ObservationCode = "cancellation.cancelled-before-commit"
-                    });
+                    ControlledCancellationResponse(response));
                 return 0;
             case "controlled-kill":
                 await ReachGateAsync(request).ConfigureAwait(false);
@@ -561,6 +571,95 @@ public static class Program
                 : "publication.invalidation-failure-committed",
             null,
             facts);
+    }
+
+    private static SubjectResponse ToolchainStateResponse(
+        SubjectRequest request,
+        string executionOutcome,
+        bool selected)
+    {
+        const string Sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        const string HostRevision = "2222222222222222222222222222222222222222";
+        var root = FindRepositoryRoot();
+        var registrySha = CanonicalJson.Sha256File(Path.Join(
+            root,
+            "tests",
+            "fixtures",
+            "m1-host-validation",
+            "v1",
+            "self-test-host-failure-registry.json"));
+        var failureCode = (executionOutcome, selected) switch
+        {
+            ("cancelled", false) => "host.test-only.cancelled-sdk-preselection",
+            ("timeout", false) => "host.test-only.timeout-sdk-preselection",
+            ("cancelled", true) => "host.test-only.cancelled-sdk-postselection",
+            ("timeout", true) => "host.test-only.timeout-sdk-postselection",
+            _ => throw new ProtocolException("HV923_SYNTHETIC_BEHAVIOR_UNKNOWN")
+        };
+        var facts = new HostObservationFacts(
+            $"source.{Sha}",
+            HostRevision,
+            Sha,
+            registrySha,
+            Sha,
+            selected ? "10.0.102" : null,
+            selected ? "10.0.0" : null,
+            selected ? "18.0.0" : null,
+            [new NormalizedDiagnosticFact(failureCode, "sdk-discovery")],
+            new OutputCommitFact("not-committed", null),
+            [],
+            null,
+            selected ? "selected" : "not-selected");
+        return new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            request.VectorId,
+            request.RunId,
+            "started",
+            "normal",
+            null,
+            executionOutcome,
+            registrySha,
+            failureCode,
+            "sdk-discovery",
+            "committed",
+            "absent",
+            "internally-enforceable",
+            $"self-test.{executionOutcome}-sdk-{(selected ? "postselection" : "preselection")}",
+            null,
+            facts);
+    }
+
+    private static SubjectResponse ControlledCancellationResponse(
+        SubjectResponse response)
+    {
+        const string Sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        const string HostRevision = "2222222222222222222222222222222222222222";
+        var facts = new HostObservationFacts(
+            $"source.{Sha}",
+            HostRevision,
+            Sha,
+            Sha,
+            Sha,
+            "10.0.102",
+            "10.0.0",
+            "18.0.0",
+            [new NormalizedDiagnosticFact("host.cancelled", "audit")],
+            new OutputCommitFact("not-committed", null),
+            [],
+            null,
+            "selected");
+        return response with
+        {
+            AuditOutcome = null,
+            ExecutionOutcome = "cancelled",
+            FailureRegistryIdentity = Sha,
+            FailureCode = "host.cancelled",
+            FailureStage = "audit",
+            TerminalState = "committed",
+            ArtifactState = "absent",
+            ObservationCode = "cancellation.cancelled-before-commit",
+            HostFacts = facts
+        };
     }
 
     private static void ValidatePublicationSelfTestRequest(

@@ -276,6 +276,57 @@ public static class HarnessSelfTest
                 && cancelled.Response?.ExecutionOutcome == "cancelled",
                 "HV918_SELF_TEST_CONTROL_CANCEL");
 
+            var materialization = new CellMaterialization(
+                "ubuntu-x64",
+                "1",
+                "https://example.invalid/jobs/1",
+                "self-test",
+                "linux-x64",
+                "X64",
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                []);
+            var toolchainCases = new[]
+            {
+                ("toolchain-cancelled-preselection", "cancelled", "not-selected"),
+                ("toolchain-timeout-preselection", "timeout", "not-selected"),
+                ("toolchain-cancelled-postselection", "cancelled", "selected"),
+                ("toolchain-timeout-postselection", "timeout", "selected")
+            };
+            foreach (var (behavior, outcome, selectionState) in toolchainCases)
+            {
+                var run = await RunFakeAsync(
+                    context,
+                    temp,
+                    behavior,
+                    "run-1",
+                    cancellationToken).ConfigureAwait(false);
+                var subject = run.Response
+                    ?? throw new ProtocolException("HV959_SELF_TEST_TOOLCHAIN_STATE");
+                var facts = subject.HostFacts
+                    ?? throw new ProtocolException("HV959_SELF_TEST_TOOLCHAIN_STATE");
+                Ensure(
+                    subject.ExecutionOutcome == outcome
+                    && subject.FailureStage == "sdk-discovery"
+                    && facts.ToolchainSelectionState == selectionState
+                    && (selectionState == "selected"
+                        ? facts.SelectedSdk == materialization.SelectedSdk
+                            && facts.SelectedRuntime == materialization.SelectedRuntime
+                            && facts.SelectedMsbuild == materialization.SelectedMsbuild
+                        : facts.SelectedSdk is null
+                            && facts.SelectedRuntime is null
+                            && facts.SelectedMsbuild is null),
+                    "HV959_SELF_TEST_TOOLCHAIN_STATE");
+                RunSemantics.ValidateToolchainSelectionState(
+                    subject.VectorId,
+                    subject.ExecutionOutcome,
+                    subject.FailureStage,
+                    facts,
+                    materialization);
+                RunSemantics.ValidateSelfTestFailureRegistryRow(context.Root, subject);
+            }
+
             var temporary = await RunFakeAsync(
                 context,
                 temp,

@@ -280,5 +280,119 @@
       "operation": "replace-committed-failure-with-late-success",
       "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
     }
+  ],
+  "toolchainSelectionCases": [
+    {
+      "caseId": "toolchain.schema.input-selected",
+      "targetLayer": "schema",
+      "operation": "mark-input-selected",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.workspace-not-selected",
+      "targetLayer": "schema",
+      "operation": "mark-workspace-not-selected",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.unknown-stage",
+      "targetLayer": "schema",
+      "operation": "replace-stage-with-unknown",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.not-selected-with-identity",
+      "targetLayer": "schema",
+      "operation": "add-sdk-to-not-selected",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.selected-missing-runtime",
+      "targetLayer": "schema",
+      "operation": "remove-selected-runtime",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.selected-null-runtime",
+      "targetLayer": "schema",
+      "operation": "null-selected-runtime",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.selected-empty-runtime",
+      "targetLayer": "schema",
+      "operation": "empty-selected-runtime",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.frozen-sdk-not-selected",
+      "targetLayer": "schema",
+      "operation": "mark-frozen-sdk-not-selected",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.schema.frozen-publication-not-selected",
+      "targetLayer": "schema",
+      "operation": "mark-frozen-publication-not-selected",
+      "schemaAccepted": false,
+      "expectedCode": null
+    },
+    {
+      "caseId": "toolchain.semantic.materialization-mismatch",
+      "targetLayer": "semantic",
+      "operation": "replace-selected-sdk-with-other-safe-token",
+      "schemaAccepted": true,
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "toolchain.registry.response-digest-mismatch",
+      "targetLayer": "registry",
+      "operation": "replace-response-registry-digest",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "toolchain.registry.host-digest-mismatch",
+      "targetLayer": "registry",
+      "operation": "replace-host-registry-digest",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "toolchain.registry.wrong-code",
+      "targetLayer": "registry",
+      "operation": "replace-registry-code",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "toolchain.registry.wrong-outcome",
+      "targetLayer": "registry",
+      "operation": "replace-registry-outcome",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "toolchain.registry.wrong-stage",
+      "targetLayer": "registry",
+      "operation": "replace-registry-stage",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "toolchain.registry.wrong-terminal",
+      "targetLayer": "registry",
+      "operation": "replace-registry-terminal",
+      "schemaAccepted": null,
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    }
   ]
 }
