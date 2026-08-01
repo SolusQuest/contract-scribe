@@ -308,7 +308,8 @@ public sealed record SubjectControl(
     bool WaitForExitBeforeAction = false,
     Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
         MeasureTemporaryDisk = null,
-    Func<CanonicalResultCommitment>? ObserveStagedCanonical = null);
+    Func<TimeSpan, CancellationToken, Task<CanonicalResultCommitment>>?
+        ObserveStagedCanonical = null);
 
 public sealed record ExecutionSubjectManifest(
     string FormatVersion,

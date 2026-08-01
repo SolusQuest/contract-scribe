@@ -456,7 +456,17 @@ public static class SubjectProcessRunner
                 CanonicalResultCommitment? stagedCanonical = null;
                 try
                 {
-                    stagedCanonical = control.ObserveStagedCanonical?.Invoke();
+                    var remaining = RemainingExcludingReserve(deadline, cleanupReserve);
+                    if (remaining == TimeSpan.Zero)
+                    {
+                        return new(false, "control-timeout");
+                    }
+                    if (control.ObserveStagedCanonical is not null)
+                    {
+                        stagedCanonical = await control.ObserveStagedCanonical(
+                            remaining,
+                            cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {

@@ -63,6 +63,27 @@
             "const": "committed-non-success"
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "executionOutcome"
+              ],
+              "properties": {
+                "executionOutcome": {
+                  "const": "publication-failure"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "stage": {
+                  "const": "publication"
+                }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       }
     }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.HostValidation;
@@ -229,6 +231,223 @@ public sealed class M1HostValidationPublicationFailureTests
             var failure = Assert.Throws<ProtocolException>(() =>
                 ExecuteMutationCase(context, seed, operation));
             Assert.Equal(expectedCode, failure.Code);
+        }
+    }
+
+    [Fact]
+    public void PublicationFailure_DirectoryLifecycleRejectsStaleAndRenamedStaging()
+    {
+        var repository = TemporaryPublicationRepository();
+        var result = Path.Join(repository, "TestResults", "audit-result.json");
+        var staging = Path.Join(
+            repository,
+            "TestResults",
+            ".audit-result.json.contractscribe-stage");
+        try
+        {
+            WriteCanonicalAuditResult(result);
+            WriteCanonicalAuditResult(staging);
+            AssertProtocol(
+                "HV253_PUBLICATION_DIRECTORY_STATE",
+                () => CellExecutor.RequireClosedPublicationDirectory(
+                    repository,
+                    expectResult: true,
+                    expectStaging: false));
+
+            File.Delete(staging);
+            CellExecutor.RequireClosedPublicationDirectory(
+                repository,
+                expectResult: true,
+                expectStaging: false);
+
+            File.Delete(result);
+            WriteCanonicalAuditResult(staging);
+            File.Move(
+                staging,
+                Path.Join(repository, "TestResults", ".renamed-publication-residual"));
+            AssertProtocol(
+                "HV253_PUBLICATION_DIRECTORY_STATE",
+                () => CellExecutor.RequireClosedPublicationDirectory(
+                    repository,
+                    expectResult: false,
+                    expectStaging: false));
+
+            File.Delete(Path.Join(
+                repository,
+                "TestResults",
+                ".renamed-publication-residual"));
+            WriteCanonicalAuditResult(staging);
+            CellExecutor.ResetPublicationDirectoryForProvisioning(repository);
+            CellExecutor.RequireClosedPublicationDirectory(
+                repository,
+                expectResult: false,
+                expectStaging: false);
+        }
+        finally
+        {
+            DeleteTemporaryRepository(repository);
+        }
+    }
+
+    [Fact]
+    public async Task PublicationFailure_StagingObservationRejectsDirectoryAndOversizedFile()
+    {
+        var repository = TemporaryPublicationRepository();
+        var staging = Path.Join(
+            repository,
+            "TestResults",
+            ".audit-result.json.contractscribe-stage");
+        try
+        {
+            Directory.CreateDirectory(staging);
+            CellExecutor.RequireClosedPublicationDirectory(
+                repository,
+                expectResult: false,
+                expectStaging: true);
+            await AssertProtocolAsync(
+                "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                () => CellExecutor.ObserveCanonicalResultAsync(
+                    Root,
+                    repository,
+                    FrozenFixtureRegistry.StagingPath,
+                    TimeSpan.FromSeconds(2),
+                    CancellationToken.None));
+
+            Directory.Delete(staging);
+            await File.WriteAllBytesAsync(staging, new byte[(4 * 1024 * 1024) + 1]);
+            await AssertProtocolAsync(
+                "HV102_ARTIFACT_SIZE",
+                () => CellExecutor.ObserveCanonicalResultAsync(
+                    Root,
+                    repository,
+                    FrozenFixtureRegistry.StagingPath,
+                    TimeSpan.FromSeconds(2),
+                    CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTemporaryRepository(repository);
+        }
+    }
+
+    [Fact]
+    public async Task PublicationFailure_StagingObservationRejectsLinksAndUnixSpecialFiles()
+    {
+        var repository = TemporaryPublicationRepository();
+        var source = Path.Join(repository, ".canonical-source.json");
+        var staging = Path.Join(
+            repository,
+            "TestResults",
+            ".audit-result.json.contractscribe-stage");
+        try
+        {
+            WriteCanonicalAuditResult(source);
+            try
+            {
+                _ = File.CreateSymbolicLink(staging, source);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or PlatformNotSupportedException)
+            {
+                return;
+            }
+            AssertProtocol(
+                "HV188_FIXTURE_PATH_INVALID",
+                () => CellExecutor.RequireClosedPublicationDirectory(
+                    repository,
+                    expectResult: false,
+                    expectStaging: true));
+            File.Delete(staging);
+
+            _ = File.CreateSymbolicLink(staging, Path.Join(repository, ".missing-source.json"));
+            AssertProtocol(
+                "HV188_FIXTURE_PATH_INVALID",
+                () => CellExecutor.RequireClosedPublicationDirectory(
+                    repository,
+                    expectResult: false,
+                    expectStaging: true));
+            File.Delete(staging);
+
+            if (!OperatingSystem.IsLinux()) return;
+            Assert.Equal(0, MkFifo(staging, Convert.ToUInt32("600", 8)));
+            CellExecutor.RequireClosedPublicationDirectory(
+                repository,
+                expectResult: false,
+                expectStaging: true);
+            var stopwatch = Stopwatch.StartNew();
+            await AssertProtocolAsync(
+                "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                () => CellExecutor.ObserveCanonicalResultAsync(
+                    Root,
+                    repository,
+                    FrozenFixtureRegistry.StagingPath,
+                    TimeSpan.FromSeconds(2),
+                    CancellationToken.None));
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            DeleteTemporaryRepository(repository);
+        }
+    }
+
+    [Fact]
+    public void PublicationFailure_RegistryRejectsNonPublicationStageOneWay()
+    {
+        var registryPath = Path.Join(FixtureRoot, "self-test-host-failure-registry.json");
+        var schemaPath = Path.Join(
+            Root,
+            "schemas",
+            "validation",
+            "m1-host-failure-registry-v1.schema.json");
+        var invalid = JsonNode.Parse(File.ReadAllText(registryPath))!.AsObject();
+        invalid["entries"]!.AsArray().Add(new JsonObject
+        {
+            ["code"] = "host.test-only.invalid-publication-stage",
+            ["stage"] = "audit",
+            ["executionOutcome"] = "publication-failure",
+            ["terminalState"] = "committed-non-success"
+        });
+        var invalidPath = TemporaryJsonPath();
+        try
+        {
+            CanonicalJson.WriteCanonical(invalidPath, invalid);
+            AssertProtocol(
+                "HV111_SCHEMA_REJECTED",
+                () => SchemaValidation.Validate(
+                    invalidPath,
+                    schemaPath,
+                    requireCanonical: true));
+            using var invalidDocument = CanonicalJson.ReadStrict(
+                invalidPath,
+                1024 * 1024,
+                requireCanonical: true);
+            AssertProtocol(
+                "HV228_HOST_REGISTRY_INVALID",
+                () => CellExecutor.ValidateHostFailureRegistrySemantics(
+                    invalidDocument.RootElement));
+
+            var legal = JsonNode.Parse(File.ReadAllText(registryPath))!.AsObject();
+            legal["entries"]!.AsArray().Add(new JsonObject
+            {
+                ["code"] = "host.test-only.cancelled-during-publication",
+                ["stage"] = "publication",
+                ["executionOutcome"] = "cancelled",
+                ["terminalState"] = "committed-non-success"
+            });
+            CanonicalJson.WriteCanonical(invalidPath, legal);
+            SchemaValidation.Validate(invalidPath, schemaPath, requireCanonical: true);
+            using var legalDocument = CanonicalJson.ReadStrict(
+                invalidPath,
+                1024 * 1024,
+                requireCanonical: true);
+            CellExecutor.ValidateHostFailureRegistrySemantics(legalDocument.RootElement);
+        }
+        finally
+        {
+            File.Delete(invalidPath);
         }
     }
 
@@ -732,6 +951,62 @@ public sealed class M1HostValidationPublicationFailureTests
             File.Delete(path);
         }
     }
+
+    private static void AssertProtocol(string code, Action action)
+    {
+        var failure = Assert.Throws<ProtocolException>(action);
+        Assert.Equal(code, failure.Code);
+    }
+
+    private static async Task AssertProtocolAsync<T>(
+        string code,
+        Func<Task<T>> action)
+    {
+        var failure = await Assert.ThrowsAsync<ProtocolException>(action);
+        Assert.Equal(code, failure.Code);
+    }
+
+    private static string TemporaryPublicationRepository()
+    {
+        var path = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-publication-observer-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Join(path, "TestResults"));
+        return path;
+    }
+
+    private static void WriteCanonicalAuditResult(string path)
+    {
+        var source = Path.Join(
+            Root,
+            "tests",
+            "fixtures",
+            "audit-result",
+            "v1",
+            "payloads",
+            "unresolved-classification.json");
+        using var document = CanonicalJson.ReadStrict(source, 4 * 1024 * 1024);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(
+            path,
+            AuditResultV1Canonicalizer.Canonicalize(document.RootElement));
+    }
+
+    private static void DeleteTemporaryRepository(string repository)
+    {
+        try
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            // The test assertion is authoritative; cleanup remains best-effort.
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int MkFifo(string path, uint mode);
 
     private static string TemporaryJsonPath() => Path.Join(
         Path.GetTempPath(),

@@ -905,12 +905,21 @@ public static class HarnessSelfTest
                 File.Delete(publicationResultPath);
             }
         }
-        var preRunCanonical = publicationBehavior
-            ? CellExecutor.ObserveCanonicalResult(
-                context.Root,
+        CanonicalResultCommitment? preRunCanonical = null;
+        if (publicationBehavior)
+        {
+            var expectsPriorResult = behavior == "publication-failure-invalidation";
+            CellExecutor.RequireClosedPublicationDirectory(
                 repository,
-                "TestResults/audit-result.json").Commitment
-            : null;
+                expectResult: expectsPriorResult,
+                expectStaging: false);
+            preRunCanonical = expectsPriorResult
+                ? CellExecutor.ObserveCanonicalResult(
+                    context.Root,
+                    repository,
+                    "TestResults/audit-result.json").Commitment
+                : null;
+        }
         TemporaryDiskHighWaterObserver? temporaryDiskObserver =
             behavior is "temporary-over-limit" or "temporary-cleanup-before-gate"
                 ? new(auditTemporaryRoot, stagingRoot)
@@ -951,12 +960,21 @@ public static class HarnessSelfTest
                 "publication-staging-ready",
                 "observe",
                 TimeSpan.FromSeconds(5),
-                ObserveStagedCanonical: () => CellExecutor.ObserveCanonicalResult(
-                    context.Root,
-                    repository,
-                    FrozenFixtureRegistry.StagingPath).Commitment
-                        ?? throw new ProtocolException(
-                            "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION")),
+                ObserveStagedCanonical: async (remaining, token) =>
+                {
+                    CellExecutor.RequireClosedPublicationDirectory(
+                        repository,
+                        expectResult: false,
+                        expectStaging: true);
+                    return (await CellExecutor.ObserveCanonicalResultAsync(
+                        context.Root,
+                        repository,
+                        FrozenFixtureRegistry.StagingPath,
+                        remaining,
+                        token).ConfigureAwait(false)).Commitment
+                            ?? throw new ProtocolException(
+                                "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION");
+                }),
             _ => null
         };
         var publicationFault = behavior switch
@@ -1055,17 +1073,19 @@ public static class HarnessSelfTest
                     context.Protocol.ExecutionContract.ResponseByteLimit,
                     requireCanonical: true);
             }
+            if (publicationBehavior)
+            {
+                CellExecutor.RequireClosedPublicationDirectory(
+                    repository,
+                    expectResult: behavior == "publication-failure-invalidation",
+                    expectStaging: false);
+            }
             var (postRunCanonical, _) = publicationBehavior
                 ? CellExecutor.ObserveCanonicalResult(
                     context.Root,
                     repository,
                     "TestResults/audit-result.json")
                 : (null, null);
-            var stagingExists = publicationBehavior
-                && File.Exists(Path.Join(
-                    repository,
-                    "TestResults",
-                    ".audit-result.json.contractscribe-stage"));
             var publicationObservation = behavior switch
             {
                 "publication-failure-invalidation" =>
@@ -1074,14 +1094,14 @@ public static class HarnessSelfTest
                         postRunCanonical,
                         postRunCanonical is null ? "absent" : "pre-existing",
                         execution.StagedCanonical,
-                        stagingExists ? "residual" : "not-created"),
+                        "not-created"),
                 "publication-failure-finalization" =>
                     new PublicationArtifactObservation(
                         preRunCanonical,
                         postRunCanonical,
                         postRunCanonical is null ? "absent" : "current-invocation",
                         execution.StagedCanonical,
-                        stagingExists ? "residual" : "cleaned"),
+                        "cleaned"),
                 _ => null
             };
             return new FakeRun(
