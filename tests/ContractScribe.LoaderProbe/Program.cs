@@ -13,16 +13,19 @@ if (args.Length < 3)
 var repositoryRoot = args[0];
 var inputPath = args[1];
 var mode = args[2];
-if (mode == "classification")
+if (mode is "classification" or "policy-evidence")
 {
-    if (args.Length != 6)
+    var expectedLength = mode == "classification" ? 6 : 5;
+    if (args.Length != expectedLength)
     {
         return 64;
     }
 
-    CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(args[4]);
-    CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(args[4]);
-    Environment.SetEnvironmentVariable("TZ", args[5]);
+    var cultureArgument = mode == "classification" ? 4 : 3;
+    var timeZoneArgument = cultureArgument + 1;
+    CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(args[cultureArgument]);
+    CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(args[cultureArgument]);
+    Environment.SetEnvironmentVariable("TZ", args[timeZoneArgument]);
     TimeZoneInfo.ClearCachedData();
 }
 
@@ -105,6 +108,46 @@ if (mode == "classification")
     }
 
     Console.Write(SerializeClassification(classification.ClassificationSet));
+    return 0;
+}
+
+if (mode == "policy-evidence")
+{
+    if (outcome.Status != RepositoryLoadStatus.Success || outcome.Session is null)
+    {
+        return 71;
+    }
+
+    var classification = new SymbolClassifier().ClassifySession(
+        outcome.Session,
+        TargetProfile.ExternalApi,
+        cancellation.Token);
+    var observations = new DocumentationObserver().Observe(
+        classification,
+        cancellation.Token);
+    var policy = PolicyConfigurationEvaluator.Parse(
+        """
+        {"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"required"}
+        """u8.ToArray(),
+        cancellation.Token);
+    if (policy.Status != PolicyRunStatus.Success || policy.Document is null)
+    {
+        await outcome.Session.DisposeAsync();
+        return 72;
+    }
+
+    var extracted = new PolicyEvidenceExtractor().Extract(
+        classification,
+        observations,
+        policy.Document,
+        cancellation.Token);
+    await outcome.Session.DisposeAsync();
+    if (extracted.Status != PolicyEvidenceExtractionStatus.Success)
+    {
+        return 73;
+    }
+
+    Console.Write(SerializePolicyEvidence(extracted));
     return 0;
 }
 
@@ -231,6 +274,231 @@ static string SerializeClassification(ClassificationSet set)
     }
 
     return Encoding.UTF8.GetString(stream.ToArray());
+}
+
+static string SerializePolicyEvidence(PolicyEvidenceExtractionOutcome outcome)
+{
+    using var stream = new MemoryStream();
+    using (var writer = new Utf8JsonWriter(
+        stream,
+        new JsonWriterOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Indented = false,
+        }))
+    {
+        writer.WriteStartArray();
+        foreach (var binding in outcome.Bindings)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("subject");
+            WriteEvidenceSubject(writer, binding.Evidence.Bundle.ObservationSubject!.Subject);
+            writer.WriteStartArray("policyContributions");
+            foreach (var contribution in binding.PolicyContributions.Contributions)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("projectPath", contribution.ProjectPath);
+                switch (contribution)
+                {
+                    case RepositoryPolicyContribution repository:
+                        writer.WriteString("sourcePath", repository.SourcePath);
+                        break;
+                    case GeneratedPolicyContribution generated:
+                        writer.WriteStartObject("generatedOutput");
+                        writer.WriteString(
+                            "producerKind",
+                            PolicyConfigurationVocabulary.GetId(
+                                generated.GeneratedOutput.ProducerKind));
+                        writer.WriteString(
+                            "producerId",
+                            generated.GeneratedOutput.ProducerId);
+                        writer.WriteString(
+                            "outputId",
+                            generated.GeneratedOutput.OutputId);
+                        writer.WriteEndObject();
+                        break;
+                    default:
+                        throw new InvalidOperationException("Unknown policy contribution.");
+                }
+
+                writer.WriteString(
+                    "expectation",
+                    PolicyConfigurationVocabulary.GetId(contribution.Expectation));
+                if (contribution.MatchedRuleId is not null)
+                {
+                    writer.WriteString("matchedRuleId", contribution.MatchedRuleId);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteString(
+                "observationValue",
+                DocumentationObservationVocabulary.GetId(
+                    binding.Evidence.ObservationValue));
+            writer.WriteBoolean(
+                "supportsOrdinaryResult",
+                binding.Evidence.SupportsOrdinaryResult);
+            writer.WriteStartArray("evidenceIds");
+            foreach (var evidenceId in binding.Evidence.EvidenceIds)
+            {
+                writer.WriteStringValue(evidenceId);
+            }
+
+            writer.WriteEndArray();
+            writer.WritePropertyName("bundle");
+            WriteBundle(writer, binding.Evidence.Bundle);
+            if (binding.Evidence.Authority is { } authority)
+            {
+                writer.WriteStartObject("authority");
+                writer.WriteString("declarationSetId", authority.DeclarationSetId);
+                writer.WriteString(
+                    "completeness",
+                    authority.Completeness == EvidenceAuthorityCompleteness.Complete
+                        ? "complete"
+                        : "positive-only");
+                writer.WriteStartArray("declarations");
+                foreach (var declaration in authority.Declarations)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("declarationId", declaration.DeclarationId);
+                    writer.WriteString("evidenceId", declaration.EvidenceId);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
+    }
+
+    return Encoding.UTF8.GetString(stream.ToArray());
+}
+
+static void WriteBundle(Utf8JsonWriter writer, EvidenceBundle bundle)
+{
+    writer.WriteStartObject();
+    writer.WriteNumber("evidenceBundleVersion", bundle.EvidenceBundleVersion);
+    writer.WriteString(
+        "availabilityStatus",
+        EvidenceVocabulary.GetId(bundle.AvailabilityStatus));
+    if (bundle.OmissionReason is { } omissionReason)
+    {
+        writer.WriteString(
+            "omissionReason",
+            EvidenceVocabulary.GetId(omissionReason));
+    }
+
+    writer.WriteStartArray("items");
+    foreach (var item in bundle.Items)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("evidenceId", item.EvidenceId);
+        writer.WritePropertyName("subject");
+        WriteEvidenceSubject(writer, item.Subject);
+        writer.WriteString("kind", EvidenceVocabulary.GetId(item.Kind));
+        writer.WriteString("relation", EvidenceVocabulary.GetId(item.Relation));
+        writer.WriteString("excerpt", item.Excerpt);
+        writer.WriteString("sha256", item.Sha256);
+        writer.WriteNumber("originalUtf8ByteCount", item.OriginalUtf8ByteCount);
+        writer.WriteNumber("includedUtf8ByteCount", item.IncludedUtf8ByteCount);
+        writer.WriteNumber("omittedUtf8ByteCount", item.OmittedUtf8ByteCount);
+        writer.WriteBoolean("isTruncated", item.IsTruncated);
+        writer.WritePropertyName("locator");
+        WriteEvidenceLocator(writer, item.Locator);
+        writer.WriteEndObject();
+    }
+
+    writer.WriteEndArray();
+    if (bundle.ObservationSubject is { } observation)
+    {
+        writer.WriteStartObject("observationSubject");
+        writer.WriteString("observationSubjectRef", observation.ObservationSubjectRef);
+        writer.WriteString("compilationContextRef", observation.CompilationContextRef);
+        writer.WritePropertyName("subject");
+        WriteEvidenceSubject(writer, observation.Subject);
+        writer.WriteString(
+            "authoritativeDeclarationSetDigest",
+            observation.AuthoritativeDeclarationSetDigest);
+        writer.WriteNumber(
+            "authoritativeDeclarationCount",
+            observation.AuthoritativeDeclarationCount);
+        writer.WriteEndObject();
+    }
+
+    writer.WriteEndObject();
+}
+
+static void WriteEvidenceSubject(Utf8JsonWriter writer, EvidenceSubject subject)
+{
+    writer.WriteStartObject();
+    if (subject is ComponentEvidenceSubject component)
+    {
+        writer.WritePropertyName("parentSymbolRef");
+        WriteSymbolRef(writer, component.ParentSymbolRef);
+        writer.WriteString(
+            "componentKind",
+            ClassificationVocabulary.GetId(component.ComponentKind));
+        writer.WriteString("identity", component.Identity);
+    }
+    else
+    {
+        writer.WriteString(
+            "compilationContextRef",
+            subject.ParentSymbolRef.CompilationContextRef);
+        writer.WriteString(
+            "documentationCommentId",
+            subject.ParentSymbolRef.DocumentationCommentId);
+    }
+
+    writer.WriteEndObject();
+}
+
+static void WriteEvidenceLocator(Utf8JsonWriter writer, EvidenceLocator locator)
+{
+    writer.WriteStartObject();
+    switch (locator)
+    {
+        case RepositoryEvidenceLocator repository:
+            writer.WriteStartObject("repository");
+            writer.WriteString("path", repository.Path);
+            WriteSpan(writer, repository.Span);
+            writer.WriteEndObject();
+            break;
+        case MetadataEvidenceLocator metadata:
+            writer.WriteStartObject("metadata");
+            writer.WriteString("assemblyIdentity", metadata.AssemblyIdentity);
+            writer.WriteString(
+                "documentationCommentId",
+                metadata.DocumentationCommentId);
+            writer.WriteEndObject();
+            break;
+        case GeneratedOutputEvidenceLocator generated:
+            writer.WriteStartObject("generatedOutput");
+            writer.WriteString(
+                "producerKind",
+                PolicyConfigurationVocabulary.GetId(generated.ProducerKind));
+            writer.WriteString("producerId", generated.ProducerId);
+            writer.WriteString("outputId", generated.OutputId);
+            writer.WriteString("sourceSha256", generated.SourceSha256);
+            WriteSpan(writer, generated.Span);
+            writer.WriteEndObject();
+            break;
+        case SyntheticEvidenceLocator synthetic:
+            writer.WriteStartObject("synthetic");
+            writer.WriteString("fixtureId", synthetic.FixtureId);
+            writer.WriteEndObject();
+            break;
+        default:
+            throw new InvalidOperationException("Unknown evidence locator.");
+    }
+
+    writer.WriteEndObject();
 }
 
 static void WriteSymbolRef(Utf8JsonWriter writer, SymbolRef symbolRef)
