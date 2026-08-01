@@ -1353,7 +1353,7 @@ public static class CellExecutor
                 {
                     throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
                 }
-                return (new FileStream(handle, FileAccess.Read, 4096, isAsync: true), identity);
+                return (new FileStream(handle, FileAccess.Read, 4096, isAsync: false), identity);
             }
             catch
             {
