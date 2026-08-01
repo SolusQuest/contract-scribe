@@ -8,6 +8,14 @@ public sealed record DerivedRun(
 
 public static class RunSemantics
 {
+    private enum ToolchainSelectionRequirement
+    {
+        Either,
+        NotSelected,
+        Selected,
+        Invalid
+    }
+
     public static DerivedRun Derive(
         BundleContext context,
         VectorDefinition vector,
@@ -358,28 +366,12 @@ public static class RunSemantics
             throw new ProtocolException("HV236_HOST_PROVENANCE_MISMATCH");
         }
 
-        var requiresNotSelected = vector.VectorId ==
-            "failure.publication-invalidation";
-        var requiresSelected = vector.VectorId ==
-            "failure.publication-finalization";
-        if (requiresNotSelected && facts.ToolchainSelectionState != "not-selected"
-            || requiresSelected && facts.ToolchainSelectionState != "selected"
-            || facts.ToolchainSelectionState == "not-selected"
-                && (facts.SelectedSdk is not null
-                    || facts.SelectedRuntime is not null
-                    || facts.SelectedMsbuild is not null)
-            || facts.ToolchainSelectionState == "selected"
-                && (string.IsNullOrWhiteSpace(facts.SelectedSdk)
-                    || string.IsNullOrWhiteSpace(facts.SelectedRuntime)
-                    || string.IsNullOrWhiteSpace(facts.SelectedMsbuild)
-                    || materialization is not null
-                        && (facts.SelectedSdk != materialization.SelectedSdk
-                            || facts.SelectedRuntime != materialization.SelectedRuntime
-                            || facts.SelectedMsbuild != materialization.SelectedMsbuild))
-            || facts.ToolchainSelectionState is not ("not-selected" or "selected"))
-        {
-            throw new ProtocolException("HV252_TOOLCHAIN_SELECTION_STATE");
-        }
+        ValidateToolchainSelectionState(
+            vector.VectorId,
+            subject.ExecutionOutcome,
+            subject.FailureStage,
+            facts,
+            materialization);
 
         var handledFailure = subject.ExecutionOutcome is not null
             && subject.ExecutionOutcome != "succeeded";
@@ -444,6 +436,110 @@ public static class RunSemantics
         {
             throw new ProtocolException("HV241_LOADER_FACTS");
         }
+    }
+
+    public static void ValidateToolchainSelectionState(
+        string vectorId,
+        string? executionOutcome,
+        string? failureStage,
+        HostObservationFacts facts,
+        CellMaterialization? materialization)
+    {
+        var requirement = RequiredToolchainSelection(
+            vectorId,
+            executionOutcome,
+            failureStage);
+        if (requirement == ToolchainSelectionRequirement.Invalid
+            || requirement == ToolchainSelectionRequirement.NotSelected
+                && facts.ToolchainSelectionState != "not-selected"
+            || requirement == ToolchainSelectionRequirement.Selected
+                && facts.ToolchainSelectionState != "selected"
+            || facts.ToolchainSelectionState == "not-selected"
+                && (facts.SelectedSdk is not null
+                    || facts.SelectedRuntime is not null
+                    || facts.SelectedMsbuild is not null)
+            || facts.ToolchainSelectionState == "selected"
+                && (string.IsNullOrWhiteSpace(facts.SelectedSdk)
+                    || string.IsNullOrWhiteSpace(facts.SelectedRuntime)
+                    || string.IsNullOrWhiteSpace(facts.SelectedMsbuild)
+                    || materialization is not null
+                        && (facts.SelectedSdk != materialization.SelectedSdk
+                            || facts.SelectedRuntime != materialization.SelectedRuntime
+                            || facts.SelectedMsbuild != materialization.SelectedMsbuild))
+            || facts.ToolchainSelectionState is not ("not-selected" or "selected"))
+        {
+            throw new ProtocolException("HV252_TOOLCHAIN_SELECTION_STATE");
+        }
+    }
+
+    public static void ValidateSelfTestFailureRegistryRow(
+        string root,
+        SubjectResponse subject)
+    {
+        var registryPath = RepositoryPaths.ResolveConfined(
+            root,
+            "tests/fixtures/m1-host-validation/v1/self-test-host-failure-registry.json");
+        var registrySha256 = CanonicalJson.Sha256File(registryPath);
+        if (subject.FailureRegistryIdentity != registrySha256
+            || subject.HostFacts?.FailureRegistrySha256 != registrySha256)
+        {
+            throw new ProtocolException("HV157_FAILURE_REGISTRY_BINDING");
+        }
+        ValidateFailureRegistryRow(registryPath, subject);
+    }
+
+    private static ToolchainSelectionRequirement RequiredToolchainSelection(
+        string vectorId,
+        string? executionOutcome,
+        string? failureStage)
+    {
+        var genericRequirement = executionOutcome switch
+        {
+            "invalid-input"
+                or "environment-unavailable"
+                or "load-failure"
+                or "audit-error"
+                or "succeeded" => ToolchainSelectionRequirement.Either,
+            "publication-failure" => ToolchainSelectionRequirement.Invalid,
+            "cancelled" or "timeout" => failureStage switch
+            {
+                "input" or "environment" =>
+                    ToolchainSelectionRequirement.NotSelected,
+                "sdk-discovery" or "publication" =>
+                    ToolchainSelectionRequirement.Either,
+                "workspace-load"
+                    or "classification"
+                    or "documentation-observation"
+                    or "policy-evidence"
+                    or "audit"
+                    or "result-validation"
+                    or "shutdown"
+                    or "internal" => ToolchainSelectionRequirement.Selected,
+                _ => ToolchainSelectionRequirement.Invalid
+            },
+            _ => ToolchainSelectionRequirement.Either
+        };
+
+        if (vectorId is "cancellation.before-commit"
+            or "cancellation.after-commit"
+            or "cancellation.late-completion"
+            or "cancellation.terminal-precedence")
+        {
+            return genericRequirement is ToolchainSelectionRequirement.Either
+                or ToolchainSelectionRequirement.Selected
+                    ? ToolchainSelectionRequirement.Selected
+                    : ToolchainSelectionRequirement.Invalid;
+        }
+        if (vectorId == "failure.publication-invalidation")
+        {
+            return ToolchainSelectionRequirement.NotSelected;
+        }
+        if (vectorId == "failure.publication-finalization")
+        {
+            return ToolchainSelectionRequirement.Selected;
+        }
+
+        return genericRequirement;
     }
 
     public static void ValidateMeasuredBounds(
@@ -612,8 +708,17 @@ public static class RunSemantics
         SubjectSourceConfiguration source,
         SubjectResponse subject)
     {
-        using var registry = CanonicalJson.ReadStrict(
+        ValidateFailureRegistryRow(
             RepositoryPaths.ResolveConfined(root, source.FailureRegistry.Path),
+            subject);
+    }
+
+    private static void ValidateFailureRegistryRow(
+        string registryPath,
+        SubjectResponse subject)
+    {
+        using var registry = CanonicalJson.ReadStrict(
+            registryPath,
             1024 * 1024,
             requireCanonical: true);
         var matches = registry.RootElement.GetProperty("entries").EnumerateArray()

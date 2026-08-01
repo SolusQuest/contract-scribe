@@ -1345,8 +1345,6 @@
                 "enum": [
                   "load-failure",
                   "audit-error",
-                  "cancelled",
-                  "timeout",
                   "succeeded"
                 ]
               },
@@ -1357,6 +1355,156 @@
             "required": [
               "executionOutcome",
               "hostFacts"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "cancelled",
+                  "timeout"
+                ]
+              }
+            },
+            "required": [
+              "executionOutcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failureStage": {
+                "enum": [
+                  "input",
+                  "environment",
+                  "sdk-discovery",
+                  "workspace-load",
+                  "classification",
+                  "documentation-observation",
+                  "policy-evidence",
+                  "audit",
+                  "result-validation",
+                  "publication",
+                  "shutdown",
+                  "internal"
+                ]
+              },
+              "hostFacts": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "cancelled",
+                  "timeout"
+                ]
+              },
+              "failureStage": {
+                "enum": [
+                  "input",
+                  "environment"
+                ]
+              }
+            },
+            "required": [
+              "executionOutcome",
+              "failureStage"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "not-selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "cancelled",
+                  "timeout"
+                ]
+              },
+              "failureStage": {
+                "enum": [
+                  "workspace-load",
+                  "classification",
+                  "documentation-observation",
+                  "policy-evidence",
+                  "audit",
+                  "result-validation",
+                  "shutdown",
+                  "internal"
+                ]
+              }
+            },
+            "required": [
+              "executionOutcome",
+              "failureStage"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "enum": [
+                  "cancellation.before-commit",
+                  "cancellation.after-commit",
+                  "cancellation.late-completion",
+                  "cancellation.terminal-precedence"
+                ]
+              }
+            },
+            "required": [
+              "vectorId"
             ]
           },
           "then": {

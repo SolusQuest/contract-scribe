@@ -83,6 +83,7 @@
     "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationPublicationFailureTests.cs",
+    "tests/ContractScribe.Tests/M1HostValidationToolchainStateTests.cs",
     "tests/fixtures/audit-result/v1/payloads/locator-variants.json",
     "tests/fixtures/audit-result/v1/payloads/unresolved-classification.json",
     "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
