@@ -646,7 +646,7 @@ public sealed class DocumentationObserver
         DocumentationDeclarationInput declaration) =>
         declaration.BlockState != DocumentationBlockState.NoBlock;
 
-    private static bool IsObservableComponent(ComponentClassification component) =>
+    internal static bool IsObservableComponent(ComponentClassification component) =>
         component.SupportStatus == SupportStatus.Supported
         && component.ComponentKind is ComponentKind.Parameter
             or ComponentKind.TypeParameter

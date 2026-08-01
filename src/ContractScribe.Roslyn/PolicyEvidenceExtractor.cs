@@ -88,6 +88,13 @@ public sealed class PolicyEvidenceExtractor
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!HasExactObservationSubjectSet(
+                    classifications,
+                    observationSet.Observations))
+            {
+                return PolicyEvidenceExtractionOutcome.Failure();
+            }
+
             var projects = session.RepositorySession.Projects
                 .GroupBy(project => project.CompilationContextRef, StringComparer.Ordinal)
                 .ToDictionary(
@@ -596,16 +603,54 @@ public sealed class PolicyEvidenceExtractor
         _ => throw new InvalidOperationException("Unknown source identity."),
     };
 
+    private static bool HasExactObservationSubjectSet(
+        ClassificationSet classifications,
+        IEnumerable<DocumentationObservation> observations)
+    {
+        var expected = classifications.Targets
+            .Where(target => target.SupportStatus == SupportStatus.Supported)
+            .Select(target => SubjectKey(target.SymbolRef, null, null))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var component in classifications.Components
+            .Where(DocumentationObserver.IsObservableComponent))
+        {
+            expected.Add(SubjectKey(
+                component.ParentSymbolRef,
+                component.ComponentKind,
+                component.Identity));
+        }
+
+        var actual = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var observation in observations)
+        {
+            if (!actual.Add(SubjectKey(observation.Subject)))
+            {
+                return false;
+            }
+        }
+
+        return actual.SetEquals(expected);
+    }
+
     private static string SubjectKey(DocumentationObservationSubject subject) =>
-        subject.ParentSymbolRef.CompilationContextRef
+        SubjectKey(
+            subject.ParentSymbolRef,
+            subject.ComponentKind,
+            subject.ComponentIdentity);
+
+    private static string SubjectKey(
+        SymbolRef parentSymbolRef,
+        ComponentKind? componentKind,
+        string? componentIdentity) =>
+        parentSymbolRef.CompilationContextRef
         + "\0"
-        + subject.ParentSymbolRef.DocumentationCommentId
+        + parentSymbolRef.DocumentationCommentId
         + "\0"
-        + (subject.ComponentKind is { } kind
+        + (componentKind is { } kind
             ? ClassificationVocabulary.GetId(kind)
             : string.Empty)
         + "\0"
-        + (subject.ComponentIdentity ?? string.Empty);
+        + (componentIdentity ?? string.Empty);
 
     private static string SubjectKey(EvidenceSubject subject) => subject switch
     {

@@ -127,6 +127,31 @@ public sealed class PolicyConfigurationProductionTests
     }
 
     [Fact]
+    public void ExtremeNegativeExponent_ReturnsStructuredSchemaFailure()
+    {
+        var outcome = PolicyConfigurationEvaluator.Parse(
+            """
+            {
+              "schemaVersion": 1,
+              "targetProfile": "profile.external-api",
+              "defaultDecision": "optional",
+              "rules": [
+                {
+                  "id": "rule",
+                  "priority": 1.0e-9223372036854775807,
+                  "decision": "required"
+                }
+              ]
+            }
+            """u8.ToArray());
+
+        Assert.Equal(PolicyRunStatus.Failure, outcome.Status);
+        Assert.Equal("policy.schema.invalid-document", outcome.PrimaryFailure!.Code);
+        Assert.Equal("/rules/0/priority", outcome.PrimaryFailure.Pointer);
+        Assert.Equal("type", outcome.PrimaryFailure.SchemaKeyword);
+    }
+
+    [Fact]
     public void MultipleSchemaFailures_PreserveGlobalPointerAndKeywordOrdering()
     {
         var payload =
