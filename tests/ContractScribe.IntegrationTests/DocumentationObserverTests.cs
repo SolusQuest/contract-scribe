@@ -749,6 +749,8 @@ public sealed class DocumentationObserverTests
     {
         Assert.Empty(typeof(ClassifiedRepositorySession).GetConstructors(
             BindingFlags.Instance | BindingFlags.Public));
+        Assert.Empty(typeof(ObservedRepositorySession).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public));
         var observeMethods = typeof(DocumentationObserver)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == nameof(DocumentationObserver.Observe))
@@ -757,6 +759,19 @@ public sealed class DocumentationObserverTests
         Assert.Equal(
             typeof(ClassifiedRepositorySession),
             observe.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(ObservedRepositorySession), observe.ReturnType);
+
+        var extractMethods = typeof(PolicyEvidenceExtractor)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == nameof(PolicyEvidenceExtractor.Extract))
+            .ToArray();
+        var extract = Assert.Single(extractMethods);
+        Assert.Equal(
+            typeof(ClassifiedRepositorySession),
+            extract.GetParameters()[0].ParameterType);
+        Assert.Equal(
+            typeof(ObservedRepositorySession),
+            extract.GetParameters()[1].ParameterType);
     }
 
     [Fact]

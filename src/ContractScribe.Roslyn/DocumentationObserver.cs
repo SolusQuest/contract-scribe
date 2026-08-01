@@ -39,11 +39,20 @@ public sealed class DocumentationObserver
         this.stageObserver = stageObserver;
     }
 
-    public DocumentationObservationOutcome Observe(
+    public ObservedRepositorySession Observe(
         ClassifiedRepositorySession session,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+        return ObservedRepositorySession.Bind(
+            session,
+            ObserveCore(session, cancellationToken));
+    }
+
+    private DocumentationObservationOutcome ObserveCore(
+        ClassifiedRepositorySession session,
+        CancellationToken cancellationToken)
+    {
         if (!session.IsBoundToClassificationSession
             || session.Classification.Status != ClassificationRunStatus.Success
             || session.Classification.ClassificationSet is not { } classifications)

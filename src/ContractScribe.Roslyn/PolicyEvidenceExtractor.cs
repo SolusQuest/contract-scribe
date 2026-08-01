@@ -66,7 +66,7 @@ public sealed class PolicyEvidenceExtractor
 
     public PolicyEvidenceExtractionOutcome Extract(
         ClassifiedRepositorySession session,
-        DocumentationObservationOutcome observations,
+        ObservedRepositorySession observations,
         PolicyDocumentV1 policy,
         CancellationToken cancellationToken = default)
     {
@@ -74,13 +74,15 @@ public sealed class PolicyEvidenceExtractor
         ArgumentNullException.ThrowIfNull(observations);
         ArgumentNullException.ThrowIfNull(policy);
         if (!session.IsBoundToClassificationSession
+            || !observations.IsBoundToObservationSession(session)
             || session.Classification.Status != ClassificationRunStatus.Success
             || session.Classification.ClassificationSet is not { } classifications
-            || observations.Status != DocumentationObservationRunStatus.Success
-            || observations.ObservationSet is not { } observationSet
+            || observations.Observation.Status != DocumentationObservationRunStatus.Success
+            || observations.Observation.ObservationSet is not { } observationSet
             || classifications.TargetProfile != policy.TargetProfile)
         {
-            return observations.Status == DocumentationObservationRunStatus.Cancelled
+            return observations.IsBoundToObservationSession(session)
+                && observations.Observation.Status == DocumentationObservationRunStatus.Cancelled
                 ? PolicyEvidenceExtractionOutcome.Cancelled()
                 : PolicyEvidenceExtractionOutcome.Failure();
         }
