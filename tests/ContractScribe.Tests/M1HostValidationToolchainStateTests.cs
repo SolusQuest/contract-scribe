@@ -124,6 +124,16 @@ public sealed class M1HostValidationToolchainStateTests
                     ResponseNode("self-test.fake-subject", outcome, "publication", state),
                     expected: true);
             }
+            foreach (var stage in new[] { "sdk-discovery", "publication" })
+            {
+                var nullHostFacts = ResponseNode(
+                    "self-test.fake-subject",
+                    outcome,
+                    stage,
+                    "not-selected");
+                nullHostFacts["hostFacts"] = null;
+                AssertSchemaParity(nullHostFacts, expected: false);
+            }
             foreach (var stage in PostSelectionStages)
             {
                 AssertSchemaParity(
@@ -206,6 +216,12 @@ public sealed class M1HostValidationToolchainStateTests
                     expected: true);
                 AssertSchemaParity(
                     ResponseNode(vectorId, "cancelled", stage, "not-selected"),
+                    expected: false);
+            }
+            foreach (var stage in new[] { "input", "environment", "future-stage" })
+            {
+                AssertSchemaParity(
+                    ResponseNode(vectorId, "cancelled", stage, "selected"),
                     expected: false);
             }
         }
@@ -349,6 +365,15 @@ public sealed class M1HostValidationToolchainStateTests
                     "cancelled",
                     stage,
                     NotSelectedFacts(),
+                    materialization);
+            }
+            foreach (var stage in new[] { "input", "environment", "future-stage" })
+            {
+                AssertSemanticRejected(
+                    vectorId,
+                    "cancelled",
+                    stage,
+                    SelectedFacts(),
                     materialization);
             }
         }

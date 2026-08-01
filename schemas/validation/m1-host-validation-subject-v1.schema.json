@@ -1404,6 +1404,9 @@
                   "shutdown",
                   "internal"
                 ]
+              },
+              "hostFacts": {
+                "type": "object"
               }
             }
           }

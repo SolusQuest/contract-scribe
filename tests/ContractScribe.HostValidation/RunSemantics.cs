@@ -493,23 +493,7 @@ public static class RunSemantics
         string? executionOutcome,
         string? failureStage)
     {
-        if (vectorId is "cancellation.before-commit"
-            or "cancellation.after-commit"
-            or "cancellation.late-completion"
-            or "cancellation.terminal-precedence")
-        {
-            return ToolchainSelectionRequirement.Selected;
-        }
-        if (vectorId == "failure.publication-invalidation")
-        {
-            return ToolchainSelectionRequirement.NotSelected;
-        }
-        if (vectorId == "failure.publication-finalization")
-        {
-            return ToolchainSelectionRequirement.Selected;
-        }
-
-        return executionOutcome switch
+        var genericRequirement = executionOutcome switch
         {
             "invalid-input"
                 or "environment-unavailable"
@@ -535,6 +519,27 @@ public static class RunSemantics
             },
             _ => ToolchainSelectionRequirement.Either
         };
+
+        if (vectorId is "cancellation.before-commit"
+            or "cancellation.after-commit"
+            or "cancellation.late-completion"
+            or "cancellation.terminal-precedence")
+        {
+            return genericRequirement is ToolchainSelectionRequirement.Either
+                or ToolchainSelectionRequirement.Selected
+                    ? ToolchainSelectionRequirement.Selected
+                    : ToolchainSelectionRequirement.Invalid;
+        }
+        if (vectorId == "failure.publication-invalidation")
+        {
+            return ToolchainSelectionRequirement.NotSelected;
+        }
+        if (vectorId == "failure.publication-finalization")
+        {
+            return ToolchainSelectionRequirement.Selected;
+        }
+
+        return genericRequirement;
     }
 
     public static void ValidateMeasuredBounds(
