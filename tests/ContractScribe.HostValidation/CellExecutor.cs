@@ -327,7 +327,12 @@ public static class CellExecutor
         {
             EnsureFixtureResultPathSafe(repositoryRoot, resultPath);
         }
-        PrepareResultPrestate(resultPath, fixture.ResultPrestate);
+        PrepareResultPrestate(context.Root, resultPath, fixture.ResultPrestate);
+        var isPublicationFailureVector = vector.VectorId is
+            "failure.publication-invalidation" or "failure.publication-finalization";
+        var preRunCanonical = isPublicationFailureVector
+            ? ObserveCanonicalResult(context.Root, repositoryRoot, fixture.ResultPath).Commitment
+            : null;
         var before = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
         if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(before))
         {
@@ -362,7 +367,15 @@ public static class CellExecutor
                 context.Protocol.ExecutionContract.SubjectTimeoutSeconds,
                 temporaryDiskObserver is null
                     ? null
-                    : temporaryDiskObserver.CaptureAndRelease);
+                    : temporaryDiskObserver.CaptureAndRelease,
+                vector.VectorId == "failure.publication-finalization"
+                    ? () => ObserveCanonicalResult(
+                        context.Root,
+                        repositoryRoot,
+                        FrozenFixtureRegistry.StagingPath).Commitment
+                            ?? throw new ProtocolException(
+                                "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION")
+                    : null);
             var request = new SubjectRequest(
                 "contractscribe-m1-host-validation-subject-request-v1",
                 "production-host",
@@ -376,7 +389,9 @@ public static class CellExecutor
                 networkOperationLogPath,
                 transitionLogPath,
                 auditTemporaryRoot,
-                temporaryDiskObserver?.GateContract);
+                temporaryDiskObserver?.GateContract,
+                PublicationFaultFor(vector.VectorId),
+                PostTerminalAttemptFor(vector.VectorId));
             CanonicalJson.WriteCanonical(requestPath, request);
             SchemaValidation.ValidateDefinition(
                 requestPath,
@@ -462,10 +477,32 @@ public static class CellExecutor
                 }
             }
 
-            var (resultCommitment, resultFacts) = ObserveCanonicalResult(
+            var (postRunCommitment, postRunFacts) = ObserveCanonicalResult(
                 context.Root,
                 repositoryRoot,
                 fixture.ResultPath);
+            var stagingExists = File.Exists(ResolveFixturePath(
+                repositoryRoot,
+                FrozenFixtureRegistry.StagingPath,
+                mustExist: false));
+            var publicationObservation = vector.VectorId switch
+            {
+                "failure.publication-invalidation" => new PublicationArtifactObservation(
+                    preRunCanonical,
+                    postRunCommitment,
+                    postRunCommitment is null ? "absent" : "pre-existing",
+                    execution.StagedCanonical,
+                    stagingExists ? "residual" : "not-created"),
+                "failure.publication-finalization" => new PublicationArtifactObservation(
+                    preRunCanonical,
+                    postRunCommitment,
+                    postRunCommitment is null ? "absent" : "current-invocation",
+                    execution.StagedCanonical,
+                    stagingExists ? "residual" : "cleaned"),
+                _ => null
+            };
+            var resultCommitment = isPublicationFailureVector ? null : postRunCommitment;
+            var resultFacts = isPublicationFailureVector ? null : postRunFacts;
             var process = new ProcessObservation(
                 execution.ExitCode,
                 execution.ProcessStart,
@@ -507,7 +544,8 @@ public static class CellExecutor
                 resultFacts,
                 delta,
                 execution.ObservedProcesses,
-                diagnostics.Order(StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray());
+                diagnostics.Order(StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray(),
+                publicationObservation);
             var derived = RunSemantics.Derive(
                 context,
                 vector,
@@ -537,7 +575,10 @@ public static class CellExecutor
         }
     }
 
-    private static void PrepareResultPrestate(string? resultPath, string prestate)
+    private static void PrepareResultPrestate(
+        string root,
+        string? resultPath,
+        string prestate)
     {
         if (resultPath is null)
         {
@@ -551,6 +592,24 @@ public static class CellExecutor
         if (prestate == "stale-invalid")
         {
             File.WriteAllText(resultPath, "stale-invalid\n");
+        }
+        else if (prestate == "prior-valid")
+        {
+            var sourcePath = RepositoryPaths.ResolveConfined(
+                root,
+                "tests/fixtures/audit-result/v1/payloads/unresolved-classification.json");
+            SchemaValidation.Validate(
+                sourcePath,
+                RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
+                requireCanonical: false);
+            using var document = CanonicalJson.ReadStrict(
+                sourcePath,
+                4 * 1024 * 1024,
+                requireCanonical: false);
+            AuditResultSemanticValidator.Validate(root, document.RootElement);
+            File.WriteAllBytes(
+                resultPath,
+                AuditResultV1Canonicalizer.Canonicalize(document.RootElement));
         }
     }
 
@@ -696,7 +755,8 @@ public static class CellExecutor
         string tempRoot,
         int timeoutSeconds,
         Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
-            measureTemporaryDisk) =>
+            measureTemporaryDisk,
+        Func<CanonicalResultCommitment>? observeStagedCanonical) =>
         vector.VectorId switch
         {
             "cancellation.before-commit" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),
@@ -712,6 +772,12 @@ public static class CellExecutor
                 "measure-temporary-disk",
                 TimeSpan.FromSeconds(timeoutSeconds),
                 MeasureTemporaryDisk: measureTemporaryDisk),
+            "failure.publication-finalization" => new(
+                Path.Join(tempRoot, "control"),
+                "publication-staging-ready",
+                "observe",
+                TimeSpan.FromSeconds(timeoutSeconds),
+                ObserveStagedCanonical: observeStagedCanonical),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"
@@ -719,6 +785,27 @@ public static class CellExecutor
                 new(Path.Join(tempRoot, "control"), "process-observation", "observe", TimeSpan.FromSeconds(timeoutSeconds)),
             _ => null
         };
+
+    public static PublicationFault? PublicationFaultFor(string vectorId) =>
+        vectorId switch
+        {
+            "failure.publication-invalidation" => new(
+                "invalidate-existing",
+                1,
+                "io-exception",
+                null),
+            "failure.publication-finalization" => new(
+                "atomic-replace",
+                1,
+                "io-exception",
+                FrozenFixtureRegistry.StagingPath),
+            _ => null
+        };
+
+    public static PostTerminalAttempt? PostTerminalAttemptFor(string vectorId) =>
+        vectorId is "failure.publication-invalidation" or "failure.publication-finalization"
+            ? new("succeeded", "after-publication-failure-commit", 1)
+            : null;
 
     private static (string Executable, IReadOnlyList<string> Arguments) BuildInvocation(
         string root,

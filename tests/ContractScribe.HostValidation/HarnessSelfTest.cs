@@ -10,6 +10,7 @@ public static class HarnessSelfTest
     {
         var context = BundleValidator.Validate(root);
         TestStrictJson();
+        await TestPublicationFailureFormsAsync(context, cancellationToken).ConfigureAwait(false);
         await TestProcessAndObserverAsync(context, cancellationToken).ConfigureAwait(false);
         await TestStreamsAsync(context, cancellationToken).ConfigureAwait(false);
         await TestFailureAndTimeoutAsync(context, cancellationToken).ConfigureAwait(false);
@@ -39,6 +40,139 @@ public static class HarnessSelfTest
         finally
         {
             Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    private static async Task TestPublicationFailureFormsAsync(
+        BundleContext context,
+        CancellationToken cancellationToken)
+    {
+        const string Sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        const string HostRevision = "2222222222222222222222222222222222222222";
+        var repository = CreateSyntheticRepository();
+        try
+        {
+            var registryPath =
+                "tests/fixtures/m1-host-validation/v1/self-test-host-failure-registry.json";
+            var registrySha = CanonicalJson.Sha256File(
+                RepositoryPaths.ResolveConfined(context.Root, registryPath));
+            var source = new SubjectSourceConfiguration(
+                $"source.{Sha}",
+                HostRevision,
+                $"operations.{Sha}",
+                ["src"],
+                [new ArtifactIdentity("src/ContractScribe.Core/ContractScribe.Core.csproj", Sha)],
+                new ArtifactIdentity(registryPath, registrySha),
+                new ArtifactIdentity(
+                    "src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json",
+                    Sha),
+                new ArtifactIdentity("Directory.Build.props", Sha),
+                new ArtifactIdentity(
+                    "schemas/validation/m1-host-validation-subject-v1.schema.json",
+                    Sha),
+                new ArtifactIdentity(
+                    "tests/fixtures/m1-contract-baseline/v1/manifest.json",
+                    Sha),
+                new ArtifactIdentity("docs/20_architecture/security-boundary.md", Sha),
+                new ArtifactIdentity(".github/workflows/ci.yml", Sha));
+            var materialization = new CellMaterialization(
+                "ubuntu-x64",
+                "1",
+                "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+                "self-test-image",
+                "linux-x64",
+                "X64",
+                "10.0.102",
+                "10.0.0",
+                "18.0.0",
+                []);
+
+            foreach (var finalization in new[] { false, true })
+            {
+                var vectorId = finalization
+                    ? "failure.publication-finalization"
+                    : "failure.publication-invalidation";
+                var behavior = finalization
+                    ? "publication-failure-finalization"
+                    : "publication-failure-invalidation";
+                var vector = context.Vectors.Vectors.Single(item =>
+                    item.VectorId == vectorId);
+                var fake = await RunFakeAsync(
+                    context,
+                    repository,
+                    behavior,
+                    "run-1",
+                    cancellationToken).ConfigureAwait(false);
+                Ensure(fake.Response is not null, "HV973_SELF_TEST_PUBLICATION_RESPONSE");
+                Ensure(
+                    fake.PublicationArtifactObservation is not null,
+                    "HV974_SELF_TEST_PUBLICATION_OBSERVATION");
+                var fixture = new FixtureRealization(
+                    vectorId,
+                    "production-host",
+                    $"tests/fixtures/m1-host-validation/runtime/ubuntu-x64/{vectorId}",
+                    Sha,
+                    true,
+                    null,
+                    "dotnet",
+                    [],
+                    Sha,
+                    [],
+                    ["obj"],
+                    "direct-process",
+                    "TestResults/audit-result.json",
+                    finalization ? "absent" : "prior-valid",
+                    [new RunWorkingDirectory("run-1", "repository-root")],
+                    null);
+                var process = new ProcessObservation(
+                    fake.Execution.ExitCode,
+                    fake.Execution.ProcessStart,
+                    fake.Execution.ProcessTermination,
+                    fake.Execution.TimedOut,
+                    fake.Execution.ControlCompleted,
+                    fake.Execution.ObservationComplete,
+                    ObservedGateName: finalization
+                        ? "publication-staging-ready"
+                        : null,
+                    ObservedControlAction: finalization ? "observe" : null,
+                    PostGateSampleObserved: finalization,
+                    ObservedControlOutcome: fake.Execution.ControlOutcome,
+                    TransitionEvents: fake.TransitionEvents,
+                    StandardOutputByteCount: fake.Execution.StandardOutput.LongLength,
+                    StandardErrorByteCount: fake.Execution.StandardError.LongLength);
+                var run = new RunEvidence(
+                    vectorId,
+                    "run-1",
+                    "matched",
+                    vector.ExpectedObservation,
+                    vector.ExpectedObservation,
+                    vector.ExpectedEnforcementClass,
+                    vector.ExpectedEnforcementClass,
+                    fake.Response,
+                    process,
+                    null,
+                    null,
+                    fake.Delta,
+                    fake.Execution.ObservedProcesses,
+                    [],
+                    fake.PublicationArtifactObservation);
+                var derived = RunSemantics.Derive(
+                    context,
+                    vector,
+                    run,
+                    fixture,
+                    source,
+                    materialization);
+                Ensure(
+                    derived.Verdict == "matched"
+                    && derived.Observation == vector.ExpectedObservation
+                    && derived.DiagnosticCodes.Count == 0,
+                    "HV975_SELF_TEST_PUBLICATION_SEMANTICS");
+            }
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
         }
     }
 
@@ -735,6 +869,48 @@ public static class HarnessSelfTest
         var stagingRoot = Path.Join(repository, $".staging-{Guid.NewGuid():N}");
         Directory.CreateDirectory(auditTemporaryRoot);
         Directory.CreateDirectory(stagingRoot);
+        var publicationBehavior = behavior is
+            "publication-failure-invalidation" or "publication-failure-finalization";
+        var publicationResultPath = Path.Join(
+            repository,
+            "TestResults",
+            "audit-result.json");
+        var transitionLogPath = publicationBehavior
+            ? Path.Join(
+                Path.GetTempPath(),
+                $"contractscribe-hv-transition-{Guid.NewGuid():N}.jsonl")
+            : null;
+        if (publicationBehavior)
+        {
+            var publicationSource = Path.Join(
+                repository,
+                ".contractscribe-publication-source.json");
+            using (var sourceDocument = CanonicalJson.ReadStrict(
+                RepositoryPaths.ResolveConfined(
+                    context.Root,
+                    "tests/fixtures/audit-result/v1/payloads/unresolved-classification.json"),
+                4 * 1024 * 1024))
+            {
+                File.WriteAllBytes(
+                    publicationSource,
+                    AuditResultV1Canonicalizer.Canonicalize(sourceDocument.RootElement));
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(publicationResultPath)!);
+            if (behavior == "publication-failure-invalidation")
+            {
+                File.Copy(publicationSource, publicationResultPath, overwrite: true);
+            }
+            else
+            {
+                File.Delete(publicationResultPath);
+            }
+        }
+        var preRunCanonical = publicationBehavior
+            ? CellExecutor.ObserveCanonicalResult(
+                context.Root,
+                repository,
+                "TestResults/audit-result.json").Commitment
+            : null;
         TemporaryDiskHighWaterObserver? temporaryDiskObserver =
             behavior is "temporary-over-limit" or "temporary-cleanup-before-gate"
                 ? new(auditTemporaryRoot, stagingRoot)
@@ -770,12 +946,49 @@ public static class HarnessSelfTest
                 "measure-temporary-disk",
                 TimeSpan.FromSeconds(5),
                 MeasureTemporaryDisk: temporaryDiskObserver!.CaptureAndRelease),
+            "publication-failure-finalization" => new(
+                controlRoot,
+                "publication-staging-ready",
+                "observe",
+                TimeSpan.FromSeconds(5),
+                ObserveStagedCanonical: () => CellExecutor.ObserveCanonicalResult(
+                    context.Root,
+                    repository,
+                    FrozenFixtureRegistry.StagingPath).Commitment
+                        ?? throw new ProtocolException(
+                            "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION")),
             _ => null
+        };
+        var publicationFault = behavior switch
+        {
+            "publication-failure-invalidation" => new PublicationFault(
+                "invalidate-existing",
+                1,
+                "io-exception",
+                null),
+            "publication-failure-finalization" => new PublicationFault(
+                "atomic-replace",
+                1,
+                "io-exception",
+                FrozenFixtureRegistry.StagingPath),
+            _ => null
+        };
+        var postTerminalAttempt = publicationBehavior
+            ? new PostTerminalAttempt(
+                "succeeded",
+                "after-publication-failure-commit",
+                1)
+            : null;
+        var vectorId = behavior switch
+        {
+            "publication-failure-invalidation" => "failure.publication-invalidation",
+            "publication-failure-finalization" => "failure.publication-finalization",
+            _ => "self-test.fake-subject"
         };
         var request = new SubjectRequest(
             "contractscribe-m1-host-validation-subject-request-v1",
             "self-test",
-            "self-test.fake-subject",
+            vectorId,
             runId,
             repository,
             responsePath,
@@ -783,9 +996,11 @@ public static class HarnessSelfTest
             control is null ? [] : [control.GateName],
             control?.Action ?? "continue",
             null,
-            null,
+            transitionLogPath,
             auditTemporaryRoot,
-            temporaryDiskObserver?.GateContract);
+            temporaryDiskObserver?.GateContract,
+            publicationFault,
+            postTerminalAttempt);
         CanonicalJson.WriteCanonical(requestPath, request);
         SchemaValidation.ValidateDefinition(
             requestPath,
@@ -840,7 +1055,42 @@ public static class HarnessSelfTest
                     context.Protocol.ExecutionContract.ResponseByteLimit,
                     requireCanonical: true);
             }
-            return new FakeRun(execution, response, delta, auditTemporaryFinalBytes);
+            var (postRunCanonical, _) = publicationBehavior
+                ? CellExecutor.ObserveCanonicalResult(
+                    context.Root,
+                    repository,
+                    "TestResults/audit-result.json")
+                : (null, null);
+            var stagingExists = publicationBehavior
+                && File.Exists(Path.Join(
+                    repository,
+                    "TestResults",
+                    ".audit-result.json.contractscribe-stage"));
+            var publicationObservation = behavior switch
+            {
+                "publication-failure-invalidation" =>
+                    new PublicationArtifactObservation(
+                        preRunCanonical,
+                        postRunCanonical,
+                        postRunCanonical is null ? "absent" : "pre-existing",
+                        execution.StagedCanonical,
+                        stagingExists ? "residual" : "not-created"),
+                "publication-failure-finalization" =>
+                    new PublicationArtifactObservation(
+                        preRunCanonical,
+                        postRunCanonical,
+                        postRunCanonical is null ? "absent" : "current-invocation",
+                        execution.StagedCanonical,
+                        stagingExists ? "residual" : "cleaned"),
+                _ => null
+            };
+            return new FakeRun(
+                execution,
+                response,
+                delta,
+                auditTemporaryFinalBytes,
+                publicationObservation,
+                CellExecutor.ObserveTransitionLog(transitionLogPath));
         }
         finally
         {
@@ -853,6 +1103,10 @@ public static class HarnessSelfTest
             }
             Directory.Delete(auditTemporaryRoot, recursive: true);
             Directory.Delete(stagingRoot, recursive: true);
+            if (transitionLogPath is not null)
+            {
+                File.Delete(transitionLogPath);
+            }
         }
     }
 
@@ -899,5 +1153,7 @@ public static class HarnessSelfTest
         ProcessExecutionResult Execution,
         SubjectResponse? Response,
         RepositoryDelta Delta,
-        long AuditTemporaryFinalBytes);
+        long AuditTemporaryFinalBytes,
+        PublicationArtifactObservation? PublicationArtifactObservation = null,
+        IReadOnlyList<string>? TransitionEvents = null);
 }

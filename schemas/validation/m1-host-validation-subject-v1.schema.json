@@ -553,6 +553,7 @@
         "resultPrestate": {
           "enum": [
             "absent",
+            "prior-valid",
             "stale-invalid"
           ]
         },
@@ -753,7 +754,9 @@
         "networkOperationLogPath",
         "transitionLogPath",
         "auditTemporaryRoot",
-        "temporaryDiskGate"
+        "temporaryDiskGate",
+        "publicationFault",
+        "postTerminalAttempt"
       ],
       "properties": {
         "formatVersion": {
@@ -802,8 +805,9 @@
               "before-commit",
               "after-commit",
           "late-completion",
-          "publication-before-commit",
+              "publication-before-commit",
               "publication-after-commit",
+              "publication-staging-ready",
               "forced-termination",
               "process-observation",
               "temporary-disk-high-water"
@@ -880,6 +884,74 @@
               "additionalProperties": false
             }
           ]
+        },
+        "publicationFault": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "operation",
+                "occurrence",
+                "failure",
+                "stagingRelativePath"
+              ],
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "invalidate-existing",
+                    "atomic-replace"
+                  ]
+                },
+                "occurrence": {
+                  "const": 1
+                },
+                "failure": {
+                  "const": "io-exception"
+                },
+                "stagingRelativePath": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "TestResults/.audit-result.json.contractscribe-stage",
+                    null
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "postTerminalAttempt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "executionOutcome",
+                "timing",
+                "occurrence"
+              ],
+              "properties": {
+                "executionOutcome": {
+                  "const": "succeeded"
+                },
+                "timing": {
+                  "const": "after-publication-failure-commit"
+                },
+                "occurrence": {
+                  "const": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "allOf": [
@@ -907,6 +979,109 @@
           "else": {
             "properties": {
               "temporaryDiskGate": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-invalidation"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "publicationFault": {
+                "const": {
+                  "operation": "invalidate-existing",
+                  "occurrence": 1,
+                  "failure": "io-exception",
+                  "stagingRelativePath": null
+                }
+              },
+              "postTerminalAttempt": {
+                "const": {
+                  "executionOutcome": "succeeded",
+                  "timing": "after-publication-failure-commit",
+                  "occurrence": 1
+                }
+              },
+              "synchronizationGates": {
+                "const": []
+              },
+              "controlAction": {
+                "const": "continue"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-finalization"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "publicationFault": {
+                "const": {
+                  "operation": "atomic-replace",
+                  "occurrence": 1,
+                  "failure": "io-exception",
+                  "stagingRelativePath": "TestResults/.audit-result.json.contractscribe-stage"
+                }
+              },
+              "postTerminalAttempt": {
+                "const": {
+                  "executionOutcome": "succeeded",
+                  "timing": "after-publication-failure-commit",
+                  "occurrence": 1
+                }
+              },
+              "synchronizationGates": {
+                "const": [
+                  "publication-staging-ready"
+                ]
+              },
+              "controlAction": {
+                "const": "observe"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "not": {
+                  "enum": [
+                    "failure.publication-invalidation",
+                    "failure.publication-finalization"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "publicationFault": {
+                "type": "null"
+              },
+              "postTerminalAttempt": {
                 "type": "null"
               }
             }
@@ -993,6 +1168,7 @@
             "environment-unavailable",
             "load-failure",
             "audit-error",
+            "publication-failure",
             "cancelled",
             "timeout",
             "succeeded",
@@ -1082,6 +1258,7 @@
                   "environment-unavailable",
                   "load-failure",
                   "audit-error",
+                  "publication-failure",
                   "cancelled",
                   "timeout"
                 ]
@@ -1123,6 +1300,159 @@
               },
               "failureStage": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "invalid-input",
+                  "environment-unavailable"
+                ]
+              },
+              "hostFacts": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "executionOutcome",
+              "hostFacts"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "not-selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "load-failure",
+                  "audit-error",
+                  "cancelled",
+                  "timeout",
+                  "succeeded"
+                ]
+              },
+              "hostFacts": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "executionOutcome",
+              "hostFacts"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-invalidation"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              },
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "not-selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-finalization"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              },
+              "hostFacts": {
+                "type": "object",
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                },
+                "required": [
+                  "toolchainSelectionState"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              }
+            },
+            "required": [
+              "executionOutcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "vectorId": {
+                "enum": [
+                  "failure.publication-invalidation",
+                  "failure.publication-finalization"
+                ]
               }
             }
           }
@@ -1173,9 +1503,7 @@
         "contractBaselineSha256",
         "failureRegistrySha256",
         "calibratedBoundsSha256",
-        "selectedSdk",
-        "selectedRuntime",
-        "selectedMsbuild",
+        "toolchainSelectionState",
         "normalizedDiagnosticFacts",
         "outputCommit",
         "measuredBounds",
@@ -1197,6 +1525,12 @@
         },
         "calibratedBoundsSha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "toolchainSelectionState": {
+          "enum": [
+            "not-selected",
+            "selected"
+          ]
         },
         "selectedSdk": {
           "$ref": "#/$defs/safeToken"
@@ -1235,6 +1569,48 @@
           ]
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "toolchainSelectionState": {
+                "const": "selected"
+              }
+            },
+            "required": [
+              "toolchainSelectionState"
+            ]
+          },
+          "then": {
+            "required": [
+              "selectedSdk",
+              "selectedRuntime",
+              "selectedMsbuild"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "selectedSdk"
+                  ]
+                },
+                {
+                  "required": [
+                    "selectedRuntime"
+                  ]
+                },
+                {
+                  "required": [
+                    "selectedMsbuild"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "normalizedDiagnosticFact": {

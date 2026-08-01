@@ -176,7 +176,8 @@
         "observedAuditResult",
         "repositoryDelta",
         "observedProcesses",
-        "diagnosticCodes"
+        "diagnosticCodes",
+        "publicationArtifactObservation"
       ],
       "properties": {
         "vectorId": {
@@ -263,6 +264,16 @@
               "type": "null"
             }
           ]
+        },
+        "publicationArtifactObservation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/publicationArtifactObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -284,7 +295,8 @@
         "artifactState",
         "enforcementClass",
         "observationCode",
-        "canonicalResult"
+        "canonicalResult",
+        "hostFacts"
       ],
       "properties": {
         "formatVersion": {
@@ -344,6 +356,7 @@
             "environment-unavailable",
             "load-failure",
             "audit-error",
+            "publication-failure",
             "cancelled",
             "timeout",
             "succeeded",
@@ -404,6 +417,480 @@
               "type": "null"
             }
           ]
+        },
+        "hostFacts": {
+          "$ref": "#/$defs/hostObservationFacts"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "invalid-input",
+                  "environment-unavailable",
+                  "load-failure",
+                  "audit-error",
+                  "publication-failure",
+                  "cancelled",
+                  "timeout"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "failureRegistryIdentity": {
+                "type": "string"
+              },
+              "failureCode": {
+                "type": "string"
+              },
+              "failureStage": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "succeeded",
+                  null
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "failureRegistryIdentity": {
+                "type": "null"
+              },
+              "failureCode": {
+                "type": "null"
+              },
+              "failureStage": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "invalid-input",
+                  "environment-unavailable"
+                ]
+              }
+            },
+            "required": [
+              "executionOutcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "not-selected"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "enum": [
+                  "load-failure",
+                  "audit-error",
+                  "cancelled",
+                  "timeout",
+                  "succeeded"
+                ]
+              }
+            },
+            "required": [
+              "executionOutcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hostFacts": {
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-invalidation"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              },
+              "hostFacts": {
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "not-selected"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vectorId": {
+                "const": "failure.publication-finalization"
+              }
+            },
+            "required": [
+              "vectorId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              },
+              "hostFacts": {
+                "properties": {
+                  "toolchainSelectionState": {
+                    "const": "selected"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executionOutcome": {
+                "const": "publication-failure"
+              }
+            },
+            "required": [
+              "executionOutcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "vectorId": {
+                "enum": [
+                  "failure.publication-invalidation",
+                  "failure.publication-finalization"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "publicationArtifactObservation": {
+      "type": "object",
+      "required": [
+        "preRunCanonical",
+        "postRunCanonical",
+        "postRunAttribution",
+        "stagedCanonical",
+        "stagingDisposition"
+      ],
+      "properties": {
+        "preRunCanonical": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "postRunCanonical": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "postRunAttribution": {
+          "enum": [
+            "absent",
+            "pre-existing",
+            "current-invocation"
+          ]
+        },
+        "stagedCanonical": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/canonicalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stagingDisposition": {
+          "enum": [
+            "not-created",
+            "cleaned",
+            "residual"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostObservationFacts": {
+      "type": "object",
+      "required": [
+        "sourceConfigurationId",
+        "hostRevision",
+        "contractBaselineSha256",
+        "failureRegistrySha256",
+        "calibratedBoundsSha256",
+        "toolchainSelectionState",
+        "normalizedDiagnosticFacts",
+        "outputCommit",
+        "measuredBounds",
+        "loaderFact"
+      ],
+      "properties": {
+        "sourceConfigurationId": {
+          "type": "string",
+          "pattern": "^source\\.[0-9a-f]{64}$"
+        },
+        "hostRevision": {
+          "$ref": "#/$defs/commit"
+        },
+        "contractBaselineSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "failureRegistrySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "calibratedBoundsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchainSelectionState": {
+          "enum": [
+            "not-selected",
+            "selected"
+          ]
+        },
+        "selectedSdk": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedRuntime": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "selectedMsbuild": {
+          "$ref": "#/$defs/safeToken"
+        },
+        "normalizedDiagnosticFacts": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/normalizedDiagnosticFact"
+          }
+        },
+        "outputCommit": {
+          "$ref": "#/$defs/outputCommitFact"
+        },
+        "measuredBounds": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/measuredBoundFact"
+          }
+        },
+        "loaderFact": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/loaderObservationFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "toolchainSelectionState": {
+                "const": "selected"
+              }
+            },
+            "required": [
+              "toolchainSelectionState"
+            ]
+          },
+          "then": {
+            "required": [
+              "selectedSdk",
+              "selectedRuntime",
+              "selectedMsbuild"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "selectedSdk"
+                  ]
+                },
+                {
+                  "required": [
+                    "selectedRuntime"
+                  ]
+                },
+                {
+                  "required": [
+                    "selectedMsbuild"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "normalizedDiagnosticFact": {
+      "type": "object",
+      "required": [
+        "code",
+        "stage"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$",
+          "maxLength": 96
+        },
+        "stage": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$",
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputCommitFact": {
+      "type": "object",
+      "required": [
+        "status",
+        "sha256"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not-committed",
+            "staged",
+            "committed"
+          ]
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "measuredBoundFact": {
+      "type": "object",
+      "required": [
+        "name",
+        "unit",
+        "measured",
+        "threshold",
+        "enforcementClass"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "temporary-disk-bytes"
+          ]
+        },
+        "unit": {
+          "enum": [
+            "bytes"
+          ]
+        },
+        "measured": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "enforcementClass": {
+          "enum": [
+            "internally-enforceable",
+            "caller-or-os-enforced",
+            "observable-only",
+            "not-enforceable-selected-topology"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "loaderObservationFact": {
+      "type": "object",
+      "required": [
+        "code",
+        "disposition",
+        "selectedOrDefaultTargetFramework",
+        "partialResultProduced"
+      ],
+      "properties": {
+        "code": {
+          "const": "loader.unsupported.multi-targeting"
+        },
+        "disposition": {
+          "const": "whole-input-rejected"
+        },
+        "selectedOrDefaultTargetFramework": {
+          "type": "boolean"
+        },
+        "partialResultProduced": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -755,10 +1242,14 @@
               "items": {
                 "enum": [
                   "invalidation-completed",
+                  "invalidation-attempt-failed",
                   "failure-prone-stage-entered",
                   "staging-created-in-destination",
                   "atomic-rename-committed",
+                  "atomic-replace-attempt-failed",
+                  "staging-cleanup-completed",
                   "terminal-commit-cancelled",
+                  "terminal-commit-publication-failure",
                   "competing-terminal-attempt-rejected",
                   "late-terminal-attempt-rejected"
                 ]

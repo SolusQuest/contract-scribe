@@ -3,6 +3,7 @@ namespace ContractScribe.HostValidation;
 public static class FrozenFixtureRegistry
 {
     public const string ResultPath = "TestResults/audit-result.json";
+    public const string StagingPath = "TestResults/.audit-result.json.contractscribe-stage";
 
     public static void Validate(
         string cellId,
@@ -18,9 +19,12 @@ public static class FrozenFixtureRegistry
                 StringComparer.Ordinal)
             || vector.ObserverRequirements.Contains("artifact-state", StringComparer.Ordinal)
             || vector.VectorId == "bounds.temporary-disk";
-        var expectedPrestate = vector.VectorId == "publication.stale-invalidation"
-            ? "stale-invalid"
-            : "absent";
+        var expectedPrestate = vector.VectorId switch
+        {
+            "publication.stale-invalidation" => "stale-invalid",
+            "failure.publication-invalidation" => "prior-valid",
+            _ => "absent"
+        };
         var expectedWorkingDirectories = vector.RunIds
             .Select(runId => new RunWorkingDirectory(
                 runId,

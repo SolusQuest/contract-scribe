@@ -2,6 +2,77 @@
   "formatVersion": "contractscribe-m1-host-validation-crosswalk-v1",
   "rows": [
     {
+      "sourceKey": "adr-0002.s6.publication-failure-outcome",
+      "source": "Hash-bound ADR 0002 section 6 outcome taxonomy and section 9 publication windows: invalidation and final atomic-replace failures are handled publication-failure outcomes with one terminal commit and no current-invocation canonical result",
+      "disposition": "executable",
+      "vectorIds": [
+        "failure.publication-invalidation",
+        "failure.publication-finalization"
+      ],
+      "validatorIds": [
+        "execution.vector-runner",
+        "observer.repository-delta",
+        "crosswalk.bidirectional"
+      ],
+      "requiredCells": [
+        "ubuntu-x64",
+        "windows-x64"
+      ],
+      "evidenceFields": [
+        "runs.subject.executionOutcome",
+        "runs.subject.terminalState",
+        "runs.publicationArtifactObservation",
+        "runs.process.transitionEvents"
+      ],
+      "deferredOwner": null
+    },
+    {
+      "sourceKey": "audit-cli.output-publication-failure",
+      "source": "Hash-bound Audit CLI contract: publication-failure is a handled execution class with not-selected invalidation and selected finalization forms",
+      "disposition": "executable",
+      "vectorIds": [
+        "failure.publication-invalidation",
+        "failure.publication-finalization"
+      ],
+      "validatorIds": [
+        "evidence.execution-set",
+        "subject.materialization",
+        "crosswalk.bidirectional"
+      ],
+      "requiredCells": [
+        "ubuntu-x64",
+        "windows-x64"
+      ],
+      "evidenceFields": [
+        "runs.subject.executionOutcome",
+        "runs.subject.hostFacts.toolchainSelectionState"
+      ],
+      "deferredOwner": null
+    },
+    {
+      "sourceKey": "issue-24.output-publication-failure",
+      "source": "Live mutable ownership trace: Issue #24 supplies production publication codes, the real publisher fault seam, and the real terminal-arbiter stimulus; this source key is intentionally not hash-bound",
+      "disposition": "deferred-owned",
+      "vectorIds": [
+        "failure.publication-invalidation",
+        "failure.publication-finalization"
+      ],
+      "validatorIds": [
+        "execution.vector-runner",
+        "subject.materialization",
+        "crosswalk.bidirectional"
+      ],
+      "requiredCells": [
+        "ubuntu-x64",
+        "windows-x64"
+      ],
+      "evidenceFields": [
+        "validationExecution.hostRevision",
+        "runs.subject.failureCode"
+      ],
+      "deferredOwner": "issue-24"
+    },
+    {
       "sourceKey": "issue-26.acceptance-01",
       "source": "Issue #26 acceptance: exact protocol, manifests, fixtures, commands, observations, taxonomy, schemas, and harness identities",
       "disposition": "executable",

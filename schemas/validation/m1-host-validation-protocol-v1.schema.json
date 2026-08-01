@@ -230,6 +230,7 @@
             "environment-unavailable",
             "load-failure",
             "audit-error",
+            "publication-failure",
             "cancelled",
             "timeout",
             "succeeded"

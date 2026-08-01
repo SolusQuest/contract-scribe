@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ContractScribe.HostValidation;
 
@@ -168,7 +169,20 @@ public sealed record SubjectRequest(
     string? NetworkOperationLogPath = null,
     string? TransitionLogPath = null,
     string? AuditTemporaryRoot = null,
-    TemporaryDiskGateContract? TemporaryDiskGate = null);
+    TemporaryDiskGateContract? TemporaryDiskGate = null,
+    PublicationFault? PublicationFault = null,
+    PostTerminalAttempt? PostTerminalAttempt = null);
+
+public sealed record PublicationFault(
+    string Operation,
+    int Occurrence,
+    string Failure,
+    string? StagingRelativePath);
+
+public sealed record PostTerminalAttempt(
+    string ExecutionOutcome,
+    string Timing,
+    int Occurrence);
 
 public sealed record TemporaryDiskGateContract(
     string TemporaryWorkRoot,
@@ -213,13 +227,14 @@ public sealed record HostObservationFacts(
     string ContractBaselineSha256,
     string FailureRegistrySha256,
     string CalibratedBoundsSha256,
-    string SelectedSdk,
-    string SelectedRuntime,
-    string SelectedMsbuild,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectedSdk,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectedRuntime,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectedMsbuild,
     IReadOnlyList<NormalizedDiagnosticFact> NormalizedDiagnosticFacts,
     OutputCommitFact OutputCommit,
     IReadOnlyList<MeasuredBoundFact> MeasuredBounds,
-    LoaderObservationFact? LoaderFact = null);
+    LoaderObservationFact? LoaderFact = null,
+    string ToolchainSelectionState = "selected");
 
 public sealed record NormalizedDiagnosticFact(string Code, string Stage);
 
@@ -257,13 +272,15 @@ public sealed record ProcessExecutionResult(
     string? FinalPlatformTerminationStatus = null,
     string? NativeTerminationKind = null,
     long? NativeTerminationCode = null,
-    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null);
+    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null,
+    CanonicalResultCommitment? StagedCanonical = null);
 
 public sealed record ControlExecutionResult(
     bool Completed,
     string? Outcome,
     NativeTerminationEvidence? NativeTermination = null,
-    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null);
+    TemporaryDiskHighWaterEvidence? TemporaryDiskHighWater = null,
+    CanonicalResultCommitment? StagedCanonical = null);
 
 public sealed record NativeTerminationEvidence(
     string Kind,
@@ -290,7 +307,8 @@ public sealed record SubjectControl(
     TimeSpan ActionDelay = default,
     bool WaitForExitBeforeAction = false,
     Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
-        MeasureTemporaryDisk = null);
+        MeasureTemporaryDisk = null,
+    Func<CanonicalResultCommitment>? ObserveStagedCanonical = null);
 
 public sealed record ExecutionSubjectManifest(
     string FormatVersion,
@@ -445,7 +463,15 @@ public sealed record RunEvidence(
     ObservedAuditResultFacts? ObservedAuditResult,
     RepositoryDelta RepositoryDelta,
     IReadOnlyList<ObservedProcess> ObservedProcesses,
-    IReadOnlyList<string> DiagnosticCodes);
+    IReadOnlyList<string> DiagnosticCodes,
+    PublicationArtifactObservation? PublicationArtifactObservation = null);
+
+public sealed record PublicationArtifactObservation(
+    CanonicalResultCommitment? PreRunCanonical,
+    CanonicalResultCommitment? PostRunCanonical,
+    string PostRunAttribution,
+    CanonicalResultCommitment? StagedCanonical,
+    string StagingDisposition);
 
 public sealed record ProcessObservation(
     int? ExitCode,

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace ContractScribe.HostValidation;
 
@@ -404,6 +405,49 @@ public static class Program
                     new byte[8 * 1024]);
                 CanonicalJson.WriteCanonical(request.ResponsePath, response);
                 return 0;
+            case "publication-failure-invalidation":
+                ValidatePublicationSelfTestRequest(
+                    request,
+                    "failure.publication-invalidation");
+                WriteTransitionLog(request.TransitionLogPath,
+                [
+                    "invalidation-attempt-failed",
+                    "terminal-commit-publication-failure",
+                    "late-terminal-attempt-rejected"
+                ]);
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    PublicationFailureResponse(request, finalization: false));
+                return 0;
+            case "publication-failure-finalization":
+                ValidatePublicationSelfTestRequest(
+                    request,
+                    "failure.publication-finalization");
+                var stagingPath = Path.Join(
+                    request.RepositoryRoot,
+                    "TestResults",
+                    ".audit-result.json.contractscribe-stage");
+                Directory.CreateDirectory(Path.GetDirectoryName(stagingPath)!);
+                File.Copy(
+                    Path.Join(request.RepositoryRoot, ".contractscribe-publication-source.json"),
+                    stagingPath,
+                    overwrite: true);
+                await ReachGateAsync(request).ConfigureAwait(false);
+                File.Delete(stagingPath);
+                WriteTransitionLog(request.TransitionLogPath,
+                [
+                    "invalidation-completed",
+                    "failure-prone-stage-entered",
+                    "staging-created-in-destination",
+                    "atomic-replace-attempt-failed",
+                    "staging-cleanup-completed",
+                    "terminal-commit-publication-failure",
+                    "late-terminal-attempt-rejected"
+                ]);
+                CanonicalJson.WriteCanonical(
+                    request.ResponsePath,
+                    PublicationFailureResponse(request, finalization: true));
+                return 0;
             case "exception-before-response":
                 throw new ProtocolException("HV921_SYNTHETIC_PRE_RESPONSE");
             case "exception-after-response":
@@ -465,6 +509,102 @@ public static class Program
             default:
                 throw new ProtocolException("HV923_SYNTHETIC_BEHAVIOR_UNKNOWN");
         }
+    }
+
+    private static SubjectResponse PublicationFailureResponse(
+        SubjectRequest request,
+        bool finalization)
+    {
+        const string Sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        const string HostRevision = "2222222222222222222222222222222222222222";
+        var root = FindRepositoryRoot();
+        var registrySha = CanonicalJson.Sha256File(Path.Join(
+            root,
+            "tests",
+            "fixtures",
+            "m1-host-validation",
+            "v1",
+            "self-test-host-failure-registry.json"));
+        var failureCode = finalization
+            ? "host.test-only.publication-finalization"
+            : "host.test-only.publication-invalidation";
+        var facts = new HostObservationFacts(
+            $"source.{Sha}",
+            HostRevision,
+            Sha,
+            registrySha,
+            Sha,
+            finalization ? "10.0.102" : null,
+            finalization ? "10.0.0" : null,
+            finalization ? "18.0.0" : null,
+            [new NormalizedDiagnosticFact(failureCode, "publication")],
+            new OutputCommitFact("not-committed", null),
+            [],
+            null,
+            finalization ? "selected" : "not-selected");
+        return new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            request.VectorId,
+            request.RunId,
+            "started",
+            "normal",
+            null,
+            "publication-failure",
+            registrySha,
+            failureCode,
+            "publication",
+            "committed",
+            "invalidated",
+            "internally-enforceable",
+            finalization
+                ? "publication.finalization-failure-committed"
+                : "publication.invalidation-failure-committed",
+            null,
+            facts);
+    }
+
+    private static void ValidatePublicationSelfTestRequest(
+        SubjectRequest request,
+        string expectedVectorId)
+    {
+        if (request.VectorId != expectedVectorId
+            || request.PublicationFault is null
+            || request.PostTerminalAttempt is not
+            {
+                ExecutionOutcome: "succeeded",
+                Timing: "after-publication-failure-commit",
+                Occurrence: 1
+            })
+        {
+            throw new ProtocolException("HV972_SELF_TEST_PUBLICATION_REQUEST");
+        }
+    }
+
+    private static void WriteTransitionLog(
+        string? path,
+        IReadOnlyList<string> events)
+    {
+        if (path is null)
+        {
+            throw new ProtocolException("HV972_SELF_TEST_PUBLICATION_REQUEST");
+        }
+        var lines = events.Select((item, index) =>
+            JsonSerializer.Serialize(new { sequence = index + 1, @event = item }));
+        File.WriteAllLines(path, lines, new UTF8Encoding(false));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+            {
+                return current.FullName;
+            }
+            current = current.Parent;
+        }
+        throw new ProtocolException("HV972_SELF_TEST_PUBLICATION_REQUEST");
     }
 
     private static string BuildSyntheticCredentialMarker() =>
