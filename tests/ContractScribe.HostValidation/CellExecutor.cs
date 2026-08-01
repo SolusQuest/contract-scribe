@@ -1,10 +1,41 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 
 namespace ContractScribe.HostValidation;
 
 public static class CellExecutor
 {
+    public sealed class PublicationResultObservation
+    {
+        internal PublicationResultObservation(
+            CanonicalResultCommitment commitment,
+            ObservedAuditResultFacts facts,
+            StableNodeIdentity stableParentIdentity,
+            StableFileIdentity stableIdentity)
+        {
+            Commitment = commitment;
+            Facts = facts;
+            StableParentIdentity = stableParentIdentity;
+            StableIdentity = stableIdentity;
+        }
+
+        public CanonicalResultCommitment Commitment { get; }
+
+        public ObservedAuditResultFacts Facts { get; }
+
+        internal StableFileIdentity StableIdentity { get; }
+
+        internal StableNodeIdentity StableParentIdentity { get; }
+
+        public bool HasSameStableIdentity(PublicationResultObservation? other) =>
+            other is not null
+                && StableParentIdentity == other.StableParentIdentity
+                && StableIdentity == other.StableIdentity;
+    }
+
     public static async Task<CellEvidence> RunAsync(
         string root,
         string subjectManifestPath,
@@ -327,7 +358,23 @@ public static class CellExecutor
         {
             EnsureFixtureResultPathSafe(repositoryRoot, resultPath);
         }
-        PrepareResultPrestate(resultPath, fixture.ResultPrestate);
+        PrepareResultPrestate(context.Root, resultPath, fixture.ResultPrestate);
+        var isPublicationFailureVector = vector.VectorId is
+            "failure.publication-invalidation" or "failure.publication-finalization";
+        PublicationResultObservation? preRunPublication = null;
+        CanonicalResultCommitment? preRunCanonical = null;
+        if (isPublicationFailureVector)
+        {
+            var expectsPriorResult = vector.VectorId == "failure.publication-invalidation";
+            RequireClosedPublicationDirectory(
+                repositoryRoot,
+                expectResult: expectsPriorResult,
+                expectStaging: false);
+            preRunPublication = expectsPriorResult
+                ? ObservePublicationResult(context.Root, repositoryRoot, fixture.ResultPath)
+                : null;
+            preRunCanonical = preRunPublication?.Commitment;
+        }
         var before = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
         if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(before))
         {
@@ -362,7 +409,25 @@ public static class CellExecutor
                 context.Protocol.ExecutionContract.SubjectTimeoutSeconds,
                 temporaryDiskObserver is null
                     ? null
-                    : temporaryDiskObserver.CaptureAndRelease);
+                    : temporaryDiskObserver.CaptureAndRelease,
+                vector.VectorId == "failure.publication-finalization"
+                    ? async (remaining, release, token) =>
+                    {
+                        RequireClosedPublicationDirectory(
+                            repositoryRoot,
+                            expectResult: false,
+                            expectStaging: true);
+                        return (await ObservePublicationResultAsync(
+                            context.Root,
+                            repositoryRoot,
+                            FrozenFixtureRegistry.StagingPath,
+                            remaining,
+                            token,
+                            releaseAfterPathVerification: release).ConfigureAwait(false))?.Commitment
+                                ?? throw new ProtocolException(
+                                    "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION");
+                    }
+            : null);
             var request = new SubjectRequest(
                 "contractscribe-m1-host-validation-subject-request-v1",
                 "production-host",
@@ -376,7 +441,9 @@ public static class CellExecutor
                 networkOperationLogPath,
                 transitionLogPath,
                 auditTemporaryRoot,
-                temporaryDiskObserver?.GateContract);
+                temporaryDiskObserver?.GateContract,
+                PublicationFaultFor(vector.VectorId),
+                PostTerminalAttemptFor(vector.VectorId));
             CanonicalJson.WriteCanonical(requestPath, request);
             SchemaValidation.ValidateDefinition(
                 requestPath,
@@ -462,10 +529,44 @@ public static class CellExecutor
                 }
             }
 
-            var (resultCommitment, resultFacts) = ObserveCanonicalResult(
+            if (isPublicationFailureVector)
+            {
+                RequireClosedPublicationDirectory(
+                    repositoryRoot,
+                    expectResult: vector.VectorId == "failure.publication-invalidation",
+                    expectStaging: false);
+            }
+            var postRunPublication = ObservePublicationResult(
                 context.Root,
                 repositoryRoot,
                 fixture.ResultPath);
+            var postRunCommitment = postRunPublication?.Commitment;
+            var postRunFacts = postRunPublication?.Facts;
+            if (vector.VectorId == "failure.publication-invalidation"
+                && (preRunPublication is null
+                    || postRunPublication is null
+                    || !preRunPublication.HasSameStableIdentity(postRunPublication)))
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            var publicationObservation = vector.VectorId switch
+            {
+                "failure.publication-invalidation" => new PublicationArtifactObservation(
+                    preRunCanonical,
+                    postRunCommitment,
+                    postRunCommitment is null ? "absent" : "pre-existing",
+                    execution.StagedCanonical,
+                    "not-created"),
+                "failure.publication-finalization" => new PublicationArtifactObservation(
+                    preRunCanonical,
+                    postRunCommitment,
+                    postRunCommitment is null ? "absent" : "current-invocation",
+                    execution.StagedCanonical,
+                    "cleaned"),
+                _ => null
+            };
+            var resultCommitment = isPublicationFailureVector ? null : postRunCommitment;
+            var resultFacts = isPublicationFailureVector ? null : postRunFacts;
             var process = new ProcessObservation(
                 execution.ExitCode,
                 execution.ProcessStart,
@@ -507,7 +608,8 @@ public static class CellExecutor
                 resultFacts,
                 delta,
                 execution.ObservedProcesses,
-                diagnostics.Order(StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray());
+                diagnostics.Order(StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray(),
+                publicationObservation);
             var derived = RunSemantics.Derive(
                 context,
                 vector,
@@ -537,7 +639,10 @@ public static class CellExecutor
         }
     }
 
-    private static void PrepareResultPrestate(string? resultPath, string prestate)
+    private static void PrepareResultPrestate(
+        string root,
+        string? resultPath,
+        string prestate)
     {
         if (resultPath is null)
         {
@@ -551,6 +656,24 @@ public static class CellExecutor
         if (prestate == "stale-invalid")
         {
             File.WriteAllText(resultPath, "stale-invalid\n");
+        }
+        else if (prestate == "prior-valid")
+        {
+            var sourcePath = RepositoryPaths.ResolveConfined(
+                root,
+                "tests/fixtures/audit-result/v1/payloads/unresolved-classification.json");
+            SchemaValidation.Validate(
+                sourcePath,
+                RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
+                requireCanonical: false);
+            using var document = CanonicalJson.ReadStrict(
+                sourcePath,
+                4 * 1024 * 1024,
+                requireCanonical: false);
+            AuditResultSemanticValidator.Validate(root, document.RootElement);
+            File.WriteAllBytes(
+                resultPath,
+                AuditResultV1Canonicalizer.Canonicalize(document.RootElement));
         }
     }
 
@@ -625,16 +748,35 @@ public static class CellExecutor
     {
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
         var current = new FileInfo(resultPath) as FileSystemInfo;
-        while (current is not null
-            && !string.Equals(
-                Path.TrimEndingDirectorySeparator(current.FullName),
-                root,
-                StringComparison.OrdinalIgnoreCase))
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        while (current is not null)
         {
-            if (current.Exists
-                && (current.Attributes & FileAttributes.ReparsePoint) != 0)
+            try
             {
-                throw new ProtocolException("HV188_FIXTURE_PATH_INVALID");
+                if (current.LinkTarget is not null
+                    || (current.Exists
+                        && (current.Attributes & FileAttributes.ReparsePoint) != 0))
+                {
+                    throw new ProtocolException("HV188_FIXTURE_PATH_INVALID");
+                }
+            }
+            catch (ProtocolException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                throw new ProtocolException("HV188_FIXTURE_PATH_INVALID", exception);
+            }
+            if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(current.FullName),
+                    root,
+                    comparison))
+            {
+                return;
             }
             current = current switch
             {
@@ -696,7 +838,9 @@ public static class CellExecutor
         string tempRoot,
         int timeoutSeconds,
         Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
-            measureTemporaryDisk) =>
+            measureTemporaryDisk,
+        Func<TimeSpan, Action, CancellationToken, Task<CanonicalResultCommitment>>?
+            observeStagedCanonical) =>
         vector.VectorId switch
         {
             "cancellation.before-commit" => new(Path.Join(tempRoot, "control"), "before-commit", "cancel", TimeSpan.FromSeconds(timeoutSeconds)),
@@ -712,6 +856,12 @@ public static class CellExecutor
                 "measure-temporary-disk",
                 TimeSpan.FromSeconds(timeoutSeconds),
                 MeasureTemporaryDisk: measureTemporaryDisk),
+            "failure.publication-finalization" => new(
+                Path.Join(tempRoot, "control"),
+                "publication-staging-ready",
+                "observe",
+                TimeSpan.FromSeconds(timeoutSeconds),
+                ObserveStagedCanonical: observeStagedCanonical),
             "toolchain.process-topology"
                 or "toolchain.no-automatic-restore"
                 or "network.no-contractscribe-initiated-operation"
@@ -719,6 +869,27 @@ public static class CellExecutor
                 new(Path.Join(tempRoot, "control"), "process-observation", "observe", TimeSpan.FromSeconds(timeoutSeconds)),
             _ => null
         };
+
+    public static PublicationFault? PublicationFaultFor(string vectorId) =>
+        vectorId switch
+        {
+            "failure.publication-invalidation" => new(
+                "invalidate-existing",
+                1,
+                "io-exception",
+                null),
+            "failure.publication-finalization" => new(
+                "atomic-replace",
+                1,
+                "io-exception",
+                FrozenFixtureRegistry.StagingPath),
+            _ => null
+        };
+
+    public static PostTerminalAttempt? PostTerminalAttemptFor(string vectorId) =>
+        vectorId is "failure.publication-invalidation" or "failure.publication-finalization"
+            ? new("succeeded", "after-publication-failure-commit", 1)
+            : null;
 
     private static (string Executable, IReadOnlyList<string> Arguments) BuildInvocation(
         string root,
@@ -896,29 +1067,78 @@ public static class CellExecutor
         }
     }
 
-    public static (CanonicalResultCommitment? Commitment, ObservedAuditResultFacts? Facts) ObserveCanonicalResult(
+    public static (CanonicalResultCommitment? Commitment, ObservedAuditResultFacts? Facts)
+        ObserveCanonicalResult(
+            string root,
+            string repositoryRoot,
+            string? resultPath)
+    {
+        var observation = ObservePublicationResult(root, repositoryRoot, resultPath);
+        return (observation?.Commitment, observation?.Facts);
+    }
+
+    public static async Task<(
+        CanonicalResultCommitment? Commitment,
+        ObservedAuditResultFacts? Facts)> ObserveCanonicalResultAsync(
+            string root,
+            string repositoryRoot,
+            string? resultPath,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        var observation = await ObservePublicationResultAsync(
+            root,
+            repositoryRoot,
+            resultPath,
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+        return (observation?.Commitment, observation?.Facts);
+    }
+
+    public static PublicationResultObservation? ObservePublicationResult(
         string root,
         string repositoryRoot,
-        string? resultPath)
+        string? resultPath) =>
+        ObservePublicationResultAsync(
+            root,
+            repositoryRoot,
+            resultPath,
+            TimeSpan.FromSeconds(30),
+            CancellationToken.None).GetAwaiter().GetResult();
+
+    public static async Task<PublicationResultObservation?> ObservePublicationResultAsync(
+            string root,
+            string repositoryRoot,
+            string? resultPath,
+            TimeSpan timeout,
+            CancellationToken cancellationToken,
+            Action<string>? afterCanonicalValidationBeforePathVerification = null,
+            Action? releaseAfterPathVerification = null)
     {
         if (resultPath is null)
         {
-            return (null, null);
+            return null;
         }
         var fullPath = ResolveFixturePath(repositoryRoot, resultPath, mustExist: false);
-        if (!File.Exists(fullPath))
+        EnsureFixtureResultPathSafe(repositoryRoot, fullPath);
+        if (!PublicationEntryExists(fullPath))
         {
-            return (null, null);
+            return null;
         }
-        var bytes = File.ReadAllBytes(fullPath);
-        using var document = CanonicalJson.ReadStrict(
+        var observationDeadline = MonotonicDeadline.Start(timeout);
+        await using var lease = await OpenPublicationObservationLeaseAsync(
             fullPath,
             4 * 1024 * 1024,
+            observationDeadline.Remaining,
+            cancellationToken).ConfigureAwait(false);
+        var bytes = lease.Bytes;
+        using var document = CanonicalJson.ReadStrict(
+            bytes,
+            4 * 1024 * 1024,
             requireCanonical: false);
-        SchemaValidation.Validate(
-            fullPath,
-            RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"),
-            requireCanonical: false);
+        SchemaValidation.ValidateElement(
+            document.RootElement,
+            RepositoryPaths.ResolveConfined(root, "schemas/audit-result/v1.schema.json"));
         var rootElement = document.RootElement;
         AuditResultSemanticValidator.Validate(root, rootElement);
         byte[] canonicalBytes;
@@ -945,12 +1165,627 @@ public static class CellExecutor
                     ?? throw new ProtocolException("HV223_AUDIT_RESULT_INVALID"))
                 .Order(StringComparer.Ordinal)
                 .ToArray());
-        return (new CanonicalResultCommitment(
+        var commitment = new CanonicalResultCommitment(
             CanonicalJson.Sha256(bytes),
             bytes.LongLength,
             "canonical-json-utf8-no-bom-single-lf",
-            true), facts);
+            true);
+        try
+        {
+            afterCanonicalValidationBeforePathVerification?.Invoke(fullPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or Win32Exception)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
+        }
+        if (observationDeadline.IsExpired || cancellationToken.IsCancellationRequested)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+        VerifyCurrentPublicationPathIdentityAndRelease(
+            lease,
+            releaseAfterPathVerification);
+        return new PublicationResultObservation(
+            commitment,
+            facts,
+            lease.DirectoryIdentity,
+            lease.FileIdentity);
     }
+
+    public static void RequireClosedPublicationDirectory(
+        string repositoryRoot,
+        bool expectResult,
+        bool expectStaging)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+        var result = ResolveFixturePath(root, FrozenFixtureRegistry.ResultPath, mustExist: false);
+        var staging = ResolveFixturePath(root, FrozenFixtureRegistry.StagingPath, mustExist: false);
+        var directory = Path.GetDirectoryName(result)
+            ?? throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE");
+        if (!string.Equals(
+                directory,
+                Path.GetDirectoryName(staging),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE");
+        }
+
+        EnsureFixtureResultPathSafe(root, result);
+        EnsureFixtureResultPathSafe(root, staging);
+        var expected = new HashSet<string>(
+            OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        if (expectResult) expected.Add(Path.GetFileName(result));
+        if (expectStaging) expected.Add(Path.GetFileName(staging));
+
+        if (!Directory.Exists(directory))
+        {
+            if (PublicationEntryExists(directory) || expected.Count != 0)
+            {
+                throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE");
+            }
+            return;
+        }
+
+        string[] entries;
+        try
+        {
+            entries = Directory.EnumerateFileSystemEntries(
+                    directory,
+                    "*",
+                    SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .ToArray()!;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE", exception);
+        }
+        if (entries.Length != expected.Count
+            || entries.Any(entry => entry is null || !expected.Contains(entry)))
+        {
+            throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE");
+        }
+    }
+
+    public static void ResetPublicationDirectoryForProvisioning(string repositoryRoot)
+    {
+        foreach (var relativePath in new[]
+        {
+            FrozenFixtureRegistry.ResultPath,
+            FrozenFixtureRegistry.StagingPath
+        })
+        {
+            var path = ResolveFixturePath(repositoryRoot, relativePath, mustExist: false);
+            EnsureFixtureResultPathSafe(repositoryRoot, path);
+            if (!PublicationEntryExists(path)) continue;
+            try
+            {
+                var attributes = File.GetAttributes(path);
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE");
+                }
+                File.Delete(path);
+            }
+            catch (ProtocolException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE", exception);
+            }
+        }
+        RequireClosedPublicationDirectory(
+            repositoryRoot,
+            expectResult: false,
+            expectStaging: false);
+    }
+
+    private static bool PublicationEntryExists(string path)
+    {
+        var parent = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+        {
+            return false;
+        }
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        try
+        {
+            return Directory.EnumerateFileSystemEntries(
+                    parent,
+                    "*",
+                    SearchOption.TopDirectoryOnly)
+                .Any(entry => string.Equals(
+                    Path.GetFileName(entry),
+                    Path.GetFileName(path),
+                    comparison));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ProtocolException("HV253_PUBLICATION_DIRECTORY_STATE", exception);
+        }
+    }
+
+    private static async Task<PublicationObservationLease>
+        OpenPublicationObservationLeaseAsync(
+        string path,
+        int maximumBytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        var directoryHandle = OpenPublicationDirectoryNoFollow(directory);
+        FileStream? stream = null;
+        try
+        {
+            var directoryIdentity = ReadStableDirectoryIdentity(directoryHandle);
+            var opened = OpenPublicationFileNoFollow(directoryHandle, path);
+            stream = opened.Stream;
+            var identity = opened.Identity;
+            if (identity.Length <= 0 || identity.Length > maximumBytes)
+            {
+                throw new ProtocolException("HV102_ARTIFACT_SIZE");
+            }
+            var bytes = new byte[checked((int)identity.Length + 1)];
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(timeout);
+            var offset = 0;
+            while (offset < bytes.Length)
+            {
+                var read = await stream.ReadAsync(
+                    bytes.AsMemory(offset, bytes.Length - offset),
+                    deadline.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                offset += read;
+            }
+
+            var finalIdentity = ReadStableFileIdentity(stream.SafeFileHandle);
+            if (finalIdentity != identity || offset != identity.Length)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            Array.Resize(ref bytes, offset);
+            return new PublicationObservationLease(
+                directory,
+                path,
+                directoryHandle,
+                stream,
+                directoryIdentity,
+                identity,
+                bytes);
+        }
+        catch (ProtocolException)
+        {
+            await DisposePublicationHandlesAsync(stream, directoryHandle)
+                .ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or Win32Exception
+                or ArgumentException
+                or NotSupportedException
+                or OperationCanceledException)
+        {
+            await DisposePublicationHandlesAsync(stream, directoryHandle)
+                .ConfigureAwait(false);
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
+        }
+    }
+
+    private static async ValueTask DisposePublicationHandlesAsync(
+        FileStream? stream,
+        SafeFileHandle directoryHandle)
+    {
+        try
+        {
+            if (stream is not null)
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            directoryHandle.Dispose();
+        }
+    }
+
+    private sealed class PublicationObservationLease : IAsyncDisposable
+    {
+        public PublicationObservationLease(
+            string directoryPath,
+            string filePath,
+            SafeFileHandle directoryHandle,
+            FileStream fileStream,
+            StableNodeIdentity directoryIdentity,
+            StableFileIdentity fileIdentity,
+            byte[] bytes)
+        {
+            DirectoryPath = directoryPath;
+            FilePath = filePath;
+            DirectoryHandle = directoryHandle;
+            FileStream = fileStream;
+            DirectoryIdentity = directoryIdentity;
+            FileIdentity = fileIdentity;
+            Bytes = bytes;
+        }
+
+        public string DirectoryPath { get; }
+
+        public string FilePath { get; }
+
+        public SafeFileHandle DirectoryHandle { get; }
+
+        public FileStream FileStream { get; }
+
+        public StableNodeIdentity DirectoryIdentity { get; }
+
+        public StableFileIdentity FileIdentity { get; }
+
+        public byte[] Bytes { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await FileStream.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                DirectoryHandle.Dispose();
+            }
+        }
+    }
+
+    private static (FileStream Stream, StableFileIdentity Identity)
+        OpenPublicationFileNoFollow(SafeFileHandle directoryHandle, string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var handle = CreateFileW(
+                path,
+                GenericRead,
+                FileShareRead | FileShareWrite | FileShareDelete,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagOverlapped | FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                handle.Dispose();
+                throw new ProtocolException(
+                    "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+            try
+            {
+                var identity = ReadStableFileIdentity(handle);
+                return (new FileStream(handle, FileAccess.Read, 4096, isAsync: true), identity);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            var descriptor = OpenAt(
+                directoryHandle.DangerousGetHandle().ToInt32(),
+                Path.GetFileName(path),
+                UnixOpenReadOnly | UnixOpenNonBlocking | UnixOpenCloseOnExec | UnixOpenNoFollow);
+            if (descriptor < 0)
+            {
+                throw new ProtocolException(
+                    "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+            var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+            try
+            {
+                var identity = ReadStableFileIdentity(handle);
+                return (new FileStream(handle, FileAccess.Read, 4096, isAsync: false), identity);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        var attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+        var fallback = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            4096,
+            FileOptions.Asynchronous);
+        try
+        {
+            return (fallback, ReadStableFileIdentity(fallback.SafeFileHandle));
+        }
+        catch
+        {
+            fallback.Dispose();
+            throw;
+        }
+    }
+
+    private static SafeFileHandle OpenPublicationDirectoryNoFollow(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var handle = CreateFileW(
+                path,
+                0,
+                FileShareRead | FileShareWrite,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                handle.Dispose();
+                throw new ProtocolException(
+                    "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+            try
+            {
+                _ = ReadStableDirectoryIdentity(handle);
+                return handle;
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            if (LStat(path, out var pathStat) != 0
+                || (pathStat.Mode & UnixFileTypeMask) != UnixDirectory)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            var descriptor = Open(
+                path,
+                UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow | UnixOpenDirectory);
+            if (descriptor < 0)
+            {
+                throw new ProtocolException(
+                    "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+            var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+            try
+            {
+                var identity = ReadStableDirectoryIdentity(handle);
+                if (identity.Volume != pathStat.Device
+                    || identity.FileId != pathStat.Inode)
+                {
+                    throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+                }
+                return handle;
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+    }
+
+    private static void VerifyCurrentPublicationPathIdentityAndRelease(
+        PublicationObservationLease lease,
+        Action? releaseAfterPathVerification)
+    {
+        using var currentDirectoryHandle = OpenPublicationDirectoryNoFollow(
+            lease.DirectoryPath);
+        if (ReadStableDirectoryIdentity(currentDirectoryHandle) != lease.DirectoryIdentity)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+        var (stream, actual) = OpenPublicationFileNoFollow(
+            currentDirectoryHandle,
+            lease.FilePath);
+        using (stream)
+        {
+            if (actual != lease.FileIdentity)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            releaseAfterPathVerification?.Invoke();
+        }
+    }
+
+    private static StableNodeIdentity ReadStableDirectoryIdentity(SafeFileHandle handle)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            if (GetFileType(handle) != FileTypeDisk
+                || !GetFileInformationByHandle(handle, out var information)
+                || (information.Attributes & FileAttributes.Directory) == 0
+                || (information.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            return new StableNodeIdentity(
+                information.VolumeSerialNumber,
+                ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow);
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            if (FStat(handle, out var information) != 0
+                || (information.Mode & UnixFileTypeMask) != UnixDirectory)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            return new StableNodeIdentity(information.Device, information.Inode);
+        }
+        throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+    }
+
+    private static StableFileIdentity ReadStableFileIdentity(SafeFileHandle handle)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            if (GetFileType(handle) != FileTypeDisk
+                || !GetFileInformationByHandle(handle, out var information)
+                || (information.Attributes
+                    & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+                || information.NumberOfLinks != 1)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            return new StableFileIdentity(
+                information.VolumeSerialNumber,
+                ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow,
+                ((long)information.FileSizeHigh << 32) | information.FileSizeLow,
+                information.NumberOfLinks);
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            if (FStat(handle, out var information) != 0
+                || (information.Mode & UnixFileTypeMask) != UnixRegularFile
+                || information.LinkCount != 1)
+            {
+                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+            }
+            return new StableFileIdentity(
+                information.Device,
+                information.Inode,
+                information.Size,
+                information.LinkCount);
+        }
+        return new StableFileIdentity(0, 0, RandomAccess.GetLength(handle), 1);
+    }
+
+    internal readonly record struct StableFileIdentity(
+        ulong Volume,
+        ulong FileId,
+        long Length,
+        ulong LinkCount);
+
+    internal readonly record struct StableNodeIdentity(ulong Volume, ulong FileId);
+
+    private const uint GenericRead = 0x80000000;
+    private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
+    private const uint FileShareDelete = 0x00000004;
+    private const uint OpenExisting = 3;
+    private const uint FileFlagOverlapped = 0x40000000;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileTypeDisk = 0x0001;
+    private const int UnixOpenReadOnly = 0;
+    private const int UnixOpenNonBlocking = 0x00000800;
+    private const int UnixOpenCloseOnExec = 0x00080000;
+    private const int UnixOpenNoFollow = 0x00020000;
+    private const int UnixOpenDirectory = 0x00010000;
+    private const uint UnixFileTypeMask = 0xF000;
+    private const uint UnixRegularFile = 0x8000;
+    private const uint UnixDirectory = 0x4000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsFileInformation
+    {
+        public FileAttributes Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStat
+    {
+        public ulong Device;
+        public ulong Inode;
+        public ulong LinkCount;
+        public uint Mode;
+        public uint UserId;
+        public uint GroupId;
+        public int Padding;
+        public ulong DeviceType;
+        public long Size;
+        public long BlockSize;
+        public long Blocks;
+        public long AccessTimeSeconds;
+        public ulong AccessTimeNanoseconds;
+        public long ModificationTimeSeconds;
+        public ulong ModificationTimeNanoseconds;
+        public long ChangeTimeSeconds;
+        public ulong ChangeTimeNanoseconds;
+        public long Reserved1;
+        public long Reserved2;
+        public long Reserved3;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+        SafeFileHandle file,
+        out WindowsFileInformation information);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetFileType(SafeFileHandle file);
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int Open(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
+    private static extern int OpenAt(int directoryFileDescriptor, string path, int flags);
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStat(string path, out LinuxStat information);
+
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStat(SafeFileHandle file, out LinuxStat information);
 
     private static string ResolveExecutable(
         string root,
@@ -1148,13 +1983,7 @@ public static class CellExecutor
                 "schemas/validation/m1-host-failure-registry-v1.schema.json"),
             requireCanonical: true);
         using var registry = CanonicalJson.ReadStrict(registryPath, 1024 * 1024, requireCanonical: true);
-        var failureCodes = registry.RootElement.GetProperty("entries").EnumerateArray()
-            .Select(entry => entry.GetProperty("code").GetString())
-            .ToArray();
-        if (failureCodes.Distinct(StringComparer.Ordinal).Count() != failureCodes.Length)
-        {
-            throw new ProtocolException("HV228_HOST_REGISTRY_INVALID");
-        }
+        ValidateHostFailureRegistrySemantics(registry.RootElement);
 
         var boundsPath = RepositoryPaths.ResolveConfined(root, source.CalibratedBounds.Path);
         SchemaValidation.Validate(
@@ -1182,6 +2011,22 @@ public static class CellExecutor
             || names.Distinct(StringComparer.Ordinal).Count() != names.Length)
         {
             throw new ProtocolException("HV229_HOST_BOUNDS_INVALID");
+        }
+    }
+
+    public static void ValidateHostFailureRegistrySemantics(JsonElement registry)
+    {
+        var entries = registry.GetProperty("entries").EnumerateArray().ToArray();
+        var failureCodes = entries
+            .Select(entry => entry.GetProperty("code").GetString())
+            .ToArray();
+        if (failureCodes.Any(string.IsNullOrWhiteSpace)
+            || failureCodes.Distinct(StringComparer.Ordinal).Count() != failureCodes.Length
+            || entries.Any(entry =>
+                entry.GetProperty("executionOutcome").GetString() == "publication-failure"
+                && entry.GetProperty("stage").GetString() != "publication"))
+        {
+            throw new ProtocolException("HV228_HOST_REGISTRY_INVALID");
         }
     }
 

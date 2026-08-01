@@ -435,6 +435,7 @@ public static class EvidenceValidator
                 "subject.processTermination",
                 "subject.terminalState",
                 "subject.artifactState",
+                "subject.hostFacts.toolchainSelectionState",
                 "repositoryDelta.protectedChanged"
             ],
             StringComparer.Ordinal);
@@ -509,6 +510,8 @@ public static class EvidenceValidator
             "subject.executionOutcome" => run.Subject?.ExecutionOutcome,
             "subject.failureStage" => run.Subject?.FailureStage,
             "subject.failureCode" => run.Subject?.FailureCode,
+            "subject.hostFacts.toolchainSelectionState" =>
+                run.Subject?.HostFacts?.ToolchainSelectionState,
             "subject.processStart" => run.Subject?.ProcessStart ?? run.Process.ProcessStart,
             "subject.processTermination" => run.Subject?.ProcessTermination ?? run.Process.ProcessTermination,
             "subject.terminalState" => run.Subject?.TerminalState ?? "not-entered",

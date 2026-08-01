@@ -176,5 +176,109 @@
       "operation": "select-protected-source-output",
       "expectedCode": "HV204_OUTPUT_PROTECTED"
     }
+  ],
+  "publicationFailureCases": [
+    {
+      "caseId": "publication-failure.unknown-outcome",
+      "seed": "publication-invalidation",
+      "operation": "replace-outcome-with-unknown",
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "publication-failure.audit-error-substitution",
+      "seed": "publication-finalization",
+      "operation": "replace-outcome-with-audit-error",
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "publication-failure.missing-artifact-observation",
+      "seed": "publication-finalization",
+      "operation": "remove-publication-artifact-observation",
+      "expectedCode": "HV251_PUBLICATION_ARTIFACT_OBSERVATION"
+    },
+    {
+      "caseId": "publication-failure.selected-missing-identity",
+      "seed": "publication-finalization",
+      "operation": "remove-selected-runtime",
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "publication-failure.selected-partial-identities",
+      "seed": "publication-finalization",
+      "operation": "retain-only-selected-sdk",
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "publication-failure.not-selected-with-identities",
+      "seed": "publication-invalidation",
+      "operation": "add-identities-to-not-selected",
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "publication-failure.invalidation-selected",
+      "seed": "publication-invalidation",
+      "operation": "mark-invalidation-selected",
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "publication-failure.finalization-not-selected",
+      "seed": "publication-finalization",
+      "operation": "mark-finalization-not-selected",
+      "expectedCode": "HV252_TOOLCHAIN_SELECTION_STATE"
+    },
+    {
+      "caseId": "publication-failure.prior-result-current-attribution",
+      "seed": "publication-invalidation",
+      "operation": "attribute-prior-result-to-current-invocation",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.current-canonical-result",
+      "seed": "publication-invalidation",
+      "operation": "report-current-canonical-result",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.published-artifact",
+      "seed": "publication-finalization",
+      "operation": "report-published-artifact",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.committed-output",
+      "seed": "publication-finalization",
+      "operation": "report-committed-output",
+      "expectedCode": "HV238_OUTPUT_COMMIT_FACTS"
+    },
+    {
+      "caseId": "publication-failure.residual-staging",
+      "seed": "publication-finalization",
+      "operation": "leave-residual-staging",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.staged-current-contradiction",
+      "seed": "publication-finalization",
+      "operation": "report-staged-bytes-as-current-result",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.wrong-registry-row",
+      "seed": "publication-finalization",
+      "operation": "replace-publication-registry-row",
+      "expectedCode": "HV157_FAILURE_REGISTRY_BINDING"
+    },
+    {
+      "caseId": "publication-failure.transition-order",
+      "seed": "publication-finalization",
+      "operation": "swap-finalization-transition-order",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    },
+    {
+      "caseId": "publication-failure.late-success-replaces-terminal",
+      "seed": "publication-finalization",
+      "operation": "replace-committed-failure-with-late-success",
+      "expectedCode": "HV210_SUBJECT_OUTCOME_ILLEGAL"
+    }
   ]
 }

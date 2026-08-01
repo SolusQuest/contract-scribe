@@ -51,6 +51,17 @@ public static class RunSemantics
                 "protocol-invalid-observation",
                 ["HV242_TEMPORARY_DISK_CONTRACT"]);
         }
+        if (vector.VectorId is not (
+                "failure.publication-invalidation"
+                or "failure.publication-finalization")
+            && run.PublicationArtifactObservation is not null)
+        {
+            return new DerivedRun(
+                "publication.artifact-observation-unexpected",
+                vector.ExpectedEnforcementClass,
+                "protocol-invalid-observation",
+                ["HV251_PUBLICATION_ARTIFACT_OBSERVATION"]);
+        }
         if (!fixture.CapabilityAvailable)
         {
             return new DerivedRun(
@@ -227,6 +238,7 @@ public static class RunSemantics
             or "cancellation.terminal-precedence"
             or "publication.kill-before-commit"
             or "publication.kill-after-commit"
+            or "failure.publication-finalization"
             or "bounds.temporary-disk"
             or "bounds.forced-termination"
             || RequiresSynchronizedTree(vectorId);
@@ -236,7 +248,9 @@ public static class RunSemantics
             "cancellation.late-completion"
             or "cancellation.terminal-precedence"
             or "publication.stale-invalidation"
-            or "publication.same-directory-atomic";
+            or "publication.same-directory-atomic"
+            or "failure.publication-invalidation"
+            or "failure.publication-finalization";
 
     public static (string Gate, string Action)? ExpectedControl(string vectorId) =>
         vectorId switch
@@ -247,6 +261,7 @@ public static class RunSemantics
             "cancellation.terminal-precedence" => ("before-commit", "cancel"),
             "publication.kill-before-commit" => ("publication-before-commit", "external-kill"),
             "publication.kill-after-commit" => ("publication-after-commit", "external-kill"),
+            "failure.publication-finalization" => ("publication-staging-ready", "observe"),
             "bounds.forced-termination" => ("forced-termination", "external-kill"),
             "bounds.temporary-disk" => (
                 "temporary-disk-high-water",
@@ -313,6 +328,7 @@ public static class RunSemantics
         }
         ValidateOutcomeLegality(vector, run, subject);
         ValidateHostFacts(context.Root, vector, run, source, materialization, subject);
+        ValidatePublicationFailureObservation(vector, run, subject);
         if (run.ObservedAuditResult is not null
             && subject.AuditOutcome is not null
             && !run.ObservedAuditResult.AuditOutcomes.Contains(
@@ -337,13 +353,32 @@ public static class RunSemantics
             || facts.HostRevision != source.HostRevision
             || facts.ContractBaselineSha256 != source.ContractBaseline.Sha256
             || facts.FailureRegistrySha256 != source.FailureRegistry.Sha256
-            || facts.CalibratedBoundsSha256 != source.CalibratedBounds.Sha256
-            || materialization is not null
-                && (facts.SelectedSdk != materialization.SelectedSdk
-                    || facts.SelectedRuntime != materialization.SelectedRuntime
-                    || facts.SelectedMsbuild != materialization.SelectedMsbuild))
+            || facts.CalibratedBoundsSha256 != source.CalibratedBounds.Sha256)
         {
             throw new ProtocolException("HV236_HOST_PROVENANCE_MISMATCH");
+        }
+
+        var requiresNotSelected = vector.VectorId ==
+            "failure.publication-invalidation";
+        var requiresSelected = vector.VectorId ==
+            "failure.publication-finalization";
+        if (requiresNotSelected && facts.ToolchainSelectionState != "not-selected"
+            || requiresSelected && facts.ToolchainSelectionState != "selected"
+            || facts.ToolchainSelectionState == "not-selected"
+                && (facts.SelectedSdk is not null
+                    || facts.SelectedRuntime is not null
+                    || facts.SelectedMsbuild is not null)
+            || facts.ToolchainSelectionState == "selected"
+                && (string.IsNullOrWhiteSpace(facts.SelectedSdk)
+                    || string.IsNullOrWhiteSpace(facts.SelectedRuntime)
+                    || string.IsNullOrWhiteSpace(facts.SelectedMsbuild)
+                    || materialization is not null
+                        && (facts.SelectedSdk != materialization.SelectedSdk
+                            || facts.SelectedRuntime != materialization.SelectedRuntime
+                            || facts.SelectedMsbuild != materialization.SelectedMsbuild))
+            || facts.ToolchainSelectionState is not ("not-selected" or "selected"))
+        {
+            throw new ProtocolException("HV252_TOOLCHAIN_SELECTION_STATE");
         }
 
         var handledFailure = subject.ExecutionOutcome is not null
@@ -472,6 +507,7 @@ public static class RunSemantics
             or "environment-unavailable"
             or "load-failure"
             or "audit-error"
+            or "publication-failure"
             or "cancelled"
             or "timeout";
         var committedSuccess = subject.ExecutionOutcome == "succeeded";
@@ -521,6 +557,54 @@ public static class RunSemantics
         {
             throw new ProtocolException("HV210_SUBJECT_OUTCOME_ILLEGAL");
         }
+    }
+
+    private static void ValidatePublicationFailureObservation(
+        VectorDefinition vector,
+        RunEvidence run,
+        SubjectResponse subject)
+    {
+        if (vector.VectorId is not (
+                "failure.publication-invalidation"
+                or "failure.publication-finalization"))
+        {
+            return;
+        }
+
+        var observation = run.PublicationArtifactObservation
+            ?? throw new ProtocolException("HV251_PUBLICATION_ARTIFACT_OBSERVATION");
+        RequireLegal(
+            subject.ExecutionOutcome == "publication-failure"
+            && subject.FailureStage == "publication"
+            && subject.ProcessStart == "started"
+            && subject.ProcessTermination == "normal"
+            && subject.AuditOutcome is null
+            && subject.TerminalState == "committed"
+            && subject.ArtifactState == "invalidated"
+            && subject.CanonicalResult is null
+            && run.ObservedCanonicalResult is null
+            && run.ObservedAuditResult is null
+            && HasExactTransitionTrace(vector.VectorId, run.Process.TransitionEvents));
+
+        if (vector.VectorId == "failure.publication-invalidation")
+        {
+            RequireLegal(
+                observation.PreRunCanonical is not null
+                && observation.PreRunCanonical == observation.PostRunCanonical
+                && observation.PostRunAttribution == "pre-existing"
+                && observation.StagedCanonical is null
+                && observation.StagingDisposition == "not-created"
+                && subject.HostFacts?.ToolchainSelectionState == "not-selected");
+            return;
+        }
+
+        RequireLegal(
+            observation.PreRunCanonical is null
+            && observation.PostRunCanonical is null
+            && observation.PostRunAttribution == "absent"
+            && observation.StagedCanonical is not null
+            && observation.StagingDisposition == "cleaned"
+            && subject.HostFacts?.ToolchainSelectionState == "selected");
     }
 
     private static void ValidateFailureRegistryRow(
@@ -675,6 +759,14 @@ public static class RunSemantics
                 vector.VectorId,
                 run.Process.TransitionEvents) =>
                 "publication.same-directory-atomic-rename",
+            "failure.publication-invalidation" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
+                "publication.invalidation-failure-committed",
+            "failure.publication-finalization" when HasExactTransitionTrace(
+                vector.VectorId,
+                run.Process.TransitionEvents) =>
+                "publication.finalization-failure-committed",
             "determinism.fresh-process-canonical" when result is not null =>
                 "determinism.byte-identical",
             "path.working-directory-independent" when result is not null =>
@@ -718,6 +810,22 @@ public static class RunSemantics
                 ["invalidation-completed", "failure-prone-stage-entered"],
             "publication.same-directory-atomic" =>
                 ["staging-created-in-destination", "atomic-rename-committed"],
+            "failure.publication-invalidation" =>
+                [
+                    "invalidation-attempt-failed",
+                    "terminal-commit-publication-failure",
+                    "late-terminal-attempt-rejected"
+                ],
+            "failure.publication-finalization" =>
+                [
+                    "invalidation-completed",
+                    "failure-prone-stage-entered",
+                    "staging-created-in-destination",
+                    "atomic-replace-attempt-failed",
+                    "staging-cleanup-completed",
+                    "terminal-commit-publication-failure",
+                    "late-terminal-attempt-rejected"
+                ],
             _ => []
         };
         return expected.Length != 0

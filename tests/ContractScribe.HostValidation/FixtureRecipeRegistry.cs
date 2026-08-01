@@ -74,6 +74,11 @@ public static class FixtureRecipeRegistry
         VectorDefinition vector)
     {
         Directory.CreateDirectory(repositoryRoot);
+        if (vector.VectorId is
+            "failure.publication-invalidation" or "failure.publication-finalization")
+        {
+            CellExecutor.ResetPublicationDirectoryForProvisioning(repositoryRoot);
+        }
         foreach (var (relative, bytes) in Files(cellId, vector))
         {
             var path = Path.GetFullPath(Path.Join(repositoryRoot, relative));

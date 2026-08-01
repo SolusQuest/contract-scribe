@@ -13,13 +13,18 @@ public static class SchemaValidation
     public static void Validate(string documentPath, string schemaPath, bool requireCanonical = false)
     {
         using var document = CanonicalJson.ReadStrict(documentPath, 4 * 1024 * 1024, requireCanonical);
+        ValidateElement(document.RootElement, schemaPath);
+    }
+
+    public static void ValidateElement(JsonElement element, string schemaPath)
+    {
         var schema = Schemas.GetOrAdd(
             Path.GetFullPath(schemaPath),
             path => new Lazy<JsonSchema>(
                 () => LoadSchema(path),
                 LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
-        var result = schema.Evaluate(document.RootElement, new EvaluationOptions
+        var result = schema.Evaluate(element, new EvaluationOptions
         {
             OutputFormat = OutputFormat.List,
             RequireFormatValidation = true

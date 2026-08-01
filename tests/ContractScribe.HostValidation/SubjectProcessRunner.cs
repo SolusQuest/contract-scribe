@@ -255,7 +255,8 @@ public static class SubjectProcessRunner
             platformTermination,
             nativeTermination?.Kind,
             nativeTermination?.Code,
-            controlResult.TemporaryDiskHighWater);
+            controlResult.TemporaryDiskHighWater,
+            controlResult.StagedCanonical);
     }
 
     private static ProcessExecutionResult StartFailure(string processStart) =>
@@ -452,8 +453,36 @@ public static class SubjectProcessRunner
                 {
                     return new(false, "post-gate-sample-missing");
                 }
-                File.WriteAllText(Path.Join(control.ControlRoot, $"{control.GateName}.release"), string.Empty);
-                return new(true, "observed");
+                CanonicalResultCommitment? stagedCanonical = null;
+                var released = false;
+                void ReleaseGate()
+                {
+                    if (released) return;
+                    File.WriteAllText(
+                        Path.Join(control.ControlRoot, $"{control.GateName}.release"),
+                        string.Empty);
+                    released = true;
+                }
+                try
+                {
+                    var remaining = RemainingExcludingReserve(deadline, cleanupReserve);
+                    if (remaining == TimeSpan.Zero)
+                    {
+                        return new(false, "control-timeout");
+                    }
+                    if (control.ObserveStagedCanonical is not null)
+                    {
+                        stagedCanonical = await control.ObserveStagedCanonical(
+                            remaining,
+                            ReleaseGate,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    ReleaseGate();
+                }
+                return new(true, "observed", StagedCanonical: stagedCanonical);
             case "measure-temporary-disk":
                 if (control.MeasureTemporaryDisk is null)
                 {

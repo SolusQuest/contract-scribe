@@ -21,13 +21,44 @@ public static class CanonicalJson
         byte[] bytes;
         try
         {
-            bytes = File.ReadAllBytes(path);
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.SequentialScan);
+            if (stream.Length <= 0 || stream.Length > maximumBytes)
+            {
+                throw new ProtocolException("HV102_ARTIFACT_SIZE");
+            }
+            bytes = new byte[checked((int)stream.Length + 1)];
+            var offset = 0;
+            while (offset < bytes.Length)
+            {
+                var read = stream.Read(bytes, offset, bytes.Length - offset);
+                if (read == 0) break;
+                offset += read;
+            }
+            if (offset != stream.Length)
+            {
+                throw new ProtocolException("HV102_ARTIFACT_SIZE");
+            }
+            Array.Resize(ref bytes, offset);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             throw new ProtocolException("HV101_ARTIFACT_UNREADABLE", exception);
         }
 
+        return ReadStrict(bytes, maximumBytes, requireCanonical);
+    }
+
+    public static JsonDocument ReadStrict(
+        byte[] bytes,
+        int maximumBytes,
+        bool requireCanonical = false)
+    {
         if (bytes.Length == 0 || bytes.Length > maximumBytes)
         {
             throw new ProtocolException("HV102_ARTIFACT_SIZE");
