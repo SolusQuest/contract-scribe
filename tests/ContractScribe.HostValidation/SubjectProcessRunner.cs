@@ -454,6 +454,15 @@ public static class SubjectProcessRunner
                     return new(false, "post-gate-sample-missing");
                 }
                 CanonicalResultCommitment? stagedCanonical = null;
+                var released = false;
+                void ReleaseGate()
+                {
+                    if (released) return;
+                    File.WriteAllText(
+                        Path.Join(control.ControlRoot, $"{control.GateName}.release"),
+                        string.Empty);
+                    released = true;
+                }
                 try
                 {
                     var remaining = RemainingExcludingReserve(deadline, cleanupReserve);
@@ -465,14 +474,13 @@ public static class SubjectProcessRunner
                     {
                         stagedCanonical = await control.ObserveStagedCanonical(
                             remaining,
+                            ReleaseGate,
                             cancellationToken).ConfigureAwait(false);
                     }
                 }
                 finally
                 {
-                    File.WriteAllText(
-                        Path.Join(control.ControlRoot, $"{control.GateName}.release"),
-                        string.Empty);
+                    ReleaseGate();
                 }
                 return new(true, "observed", StagedCanonical: stagedCanonical);
             case "measure-temporary-disk":

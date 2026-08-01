@@ -962,7 +962,7 @@ public static class HarnessSelfTest
                 "publication-staging-ready",
                 "observe",
                 TimeSpan.FromSeconds(5),
-                ObserveStagedCanonical: async (remaining, token) =>
+                ObserveStagedCanonical: async (remaining, release, token) =>
                 {
                     CellExecutor.RequireClosedPublicationDirectory(
                         repository,
@@ -973,7 +973,8 @@ public static class HarnessSelfTest
                         repository,
                         FrozenFixtureRegistry.StagingPath,
                         remaining,
-                        token).ConfigureAwait(false))?.Commitment
+                        token,
+                        releaseAfterPathVerification: release).ConfigureAwait(false))?.Commitment
                             ?? throw new ProtocolException(
                                 "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION");
                 }),

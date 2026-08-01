@@ -453,7 +453,7 @@ public sealed class M1HostValidationPublicationFailureTests
     }
 
     [Fact]
-    public async Task PublicationFailure_FixedPathReplacementDuringObservationIsRejected()
+    public async Task PublicationFailure_FixedPathReplacementBeforeGateReleaseIsRejected()
     {
         var repository = TemporaryPublicationRepository();
         var staging = Path.Join(
@@ -461,6 +461,7 @@ public sealed class M1HostValidationPublicationFailureTests
             "TestResults",
             ".audit-result.json.contractscribe-stage");
         var displaced = Path.Join(repository, "TestResults", ".displaced-staging.json");
+        var released = false;
         try
         {
             WriteCanonicalAuditResult(staging);
@@ -476,7 +477,47 @@ public sealed class M1HostValidationPublicationFailureTests
                     {
                         File.Move(path, displaced);
                         File.Copy(displaced, path);
-                    }));
+                    },
+                    releaseAfterPathVerification: () => released = true));
+            Assert.False(released);
+        }
+        finally
+        {
+            DeleteTemporaryRepository(repository);
+        }
+    }
+
+    [Fact]
+    public async Task PublicationFailure_ParentReplacementAfterHandleOpenIsRejected()
+    {
+        var repository = TemporaryPublicationRepository();
+        var resultDirectory = Path.Join(repository, "TestResults");
+        var displacedDirectory = Path.Join(repository, ".displaced-results");
+        var staging = Path.Join(
+            resultDirectory,
+            ".audit-result.json.contractscribe-stage");
+        var released = false;
+        try
+        {
+            WriteCanonicalAuditResult(staging);
+            await AssertProtocolAsync(
+                "HV254_PUBLICATION_ARTIFACT_UNSAFE",
+                () => CellExecutor.ObservePublicationResultAsync(
+                    Root,
+                    repository,
+                    FrozenFixtureRegistry.StagingPath,
+                    TimeSpan.FromSeconds(2),
+                    CancellationToken.None,
+                    path =>
+                    {
+                        Directory.Move(resultDirectory, displacedDirectory);
+                        Directory.CreateDirectory(resultDirectory);
+                        File.Copy(
+                            Path.Join(displacedDirectory, Path.GetFileName(path)),
+                            Path.Join(resultDirectory, Path.GetFileName(path)));
+                    },
+                    releaseAfterPathVerification: () => released = true));
+            Assert.False(released);
         }
         finally
         {

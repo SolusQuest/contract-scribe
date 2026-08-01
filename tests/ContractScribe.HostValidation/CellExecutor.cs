@@ -13,10 +13,12 @@ public static class CellExecutor
         internal PublicationResultObservation(
             CanonicalResultCommitment commitment,
             ObservedAuditResultFacts facts,
+            StableNodeIdentity stableParentIdentity,
             StableFileIdentity stableIdentity)
         {
             Commitment = commitment;
             Facts = facts;
+            StableParentIdentity = stableParentIdentity;
             StableIdentity = stableIdentity;
         }
 
@@ -26,8 +28,12 @@ public static class CellExecutor
 
         internal StableFileIdentity StableIdentity { get; }
 
+        internal StableNodeIdentity StableParentIdentity { get; }
+
         public bool HasSameStableIdentity(PublicationResultObservation? other) =>
-            other is not null && StableIdentity == other.StableIdentity;
+            other is not null
+                && StableParentIdentity == other.StableParentIdentity
+                && StableIdentity == other.StableIdentity;
     }
 
     public static async Task<CellEvidence> RunAsync(
@@ -405,7 +411,7 @@ public static class CellExecutor
                     ? null
                     : temporaryDiskObserver.CaptureAndRelease,
                 vector.VectorId == "failure.publication-finalization"
-                    ? async (remaining, token) =>
+                    ? async (remaining, release, token) =>
                     {
                         RequireClosedPublicationDirectory(
                             repositoryRoot,
@@ -416,7 +422,8 @@ public static class CellExecutor
                             repositoryRoot,
                             FrozenFixtureRegistry.StagingPath,
                             remaining,
-                            token).ConfigureAwait(false))?.Commitment
+                            token,
+                            releaseAfterPathVerification: release).ConfigureAwait(false))?.Commitment
                                 ?? throw new ProtocolException(
                                     "HV250_PUBLICATION_STAGED_CANONICAL_OBSERVATION");
                     }
@@ -832,7 +839,7 @@ public static class CellExecutor
         int timeoutSeconds,
         Func<Action, MonotonicDeadline, TemporaryDiskHighWaterEvidence>?
             measureTemporaryDisk,
-        Func<TimeSpan, CancellationToken, Task<CanonicalResultCommitment>>?
+        Func<TimeSpan, Action, CancellationToken, Task<CanonicalResultCommitment>>?
             observeStagedCanonical) =>
         vector.VectorId switch
         {
@@ -1105,7 +1112,8 @@ public static class CellExecutor
             string? resultPath,
             TimeSpan timeout,
             CancellationToken cancellationToken,
-            Action<string>? afterStableReadBeforePathVerification = null)
+            Action<string>? afterCanonicalValidationBeforePathVerification = null,
+            Action? releaseAfterPathVerification = null)
     {
         if (resultPath is null)
         {
@@ -1117,12 +1125,13 @@ public static class CellExecutor
         {
             return null;
         }
-        var (bytes, stableIdentity) = await ReadPublicationFileAsync(
+        var observationDeadline = MonotonicDeadline.Start(timeout);
+        await using var lease = await OpenPublicationObservationLeaseAsync(
             fullPath,
             4 * 1024 * 1024,
-            timeout,
-            cancellationToken,
-            afterStableReadBeforePathVerification).ConfigureAwait(false);
+            observationDeadline.Remaining,
+            cancellationToken).ConfigureAwait(false);
+        var bytes = lease.Bytes;
         using var document = CanonicalJson.ReadStrict(
             bytes,
             4 * 1024 * 1024,
@@ -1156,14 +1165,34 @@ public static class CellExecutor
                     ?? throw new ProtocolException("HV223_AUDIT_RESULT_INVALID"))
                 .Order(StringComparer.Ordinal)
                 .ToArray());
+        var commitment = new CanonicalResultCommitment(
+            CanonicalJson.Sha256(bytes),
+            bytes.LongLength,
+            "canonical-json-utf8-no-bom-single-lf",
+            true);
+        try
+        {
+            afterCanonicalValidationBeforePathVerification?.Invoke(fullPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or Win32Exception)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
+        }
+        if (observationDeadline.IsExpired || cancellationToken.IsCancellationRequested)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+        VerifyCurrentPublicationPathIdentityAndRelease(
+            lease,
+            releaseAfterPathVerification);
         return new PublicationResultObservation(
-            new CanonicalResultCommitment(
-                CanonicalJson.Sha256(bytes),
-                bytes.LongLength,
-                "canonical-json-utf8-no-bom-single-lf",
-                true),
+            commitment,
             facts,
-            stableIdentity);
+            lease.DirectoryIdentity,
+            lease.FileIdentity);
     }
 
     public static void RequireClosedPublicationDirectory(
@@ -1290,13 +1319,12 @@ public static class CellExecutor
         }
     }
 
-    private static async Task<(byte[] Bytes, StableFileIdentity Identity)>
-        ReadPublicationFileAsync(
+    private static async Task<PublicationObservationLease>
+        OpenPublicationObservationLeaseAsync(
         string path,
         int maximumBytes,
         TimeSpan timeout,
-        CancellationToken cancellationToken,
-        Action<string>? afterStableReadBeforePathVerification)
+        CancellationToken cancellationToken)
     {
         if (timeout <= TimeSpan.Zero)
         {
@@ -1305,29 +1333,14 @@ public static class CellExecutor
 
         var directory = Path.GetDirectoryName(path)
             ?? throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
-        using var directoryHandle = OpenPublicationDirectoryNoFollow(directory);
-        FileStream stream;
-        StableFileIdentity identity;
+        var directoryHandle = OpenPublicationDirectoryNoFollow(directory);
+        FileStream? stream = null;
         try
         {
-            (stream, identity) = OpenPublicationFileNoFollow(directoryHandle, path);
-        }
-        catch (ProtocolException)
-        {
-            throw;
-        }
-        catch (Exception exception) when (
-            exception is IOException
-                or UnauthorizedAccessException
-                or Win32Exception
-                or ArgumentException
-                or NotSupportedException)
-        {
-            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
-        }
-
-        await using (stream.ConfigureAwait(false))
-        {
+            var directoryIdentity = ReadStableDirectoryIdentity(directoryHandle);
+            var opened = OpenPublicationFileNoFollow(directoryHandle, path);
+            stream = opened.Stream;
+            var identity = opened.Identity;
             if (identity.Length <= 0 || identity.Length > maximumBytes)
             {
                 throw new ProtocolException("HV102_ARTIFACT_SIZE");
@@ -1336,24 +1349,13 @@ public static class CellExecutor
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(timeout);
             var offset = 0;
-            try
+            while (offset < bytes.Length)
             {
-                while (offset < bytes.Length)
-                {
-                    var read = await stream.ReadAsync(
-                        bytes.AsMemory(offset, bytes.Length - offset),
-                        deadline.Token).ConfigureAwait(false);
-                    if (read == 0) break;
-                    offset += read;
-                }
-            }
-            catch (OperationCanceledException exception)
-            {
-                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
-            }
-            catch (IOException exception)
-            {
-                throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
+                var read = await stream.ReadAsync(
+                    bytes.AsMemory(offset, bytes.Length - offset),
+                    deadline.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                offset += read;
             }
 
             var finalIdentity = ReadStableFileIdentity(stream.SafeFileHandle);
@@ -1361,10 +1363,97 @@ public static class CellExecutor
             {
                 throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
             }
-            afterStableReadBeforePathVerification?.Invoke(path);
-            VerifyPublicationPathIdentity(directoryHandle, path, identity);
             Array.Resize(ref bytes, offset);
-            return (bytes, identity);
+            return new PublicationObservationLease(
+                directory,
+                path,
+                directoryHandle,
+                stream,
+                directoryIdentity,
+                identity,
+                bytes);
+        }
+        catch (ProtocolException)
+        {
+            await DisposePublicationHandlesAsync(stream, directoryHandle)
+                .ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or Win32Exception
+                or ArgumentException
+                or NotSupportedException
+                or OperationCanceledException)
+        {
+            await DisposePublicationHandlesAsync(stream, directoryHandle)
+                .ConfigureAwait(false);
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE", exception);
+        }
+    }
+
+    private static async ValueTask DisposePublicationHandlesAsync(
+        FileStream? stream,
+        SafeFileHandle directoryHandle)
+    {
+        try
+        {
+            if (stream is not null)
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            directoryHandle.Dispose();
+        }
+    }
+
+    private sealed class PublicationObservationLease : IAsyncDisposable
+    {
+        public PublicationObservationLease(
+            string directoryPath,
+            string filePath,
+            SafeFileHandle directoryHandle,
+            FileStream fileStream,
+            StableNodeIdentity directoryIdentity,
+            StableFileIdentity fileIdentity,
+            byte[] bytes)
+        {
+            DirectoryPath = directoryPath;
+            FilePath = filePath;
+            DirectoryHandle = directoryHandle;
+            FileStream = fileStream;
+            DirectoryIdentity = directoryIdentity;
+            FileIdentity = fileIdentity;
+            Bytes = bytes;
+        }
+
+        public string DirectoryPath { get; }
+
+        public string FilePath { get; }
+
+        public SafeFileHandle DirectoryHandle { get; }
+
+        public FileStream FileStream { get; }
+
+        public StableNodeIdentity DirectoryIdentity { get; }
+
+        public StableFileIdentity FileIdentity { get; }
+
+        public byte[] Bytes { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await FileStream.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                DirectoryHandle.Dispose();
+            }
         }
     }
 
@@ -1516,18 +1605,26 @@ public static class CellExecutor
         throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
     }
 
-    private static void VerifyPublicationPathIdentity(
-        SafeFileHandle directoryHandle,
-        string path,
-        StableFileIdentity expected)
+    private static void VerifyCurrentPublicationPathIdentityAndRelease(
+        PublicationObservationLease lease,
+        Action? releaseAfterPathVerification)
     {
-        var (stream, actual) = OpenPublicationFileNoFollow(directoryHandle, path);
+        using var currentDirectoryHandle = OpenPublicationDirectoryNoFollow(
+            lease.DirectoryPath);
+        if (ReadStableDirectoryIdentity(currentDirectoryHandle) != lease.DirectoryIdentity)
+        {
+            throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
+        }
+        var (stream, actual) = OpenPublicationFileNoFollow(
+            currentDirectoryHandle,
+            lease.FilePath);
         using (stream)
         {
-            if (actual != expected)
+            if (actual != lease.FileIdentity)
             {
                 throw new ProtocolException("HV254_PUBLICATION_ARTIFACT_UNSAFE");
             }
+            releaseAfterPathVerification?.Invoke();
         }
     }
 
@@ -1599,7 +1696,7 @@ public static class CellExecutor
         long Length,
         ulong LinkCount);
 
-    private readonly record struct StableNodeIdentity(ulong Volume, ulong FileId);
+    internal readonly record struct StableNodeIdentity(ulong Volume, ulong FileId);
 
     private const uint GenericRead = 0x80000000;
     private const uint FileShareRead = 0x00000001;
