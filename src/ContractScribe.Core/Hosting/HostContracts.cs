@@ -360,7 +360,8 @@ public static class HostDiagnosticEnvelope
     public static ImmutableArray<HostDiagnosticFact> Normalize(
         IEnumerable<HostDiagnosticFact> facts,
         int maximumCount,
-        int maximumUtf8Bytes)
+        int maximumUtf8Bytes,
+        HostDiagnosticFact? requiredFact = null)
     {
         ArgumentNullException.ThrowIfNull(facts);
         if (maximumCount < 1 || maximumUtf8Bytes < 2)
@@ -368,14 +369,38 @@ public static class HostDiagnosticEnvelope
             throw new ArgumentOutOfRangeException(nameof(maximumCount));
         }
 
-        var result = ImmutableArray.CreateBuilder<HostDiagnosticFact>();
-        foreach (var fact in facts
+        var ordered = facts
             .Distinct(HostDiagnosticFactComparer.Instance)
             .OrderBy(item => HostVocabulary.GetId(item.Stage), StringComparer.Ordinal)
             .ThenBy(item => item.Code, StringComparer.Ordinal)
             .ThenBy(item => item.TemplateId, StringComparer.Ordinal)
-            .ThenBy(item => item.RepositoryRelativePath, StringComparer.Ordinal))
+            .ThenBy(item => item.RepositoryRelativePath, StringComparer.Ordinal)
+            .ToArray();
+        if (requiredFact is not null
+            && !ordered.Contains(requiredFact, HostDiagnosticFactComparer.Instance))
         {
+            throw new ArgumentException("The required diagnostic must be present in the envelope.", nameof(requiredFact));
+        }
+
+        var result = ImmutableArray.CreateBuilder<HostDiagnosticFact>();
+        if (requiredFact is not null)
+        {
+            result.Add(requiredFact);
+            if (JsonSerializer.SerializeToUtf8Bytes(result, CanonicalOptions).Length
+                > maximumUtf8Bytes)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maximumUtf8Bytes),
+                    "The diagnostic byte cap cannot retain the required primary fact.");
+            }
+        }
+        foreach (var fact in ordered)
+        {
+            if (requiredFact is not null
+                && HostDiagnosticFactComparer.Instance.Equals(fact, requiredFact))
+            {
+                continue;
+            }
             if (result.Count == maximumCount)
             {
                 break;
@@ -388,7 +413,12 @@ public static class HostDiagnosticEnvelope
                 break;
             }
         }
-        return result.ToImmutable();
+        return result
+            .OrderBy(item => HostVocabulary.GetId(item.Stage), StringComparer.Ordinal)
+            .ThenBy(item => item.Code, StringComparer.Ordinal)
+            .ThenBy(item => item.TemplateId, StringComparer.Ordinal)
+            .ThenBy(item => item.RepositoryRelativePath, StringComparer.Ordinal)
+            .ToImmutableArray();
     }
 
     private sealed class HostDiagnosticFactComparer : IEqualityComparer<HostDiagnosticFact>

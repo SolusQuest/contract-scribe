@@ -191,6 +191,30 @@ public sealed class ProductionHostContractTests
     }
 
     [Fact]
+    public void DiagnosticEnvelope_ReservesThePrimaryFactBeforeSupportingCaps()
+    {
+        var primary = new HostDiagnosticFact(
+            "host.workspace-load.failed",
+            HostStage.WorkspaceLoad,
+            HostDiagnosticSeverity.Error,
+            "host.workspace-load.failed");
+        var supporting = Enumerable.Range(0, 40)
+            .Select(index => new HostDiagnosticFact(
+                $"host.audit.supporting-{index:D2}",
+                HostStage.Audit,
+                HostDiagnosticSeverity.Warning,
+                "host.audit.fixture"));
+
+        var normalized = HostDiagnosticEnvelope.Normalize(
+            supporting.Append(primary),
+            maximumCount: 1,
+            maximumUtf8Bytes: 4096,
+            requiredFact: primary);
+
+        Assert.Same(primary, Assert.Single(normalized));
+    }
+
+    [Fact]
     public void RegisteredCause_AtomicallyPreventsPublicationAcquisitionUntilCommitted()
     {
         var coordinator = new HostTerminalCoordinator();
@@ -278,6 +302,62 @@ public sealed class ProductionHostContractTests
         };
         Assert.Throws<ArgumentException>(() =>
             second.TryCommitRegisteredCause(original, reclassified, out _));
+    }
+
+    [Fact]
+    public void CauseArbitration_UsesCausalSequenceInsteadOfCallbackLockOrder()
+    {
+        var timeoutFirst = new HostTerminalCoordinator();
+        var timeout = Failure(timeoutFirst, "host.publication.timeout");
+        var laterCancellation = Failure(timeoutFirst, "host.publication.cancelled");
+        Assert.True(timeoutFirst.TryRegisterCause(timeout, out _));
+        Assert.False(timeoutFirst.TryRegisterCause(laterCancellation, out var timeoutWinner));
+        Assert.Same(timeout, timeoutWinner);
+
+        var cancellationFirst = new HostTerminalCoordinator();
+        var cancellation = Failure(cancellationFirst, "host.publication.cancelled");
+        var laterTimeout = Failure(cancellationFirst, "host.publication.timeout");
+        Assert.True(cancellationFirst.TryRegisterCause(cancellation, out _));
+        Assert.False(cancellationFirst.TryRegisterCause(laterTimeout, out var cancellationWinner));
+        Assert.Same(cancellation, cancellationWinner);
+
+        var delayedEarlierCallback = new HostTerminalCoordinator();
+        var earlier = Failure(delayedEarlierCallback, "host.publication.timeout");
+        var later = Failure(delayedEarlierCallback, "host.publication.cancelled");
+        Assert.True(delayedEarlierCallback.TryRegisterCause(later, out _));
+        Assert.True(delayedEarlierCallback.TryRegisterCause(earlier, out var correctedWinner));
+        Assert.Same(earlier, correctedWinner);
+    }
+
+    [Fact]
+    public void CauseArbitration_UsesCancellationAsTheSameSequenceTieBreaker()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var timeout = Failure(coordinator, "host.publication.timeout");
+        var cancellation = Failure(coordinator, "host.publication.cancelled") with
+        {
+            AcceptedSequence = timeout.AcceptedSequence,
+        };
+
+        Assert.True(coordinator.TryRegisterCause(timeout, out _));
+        Assert.True(coordinator.TryRegisterCause(cancellation, out var winner));
+        Assert.Same(cancellation, winner);
+    }
+
+    [Fact]
+    public void AcceptedInterruption_PrecedesLaterStageFailureAndPublication()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var cancellation = Failure(coordinator, "host.audit.cancelled");
+        var stageFailure = Failure(coordinator, "host.audit.aggregation-failed");
+
+        Assert.True(coordinator.TryRegisterCause(cancellation, out _));
+        Assert.False(coordinator.TryCommitNonSuccess(stageFailure, out var winner));
+        Assert.Same(cancellation, winner);
+        Assert.False(coordinator.TryAcquirePublicationDecision(out _, out var publicationWinner));
+        Assert.Same(cancellation, publicationWinner);
+        Assert.True(coordinator.TryCommitRegisteredCause(cancellation, out var terminal));
+        Assert.Same(cancellation, terminal);
     }
 
     private static HostTerminalRecord Failure(

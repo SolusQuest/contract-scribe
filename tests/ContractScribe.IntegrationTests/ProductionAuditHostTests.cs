@@ -228,6 +228,29 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
+    public async Task PublicationRenameRace_PreservesCompetitorAndCommitsFailure()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var competitor = "competitor-result\n"u8.ToArray();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                BeforeAtomicRename: () => File.WriteAllBytes(resultPath, competitor)));
+
+        Assert.Equal(HostExecutionOutcome.PublicationFailure, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.publication.finalization-failed", outcome.Terminal.Failure?.Code);
+        Assert.Equal(competitor, await File.ReadAllBytesAsync(resultPath));
+        Assert.False(File.Exists(Path.Join(
+            fixture.Root,
+            "TestResults",
+            ".audit-result.json.contractscribe-stage")));
+        Assert.Null(outcome.CanonicalResult);
+    }
+
+    [Fact]
     public async Task TemporaryDiskMeter_TracksTransientHighWaterAcrossDistinctAndNestedRoots()
     {
         var root = Path.Join(
@@ -285,33 +308,157 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
+    public void TemporaryDiskMeter_RetainsOverLimitWriteDeletedBeforeRescan()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-disk-meter",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var meter = new TemporaryDiskMeter(root, null);
+            var transient = Path.Join(root, "over-limit-then-delete.bin");
+            using (var stream = new FileStream(
+                       transient,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.SetLength(HostContractResources.RequireBound("temporary-disk-bytes") + 1);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Delete(transient);
+
+            Assert.True(SpinWait.SpinUntil(
+                () => meter.HighWater > HostContractResources.RequireBound("temporary-disk-bytes"),
+                TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryDiskMeter_DirectAllocationCleanupProducesOneAtomicFact()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-disk-meter",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var meter = new TemporaryDiskMeter(root, null);
+            var staging = Path.Join(root, "direct-staging.bin");
+            meter.ObserveHostAllocation(staging, 0, 257);
+            await File.WriteAllBytesAsync(staging, new byte[257]);
+            File.Delete(staging);
+
+            var barrier = Path.Join(root, "watcher-barrier.bin");
+            await File.WriteAllBytesAsync(barrier, new byte[258]);
+            Assert.True(SpinWait.SpinUntil(
+                () => meter.HighWater >= 258,
+                TimeSpan.FromSeconds(5)));
+
+            Assert.True(meter.TryCreateFactWithinThreshold(out var fact));
+            Assert.Equal(258, fact!.Measured);
+            File.Delete(barrier);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ToolchainProcessMeter_UsesParentChainsAndPidStartIdentity()
     {
+        var toolchainRoot = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-process-meter",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(toolchainRoot);
+        var compiler = Path.Join(toolchainRoot, "csc.dll");
+        File.WriteAllBytes(compiler, "compiler-fixture"u8.ToArray());
+        try
+        {
+            using var current = Process.GetCurrentProcess();
+            var rootNode = new ToolchainProcessMeter.ProcessNode(
+                current.Id,
+                0,
+                current.StartTime.ToUniversalTime().Ticks,
+                current.ProcessName,
+                current.MainModule?.FileName,
+                [],
+                true);
+            IReadOnlyList<ToolchainProcessMeter.ProcessNode> snapshot =
+            [
+                rootNode,
+                new(910001, current.Id, 1, "dotnet", compiler, [], true),
+                new(910002, 910001, 2, "dotnet", compiler, [], true),
+                new(910003, 999999, 3, "dotnet", compiler, [], true),
+                new(910004, current.Id, 4, "ContractScribe.Helper", null, [], true),
+                new(910005, current.Id, 5, "dotnet", compiler, ["restore"], true),
+            ];
+            using var meter = new ToolchainProcessMeter(
+                () => snapshot,
+                TimeSpan.FromDays(1));
+
+            Assert.Equal(2, meter.SelectToolchain(new RegisteredToolchain(
+                new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),
+                toolchainRoot)));
+            snapshot =
+            [
+                rootNode,
+                new(910001, current.Id, 6, "dotnet", compiler, [], true),
+            ];
+
+            Assert.Equal(3, meter.Reconcile());
+            Assert.Equal(3, meter.ToFact().Measured);
+        }
+        finally
+        {
+            Directory.Delete(toolchainRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolchainProcessMeter_FailsClosedForUnclassifiedDescendant()
+    {
         using var current = Process.GetCurrentProcess();
-        var rootNode = new ToolchainProcessMeter.ProcessNode(
-            current.Id,
-            0,
-            current.StartTime.ToUniversalTime().Ticks);
         IReadOnlyList<ToolchainProcessMeter.ProcessNode> snapshot =
         [
-            rootNode,
-            new(910001, current.Id, 1),
-            new(910002, 910001, 2),
-            new(910003, 999999, 3),
+            new(
+                current.Id,
+                0,
+                current.StartTime.ToUniversalTime().Ticks,
+                current.ProcessName,
+                current.MainModule?.FileName,
+                [],
+                true),
+            new(920001, current.Id, 1, "unknown", null, [], false),
         ];
         using var meter = new ToolchainProcessMeter(
             () => snapshot,
             TimeSpan.FromDays(1));
 
-        Assert.Equal(2, meter.Count);
-        snapshot =
-        [
-            rootNode,
-            new(910001, current.Id, 4),
-        ];
+        Assert.Throws<IOException>(() => meter.SelectToolchain(new RegisteredToolchain(
+            new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),
+            Path.GetTempPath())));
+    }
 
-        Assert.Equal(3, meter.Reconcile());
-        Assert.Equal(3, meter.ToFact().Measured);
+    [Fact]
+    public async Task ToolchainProcessMeter_ClassifiesTheSelectedProductionToolchain()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        using var meter = new ToolchainProcessMeter();
+        var selected = await MsBuildBootstrap.EnsureRegisteredForProductionHostAsync(
+            Path.Join(fixture.Root, "App"),
+            CancellationToken.None);
+
+        _ = meter.SelectToolchain(selected);
     }
 
     [Fact]
@@ -482,20 +629,17 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
-    public async Task UnexpectedSdkBoundaryFailure_CommitsClosedInternalFailureRow()
+    public async Task UnexpectedSdkBoundaryFailure_EscapesBeforeToolchainSelection()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
 
-        var outcome = await RunAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                SdkDiscovery: _ => throw new InvalidOperationException("test-only")));
+                SdkDiscovery: _ => throw new InvalidOperationException("test-only"))));
 
-        Assert.Equal(HostExecutionOutcome.AuditError, outcome.Terminal.ExecutionOutcome);
-        Assert.Equal("host.internal.unexpected", outcome.Terminal.Failure?.Code);
-        Assert.Equal(HostStage.Internal, outcome.Terminal.Failure?.Stage);
         Assert.False(File.Exists(resultPath));
     }
 
@@ -719,6 +863,72 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
+    public async Task SdkDiscoveryCauseOrder_TimeoutThenCancellationCommitsTimeout()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "sdk-discovery-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                StageBoundary: async (stage, token) =>
+                {
+                    if (stage != HostStage.SdkDiscovery)
+                    {
+                        return;
+                    }
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        caller.Cancel();
+                        throw;
+                    }
+                }),
+            caller.Token);
+
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.timeout", outcome.Terminal.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task SdkDiscoveryCauseOrder_CancellationThenTimeoutCommitsCancellation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "sdk-discovery-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                StageBoundary: async (stage, token) =>
+                {
+                    if (stage != HostStage.SdkDiscovery)
+                    {
+                        return;
+                    }
+                    caller.Cancel();
+                    await Task.Delay(100, CancellationToken.None);
+                    throw new OperationCanceledException(token);
+                }),
+            caller.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.cancelled", outcome.Terminal.Failure?.Code);
+    }
+
+    [Fact]
     public async Task WorkspaceDeadline_RacesBlockingTailInventoryAndObservesLateCompletion()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -891,6 +1101,41 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
+    public async Task ValidationAdapter_ProjectsOnlyThePrimaryDiagnosticForSchemaSemantics()
+    {
+        var success = await RunDiagnosticProjectionAdapterAsync("adapter.supporting-success");
+        var failure = await RunDiagnosticProjectionAdapterAsync("adapter.supporting-failure");
+        var reversed = await RunDiagnosticProjectionAdapterAsync(
+            "adapter.supporting-failure-reversed");
+        var successFacts = Assert.IsType<HostObservationFacts>(success.HostFacts);
+        var failureFacts = Assert.IsType<HostObservationFacts>(failure.HostFacts);
+        var reversedFacts = Assert.IsType<HostObservationFacts>(reversed.HostFacts);
+
+        Assert.Empty(successFacts.NormalizedDiagnosticFacts);
+        var primary = Assert.Single(failureFacts.NormalizedDiagnosticFacts);
+        Assert.Equal("host.workspace-load.failed", primary.Code);
+        Assert.Equal("workspace-load", primary.Stage);
+        Assert.Equal(
+            failureFacts.NormalizedDiagnosticFacts,
+            reversedFacts.NormalizedDiagnosticFacts);
+    }
+
+    [Fact]
+    public async Task ValidationAdapter_EmitsSchemaLegalPreselectionEnvironmentFailure()
+    {
+        var response = await RunDiagnosticProjectionAdapterAsync("failure.sdk-environment");
+
+        Assert.Equal("environment-unavailable", response.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.unavailable", response.FailureCode);
+        Assert.Equal("sdk-discovery", response.FailureStage);
+        var facts = Assert.IsType<HostObservationFacts>(response.HostFacts);
+        Assert.Equal("not-selected", facts.ToolchainSelectionState);
+        var primary = Assert.Single(facts.NormalizedDiagnosticFacts);
+        Assert.Equal(response.FailureCode, primary.Code);
+        Assert.Equal(response.FailureStage, primary.Stage);
+    }
+
+    [Fact]
     public async Task ValidationAdapter_NeverMasksACommittedHostResultForObservationOnlyFixture()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1042,6 +1287,49 @@ public sealed class ProductionAuditHostTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static async Task<SubjectResponse> RunDiagnosticProjectionAdapterAsync(
+        string fixtureProfile)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        CanonicalJson.WriteCanonical(
+            Path.Join(fixture.Root, ".contractscribe-fixture.json"),
+            new { fixture = fixtureProfile });
+        var requestPath = Path.Join(fixture.Root, "request.json");
+        var responsePath = Path.Join(fixture.Root, "response.json");
+        CanonicalJson.WriteCanonical(
+            requestPath,
+            new SubjectRequest(
+                "contractscribe-m1-host-validation-subject-request-v1",
+                "production-host",
+                fixtureProfile,
+                "run-1",
+                fixture.Root,
+                responsePath,
+                null,
+                [],
+                "continue"));
+
+        var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
+            requestPath,
+            responsePath,
+            Provenance());
+
+        Assert.Equal(0, exitCode);
+        SchemaValidation.ValidateDefinition(
+            responsePath,
+            Path.Join(
+                FindRepositoryRoot(),
+                "schemas",
+                "validation",
+                "m1-host-validation-subject-v1.schema.json"),
+            "subjectResponse",
+            requireCanonical: true);
+        return CanonicalJson.DeserializeStrict<SubjectResponse>(
+            responsePath,
+            64 * 1024,
+            requireCanonical: true);
     }
 
     private static string FindRepositoryRoot()

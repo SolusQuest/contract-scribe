@@ -56,7 +56,8 @@ internal sealed record ProductionAuditHostControls(
     Func<CancellationToken, Task<RegisteredToolchain>>? SdkDiscovery = null,
     Func<RepositoryLoadRequest, CancellationToken, Task<RepositoryLoadOutcome>>? RepositoryLoad = null,
     Func<LoadedRepositorySession, Task>? Shutdown = null,
-    Func<HostStage, CancellationToken, Task>? StageBoundary = null)
+    Func<HostStage, CancellationToken, Task>? StageBoundary = null,
+    Action? BeforeAtomicRename = null)
 {
     public Task ReachAsync(
         ProductionHostControlPoint point,

@@ -33,6 +33,17 @@ public sealed class HostTerminalCoordinator
         }
     }
 
+    public HostTerminalRecord? RegisteredCause
+    {
+        get
+        {
+            lock (gate)
+            {
+                return registeredCause;
+            }
+        }
+    }
+
     public long NextCauseSequence() => Interlocked.Increment(ref nextSequence);
 
     public bool TryRegisterCause(
@@ -47,7 +58,10 @@ public sealed class HostTerminalCoordinator
                 accepted = terminal ?? candidate;
                 return false;
             }
-            registeredCause ??= candidate;
+            if (registeredCause is null || CompareCause(candidate, registeredCause) < 0)
+            {
+                registeredCause = candidate;
+            }
             accepted = registeredCause;
             return ReferenceEquals(registeredCause, candidate);
         }
@@ -100,7 +114,9 @@ public sealed class HostTerminalCoordinator
                 accepted = terminal ?? candidate;
                 return false;
             }
-            if (registeredCause is not null && !ReferenceEquals(registeredCause, candidate))
+            if (registeredCause is not null
+                && !ReferenceEquals(registeredCause, candidate)
+                && CompareCause(candidate, registeredCause) >= 0)
             {
                 accepted = registeredCause;
                 return false;
@@ -239,6 +255,41 @@ public sealed class HostTerminalCoordinator
                 nameof(candidate));
         }
     }
+
+    private static int CompareCause(
+        HostTerminalRecord candidate,
+        HostTerminalRecord incumbent)
+    {
+        var sequence = candidate.AcceptedSequence.CompareTo(incumbent.AcceptedSequence);
+        if (sequence != 0)
+        {
+            return sequence;
+        }
+
+        var stage = candidate.Failure!.Stage.CompareTo(incumbent.Failure!.Stage);
+        if (stage != 0)
+        {
+            return stage;
+        }
+
+        var outcome = CauseTiePriority(candidate.ExecutionOutcome)
+            .CompareTo(CauseTiePriority(incumbent.ExecutionOutcome));
+        return outcome != 0
+            ? outcome
+            : StringComparer.Ordinal.Compare(candidate.Failure.Code, incumbent.Failure.Code);
+    }
+
+    private static int CauseTiePriority(HostExecutionOutcome outcome) => outcome switch
+    {
+        HostExecutionOutcome.Cancelled => 0,
+        HostExecutionOutcome.Timeout => 1,
+        HostExecutionOutcome.InvalidInput => 2,
+        HostExecutionOutcome.EnvironmentUnavailable => 3,
+        HostExecutionOutcome.LoadFailure => 4,
+        HostExecutionOutcome.AuditError => 5,
+        HostExecutionOutcome.PublicationFailure => 6,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
+    };
 
     private static void ValidateSameCause(
         HostTerminalRecord registered,

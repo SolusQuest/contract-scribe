@@ -114,6 +114,7 @@ internal sealed class AtomicResultPublisher : IDisposable
 
         parent.RebindPath();
         parent.RebindEntry(StagingFileName, expectedIdentity);
+        controls.BeforeAtomicRename?.Invoke();
         parent.Rename(staging.SafeFileHandle, StagingFileName, Path.GetFileName(target.FinalPath));
         parent.RebindPath();
         parent.RebindEntry(Path.GetFileName(target.FinalPath), expectedIdentity);
@@ -209,6 +210,7 @@ internal sealed class StablePublicationDirectory : IDisposable
     private const int UnixOpenDirectory = 0x00010000;
     private const int UnixOpenSync = 0x00101000;
     private const int UnixAtSymlinkNoFollow = 0x100;
+    private const uint UnixRenameNoReplace = 1;
     private const uint UnixFileTypeMask = 0xF000;
     private const uint UnixRegularFile = 0x8000;
     private const uint UnixDirectory = 0x4000;
@@ -457,7 +459,12 @@ internal sealed class StablePublicationDirectory : IDisposable
             return;
         }
         if (OperatingSystem.IsLinux()
-            && RenameAt(DirectoryDescriptor, sourceName, DirectoryDescriptor, destinationName) == 0)
+            && RenameAt2(
+                DirectoryDescriptor,
+                sourceName,
+                DirectoryDescriptor,
+                destinationName,
+                UnixRenameNoReplace) == 0)
         {
             return;
         }
@@ -719,12 +726,13 @@ internal sealed class StablePublicationDirectory : IDisposable
     [DllImport("libc", EntryPoint = "unlinkat", SetLastError = true)]
     private static extern int UnlinkAt(int directoryFileDescriptor, string path, int flags);
 
-    [DllImport("libc", EntryPoint = "renameat", SetLastError = true)]
-    private static extern int RenameAt(
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
+    private static extern int RenameAt2(
         int oldDirectoryFileDescriptor,
         string oldPath,
         int newDirectoryFileDescriptor,
-        string newPath);
+        string newPath,
+        uint flags);
 }
 
 internal sealed class PublicationException : IOException

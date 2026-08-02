@@ -69,6 +69,44 @@ internal sealed class ProductionAuditHost
                 cancellationToken,
                 totalDeadline.Token);
             var totalToken = totalTimeout.Token;
+            var causeGate = new object();
+            var currentStage = HostStage.Input;
+            var currentToolchain = toolchain;
+
+            void EnterStage(HostStage stage)
+            {
+                lock (causeGate)
+                {
+                    currentStage = stage;
+                    currentToolchain = toolchain;
+                }
+            }
+
+            void RegisterInterruption(HostExecutionOutcome outcome)
+            {
+                var acceptedSequence = coordinator.NextCauseSequence();
+                HostStage acceptedStage;
+                HostToolchainFact acceptedToolchain;
+                lock (causeGate)
+                {
+                    acceptedStage = currentStage;
+                    acceptedToolchain = currentToolchain;
+                }
+                var suffix = outcome == HostExecutionOutcome.Cancelled ? "cancelled" : "timeout";
+                var candidate = CreateFailureRecord(
+                    coordinator,
+                    actualProvenance,
+                    acceptedToolchain,
+                    $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
+                    HostArtifactState.Invalidated,
+                    acceptedSequence: acceptedSequence);
+                _ = coordinator.TryRegisterCause(candidate, out _);
+            }
+
+            using var callerCauseRegistration = cancellationToken.Register(
+                () => RegisterInterruption(HostExecutionOutcome.Cancelled));
+            using var totalCauseRegistration = totalDeadline.Token.Register(
+                () => RegisterInterruption(HostExecutionOutcome.Timeout));
 
             Record(controls, transitions, "failure-prone-stage-entered");
             PolicyDocumentV1 policy;
@@ -117,9 +155,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.Input,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -136,28 +172,21 @@ internal sealed class ProductionAuditHost
                     transitions,
                     loaderFact).ConfigureAwait(false);
             }
-            catch (Exception)
-            {
-                return await CommitFailureAsync(
-                    coordinator,
-                    actualProvenance,
-                    toolchain,
-                    "host.internal.unexpected",
-                    HostArtifactState.Invalidated,
-                    controls,
-                    transitions,
-                    loaderFact).ConfigureAwait(false);
-            }
-
             RegisteredToolchain registered;
+            EnterStage(HostStage.SdkDiscovery);
             try
             {
                 if (controls.Fault == ProductionHostFault.EnvironmentUnavailable)
                 {
                     throw LoaderException.Toolchain("toolchain.sdk-unavailable");
                 }
-                using var sdkTimeout = CancellationTokenSource.CreateLinkedTokenSource(totalToken);
-                sdkTimeout.CancelAfter(controls.Deadline("sdk-discovery-timeout"));
+                using var sdkDeadline = new CancellationTokenSource();
+                sdkDeadline.CancelAfter(controls.Deadline("sdk-discovery-timeout"));
+                using var sdkCauseRegistration = sdkDeadline.Token.Register(
+                    () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                using var sdkTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+                    totalToken,
+                    sdkDeadline.Token);
                 await controls.ReachStageAsync(HostStage.SdkDiscovery, sdkTimeout.Token)
                     .ConfigureAwait(false);
                 sdkTimeout.Token.ThrowIfCancellationRequested();
@@ -181,6 +210,8 @@ internal sealed class ProductionAuditHost
                     registered.Identity.RuntimeVersion,
                     registered.Identity.MsbuildVersion,
                     registered.Identity.Architecture);
+                EnterStage(HostStage.SdkDiscovery);
+                _ = processMeter.SelectToolchain(registered);
             }
             catch (OperationCanceledException)
             {
@@ -189,9 +220,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.SdkDiscovery,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -208,6 +237,11 @@ internal sealed class ProductionAuditHost
                     transitions,
                     loaderFact).ConfigureAwait(false);
             }
+            catch (Exception) when (
+                toolchain.SelectionState == HostToolchainSelectionState.NotSelected)
+            {
+                throw;
+            }
             catch (Exception)
             {
                 return await CommitFailureAsync(
@@ -223,8 +257,14 @@ internal sealed class ProductionAuditHost
 
             RepositoryLoadOutcome load;
             Task<RepositoryLoadOutcome>? loaderTask = null;
-            using var workspaceTimeout = CancellationTokenSource.CreateLinkedTokenSource(totalToken);
-            workspaceTimeout.CancelAfter(controls.Deadline("workspace-load-timeout"));
+            EnterStage(HostStage.WorkspaceLoad);
+            using var workspaceDeadline = new CancellationTokenSource();
+            workspaceDeadline.CancelAfter(controls.Deadline("workspace-load-timeout"));
+            using var workspaceCauseRegistration = workspaceDeadline.Token.Register(
+                () => RegisterInterruption(HostExecutionOutcome.Timeout));
+            using var workspaceTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+                totalToken,
+                workspaceDeadline.Token);
             try
             {
                 await controls.ReachStageAsync(HostStage.WorkspaceLoad, workspaceTimeout.Token)
@@ -257,6 +297,7 @@ internal sealed class ProductionAuditHost
                         ?? loader.LoadAsync(loadRequest, workspaceTimeout.Token),
                     CancellationToken.None);
                 load = await loaderTask.WaitAsync(workspaceTimeout.Token).ConfigureAwait(false);
+                _ = processMeter.Reconcile();
             }
             catch (OperationCanceledException)
             {
@@ -269,9 +310,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.WorkspaceLoad,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -288,6 +327,9 @@ internal sealed class ProductionAuditHost
                     transitions,
                     loaderFact).ConfigureAwait(false);
             }
+            workspaceCauseRegistration.Dispose();
+            workspaceTimeout.Dispose();
+            workspaceDeadline.Dispose();
 
             var hostDiagnostics = MapLoaderDiagnostics(load.Diagnostics);
             if (load.Status == RepositoryLoadStatus.Cancelled)
@@ -298,9 +340,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.WorkspaceLoad,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Cancelled,
                     controls,
                     transitions,
                     loaderFact,
@@ -324,10 +364,12 @@ internal sealed class ProductionAuditHost
             var session = load.Session;
             ClassifiedRepositorySession classified;
             ClassificationSet classifications;
+            EnterStage(HostStage.Classification);
             try
             {
                 await controls.ReachStageAsync(HostStage.Classification, totalToken)
                     .ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 totalToken.ThrowIfCancellationRequested();
                 classified = new SymbolClassifier().ClassifySession(
                     session,
@@ -359,7 +401,6 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.Classification,
-                    cancellationToken,
                     controls,
                     transitions,
                     loaderFact,
@@ -379,10 +420,12 @@ internal sealed class ProductionAuditHost
             }
 
             ObservedRepositorySession observed;
+            EnterStage(HostStage.DocumentationObservation);
             try
             {
                 await controls.ReachStageAsync(HostStage.DocumentationObservation, totalToken)
                     .ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 totalToken.ThrowIfCancellationRequested();
                 observed = new DocumentationObserver().Observe(classified, totalToken);
                 if (observed.Status == DocumentationObservationRunStatus.Cancelled)
@@ -409,7 +452,6 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.DocumentationObservation,
-                    cancellationToken,
                     controls,
                     transitions,
                     loaderFact,
@@ -429,10 +471,12 @@ internal sealed class ProductionAuditHost
             }
 
             PolicyEvidenceExtractionOutcome extracted;
+            EnterStage(HostStage.PolicyEvidence);
             try
             {
                 await controls.ReachStageAsync(HostStage.PolicyEvidence, totalToken)
                     .ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 totalToken.ThrowIfCancellationRequested();
                 extracted = new PolicyEvidenceExtractor().Extract(
                     classified,
@@ -463,7 +507,6 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.PolicyEvidence,
-                    cancellationToken,
                     controls,
                     transitions,
                     loaderFact,
@@ -483,9 +526,11 @@ internal sealed class ProductionAuditHost
             }
 
             byte[] canonical;
+            EnterStage(HostStage.Audit);
             try
             {
                 await controls.ReachStageAsync(HostStage.Audit, totalToken).ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 totalToken.ThrowIfCancellationRequested();
                 if (controls.Fault == ProductionHostFault.AuditError)
                 {
@@ -508,7 +553,6 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.Audit,
-                    cancellationToken,
                     controls,
                     transitions,
                     loaderFact,
@@ -528,6 +572,7 @@ internal sealed class ProductionAuditHost
             }
 
             AuditOutcome auditOutcome;
+            EnterStage(HostStage.ResultValidation);
             try
             {
                 await controls.ReachStageAsync(HostStage.ResultValidation, totalToken)
@@ -548,7 +593,6 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.ResultValidation,
-                    cancellationToken,
                     controls,
                     transitions,
                     loaderFact,
@@ -568,12 +612,19 @@ internal sealed class ProductionAuditHost
             }
 
             Task? shutdownTask = null;
+            EnterStage(HostStage.Shutdown);
             try
             {
-                using var shutdownTimeout = CancellationTokenSource.CreateLinkedTokenSource(totalToken);
-                shutdownTimeout.CancelAfter(controls.Deadline("graceful-shutdown-timeout"));
+                using var shutdownDeadline = new CancellationTokenSource();
+                shutdownDeadline.CancelAfter(controls.Deadline("graceful-shutdown-timeout"));
+                using var shutdownCauseRegistration = shutdownDeadline.Token.Register(
+                    () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                using var shutdownTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+                    totalToken,
+                    shutdownDeadline.Token);
                 await controls.ReachStageAsync(HostStage.Shutdown, shutdownTimeout.Token)
                     .ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 shutdownTimeout.Token.ThrowIfCancellationRequested();
                 shutdownTask = DisposeSessionOnWorkerAsync(session, controls.Shutdown);
                 try
@@ -598,9 +649,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.Shutdown,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
                     loaderFact,
@@ -620,22 +669,12 @@ internal sealed class ProductionAuditHost
                     diagnostics: hostDiagnostics).ConfigureAwait(false);
             }
 
-            using var callerPublicationRegistration = cancellationToken.Register(() =>
-                RegisterPublicationInterruption(
-                    coordinator,
-                    actualProvenance,
-                    toolchain,
-                    HostExecutionOutcome.Cancelled));
-            using var timeoutPublicationRegistration = totalDeadline.Token.Register(() =>
-                RegisterPublicationInterruption(
-                    coordinator,
-                    actualProvenance,
-                    toolchain,
-                    HostExecutionOutcome.Timeout));
+            EnterStage(HostStage.Publication);
             try
             {
                 await controls.ReachStageAsync(HostStage.Publication, totalToken)
                     .ConfigureAwait(false);
+                _ = processMeter.Reconcile();
                 totalToken.ThrowIfCancellationRequested();
                 var existingBytes = meter.Reconcile();
                 var bound = HostContractResources.RequireBound("temporary-disk-bytes");
@@ -652,6 +691,10 @@ internal sealed class ProductionAuditHost
                         loaderFact,
                         hostDiagnostics).ConfigureAwait(false);
                 }
+                meter.ObserveHostAllocation(
+                    publisher.StagingPath,
+                    existingBytes,
+                    canonical.LongLength);
                 publisher.Stage(canonical);
                 Record(controls, transitions, "staging-created-in-destination");
                 meter.Reconcile();
@@ -704,9 +747,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.Publication,
-                    cancellationToken.IsCancellationRequested
-                        ? HostExecutionOutcome.Cancelled
-                        : HostExecutionOutcome.Timeout,
+                    HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
                     loaderFact,
@@ -844,8 +885,8 @@ internal sealed class ProductionAuditHost
 
     private static IReadOnlyList<HostMeasuredBound> MeasuredBoundsWithinThreshold(
         TemporaryDiskMeter meter) =>
-        meter.HighWater <= HostContractResources.RequireBound("temporary-disk-bytes")
-            ? [meter.ToFact()]
+        meter.TryCreateFactWithinThreshold(out var fact)
+            ? [fact!]
             : [];
 
     private static IReadOnlyList<HostMeasuredBound> ResourceFactsWithinThreshold(
@@ -886,7 +927,6 @@ internal sealed class ProductionAuditHost
         HostTerminalCoordinator coordinator,
         HostToolchainFact toolchain,
         HostStage stage,
-        CancellationToken callerCancellationToken,
         ProductionAuditHostControls controls,
         List<string> transitions,
         LoaderFact? loaderFact,
@@ -898,9 +938,7 @@ internal sealed class ProductionAuditHost
             actualProvenance,
             toolchain,
             stage,
-            callerCancellationToken.IsCancellationRequested
-                ? HostExecutionOutcome.Cancelled
-                : HostExecutionOutcome.Timeout,
+            HostExecutionOutcome.Timeout,
             controls,
             transitions,
             loaderFact,
@@ -982,24 +1020,40 @@ internal sealed class ProductionAuditHost
         IEnumerable<HostMeasuredBound>? measuredBounds,
         out HostTerminalRecord accepted)
     {
-        var supportingDiagnostics = diagnostics ?? [];
-        if (!cleanupSucceeded)
+        var current = registered;
+        for (var attempt = 0; attempt < 8; attempt++)
         {
-            supportingDiagnostics = supportingDiagnostics.Append(new HostDiagnosticFact(
-                "host.publication.cleanup-failed",
-                HostStage.Publication,
-                HostDiagnosticSeverity.Error,
-                "host.publication.cleanup-failed"));
+            var supportingDiagnostics = diagnostics ?? [];
+            if (!cleanupSucceeded)
+            {
+                supportingDiagnostics = supportingDiagnostics.Append(new HostDiagnosticFact(
+                    "host.publication.cleanup-failed",
+                    HostStage.Publication,
+                    HostDiagnosticSeverity.Error,
+                    "host.publication.cleanup-failed"));
+            }
+            var final = current with
+            {
+                Diagnostics = HostDiagnosticEnvelope.Normalize(
+                    current.Diagnostics.Concat(supportingDiagnostics),
+                    checked((int)HostContractResources.RequireBound("diagnostic-count")),
+                    checked((int)HostContractResources.RequireBound("diagnostic-utf8-bytes")),
+                    current.Diagnostics.Single(item => item.Code == current.Failure!.Code)),
+                MeasuredBounds = (measuredBounds ?? []).ToImmutableArray(),
+            };
+            if (coordinator.TryCommitRegisteredCause(current, final, out accepted))
+            {
+                return true;
+            }
+            if (coordinator.RegisteredCause is not { } replacement
+                || ReferenceEquals(replacement, current))
+            {
+                return false;
+            }
+            current = replacement;
         }
-        var final = registered with
-        {
-            Diagnostics = HostDiagnosticEnvelope.Normalize(
-                registered.Diagnostics.Concat(supportingDiagnostics),
-                checked((int)HostContractResources.RequireBound("diagnostic-count")),
-                checked((int)HostContractResources.RequireBound("diagnostic-utf8-bytes"))),
-            MeasuredBounds = (measuredBounds ?? []).ToImmutableArray(),
-        };
-        return coordinator.TryCommitRegisteredCause(registered, final, out accepted);
+        accepted = current;
+        return false;
     }
 
     private static async Task<ProductionAuditOutcome> CommitFailureAsync(
@@ -1022,17 +1076,37 @@ internal sealed class ProductionAuditHost
             artifactState,
             diagnostics,
             measuredBounds);
-        if (!coordinator.TryCommitNonSuccess(failure, out var accepted)
-            || !ReferenceEquals(accepted, failure))
+        HostTerminalRecord accepted;
+        if (coordinator.TryCommitNonSuccess(failure, out accepted))
+        {
+            if (!ReferenceEquals(accepted, failure))
+            {
+                throw new InvalidOperationException("The committed failure identity changed during arbitration.");
+            }
+        }
+        else if (coordinator.RegisteredCause is { } registered)
+        {
+            if (!TryCommitRegisteredCause(
+                    coordinator,
+                    registered,
+                    cleanupSucceeded: true,
+                    diagnostics,
+                    measuredBounds,
+                    out accepted))
+            {
+                throw new InvalidOperationException("The earlier accepted terminal cause could not be committed.");
+            }
+        }
+        else
         {
             throw new InvalidOperationException("A stale terminal failure attempt was rejected.");
         }
-        RecordAcceptedFailure(controls, transitions, failure);
+        RecordAcceptedFailure(controls, transitions, accepted);
         await RunRejectedLateAttemptAsync(
             coordinator,
             controls,
             transitions).ConfigureAwait(false);
-        return new ProductionAuditOutcome(failure, null, loaderFact, transitions);
+        return new ProductionAuditOutcome(accepted, null, loaderFact, transitions);
     }
 
     private static HostTerminalRecord CreateFailureRecord(
@@ -1042,7 +1116,8 @@ internal sealed class ProductionAuditHost
         string code,
         HostArtifactState artifactState,
         IEnumerable<HostDiagnosticFact>? diagnostics = null,
-        IEnumerable<HostMeasuredBound>? measuredBounds = null)
+        IEnumerable<HostMeasuredBound>? measuredBounds = null,
+        long? acceptedSequence = null)
     {
         var row = HostContractResources.RequireFailure(code);
         var primaryDiagnostic = new HostDiagnosticFact(
@@ -1053,7 +1128,8 @@ internal sealed class ProductionAuditHost
         var normalizedDiagnostics = HostDiagnosticEnvelope.Normalize(
             new[] { primaryDiagnostic }.Concat(diagnostics ?? []),
             checked((int)HostContractResources.RequireBound("diagnostic-count")),
-            checked((int)HostContractResources.RequireBound("diagnostic-utf8-bytes")));
+            checked((int)HostContractResources.RequireBound("diagnostic-utf8-bytes")),
+            primaryDiagnostic);
         return new HostTerminalRecord(
             row.ExecutionOutcome,
             null,
@@ -1064,23 +1140,7 @@ internal sealed class ProductionAuditHost
             new HostOutputCommit(artifactState, null, 0),
             normalizedDiagnostics,
             (measuredBounds ?? []).ToImmutableArray(),
-            coordinator.NextCauseSequence());
-    }
-
-    private static void RegisterPublicationInterruption(
-        HostTerminalCoordinator coordinator,
-        HostBuildProvenance provenance,
-        HostToolchainFact toolchain,
-        HostExecutionOutcome outcome)
-    {
-        var suffix = outcome == HostExecutionOutcome.Cancelled ? "cancelled" : "timeout";
-        var candidate = CreateFailureRecord(
-            coordinator,
-            provenance,
-            toolchain,
-            $"host.publication.{suffix}",
-            HostArtifactState.Invalidated);
-        _ = coordinator.TryRegisterCause(candidate, out _);
+            acceptedSequence ?? coordinator.NextCauseSequence());
     }
 
     private static void RecordAcceptedFailure(

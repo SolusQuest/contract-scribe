@@ -6,6 +6,9 @@ internal sealed class TemporaryDiskMeter : IDisposable
 {
     private readonly object gate = new();
     private readonly IReadOnlyList<string> roots;
+    private readonly StringComparer pathComparer;
+    private readonly Dictionary<string, long> currentLengths;
+    private readonly HashSet<string> retainedPaths;
     private readonly List<FileSystemWatcher> watchers = [];
     private Exception? observerFailure;
     private long highWater;
@@ -13,13 +16,15 @@ internal sealed class TemporaryDiskMeter : IDisposable
 
     public TemporaryDiskMeter(string? temporaryRoot, string? outputStagingRoot)
     {
-        var comparison = OperatingSystem.IsWindows()
+        pathComparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
+        currentLengths = new Dictionary<string, long>(pathComparer);
+        retainedPaths = new HashSet<string>(pathComparer);
         roots = new[] { temporaryRoot, outputStagingRoot }
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root!)))
-            .Distinct(comparison)
+            .Distinct(pathComparer)
             .OrderBy(root => root.Length)
             .Aggregate(
                 new List<string>(),
@@ -31,7 +36,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
                     }
                     return selected;
                 });
-        var watched = new HashSet<string>(comparison);
+        var watched = new HashSet<string>(pathComparer);
         foreach (var root in roots)
         {
             var watchRoot = FindExistingAncestor(root);
@@ -50,7 +55,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
             };
             watcher.Created += ObserveChange;
             watcher.Changed += ObserveChange;
-            watcher.Deleted += ObserveChange;
+            watcher.Deleted += ObserveDelete;
             watcher.Renamed += ObserveRename;
             watcher.Error += ObserveError;
             watchers.Add(watcher);
@@ -67,8 +72,9 @@ internal sealed class TemporaryDiskMeter : IDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             if (observerFailure is not null)
             {
-                throw new IOException("The temporary-disk observer lost continuity.", observerFailure);
+                return HighWater;
             }
+            var observed = new Dictionary<string, long>(pathComparer);
             long total = 0;
             foreach (var root in roots)
             {
@@ -86,20 +92,75 @@ internal sealed class TemporaryDiskMeter : IDisposable
                     {
                         continue;
                     }
-                    total = checked(total + new FileInfo(path).Length);
+                    var length = new FileInfo(path).Length;
+                    observed[Path.GetFullPath(path)] = length;
+                    total = checked(total + length);
                 }
+            }
+            currentLengths.Clear();
+            foreach (var item in observed)
+            {
+                currentLengths.Add(item.Key, item.Value);
+                retainedPaths.Add(item.Key);
             }
             UpdateHighWater(total);
             return total;
         }
     }
 
-    public HostMeasuredBound ToFact() => new(
-        "temporary-disk-bytes",
-        "bytes",
-        HighWater,
-        HostContractResources.RequireBound("temporary-disk-bytes"),
-        HostEnforcementClass.InternallyEnforceable);
+    public void ObserveHostAllocation(
+        string path,
+        long currentBytes,
+        long allocatedBytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (currentBytes < 0 || allocatedBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(allocatedBytes));
+        }
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var fullPath = Path.GetFullPath(path);
+            if (!IsGovernedPath(fullPath) || IsIgnoredSentinel(fullPath))
+            {
+                throw new ArgumentException(
+                    "The direct Host allocation must belong to a governed root.",
+                    nameof(path));
+            }
+            currentLengths[fullPath] = allocatedBytes;
+            retainedPaths.Add(fullPath);
+            UpdateHighWater(checked(currentBytes + allocatedBytes));
+        }
+    }
+
+    public bool TryCreateFactWithinThreshold(out HostMeasuredBound? fact)
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var measured = highWater;
+            var threshold = HostContractResources.RequireBound("temporary-disk-bytes");
+            if (measured > threshold)
+            {
+                fact = null;
+                return false;
+            }
+            fact = new HostMeasuredBound(
+                "temporary-disk-bytes",
+                "bytes",
+                measured,
+                threshold,
+                HostEnforcementClass.InternallyEnforceable);
+            return true;
+        }
+    }
+
+    public HostMeasuredBound ToFact() =>
+        TryCreateFactWithinThreshold(out var fact)
+            ? fact!
+            : throw new InvalidOperationException(
+                "The temporary-disk measurement exceeds its protected threshold.");
 
     public void Dispose()
     {
@@ -118,35 +179,149 @@ internal sealed class TemporaryDiskMeter : IDisposable
         }
     }
 
-    private void ObserveChange(object sender, FileSystemEventArgs args) => ReconcileFromEvent();
+    private void ObserveChange(object sender, FileSystemEventArgs args) => ObservePath(args.FullPath);
 
-    private void ObserveRename(object sender, RenamedEventArgs args) => ReconcileFromEvent();
+    private void ObserveDelete(object sender, FileSystemEventArgs args)
+    {
+        if (!IsGovernedPath(args.FullPath) || IsIgnoredSentinel(args.FullPath))
+        {
+            return;
+        }
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+            var fullPath = Path.GetFullPath(args.FullPath);
+            if (!currentLengths.Remove(fullPath) && !retainedPaths.Contains(fullPath))
+            {
+                FailClosed(new IOException(
+                    "A governed temporary entry disappeared before its event-time size was retained."));
+            }
+        }
+    }
+
+    private void ObserveRename(object sender, RenamedEventArgs args)
+    {
+        var oldGoverned = IsGovernedPath(args.OldFullPath)
+            && !IsIgnoredSentinel(args.OldFullPath);
+        var newGoverned = IsGovernedPath(args.FullPath)
+            && !IsIgnoredSentinel(args.FullPath);
+        if (!oldGoverned && !newGoverned)
+        {
+            return;
+        }
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+            if (oldGoverned)
+            {
+                var oldPath = Path.GetFullPath(args.OldFullPath);
+                if (!currentLengths.Remove(oldPath) && !retainedPaths.Contains(oldPath))
+                {
+                    FailClosed(new IOException(
+                        "A governed temporary entry was renamed before its event-time size was retained."));
+                }
+            }
+        }
+        if (newGoverned)
+        {
+            ObservePath(args.FullPath);
+        }
+    }
 
     private void ObserveError(object sender, ErrorEventArgs args)
     {
         lock (gate)
         {
-            observerFailure ??= args.GetException();
+            if (!disposed)
+            {
+                FailClosed(args.GetException());
+            }
         }
     }
 
-    private void ReconcileFromEvent()
+    private void ObservePath(string path)
     {
+        if (!IsGovernedPath(path) || IsIgnoredSentinel(path))
+        {
+            return;
+        }
         try
         {
-            _ = Reconcile();
+            lock (gate)
+            {
+                if (disposed)
+                {
+                    return;
+                }
+                var fullPath = Path.GetFullPath(path);
+                if (Directory.Exists(fullPath))
+                {
+                    _ = Reconcile();
+                    return;
+                }
+                if (!File.Exists(fullPath))
+                {
+                    FailClosed(new IOException(
+                        "A governed temporary entry disappeared before its event-time size was retained."));
+                    return;
+                }
+                var attributes = File.GetAttributes(fullPath);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    FailClosed(new IOException("A governed temporary entry is a reparse point."));
+                    return;
+                }
+                currentLengths[fullPath] = new FileInfo(fullPath).Length;
+                retainedPaths.Add(fullPath);
+                UpdateHighWater(SumCurrentLengths());
+            }
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+            exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
             lock (gate)
             {
                 if (!disposed)
                 {
-                    observerFailure ??= exception;
+                    FailClosed(exception);
                 }
             }
         }
+    }
+
+    private long SumCurrentLengths()
+    {
+        long total = 0;
+        foreach (var length in currentLengths.Values)
+        {
+            total = checked(total + length);
+        }
+        return total;
+    }
+
+    private void FailClosed(Exception exception)
+    {
+        observerFailure ??= exception;
+        UpdateHighWater(checked(HostContractResources.RequireBound("temporary-disk-bytes") + 1));
+    }
+
+    private bool IsGovernedPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        return roots.Any(root => pathComparer.Equals(root, fullPath) || IsContained(root, fullPath));
+    }
+
+    private static bool IsIgnoredSentinel(string path)
+    {
+        var name = Path.GetFileName(path);
+        return name.StartsWith(".contractscribe-hv-freeze-", StringComparison.Ordinal)
+            || name.StartsWith(".contractscribe-hv-release-", StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> EnumerateRegularFiles(string root)

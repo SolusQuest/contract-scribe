@@ -89,7 +89,9 @@ internal static class HostValidationSubjectAdapter
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
         var publicationTarget = ResolvedPublicationTarget.ForValidationFixture(
             request.RepositoryRoot);
-        var fault = ResolveFault(request.PublicationFault);
+        var fault = fixture.Fixture == "failure.sdk-environment"
+            ? ProductionHostFault.EnvironmentUnavailable
+            : ResolveFault(request.PublicationFault);
         var lateAttemptKind = ResolveLateAttempt(request);
         var transitions = new SubjectTransitionRecorder(
             request.TransitionLogPath,
@@ -101,7 +103,8 @@ internal static class HostValidationSubjectAdapter
             lateAttemptKind is not null
                 ? _ => Task.CompletedTask
                 : null,
-            lateAttemptKind ?? ProductionLateAttemptKind.LateCompletion);
+            lateAttemptKind ?? ProductionLateAttemptKind.LateCompletion,
+            RepositoryLoad: ResolveDiagnosticProjectionLoad(fixture.Fixture));
         var productionRequest = new ProductionAuditRequest(
             request.RepositoryRoot,
             ResolveInputPath(fixture.Fixture),
@@ -234,6 +237,10 @@ internal static class HostValidationSubjectAdapter
         "entry.slnf" => "Fixture.slnf",
         "entry.non-csharp" => "Fixture.fsproj",
         "path.lexical-parent" => "../outside.csproj",
+        "failure.sdk-environment" => "Fixture.slnx",
+        "adapter.supporting-success" or
+        "adapter.supporting-failure" or
+        "adapter.supporting-failure-reversed" => "Fixture.slnx",
         _ => "Fixture.csproj",
     };
 
@@ -267,6 +274,47 @@ internal static class HostValidationSubjectAdapter
             ]
             : null;
 
+    private static Func<RepositoryLoadRequest, CancellationToken, Task<RepositoryLoadOutcome>>?
+        ResolveDiagnosticProjectionLoad(string fixtureProfile)
+    {
+        if (fixtureProfile is not (
+            "adapter.supporting-success"
+            or "adapter.supporting-failure"
+            or "adapter.supporting-failure-reversed"))
+        {
+            return null;
+        }
+
+        return async (request, token) =>
+        {
+            var diagnostics = Enumerable.Range(0, 40)
+                .Select(index => new LoaderDiagnostic(
+                    "workspace",
+                    $"loader.supporting-{index:D2}",
+                    "warning"));
+            if (fixtureProfile == "adapter.supporting-failure-reversed")
+            {
+                diagnostics = diagnostics.Reverse();
+            }
+            var facts = diagnostics.ToArray();
+            if (fixtureProfile != "adapter.supporting-success")
+            {
+                return RepositoryLoadOutcome.Failure(
+                    new LoaderFact("workspace", "loader.test-stimulus"),
+                    diagnostics: facts);
+            }
+
+            var loaded = await new RepositoryLoader(observer: null)
+                .LoadAsync(request, token)
+                .ConfigureAwait(false);
+            if (loaded.Status != RepositoryLoadStatus.Success || loaded.Session is null)
+            {
+                return loaded;
+            }
+            return RepositoryLoadOutcome.Success(loaded.Session, facts);
+        };
+    }
+
     private static ValidationSubjectResponse CreateResponse(
         ValidationSubjectRequest request,
         string fixtureProfile,
@@ -287,11 +335,14 @@ internal static class HostValidationSubjectAdapter
                 "canonical-json-utf8-no-bom-single-lf",
                 true)
             : null;
-        var diagnostics = terminal.Diagnostics
-            .Select(diagnostic => new NormalizedDiagnosticResponse(
-                diagnostic.Code,
-                HostVocabulary.GetId(diagnostic.Stage)))
-            .ToArray();
+        IReadOnlyList<NormalizedDiagnosticResponse> diagnostics = failure is null
+            ? []
+            :
+            [
+                new NormalizedDiagnosticResponse(
+                    failure.Code,
+                    HostVocabulary.GetId(failure.Stage)),
+            ];
         var toolchain = terminal.Toolchain;
         var toolchainSelected = toolchain.SelectionState == HostToolchainSelectionState.Selected;
         var measuredBounds = CreateMeasuredBounds(fixtureProfile, diagnostics, terminal);
