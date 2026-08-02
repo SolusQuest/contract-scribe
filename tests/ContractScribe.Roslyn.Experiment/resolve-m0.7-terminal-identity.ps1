@@ -79,7 +79,7 @@ function Resolve-M07TerminalIdentity {
     if ([string]::IsNullOrWhiteSpace($resolvedRunId) -or $resolvedRunId -cnotmatch "^[1-9][0-9]*$") { throw "The M0.7 run ID must be a non-empty decimal string." }
     $resolvedRunAttempt = ConvertTo-M07PositiveInteger $resolvedAttemptInput "The M0.7 run attempt"
 
-    $expectedRid = switch ($resolvedRunnerOs) {
+    $expectedRid = switch -CaseSensitive ($resolvedRunnerOs) {
         "Linux" { "linux-x64" }
         "Windows" { "win-x64" }
         default { throw "The M0.7 runner OS must be Linux or Windows." }

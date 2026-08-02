@@ -134,6 +134,8 @@ try {
         @{ PrHeadCommit = "ABCDEF"; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "2"; RunnerOs = "Linux"; Rid = "linux-x64" },
         @{ PrHeadCommit = $pullHead; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "1.0"; RunnerOs = "Linux"; Rid = "linux-x64" },
         @{ PrHeadCommit = $pullHead; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "2"; RunnerOs = "macOS"; Rid = "linux-x64" },
+        @{ PrHeadCommit = $pullHead; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "2"; RunnerOs = "windows"; Rid = "win-x64" },
+        @{ PrHeadCommit = $pullHead; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "2"; RunnerOs = "LINUX"; Rid = "linux-x64" },
         @{ PrHeadCommit = $pullHead; ValidationMergeCommit = $mergeHead; RunId = "300"; RunAttempt = "2"; RunnerOs = "Linux"; Rid = "win-x64" }
     )) {
         $threw = $false

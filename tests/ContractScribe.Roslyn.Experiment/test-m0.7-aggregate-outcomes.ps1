@@ -302,6 +302,21 @@ Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1
 $result = Invoke-SyntheticAggregate $scenario 1
 Assert-Aggregate $result 1 "protocol-failure" "aggregate-evidence-invalid"
 
+$scenario = New-Scenario "case-variant-newer-cell"
+Write-SyntheticSuccess (Join-Path $scenario "linux-a1") "Linux" 1
+Write-SyntheticSuccess (Join-Path $scenario "windows-a1") "Windows" 1
+Write-SyntheticSuccess (Join-Path $scenario "lowercase-windows-a2") "windows" 2 -Rid "win-x64"
+$result = Invoke-SyntheticAggregate $scenario 2
+Assert-Aggregate $result 1 "protocol-failure" "aggregate-evidence-invalid"
+if ($null -ne $result.document.PSObject.Properties["cellSelections"]) { throw "A case-variant cell failure emitted selections instead of failing before selection." }
+
+$scenario = New-Scenario "case-variant-failure-outcome"
+Write-SyntheticFailure (Join-Path $scenario "linux") "Linux" 1 "Inconclusive" "synthetic-case-variant"
+Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1
+$result = Invoke-SyntheticAggregate $scenario 1
+Assert-Aggregate $result 1 "protocol-failure" "aggregate-evidence-invalid"
+if ($null -ne $result.document.PSObject.Properties["cellSelections"]) { throw "A case-variant failure outcome emitted selections instead of failing before selection." }
+
 $scenario = New-Scenario "cross-wired-cell"
 Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -Rid "win-x64"
 Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1

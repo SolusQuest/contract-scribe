@@ -148,7 +148,7 @@ $records = @($terminalFiles | ForEach-Object {
     }
     else {
         Assert-Condition ($document.formatVersion -ceq "contractscribe-m0.7-failure-evidence-v1") "A failure evidence format is unsupported."
-        Assert-Condition ($document.aggregateOutcome -in @("baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive")) "A failure evidence document has an invalid outcome."
+        Assert-Condition ($document.aggregateOutcome -cin @("baseline-invalidated", "protocol-failure", "baseline-failure", "inconclusive")) "A failure evidence document has an invalid outcome."
         Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$document.reasonCode)) "A failure evidence document has no bounded reason code."
         Assert-Condition ($document.retainedFailure -eq $true) "A failure evidence document is not retained failure evidence."
     }
@@ -157,7 +157,7 @@ $records = @($terminalFiles | ForEach-Object {
     Assert-Condition ($document.ci.runId -is [string] -and $document.ci.runId -cmatch "^[1-9][0-9]*$") "A terminal evidence run ID is invalid."
     $runAttempt = ConvertFrom-JsonPositiveInteger $document.ci.runAttempt "A terminal evidence run attempt"
     Assert-Condition ($runAttempt -le $script:currentRunAttempt) "A terminal evidence record claims a future run attempt."
-    Assert-Condition ($document.runnerOs -in @("Linux", "Windows")) "A terminal evidence runner OS is unsupported."
+    Assert-Condition ($document.runnerOs -cin @("Linux", "Windows")) "A terminal evidence runner OS is unsupported."
     $expectedRid = if ($document.runnerOs -ceq "Linux") { "linux-x64" } else { "win-x64" }
     Assert-Condition ($document.rid -ceq $expectedRid) "A terminal evidence runner OS and RID are cross-wired."
     Assert-Condition (Test-CommitIdentity $document.protocolPrHeadCommit) "A terminal evidence PR head is invalid."
@@ -313,7 +313,7 @@ $selectedFailures = @($selectedRecords | Where-Object { $_.kind -eq "failure" })
 $winningObservation = $null
 if ($selectedFailures.Count -gt 0) {
     $failureOutcomes = @($selectedFailures.document.aggregateOutcome)
-    $selectedFailureOutcome = if ($failureOutcomes -contains "baseline-invalidated") { "baseline-invalidated" } elseif ($failureOutcomes -contains "protocol-failure") { "protocol-failure" } elseif ($failureOutcomes -contains "baseline-failure") { "baseline-failure" } else { "inconclusive" }
+    $selectedFailureOutcome = if ($failureOutcomes -ccontains "baseline-invalidated") { "baseline-invalidated" } elseif ($failureOutcomes -ccontains "protocol-failure") { "protocol-failure" } elseif ($failureOutcomes -ccontains "baseline-failure") { "baseline-failure" } else { "inconclusive" }
     $winningObservation = [pscustomobject][ordered]@{ aggregateOutcome = $selectedFailureOutcome; reasonCode = "required-cell-failure" }
 }
 foreach ($observation in $selectedSuccessFailures) {
