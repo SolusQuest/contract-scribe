@@ -97,6 +97,8 @@ trap {
     exit 1
 }
 
+. (Join-Path $PSScriptRoot "m0.7-output-policy.ps1")
+
 Set-AggregateFailureContext "protocol-failure" "aggregate-evidence-invalid"
 if ([string]::IsNullOrWhiteSpace($ExpectedRunId)) { $ExpectedRunId = $env:GITHUB_RUN_ID }
 if ([string]::IsNullOrWhiteSpace($ExpectedRunAttempt)) { $ExpectedRunAttempt = $env:GITHUB_RUN_ATTEMPT }
@@ -252,6 +254,9 @@ if ($ValidateResult -ne "success") {
 $cells = @($selectedRecords | Sort-Object runnerOs, rid | ForEach-Object {
     $record = $_
     $document = $record.document
+    Set-AggregateFailureContext "protocol-failure" "public-output-safety"
+    $rawEvidence = Get-Content -LiteralPath $record.file.FullName -Raw
+    Assert-Condition (Test-M07PublicOutputSafe $rawEvidence) "A selected cell evidence document contains a path or credential-like value."
     Set-AggregateFailureContext "baseline-failure" "cross-cell-byte-mismatch"
     Assert-Condition ($document.comparison.crossRunEquality -eq $true) "A selected cell did not prove fresh-run byte equality."
     Set-AggregateFailureContext "protocol-failure" "aggregate-evidence-invalid"

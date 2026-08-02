@@ -46,7 +46,8 @@ function Write-SyntheticSuccess {
         [switch]$OmitPayloads,
         [switch]$OmitRunAttempt,
         [bool]$CrossRunEquality = $true,
-        [bool]$OracleEquality = $true
+        [bool]$OracleEquality = $true,
+        [string]$UnsafeExtraContent
     )
     if ([string]::IsNullOrWhiteSpace($Rid)) { $Rid = Get-CellRid $RunnerOs }
     if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = $script:runId }
@@ -100,6 +101,7 @@ function Write-SyntheticSuccess {
         runs = $runs
         ci = $ci
     }
+    if (-not [string]::IsNullOrEmpty($UnsafeExtraContent)) { $document["unexpectedDiagnostic"] = $UnsafeExtraContent }
     [IO.File]::WriteAllText((Join-Path $Directory "m0.7-evidence.json"), ($document | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
 }
 
@@ -255,6 +257,15 @@ Write-SyntheticSuccess (Join-Path $scenario "windows-a1") "Windows" 1
 $result = Invoke-SyntheticAggregate $scenario 2
 Assert-Aggregate $result 0 "succeeded"
 
+$scenario = New-Scenario "superseded-success-public-output-unsafe"
+Write-SyntheticSuccess (Join-Path $scenario "linux-a1-unsafe") "Linux" 1 -UnsafeExtraContent "Authorization: Bearer synthetic-secret"
+Write-SyntheticSuccess (Join-Path $scenario "linux-a2") "Linux" 2
+Write-SyntheticSuccess (Join-Path $scenario "windows-a1") "Windows" 1
+$result = Invoke-SyntheticAggregate $scenario 2
+Assert-Aggregate $result 0 "succeeded"
+$linuxSelection = $result.document.cellSelections | Where-Object runnerOs -eq "Linux"
+if ($linuxSelection.selectedRunAttempt -ne 2 -or $linuxSelection.supersededRecordCount -ne 1) { throw "An unsafe superseded success changed the selected current record." }
+
 $scenario = New-Scenario "same-key-success-failure-conflict"
 Write-SyntheticSuccess (Join-Path $scenario "linux-success") "Linux" 1
 Write-SyntheticFailure (Join-Path $scenario "linux-failure") "Linux" 1
@@ -336,6 +347,13 @@ Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1
 $result = Invoke-SyntheticAggregate $scenario 1
 Assert-Aggregate $result 1 "protocol-failure" "aggregate-evidence-invalid"
 
+$scenario = New-Scenario "selected-success-public-output-unsafe"
+Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -UnsafeExtraContent "Authorization: Bearer synthetic-secret"
+Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1
+$result = Invoke-SyntheticAggregate $scenario 1
+Assert-Aggregate $result 1 "protocol-failure" "public-output-safety"
+if (@($result.document.cellSelections).Count -ne 2) { throw "A selected unsafe success did not retain the complete selection summary." }
+
 $scenario = New-Scenario "selected-cross-run-declaration-failure"
 Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -CrossRunEquality $false
 Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1
@@ -369,4 +387,4 @@ foreach ($vector in $precedenceVectors) {
 }
 
 Remove-Item -LiteralPath $root -Recurse -Force
-Write-Output "M0.7 aggregate attempt vectors passed: per-cell rerun selection, fail-closed identity, bounded supersession, and existing outcome precedence are retained."
+Write-Output "M0.7 aggregate attempt vectors passed: per-cell rerun selection, fail-closed identity, selected-record public safety, bounded supersession, and existing outcome precedence are retained."
