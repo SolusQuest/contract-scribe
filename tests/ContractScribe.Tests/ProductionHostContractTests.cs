@@ -360,9 +360,114 @@ public sealed class ProductionHostContractTests
         Assert.Same(cancellation, terminal);
     }
 
+    [Fact]
+    public void AtomicCauseAcceptance_InstallsTheCauseBeforeLaterTerminalDecisions()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var selected = HostToolchainFact.Selected(
+            "10.0.102",
+            "10.0.2",
+            "18.0.0",
+            "X64");
+        coordinator.TransitionExecutionState(HostStage.Audit, selected);
+
+        Assert.True(coordinator.TryAcceptCause(
+            (stage, toolchain, sequence) =>
+            {
+                Assert.Equal(HostStage.Audit, stage);
+                Assert.Same(selected, toolchain);
+                return Failure(sequence, "host.audit.cancelled", toolchain);
+            },
+            out var cancellation));
+
+        var stageFailure = Failure(coordinator, "host.audit.aggregation-failed");
+        Assert.False(coordinator.TryCommitNonSuccess(stageFailure, out var failureWinner));
+        Assert.Same(cancellation, failureWinner);
+        Assert.False(coordinator.TryAcquirePublicationDecision(out _, out var publicationWinner));
+        Assert.Same(cancellation, publicationWinner);
+    }
+
+    [Fact]
+    public void AtomicExecutionStateTransition_PreservesBothSidesOfToolchainSelection()
+    {
+        var before = new HostTerminalCoordinator();
+        before.TransitionExecutionState(
+            HostStage.SdkDiscovery,
+            HostToolchainFact.NotSelected);
+        Assert.True(before.TryAcceptCause(
+            (stage, toolchain, sequence) =>
+                Failure(sequence, $"host.{HostVocabulary.GetId(stage)}.cancelled", toolchain),
+            out var notSelected));
+        Assert.Equal(HostStage.SdkDiscovery, notSelected.Failure!.Stage);
+        Assert.Equal(HostToolchainSelectionState.NotSelected, notSelected.Toolchain.SelectionState);
+
+        var after = new HostTerminalCoordinator();
+        var selected = HostToolchainFact.Selected(
+            "10.0.102",
+            "10.0.2",
+            "18.0.0",
+            "X64");
+        HostToolchainFact local = HostToolchainFact.NotSelected;
+        after.TransitionExecutionState(
+            HostStage.SdkDiscovery,
+            selected,
+            () => local = selected);
+        Assert.Same(selected, local);
+        Assert.True(after.TryAcceptCause(
+            (stage, toolchain, sequence) =>
+                Failure(sequence, $"host.{HostVocabulary.GetId(stage)}.cancelled", toolchain),
+            out var selectedCause));
+        Assert.Equal(HostStage.SdkDiscovery, selectedCause.Failure!.Stage);
+        Assert.Same(selected, selectedCause.Toolchain);
+    }
+
+    [Fact]
+    public async Task AcceptedCause_RetainsTheStageWhileItsCallbackIsPaused()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var selected = HostToolchainFact.Selected(
+            "10.0.102",
+            "10.0.2",
+            "18.0.0",
+            "X64");
+        coordinator.TransitionExecutionState(HostStage.Classification, selected);
+        var acceptedSignal = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var callback = Task.Run(async () =>
+        {
+            Assert.True(coordinator.TryAcceptCause(
+                (stage, toolchain, sequence) =>
+                    Failure(sequence, $"host.{HostVocabulary.GetId(stage)}.cancelled", toolchain),
+                out var accepted));
+            acceptedSignal.SetResult();
+            await releaseCallback.Task.ConfigureAwait(false);
+            return accepted;
+        });
+
+        await acceptedSignal.Task;
+        coordinator.TransitionExecutionState(HostStage.Audit, selected);
+        releaseCallback.SetResult();
+
+        var cause = await callback;
+        Assert.Equal(HostStage.Classification, cause.Failure!.Stage);
+        Assert.Same(selected, cause.Toolchain);
+    }
+
     private static HostTerminalRecord Failure(
         HostTerminalCoordinator coordinator,
         string code)
+        => Failure(
+            coordinator.NextCauseSequence(),
+            code,
+            HostToolchainFact.NotSelected);
+
+    private static HostTerminalRecord Failure(
+        long acceptedSequence,
+        string code,
+        HostToolchainFact toolchain)
     {
         var row = HostContractResources.RequireFailure(code);
         var diagnostic = new HostDiagnosticFact(
@@ -376,11 +481,11 @@ public sealed class ProductionHostContractTests
             HostTerminalState.CommittedNonSuccess,
             row,
             Provenance(),
-            HostToolchainFact.NotSelected,
+            toolchain,
             new HostOutputCommit(HostArtifactState.Invalidated, null, 0),
             [diagnostic],
             ImmutableArray<HostMeasuredBound>.Empty,
-            coordinator.NextCauseSequence());
+            acceptedSequence);
     }
 
     private static HostBuildProvenance Provenance() => new(

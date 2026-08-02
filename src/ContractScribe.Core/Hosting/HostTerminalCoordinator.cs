@@ -7,6 +7,8 @@ public sealed class HostTerminalCoordinator
     private readonly object gate = new();
     private long nextSequence;
     private bool publicationDecisionAcquired;
+    private HostStage currentStage = HostStage.Input;
+    private HostToolchainFact currentToolchain = HostToolchainFact.NotSelected;
     private HostTerminalRecord? registeredCause;
     private HostTerminalRecord? terminal;
     private CommittedCanonicalResult? committedResult;
@@ -44,7 +46,80 @@ public sealed class HostTerminalCoordinator
         }
     }
 
-    public long NextCauseSequence() => Interlocked.Increment(ref nextSequence);
+    public long NextCauseSequence()
+    {
+        lock (gate)
+        {
+            return ++nextSequence;
+        }
+    }
+
+    public void TransitionExecutionState(
+        HostStage stage,
+        HostToolchainFact toolchain,
+        Action? transition = null)
+    {
+        ArgumentNullException.ThrowIfNull(toolchain);
+        lock (gate)
+        {
+            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            {
+                throw new InvalidOperationException(
+                    "Execution state cannot advance after terminal linearization.");
+            }
+            transition?.Invoke();
+            currentStage = stage;
+            currentToolchain = toolchain;
+        }
+    }
+
+    public bool TryAcceptCause(
+        Func<HostStage, HostToolchainFact, long, HostTerminalRecord> candidateFactory,
+        out HostTerminalRecord accepted)
+    {
+        ArgumentNullException.ThrowIfNull(candidateFactory);
+        lock (gate)
+        {
+            var candidate = candidateFactory(currentStage, currentToolchain, ++nextSequence);
+            ValidateNonSuccess(candidate);
+            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            {
+                accepted = terminal ?? candidate;
+                return false;
+            }
+            if (registeredCause is null || CompareCause(candidate, registeredCause) < 0)
+            {
+                registeredCause = candidate;
+            }
+            accepted = registeredCause;
+            return ReferenceEquals(registeredCause, candidate);
+        }
+    }
+
+    public HostTerminalRecord CommitNonSuccessOrGetEarlierCause(
+        Func<long, HostTerminalRecord> candidateFactory,
+        out bool committed)
+    {
+        ArgumentNullException.ThrowIfNull(candidateFactory);
+        lock (gate)
+        {
+            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            {
+                throw new InvalidOperationException(
+                    "A non-success cause cannot commit after terminal linearization.");
+            }
+            if (registeredCause is not null)
+            {
+                committed = false;
+                return registeredCause;
+            }
+            var candidate = candidateFactory(++nextSequence);
+            ValidateNonSuccess(candidate);
+            terminal = candidate;
+            committed = true;
+            return candidate;
+        }
+    }
 
     public bool TryRegisterCause(
         HostTerminalRecord candidate,

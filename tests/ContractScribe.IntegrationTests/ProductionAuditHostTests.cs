@@ -696,8 +696,9 @@ public sealed class ProductionAuditHostTests
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                StageBoundary: (stage, _) =>
+                StageBoundary: (stage, cancellationToken) =>
                 {
+                    _ = cancellationToken;
                     if (stage == cancelledStage)
                     {
                         cancellation.Cancel();
@@ -926,6 +927,136 @@ public sealed class ProductionAuditHostTests
 
         Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
         Assert.Equal("host.sdk-discovery.cancelled", outcome.Terminal.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task AcceptedCancellation_BlocksALaterStageFailureWhileTheCallbackIsPaused()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        using var accepted = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, cancellationToken) =>
+                {
+                    _ = cancellationToken;
+                    if (stage != HostStage.Audit)
+                    {
+                        return Task.CompletedTask;
+                    }
+                    _ = Task.Run(caller.Cancel);
+                    Assert.True(accepted.Wait(TimeSpan.FromSeconds(5)));
+                    return Task.FromException(new InvalidOperationException("test-only stage failure"));
+                },
+                LateCompletion: _ =>
+                {
+                    release.Set();
+                    return Task.CompletedTask;
+                },
+                AfterCauseAccepted: _ =>
+                {
+                    accepted.Set();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+                }),
+            caller.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.audit.cancelled", outcome.Terminal.Failure?.Code);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task AcceptedCancellation_BlocksPublicationWhileTheCallbackIsPaused()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        using var accepted = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                Gate: (point, cancellationToken) =>
+                {
+                    _ = cancellationToken;
+                    if (point == ProductionHostControlPoint.BeforePublicationDecision)
+                    {
+                        _ = Task.Run(caller.Cancel);
+                        Assert.True(accepted.Wait(TimeSpan.FromSeconds(5)));
+                    }
+                    return Task.CompletedTask;
+                },
+                LateCompletion: _ =>
+                {
+                    release.Set();
+                    return Task.CompletedTask;
+                },
+                AfterCauseAccepted: _ =>
+                {
+                    accepted.Set();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+                }),
+            caller.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.publication.cancelled", outcome.Terminal.Failure?.Code);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task CancellationImmediatelyBeforeAndAfterToolchainSelectionPreservesItsExactSide()
+    {
+        await using var beforeFixture = await LoaderFixture.CreateAsync();
+        var beforeResult = Path.Join(beforeFixture.Root, "TestResults", "audit-result.json");
+        using var beforeCaller = new CancellationTokenSource();
+        var before = await RunAsync(
+            beforeFixture,
+            beforeResult,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, token) =>
+                {
+                    if (stage == HostStage.SdkDiscovery)
+                    {
+                        beforeCaller.Cancel();
+                        return Task.FromException(new OperationCanceledException(token));
+                    }
+                    return Task.CompletedTask;
+                }),
+            beforeCaller.Token);
+        Assert.Equal("host.sdk-discovery.cancelled", before.Terminal.Failure?.Code);
+        Assert.Equal(
+            HostToolchainSelectionState.NotSelected,
+            before.Terminal.Toolchain.SelectionState);
+
+        await using var afterFixture = await LoaderFixture.CreateAsync();
+        var afterResult = Path.Join(afterFixture.Root, "TestResults", "audit-result.json");
+        using var afterCaller = new CancellationTokenSource();
+        HostToolchainFact? selectedAtBoundary = null;
+        var after = await RunAsync(
+            afterFixture,
+            afterResult,
+            new ProductionAuditHostControls(
+                AfterToolchainSelection: selected =>
+                {
+                    selectedAtBoundary = selected;
+                    afterCaller.Cancel();
+                }),
+            afterCaller.Token);
+
+        Assert.NotNull(selectedAtBoundary);
+        Assert.Equal(HostExecutionOutcome.Cancelled, after.Terminal.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.cancelled", after.Terminal.Failure?.Code);
+        Assert.Equal(selectedAtBoundary, after.Terminal.Toolchain);
+        Assert.Equal(
+            HostToolchainSelectionState.Selected,
+            after.Terminal.Toolchain.SelectionState);
     }
 
     [Fact]

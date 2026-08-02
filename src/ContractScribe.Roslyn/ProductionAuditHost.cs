@@ -69,38 +69,27 @@ internal sealed class ProductionAuditHost
                 cancellationToken,
                 totalDeadline.Token);
             var totalToken = totalTimeout.Token;
-            var causeGate = new object();
-            var currentStage = HostStage.Input;
-            var currentToolchain = toolchain;
-
-            void EnterStage(HostStage stage)
-            {
-                lock (causeGate)
-                {
-                    currentStage = stage;
-                    currentToolchain = toolchain;
-                }
-            }
 
             void RegisterInterruption(HostExecutionOutcome outcome)
             {
-                var acceptedSequence = coordinator.NextCauseSequence();
-                HostStage acceptedStage;
-                HostToolchainFact acceptedToolchain;
-                lock (causeGate)
+                if (coordinator.TryAcceptCause(
+                        (acceptedStage, acceptedToolchain, acceptedSequence) =>
+                        {
+                            var suffix = outcome == HostExecutionOutcome.Cancelled
+                                ? "cancelled"
+                                : "timeout";
+                            return CreateFailureRecord(
+                                coordinator,
+                                actualProvenance,
+                                acceptedToolchain,
+                                $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
+                                HostArtifactState.Invalidated,
+                                acceptedSequence: acceptedSequence);
+                        },
+                        out var accepted))
                 {
-                    acceptedStage = currentStage;
-                    acceptedToolchain = currentToolchain;
+                    controls.AfterCauseAccepted?.Invoke(accepted);
                 }
-                var suffix = outcome == HostExecutionOutcome.Cancelled ? "cancelled" : "timeout";
-                var candidate = CreateFailureRecord(
-                    coordinator,
-                    actualProvenance,
-                    acceptedToolchain,
-                    $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
-                    HostArtifactState.Invalidated,
-                    acceptedSequence: acceptedSequence);
-                _ = coordinator.TryRegisterCause(candidate, out _);
             }
 
             using var callerCauseRegistration = cancellationToken.Register(
@@ -173,7 +162,7 @@ internal sealed class ProductionAuditHost
                     loaderFact).ConfigureAwait(false);
             }
             RegisteredToolchain registered;
-            EnterStage(HostStage.SdkDiscovery);
+            coordinator.TransitionExecutionState(HostStage.SdkDiscovery, toolchain);
             try
             {
                 if (controls.Fault == ProductionHostFault.EnvironmentUnavailable)
@@ -205,12 +194,16 @@ internal sealed class ProductionAuditHost
                     _ = ObserveLateSdkDiscoveryAsync(sdkTask);
                     throw;
                 }
-                toolchain = HostToolchainFact.Selected(
+                var selectedToolchain = HostToolchainFact.Selected(
                     registered.Identity.SdkVersion,
                     registered.Identity.RuntimeVersion,
                     registered.Identity.MsbuildVersion,
                     registered.Identity.Architecture);
-                EnterStage(HostStage.SdkDiscovery);
+                coordinator.TransitionExecutionState(
+                    HostStage.SdkDiscovery,
+                    selectedToolchain,
+                    () => toolchain = selectedToolchain);
+                controls.AfterToolchainSelection?.Invoke(selectedToolchain);
                 _ = processMeter.SelectToolchain(registered);
             }
             catch (OperationCanceledException)
@@ -257,7 +250,7 @@ internal sealed class ProductionAuditHost
 
             RepositoryLoadOutcome load;
             Task<RepositoryLoadOutcome>? loaderTask = null;
-            EnterStage(HostStage.WorkspaceLoad);
+            coordinator.TransitionExecutionState(HostStage.WorkspaceLoad, toolchain);
             using var workspaceDeadline = new CancellationTokenSource();
             workspaceDeadline.CancelAfter(controls.Deadline("workspace-load-timeout"));
             using var workspaceCauseRegistration = workspaceDeadline.Token.Register(
@@ -364,7 +357,7 @@ internal sealed class ProductionAuditHost
             var session = load.Session;
             ClassifiedRepositorySession classified;
             ClassificationSet classifications;
-            EnterStage(HostStage.Classification);
+            coordinator.TransitionExecutionState(HostStage.Classification, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.Classification, totalToken)
@@ -420,7 +413,7 @@ internal sealed class ProductionAuditHost
             }
 
             ObservedRepositorySession observed;
-            EnterStage(HostStage.DocumentationObservation);
+            coordinator.TransitionExecutionState(HostStage.DocumentationObservation, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.DocumentationObservation, totalToken)
@@ -471,7 +464,7 @@ internal sealed class ProductionAuditHost
             }
 
             PolicyEvidenceExtractionOutcome extracted;
-            EnterStage(HostStage.PolicyEvidence);
+            coordinator.TransitionExecutionState(HostStage.PolicyEvidence, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.PolicyEvidence, totalToken)
@@ -526,7 +519,7 @@ internal sealed class ProductionAuditHost
             }
 
             byte[] canonical;
-            EnterStage(HostStage.Audit);
+            coordinator.TransitionExecutionState(HostStage.Audit, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.Audit, totalToken).ConfigureAwait(false);
@@ -572,7 +565,7 @@ internal sealed class ProductionAuditHost
             }
 
             AuditOutcome auditOutcome;
-            EnterStage(HostStage.ResultValidation);
+            coordinator.TransitionExecutionState(HostStage.ResultValidation, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.ResultValidation, totalToken)
@@ -612,7 +605,7 @@ internal sealed class ProductionAuditHost
             }
 
             Task? shutdownTask = null;
-            EnterStage(HostStage.Shutdown);
+            coordinator.TransitionExecutionState(HostStage.Shutdown, toolchain);
             try
             {
                 using var shutdownDeadline = new CancellationTokenSource();
@@ -669,7 +662,7 @@ internal sealed class ProductionAuditHost
                     diagnostics: hostDiagnostics).ConfigureAwait(false);
             }
 
-            EnterStage(HostStage.Publication);
+            coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
             try
             {
                 await controls.ReachStageAsync(HostStage.Publication, totalToken)
@@ -745,8 +738,6 @@ internal sealed class ProductionAuditHost
                 return await CommitRegisteredInterruptionAsync(
                     coordinator,
                     actualProvenance,
-                    toolchain,
-                    HostStage.Publication,
                     HostExecutionOutcome.Timeout,
                     controls,
                     transitions,
@@ -974,8 +965,6 @@ internal sealed class ProductionAuditHost
     private static async Task<ProductionAuditOutcome> CommitRegisteredInterruptionAsync(
         HostTerminalCoordinator coordinator,
         HostBuildProvenance provenance,
-        HostToolchainFact toolchain,
-        HostStage stage,
         HostExecutionOutcome outcome,
         ProductionAuditHostControls controls,
         List<string> transitions,
@@ -984,16 +973,23 @@ internal sealed class ProductionAuditHost
         bool cleanupSucceeded,
         params HostMeasuredBound[] measuredBounds)
     {
-        var suffix = outcome == HostExecutionOutcome.Cancelled ? "cancelled" : "timeout";
-        var candidate = CreateFailureRecord(
-            coordinator,
-            provenance,
-            toolchain,
-            $"host.{HostVocabulary.GetId(stage)}.{suffix}",
-            HostArtifactState.Invalidated,
-            diagnostics,
-            measuredBounds: measuredBounds);
-        _ = coordinator.TryRegisterCause(candidate, out var winningCause);
+        _ = coordinator.TryAcceptCause(
+            (acceptedStage, acceptedToolchain, acceptedSequence) =>
+            {
+                var suffix = outcome == HostExecutionOutcome.Cancelled
+                    ? "cancelled"
+                    : "timeout";
+                return CreateFailureRecord(
+                    coordinator,
+                    provenance,
+                    acceptedToolchain,
+                    $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
+                    HostArtifactState.Invalidated,
+                    diagnostics,
+                    measuredBounds,
+                    acceptedSequence);
+            },
+            out var winningCause);
         if (!TryCommitRegisteredCause(
                 coordinator,
                 winningCause,
@@ -1068,27 +1064,22 @@ internal sealed class ProductionAuditHost
         IEnumerable<HostDiagnosticFact>? diagnostics = null,
         IEnumerable<HostMeasuredBound>? measuredBounds = null)
     {
-        var failure = CreateFailureRecord(
-            coordinator,
-            provenance,
-            toolchain,
-            code,
-            artifactState,
-            diagnostics,
-            measuredBounds);
-        HostTerminalRecord accepted;
-        if (coordinator.TryCommitNonSuccess(failure, out accepted))
-        {
-            if (!ReferenceEquals(accepted, failure))
-            {
-                throw new InvalidOperationException("The committed failure identity changed during arbitration.");
-            }
-        }
-        else if (coordinator.RegisteredCause is { } registered)
+        var accepted = coordinator.CommitNonSuccessOrGetEarlierCause(
+            acceptedSequence => CreateFailureRecord(
+                coordinator,
+                provenance,
+                toolchain,
+                code,
+                artifactState,
+                diagnostics,
+                measuredBounds,
+                acceptedSequence),
+            out var committed);
+        if (!committed)
         {
             if (!TryCommitRegisteredCause(
                     coordinator,
-                    registered,
+                    accepted,
                     cleanupSucceeded: true,
                     diagnostics,
                     measuredBounds,
@@ -1096,10 +1087,6 @@ internal sealed class ProductionAuditHost
             {
                 throw new InvalidOperationException("The earlier accepted terminal cause could not be committed.");
             }
-        }
-        else
-        {
-            throw new InvalidOperationException("A stale terminal failure attempt was rejected.");
         }
         RecordAcceptedFailure(controls, transitions, accepted);
         await RunRejectedLateAttemptAsync(
