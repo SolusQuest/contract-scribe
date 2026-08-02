@@ -9,7 +9,7 @@ internal sealed class AtomicResultPublisher
     private readonly string finalPath;
     private readonly string parentPath;
     private readonly string stagingPath;
-    private readonly DateTime parentCreationTimeUtc;
+    private readonly DateTime? stableParentCreationTimeUtc;
     private readonly ProductionAuditHostControls controls;
     private string? stagedSha256;
 
@@ -24,7 +24,12 @@ internal sealed class AtomicResultPublisher
         this.parentPath = parentPath;
         stagingPath = Path.Join(parentPath, StagingFileName);
         this.controls = controls;
-        parentCreationTimeUtc = new DirectoryInfo(parentPath).CreationTimeUtc;
+        // Unix file systems without birth-time support synthesize CreationTimeUtc
+        // from mutable status/write timestamps. Creating the staging file can
+        // therefore change that value even though the directory is unchanged.
+        stableParentCreationTimeUtc = OperatingSystem.IsWindows()
+            ? new DirectoryInfo(parentPath).CreationTimeUtc
+            : null;
     }
 
     public string StagingPath => stagingPath;
@@ -153,7 +158,8 @@ internal sealed class AtomicResultPublisher
         EnsureNoReparsePath(repositoryRoot, parentPath);
         var parent = new DirectoryInfo(parentPath);
         if (!parent.Exists
-            || parent.CreationTimeUtc != parentCreationTimeUtc
+            || (stableParentCreationTimeUtc is { } expectedCreationTimeUtc
+                && parent.CreationTimeUtc != expectedCreationTimeUtc)
             || (parent.Attributes & FileAttributes.ReparsePoint) != 0)
         {
             throw new PublicationException("host.publication.finalization-failed");
