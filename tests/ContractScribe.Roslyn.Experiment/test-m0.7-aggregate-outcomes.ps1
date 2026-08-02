@@ -354,6 +354,26 @@ $result = Invoke-SyntheticAggregate $scenario 1
 Assert-Aggregate $result 1 "protocol-failure" "public-output-safety"
 if (@($result.document.cellSelections).Count -ne 2) { throw "A selected unsafe success did not retain the complete selection summary." }
 
+$scenario = New-Scenario "selected-unsafe-success-with-inconclusive-failure"
+Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -UnsafeExtraContent "Authorization: Bearer synthetic-secret"
+Write-SyntheticFailure (Join-Path $scenario "windows") "Windows" 1 "inconclusive" "synthetic-inconclusive"
+$result = Invoke-SyntheticAggregate $scenario 1
+Assert-Aggregate $result 1 "protocol-failure" "public-output-safety"
+if (@($result.document.cellSelections).Count -ne 2) { throw "A mixed unsafe-success failure did not retain the complete selection summary." }
+
+$scenario = New-Scenario "selected-unsafe-success-with-baseline-invalidated-failure"
+Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -UnsafeExtraContent "Authorization: Bearer synthetic-secret"
+Write-SyntheticFailure (Join-Path $scenario "windows") "Windows" 1 "baseline-invalidated" "synthetic-baseline-invalidated"
+$result = Invoke-SyntheticAggregate $scenario 1
+Assert-Aggregate $result 1 "baseline-invalidated" "required-cell-failure"
+if (@($result.document.cellSelections).Count -ne 2) { throw "A mixed baseline-invalidated failure did not retain the complete selection summary." }
+
+$scenario = New-Scenario "selected-invalid-success-with-inconclusive-failure"
+Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -OmitPayloads
+Write-SyntheticFailure (Join-Path $scenario "windows") "Windows" 1 "inconclusive" "synthetic-inconclusive"
+$result = Invoke-SyntheticAggregate $scenario 1
+Assert-Aggregate $result 1 "protocol-failure" "aggregate-evidence-invalid"
+
 $scenario = New-Scenario "selected-cross-run-declaration-failure"
 Write-SyntheticSuccess (Join-Path $scenario "linux") "Linux" 1 -CrossRunEquality $false
 Write-SyntheticSuccess (Join-Path $scenario "windows") "Windows" 1

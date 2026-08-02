@@ -66,6 +66,16 @@ function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-AggregateOutcomePriority([string]$Outcome) {
+    switch -CaseSensitive ($Outcome) {
+        "baseline-invalidated" { return 4 }
+        "protocol-failure" { return 3 }
+        "baseline-failure" { return 2 }
+        "inconclusive" { return 1 }
+        default { return 0 }
+    }
+}
+
 function Write-AggregateFailure([string]$Outcome, [string]$ReasonCode, [object[]]$Selections = $null) {
     $outputDirectory = Split-Path -Parent $OutputPath
     if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) {
@@ -238,69 +248,89 @@ $script:cellSelections = @($selectedRecords | Sort-Object runnerOs, rid | ForEac
     }
 })
 
+$cells = @()
+$selectedSuccessFailures = @()
+foreach ($record in @($selectedRecords | Where-Object { $_.kind -eq "success" } | Sort-Object runnerOs, rid)) {
+    try {
+        $document = $record.document
+        Set-AggregateFailureContext "protocol-failure" "public-output-safety"
+        $rawEvidence = Get-Content -LiteralPath $record.file.FullName -Raw
+        Assert-Condition (Test-M07PublicOutputSafe $rawEvidence) "A selected cell evidence document contains a path or credential-like value."
+        Set-AggregateFailureContext "baseline-failure" "cross-cell-byte-mismatch"
+        Assert-Condition ($document.comparison.crossRunEquality -eq $true) "A selected cell did not prove fresh-run byte equality."
+        Set-AggregateFailureContext "protocol-failure" "aggregate-evidence-invalid"
+        Assert-Condition ($document.comparison.oracleEquality -eq $true) "A selected cell did not prove oracle byte equality."
+        Assert-Condition (@($document.runs).Count -eq 2) "A selected cell did not record exactly two fresh runs."
+        Assert-Condition (@($document.observedCommands).Count -eq 2) "A selected cell did not record each host invocation."
+        Assert-Condition ($document.executionPolicy.networkDependencyDeclared -eq $manifest.executionPolicy.networkDependencyDeclared) "A selected cell used an unbound network-dependency policy."
+        Assert-Condition ($document.executionPolicy.networkIsolationEnforced -eq $manifest.executionPolicy.networkIsolationEnforced) "A selected cell used an unbound network-isolation policy."
+        foreach ($invocation in $document.observedCommands) {
+            Assert-Condition ($invocation.executable -eq "dotnet" -and @($invocation.arguments).Count -eq 3 -and $invocation.workingDirectory -eq "repository") "A selected cell recorded an invalid host invocation."
+        }
+
+        $runHashes = @()
+        foreach ($run in $document.runs) {
+            $payloadPath = Join-Path $record.file.DirectoryName ("run-{0}\semantic-payload.json" -f $run.run)
+            Assert-Condition (Test-Path -LiteralPath $payloadPath -PathType Leaf) "A selected cell payload artifact is missing."
+            $hash = Get-FileSha256 $payloadPath
+            Assert-Condition ($hash -ceq $run.payloadSha256) "A selected cell payload hash does not match its record."
+            Set-AggregateFailureContext "baseline-failure" "oracle-mismatch"
+            Assert-Condition ($hash -ceq $manifest.fixture.oracleSha256) "A selected cell payload does not match the pinned oracle."
+            $runHashes += $hash
+        }
+        Set-AggregateFailureContext "baseline-failure" "fresh-process-nondeterminism"
+        Assert-Condition ($runHashes[0] -ceq $runHashes[1]) "Fresh runs in a selected cell are not byte-identical."
+        Set-AggregateFailureContext "inconclusive" "required-cell-inconclusive"
+        Assert-Condition ($document.runs[0].processArchitecture -ceq "X64") "A selected cell was not X64."
+
+        $cells += [pscustomobject][ordered]@{
+            runnerOs = $record.runnerOs
+            rid = $record.rid
+            selectedBaselineCommit = $record.selectedBaselineCommit
+            protocolCommit = $record.protocolCommit
+            protocolPrHeadCommit = $record.protocolPrHeadCommit
+            validationMergeCommit = $record.validationMergeCommit
+            fixtureCommit = $record.fixtureCommit
+            oracleSha256 = $record.oracleSha256
+            payloadSha256 = $runHashes[0]
+            sdkVersion = $document.runs[0].sdkVersion
+            msbuildVersion = $document.runs[0].msbuildVersion
+            runtimeVersion = $document.runs[0].runtimeVersion
+            processArchitecture = $document.runs[0].processArchitecture
+            ci = $document.ci
+        }
+    }
+    catch {
+        $exception = $_.Exception
+        $selectedSuccessFailures += [pscustomobject][ordered]@{
+            aggregateOutcome = if ($exception.Data.Contains("M07Outcome")) { [string]$exception.Data["M07Outcome"] } else { $script:aggregateOutcome }
+            reasonCode = if ($exception.Data.Contains("M07ReasonCode")) { [string]$exception.Data["M07ReasonCode"] } else { $script:aggregateReasonCode }
+        }
+    }
+}
+
 $selectedFailures = @($selectedRecords | Where-Object { $_.kind -eq "failure" })
+$winningObservation = $null
 if ($selectedFailures.Count -gt 0) {
     $failureOutcomes = @($selectedFailures.document.aggregateOutcome)
-    $aggregateOutcome = if ($failureOutcomes -contains "baseline-invalidated") { "baseline-invalidated" } elseif ($failureOutcomes -contains "protocol-failure") { "protocol-failure" } elseif ($failureOutcomes -contains "baseline-failure") { "baseline-failure" } else { "inconclusive" }
-    Write-AggregateFailure $aggregateOutcome "required-cell-failure" $script:cellSelections
-    exit 1
+    $selectedFailureOutcome = if ($failureOutcomes -contains "baseline-invalidated") { "baseline-invalidated" } elseif ($failureOutcomes -contains "protocol-failure") { "protocol-failure" } elseif ($failureOutcomes -contains "baseline-failure") { "baseline-failure" } else { "inconclusive" }
+    $winningObservation = [pscustomobject][ordered]@{ aggregateOutcome = $selectedFailureOutcome; reasonCode = "required-cell-failure" }
 }
-
+foreach ($observation in $selectedSuccessFailures) {
+    if ($null -eq $winningObservation -or (Get-AggregateOutcomePriority $observation.aggregateOutcome) -gt (Get-AggregateOutcomePriority $winningObservation.aggregateOutcome)) {
+        $winningObservation = $observation
+    }
+}
 if ($ValidateResult -ne "success") {
-    Write-AggregateFailure "inconclusive" "required-cell-validation-incomplete" $script:cellSelections
+    $validationObservation = [pscustomobject][ordered]@{ aggregateOutcome = "inconclusive"; reasonCode = "required-cell-validation-incomplete" }
+    if ($null -eq $winningObservation -or (Get-AggregateOutcomePriority $validationObservation.aggregateOutcome) -gt (Get-AggregateOutcomePriority $winningObservation.aggregateOutcome)) {
+        $winningObservation = $validationObservation
+    }
+}
+if ($null -ne $winningObservation) {
+    Write-AggregateFailure $winningObservation.aggregateOutcome $winningObservation.reasonCode $script:cellSelections
     exit 1
 }
-
-$cells = @($selectedRecords | Sort-Object runnerOs, rid | ForEach-Object {
-    $record = $_
-    $document = $record.document
-    Set-AggregateFailureContext "protocol-failure" "public-output-safety"
-    $rawEvidence = Get-Content -LiteralPath $record.file.FullName -Raw
-    Assert-Condition (Test-M07PublicOutputSafe $rawEvidence) "A selected cell evidence document contains a path or credential-like value."
-    Set-AggregateFailureContext "baseline-failure" "cross-cell-byte-mismatch"
-    Assert-Condition ($document.comparison.crossRunEquality -eq $true) "A selected cell did not prove fresh-run byte equality."
-    Set-AggregateFailureContext "protocol-failure" "aggregate-evidence-invalid"
-    Assert-Condition ($document.comparison.oracleEquality -eq $true) "A selected cell did not prove oracle byte equality."
-    Assert-Condition (@($document.runs).Count -eq 2) "A selected cell did not record exactly two fresh runs."
-    Assert-Condition (@($document.observedCommands).Count -eq 2) "A selected cell did not record each host invocation."
-    Assert-Condition ($document.executionPolicy.networkDependencyDeclared -eq $manifest.executionPolicy.networkDependencyDeclared) "A selected cell used an unbound network-dependency policy."
-    Assert-Condition ($document.executionPolicy.networkIsolationEnforced -eq $manifest.executionPolicy.networkIsolationEnforced) "A selected cell used an unbound network-isolation policy."
-    foreach ($invocation in $document.observedCommands) {
-        Assert-Condition ($invocation.executable -eq "dotnet" -and @($invocation.arguments).Count -eq 3 -and $invocation.workingDirectory -eq "repository") "A selected cell recorded an invalid host invocation."
-    }
-
-    $runHashes = @()
-    foreach ($run in $document.runs) {
-        $payloadPath = Join-Path $record.file.DirectoryName ("run-{0}\semantic-payload.json" -f $run.run)
-        Assert-Condition (Test-Path -LiteralPath $payloadPath -PathType Leaf) "A selected cell payload artifact is missing."
-        $hash = Get-FileSha256 $payloadPath
-        Assert-Condition ($hash -ceq $run.payloadSha256) "A selected cell payload hash does not match its record."
-        Set-AggregateFailureContext "baseline-failure" "oracle-mismatch"
-        Assert-Condition ($hash -ceq $manifest.fixture.oracleSha256) "A selected cell payload does not match the pinned oracle."
-        $runHashes += $hash
-    }
-    Set-AggregateFailureContext "baseline-failure" "fresh-process-nondeterminism"
-    Assert-Condition ($runHashes[0] -ceq $runHashes[1]) "Fresh runs in a selected cell are not byte-identical."
-    Set-AggregateFailureContext "inconclusive" "required-cell-inconclusive"
-    Assert-Condition ($document.runs[0].processArchitecture -ceq "X64") "A selected cell was not X64."
-
-    [pscustomobject][ordered]@{
-        runnerOs = $record.runnerOs
-        rid = $record.rid
-        selectedBaselineCommit = $record.selectedBaselineCommit
-        protocolCommit = $record.protocolCommit
-        protocolPrHeadCommit = $record.protocolPrHeadCommit
-        validationMergeCommit = $record.validationMergeCommit
-        fixtureCommit = $record.fixtureCommit
-        oracleSha256 = $record.oracleSha256
-        payloadSha256 = $runHashes[0]
-        sdkVersion = $document.runs[0].sdkVersion
-        msbuildVersion = $document.runs[0].msbuildVersion
-        runtimeVersion = $document.runs[0].runtimeVersion
-        processArchitecture = $document.runs[0].processArchitecture
-        ci = $document.ci
-    }
-})
 
 Set-AggregateFailureContext "protocol-failure" "aggregate-provenance-mismatch"
 Assert-Condition ((@($cells.protocolCommit) | Select-Object -Unique).Count -eq 1) "Selected cells used different protocol revisions."
