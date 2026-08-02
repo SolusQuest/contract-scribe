@@ -81,6 +81,7 @@
     "tests/ContractScribe.Tests/ContractScribe.Tests.csproj",
     "tests/ContractScribe.Tests/AuditResultConformance.cs",
     "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
+    "tests/ContractScribe.Tests/M1HostValidationMeasuredBoundSchemaTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationPublicationFailureTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationToolchainStateTests.cs",
