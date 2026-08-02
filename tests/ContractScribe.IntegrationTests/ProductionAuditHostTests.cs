@@ -355,6 +355,7 @@ public sealed class ProductionAuditHostTests
             meter.ObserveHostAllocation(staging, 0, 257);
             await File.WriteAllBytesAsync(staging, new byte[257]);
             File.Delete(staging);
+            meter.ObservePath(staging);
 
             var barrier = Path.Join(root, "watcher-barrier.bin");
             await File.WriteAllBytesAsync(barrier, new byte[258]);

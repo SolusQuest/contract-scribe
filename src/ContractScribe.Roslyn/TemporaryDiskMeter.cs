@@ -245,7 +245,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
         }
     }
 
-    private void ObservePath(string path)
+    internal void ObservePath(string path)
     {
         if (!IsGovernedPath(path) || IsIgnoredSentinel(path))
         {
@@ -267,6 +267,11 @@ internal sealed class TemporaryDiskMeter : IDisposable
                 }
                 if (!File.Exists(fullPath))
                 {
+                    if (retainedPaths.Contains(fullPath))
+                    {
+                        currentLengths.Remove(fullPath);
+                        return;
+                    }
                     FailClosed(new IOException(
                         "A governed temporary entry disappeared before its event-time size was retained."));
                     return;
