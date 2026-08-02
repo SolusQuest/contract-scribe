@@ -493,6 +493,265 @@ public sealed class M1HostValidationToolchainStateTests
         }
     }
 
+    [Fact]
+    public void ToolchainClaims_SameFixtureSeparatesSubjectAndObserverOwnership()
+    {
+        var context = BundleValidator.Validate(Root);
+        var missingAssets = context.Vectors.Vectors.Single(vector =>
+            vector.VectorId == "toolchain.missing-assets");
+        var noAutomaticRestore = context.Vectors.Vectors.Single(vector =>
+            vector.VectorId == "toolchain.no-automatic-restore");
+
+        Assert.Equal(missingAssets.Fixture, noAutomaticRestore.Fixture);
+        Assert.NotEqual(missingAssets.ExpectedObservation, noAutomaticRestore.ExpectedObservation);
+        Assert.NotEqual(
+            missingAssets.ExpectedEnforcementClass,
+            noAutomaticRestore.ExpectedEnforcementClass);
+
+        var missingAssetsDerived = DeriveToolchainClaim(context, missingAssets);
+        Assert.Equal("toolchain.missing-assets-classified", missingAssetsDerived.Observation);
+        Assert.Equal("internally-enforceable", missingAssetsDerived.EnforcementClass);
+        Assert.Equal("matched", missingAssetsDerived.Verdict);
+
+        var noRestoreDerived = DeriveToolchainClaim(context, noAutomaticRestore);
+        Assert.Equal("toolchain.no-restore-observed", noRestoreDerived.Observation);
+        Assert.Equal("observable-only", noRestoreDerived.EnforcementClass);
+        Assert.Equal("matched", noRestoreDerived.Verdict);
+
+        var unrelatedProjection = DeriveToolchainClaim(
+            context,
+            missingAssets,
+            subjectObservation: "toolchain.subject-actual",
+            subjectEnforcement: "caller-or-os-enforced");
+        Assert.Equal("toolchain.subject-actual", unrelatedProjection.Observation);
+        Assert.Equal("caller-or-os-enforced", unrelatedProjection.EnforcementClass);
+        Assert.Equal("subject-nonconformance", unrelatedProjection.Verdict);
+    }
+
+    [Fact]
+    public void ToolchainClaims_NoRestoreRequiresCommonSubjectProjection()
+    {
+        var context = BundleValidator.Validate(Root);
+        var vector = context.Vectors.Vectors.Single(candidate =>
+            candidate.VectorId == "toolchain.no-automatic-restore");
+
+        foreach (var (observation, enforcement) in new[]
+                 {
+                     ("toolchain.no-restore-observed", "observable-only"),
+                     ("toolchain.subject-actual", "internally-enforceable"),
+                     ("toolchain.missing-assets-classified", "observable-only")
+                 })
+        {
+            var derived = DeriveToolchainClaim(
+                context,
+                vector,
+                subjectObservation: observation,
+                subjectEnforcement: enforcement);
+            Assert.Equal("process.no-valid-subject-response", derived.Observation);
+            Assert.Equal("subject-nonconformance", derived.Verdict);
+        }
+
+        var missing = DeriveToolchainClaim(context, vector, includeSubject: false);
+        Assert.Equal("process.no-valid-subject-response", missing.Observation);
+        Assert.Equal("protocol-invalid-observation", missing.Verdict);
+        Assert.Contains("HV208_SUBJECT_RESPONSE_MISSING", missing.DiagnosticCodes);
+    }
+
+    [Fact]
+    public void ToolchainClaims_NoRestoreRejectsIndependentRestoreMarkers()
+    {
+        var context = BundleValidator.Validate(Root);
+        var vector = context.Vectors.Vectors.Single(candidate =>
+            candidate.VectorId == "toolchain.no-automatic-restore");
+
+        var processMarker = DeriveToolchainClaim(
+            context,
+            vector,
+            observedProcesses:
+            [
+                new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                new ObservedProcess(701, 700, "restore-or-runtime-download", "dotnet")
+            ]);
+        Assert.Equal(
+            "toolchain.restore-or-runtime-download-marker-observed",
+            processMarker.Observation);
+        Assert.Equal("subject-nonconformance", processMarker.Verdict);
+
+        var repositoryMarker = DeriveToolchainClaim(
+            context,
+            vector,
+            repositoryDelta: new RepositoryDelta(
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                ["fixture/obj/project.assets.json"],
+                [],
+                []));
+        Assert.Equal(
+            "toolchain.restore-or-runtime-download-marker-observed",
+            repositoryMarker.Observation);
+        Assert.Equal("subject-nonconformance", repositoryMarker.Verdict);
+
+        var directRestoreRole = ProcessTreeObserver.ClassifyIdentity(
+            "dotnet",
+            null,
+            ["restore"],
+            []);
+        Assert.Equal("contractscribe-worker", directRestoreRole);
+        var directRestore = DeriveToolchainClaim(
+            context,
+            vector,
+            observedProcesses:
+            [
+                new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                new ObservedProcess(701, 700, directRestoreRole, "dotnet")
+            ]);
+        Assert.Equal("process.unowned-subprocess-observed", directRestore.Observation);
+        Assert.Equal("subject-nonconformance", directRestore.Verdict);
+
+        foreach (var processes in new IReadOnlyList<ObservedProcess>[]
+                 {
+                     [new ObservedProcess(701, 700, "unknown-descendant", "custom")],
+                     [],
+                     [
+                         new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                         new ObservedProcess(701, 1, "subject-runtime", "dotnet")
+                     ]
+                 })
+        {
+            var unclosedTree = DeriveToolchainClaim(
+                context,
+                vector,
+                observedProcesses: processes);
+            Assert.Equal("process.unowned-subprocess-observed", unclosedTree.Observation);
+            Assert.Equal("subject-nonconformance", unclosedTree.Verdict);
+        }
+    }
+
+    private static DerivedRun DeriveToolchainClaim(
+        BundleContext context,
+        VectorDefinition vector,
+        RepositoryDelta? repositoryDelta = null,
+        IReadOnlyList<ObservedProcess>? observedProcesses = null,
+        string subjectObservation = "toolchain.missing-assets-classified",
+        string subjectEnforcement = "internally-enforceable",
+        bool includeSubject = true)
+    {
+        var artifact = new ArtifactIdentity(
+            "src/ContractScribe.Core/ContractScribe.Core.csproj",
+            Sha);
+        var source = new SubjectSourceConfiguration(
+            $"source.{Sha}",
+            HostRevision,
+            $"operations.{Sha}",
+            ["src/ContractScribe.Core"],
+            [artifact],
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact,
+            artifact);
+        var materialization = ExactMaterialization();
+        var commitment = new CanonicalResultCommitment(
+            Sha,
+            1,
+            "canonical-json-utf8-no-bom-single-lf",
+            true);
+        var subject = new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            vector.VectorId,
+            "run-1",
+            "started",
+            "normal",
+            "compliant",
+            "succeeded",
+            null,
+            null,
+            null,
+            "committed",
+            "published",
+            subjectEnforcement,
+            subjectObservation,
+            commitment,
+            new HostObservationFacts(
+                source.SourceConfigurationId,
+                source.HostRevision,
+                source.ContractBaseline.Sha256,
+                source.FailureRegistry.Sha256,
+                source.CalibratedBounds.Sha256,
+                materialization.SelectedSdk,
+                materialization.SelectedRuntime,
+                materialization.SelectedMsbuild,
+                [],
+                new OutputCommitFact("committed", commitment.Sha256),
+                []));
+        var process = new ProcessObservation(
+            0,
+            "started",
+            "normal",
+            false,
+            true,
+            true,
+            vector.VectorId == "toolchain.no-automatic-restore"
+                ? "process-observation"
+                : null,
+            vector.VectorId == "toolchain.no-automatic-restore" ? "observe" : null,
+            vector.VectorId == "toolchain.no-automatic-restore");
+        var run = new RunEvidence(
+            vector.VectorId,
+            "run-1",
+            "unvalidated",
+            vector.ExpectedObservation,
+            "unvalidated",
+            vector.ExpectedEnforcementClass,
+            "unvalidated",
+            includeSubject ? subject : null,
+            process,
+            commitment,
+            new ObservedAuditResultFacts(
+                1,
+                1,
+                1,
+                "profile.external-api",
+                ["audit.outcome.compliant"]),
+            repositoryDelta ?? new RepositoryDelta([], [], [], [], [], [], [], [], []),
+            observedProcesses
+                ?? [new ObservedProcess(700, 1, "subject-runtime", "dotnet")],
+            []);
+        var fixture = new FixtureRealization(
+            vector.VectorId,
+            vector.ExecutorKind,
+            "tests/fixtures",
+            Sha,
+            true,
+            null,
+            null,
+            [],
+            null,
+            [],
+            [],
+            vector.VectorId == "toolchain.no-automatic-restore"
+                ? "synchronized-tree"
+                : "bounded-polling",
+            null,
+            "absent",
+            [new RunWorkingDirectory("run-1", "repository-root")],
+            null);
+
+        return RunSemantics.Derive(
+            context,
+            vector,
+            run,
+            fixture,
+            source,
+            materialization);
+    }
+
     private static JsonObject ExecuteSchemaMutation(string operation)
     {
         JsonObject result;

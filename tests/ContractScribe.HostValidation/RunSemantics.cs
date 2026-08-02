@@ -214,10 +214,7 @@ public static class RunSemantics
             fixture,
             source,
             materialization);
-        var enforcement = run.Subject?.EnforcementClass
-            ?? (vector.ExpectedEnforcementClass == "caller-or-os-enforced"
-                ? "caller-or-os-enforced"
-                : "observable-only");
+        var enforcement = DeriveEnforcement(vector, run, observation);
         var verdict = diagnostics.Count != 0
             ? "protocol-invalid-observation"
             : observation == vector.ExpectedObservation
@@ -767,6 +764,24 @@ public static class RunSemantics
         {
             return "toolchain.restore-or-runtime-download-marker-observed";
         }
+        if (vector.VectorId == "toolchain.no-automatic-restore")
+        {
+            if (run.Subject is not
+                {
+                    ObservationCode: "toolchain.missing-assets-classified",
+                    EnforcementClass: "internally-enforceable"
+                })
+            {
+                return "process.no-valid-subject-response";
+            }
+            if (run.ObservedProcesses.Count(process => process.Role == "subject-runtime") != 1
+                || run.ObservedProcesses.Any(process =>
+                    process.Role is not ("subject-runtime" or "toolchain-owned")))
+            {
+                return "process.unowned-subprocess-observed";
+            }
+            return "toolchain.no-restore-observed";
+        }
         if (vector.VectorId == "toolchain.process-topology")
         {
             if (run.ObservedProcesses.Count(process => process.Role == "subject-runtime") != 1
@@ -820,6 +835,18 @@ public static class RunSemantics
             _ => run.Subject?.ObservationCode ?? "process.no-valid-subject-response"
         };
     }
+
+    private static string DeriveEnforcement(
+        VectorDefinition vector,
+        RunEvidence run,
+        string observation) =>
+        vector.VectorId == "toolchain.no-automatic-restore"
+            && observation == "toolchain.no-restore-observed"
+                ? "observable-only"
+                : run.Subject?.EnforcementClass
+                    ?? (vector.ExpectedEnforcementClass == "caller-or-os-enforced"
+                        ? "caller-or-os-enforced"
+                        : "observable-only");
 
     private static string DeriveProductionObservation(VectorDefinition vector, RunEvidence run)
     {
