@@ -6,7 +6,7 @@ internal sealed record ProductionAuditRequest(
     string RepositoryRoot,
     string InputPath,
     byte[] PolicyBytes,
-    string ResultPath,
+    ResolvedPublicationTarget PublicationTarget,
     HostBuildProvenance ProvenanceAssertion,
     string? AuditTemporaryRoot = null,
     string? OutputStagingRoot = null,
@@ -21,6 +21,7 @@ internal sealed record ProductionAuditOutcome(
 internal enum ProductionHostControlPoint
 {
     BeforeCommit,
+    BeforePublicationDecision,
     AfterCommit,
     LateCompletion,
     PublicationStagingReady,
@@ -50,7 +51,12 @@ internal sealed record ProductionAuditHostControls(
     Func<ProductionHostControlPoint, CancellationToken, Task>? Gate = null,
     Action<string>? Transition = null,
     Func<CancellationToken, Task>? LateCompletion = null,
-    ProductionLateAttemptKind LateAttemptKind = ProductionLateAttemptKind.LateCompletion)
+    ProductionLateAttemptKind LateAttemptKind = ProductionLateAttemptKind.LateCompletion,
+    Func<string, TimeSpan?>? DeadlineOverride = null,
+    Func<CancellationToken, Task<RegisteredToolchain>>? SdkDiscovery = null,
+    Func<RepositoryLoadRequest, CancellationToken, Task<RepositoryLoadOutcome>>? RepositoryLoad = null,
+    Func<LoadedRepositorySession, Task>? Shutdown = null,
+    Func<HostStage, CancellationToken, Task>? StageBoundary = null)
 {
     public Task ReachAsync(
         ProductionHostControlPoint point,
@@ -58,4 +64,11 @@ internal sealed record ProductionAuditHostControls(
         Gate?.Invoke(point, cancellationToken) ?? Task.CompletedTask;
 
     public void Record(string transition) => Transition?.Invoke(transition);
+
+    public Task ReachStageAsync(HostStage stage, CancellationToken cancellationToken) =>
+        StageBoundary?.Invoke(stage, cancellationToken) ?? Task.CompletedTask;
+
+    public TimeSpan Deadline(string boundName) =>
+        DeadlineOverride?.Invoke(boundName)
+        ?? TimeSpan.FromMilliseconds(HostContractResources.RequireBound(boundName));
 }

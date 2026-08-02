@@ -201,7 +201,7 @@ Cancellation follows a single-terminal-outcome state machine with an atomic resu
 | C1 host startup failure/timeout = externally observed process outcome with no committed result (no host-enforced pre-start timeout) | decided | this section |
 | C2/C3 worker startup timeout maps to an execution timeout via the surviving host | decided | this section; protocol in [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
 | Graceful-shutdown timeout bounded by the commit rule | decided | this section; concrete value deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) |
-| Concrete timeout values | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | runtime calibration |
+| Concrete timeout values | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | [runtime calibration record](../validation/m1-production-host-calibration.md) |
 | Forced termination external-only (documented R2 limitation) | decided | reconsideration trigger in §12 |
 | Whole-process retry; idempotent reruns | decided | this section; vectors in [#26](https://github.com/SolusQuest/contract-scribe/issues/26) |
 | Worker orphan/hang/response-vs-exit-code conflicts | not applicable to C1 | open questions for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
@@ -217,7 +217,7 @@ Diagnostics are allowlisted: stable codes, bounded messages, repository-relative
 | Deterministic ordering and deduplication | decided | this section |
 | Stack traces debug-only; debug never changes the public contract | decided | this section |
 | No default disk logs; no telemetry | decided | this section |
-| Numeric count/byte caps | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
+| Numeric count/byte caps | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | [runtime calibration record](../validation/m1-production-host-calibration.md) |
 
 ### 9. Determinism and state management
 
@@ -236,8 +236,8 @@ The canonical audit result contains no process metadata (PID, timestamps, durati
 | Topology process invariant: one ContractScribe runtime process and zero ContractScribe worker processes | decided | this section |
 | Toolchain-owned subprocesses (for example SDK-resolution invocations): count and bounding | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) and [#26](https://github.com/SolusQuest/contract-scribe/issues/26) | implementation contract and validation vectors |
 | OOM/stack-overflow/abort classified externally | decided | this section |
-| Concrete memory/runtime resource limits | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
-| Temporary-disk usage bound | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | calibration |
+| Concrete memory/runtime resource limits | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | [runtime calibration record](../validation/m1-production-host-calibration.md) |
+| Temporary-disk usage bound | deferred to [#24](https://github.com/SolusQuest/contract-scribe/issues/24) | [runtime calibration record](../validation/m1-production-host-calibration.md) |
 | Pipe backpressure | not applicable to C1 | open question for [#27](https://github.com/SolusQuest/contract-scribe/issues/27) |
 | Working-directory independence | decided | this section |
 

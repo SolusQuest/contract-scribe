@@ -1,3 +1,9 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
@@ -31,6 +37,308 @@ public sealed class ProductionAuditHostTests
             fixture.Root,
             "TestResults",
             ".audit-result.json.contractscribe-stage")));
+    }
+
+    [Fact]
+    public void Publisher_RenamesTheHeldSingleLinkStagingFile()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-publisher",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Join(root, "TestResults"));
+        try
+        {
+            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            using var publisher = AtomicResultPublisher.Prepare(
+                target,
+                new ProductionAuditHostControls());
+            var bytes = "{\"result\":true}\n"u8.ToArray();
+
+            publisher.Stage(bytes);
+            var sha256 = publisher.CommitRename();
+
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), sha256);
+            Assert.Equal(bytes, File.ReadAllBytes(target.FinalPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PublicationTarget_SeparatesCliPreflightFromFrozenValidationCapability()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-target",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Join(root, "repository");
+        var external = Path.Join(root, "output", "audit.json");
+        Directory.CreateDirectory(Path.Join(repository, "TestResults"));
+        Directory.CreateDirectory(Path.GetDirectoryName(external)!);
+        try
+        {
+            var validation = ResolvedPublicationTarget.ForValidationFixture(repository);
+            var cli = ResolvedPublicationTarget.ForExternalCli(repository, external);
+
+            Assert.Equal(
+                Path.Join(repository, "TestResults", "audit-result.json"),
+                validation.FinalPath);
+            Assert.Equal(external, cli.FinalPath);
+            Assert.Throws<ArgumentException>(() =>
+                ResolvedPublicationTarget.ForExternalCli(
+                    repository,
+                    Path.Join(repository, "audit.json")));
+            Assert.Throws<ArgumentException>(() =>
+                ResolvedPublicationTarget.ForExternalCli(
+                    repository,
+                    Path.Join(root, "missing", "audit.json")));
+
+            using var publisher = AtomicResultPublisher.Prepare(
+                cli,
+                new ProductionAuditHostControls());
+            var bytes = "{\"external\":true}\n"u8.ToArray();
+            publisher.Stage(bytes);
+            var sha256 = publisher.CommitRename();
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), sha256);
+            Assert.Equal(bytes, File.ReadAllBytes(external));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Publisher_RejectsParentReplacementAndStagingHardLinks()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-publisher",
+            Guid.NewGuid().ToString("N"));
+        var resultDirectory = Path.Join(root, "TestResults");
+        var movedDirectory = Path.Join(root, "TestResults-original");
+        Directory.CreateDirectory(resultDirectory);
+        try
+        {
+            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            using (var publisher = AtomicResultPublisher.Prepare(
+                       target,
+                       new ProductionAuditHostControls()))
+            {
+                Directory.Move(resultDirectory, movedDirectory);
+                Directory.CreateDirectory(resultDirectory);
+                Assert.Throws<PublicationException>(() => publisher.Stage("{}\n"u8));
+            }
+
+            Directory.Delete(resultDirectory);
+            Directory.Move(movedDirectory, resultDirectory);
+            using (var publisher = AtomicResultPublisher.Prepare(
+                       target,
+                       new ProductionAuditHostControls()))
+            {
+                publisher.Stage("{}\n"u8);
+                var alias = Path.Join(resultDirectory, "staging-alias.json");
+                CreateHardLinkForTest(publisher.StagingPath, alias);
+                Assert.Throws<PublicationException>(() => publisher.CommitRename());
+                File.Delete(alias);
+                Assert.True(publisher.TryCleanupStaging());
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Publisher_RejectsFinalHardLinksAndStagingNameReplacement()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-publisher",
+            Guid.NewGuid().ToString("N"));
+        var resultDirectory = Path.Join(root, "TestResults");
+        Directory.CreateDirectory(resultDirectory);
+        try
+        {
+            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            File.WriteAllText(target.FinalPath, "prior\n");
+            var finalAlias = Path.Join(resultDirectory, "prior-alias.json");
+            CreateHardLinkForTest(target.FinalPath, finalAlias);
+            Assert.Throws<PublicationException>(() => AtomicResultPublisher.Prepare(
+                target,
+                new ProductionAuditHostControls()));
+            Assert.True(File.Exists(target.FinalPath));
+            Assert.True(File.Exists(finalAlias));
+            File.Delete(finalAlias);
+            File.Delete(target.FinalPath);
+
+            using var publisher = AtomicResultPublisher.Prepare(
+                target,
+                new ProductionAuditHostControls());
+            publisher.Stage("{\"original\":true}\n"u8);
+            File.Delete(publisher.StagingPath);
+            File.WriteAllText(publisher.StagingPath, "{\"replacement\":true}\n");
+
+            Assert.Throws<PublicationException>(() => publisher.CommitRename());
+            Assert.False(File.Exists(target.FinalPath));
+            Assert.True(publisher.TryCleanupStaging());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Publisher_RejectsParentReplacementAfterStagingAndCleansHeldDirectory()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-publisher",
+            Guid.NewGuid().ToString("N"));
+        var resultDirectory = Path.Join(root, "TestResults");
+        var heldDirectory = Path.Join(root, "held-TestResults");
+        Directory.CreateDirectory(resultDirectory);
+        try
+        {
+            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            using var publisher = AtomicResultPublisher.Prepare(
+                target,
+                new ProductionAuditHostControls());
+            publisher.Stage("{}\n"u8);
+
+            Directory.Move(resultDirectory, heldDirectory);
+            Directory.CreateDirectory(resultDirectory);
+
+            Assert.Throws<PublicationException>(() => publisher.CommitRename());
+            Assert.False(publisher.TryCleanupStaging());
+            Assert.True(File.Exists(Path.Join(
+                heldDirectory,
+                ".audit-result.json.contractscribe-stage")));
+            Assert.False(File.Exists(target.FinalPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryDiskMeter_TracksTransientHighWaterAcrossDistinctAndNestedRoots()
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-disk-meter",
+            Guid.NewGuid().ToString("N"));
+        var nested = Path.Join(root, "nested");
+        var second = Path.Join(root, "..", Path.GetFileName(root) + "-second");
+        Directory.CreateDirectory(nested);
+        Directory.CreateDirectory(second);
+        try
+        {
+            using var meter = new TemporaryDiskMeter(root, nested);
+            var transient = Path.Join(nested, "transient.bin");
+            await File.WriteAllBytesAsync(transient, new byte[4096]);
+            Assert.Equal(4096, meter.Reconcile());
+            File.Delete(transient);
+            Assert.Equal(0, meter.Reconcile());
+            Assert.Equal(4096, meter.HighWater);
+
+            using var distinct = new TemporaryDiskMeter(root, second);
+            await File.WriteAllBytesAsync(Path.Join(root, "first.bin"), new byte[17]);
+            await File.WriteAllBytesAsync(Path.Join(second, "second.bin"), new byte[23]);
+            Assert.Equal(40, distinct.Reconcile());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(second, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryDiskMeter_ObservesGovernedRootCreatedAfterMonitoringStarts()
+    {
+        var parent = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-disk-meter",
+            Guid.NewGuid().ToString("N"));
+        var governed = Path.Join(parent, "created-later");
+        Directory.CreateDirectory(parent);
+        try
+        {
+            using var meter = new TemporaryDiskMeter(governed, null);
+            Directory.CreateDirectory(governed);
+            await File.WriteAllBytesAsync(Path.Join(governed, "observed.bin"), new byte[257]);
+
+            Assert.Equal(257, meter.Reconcile());
+            Assert.Equal(257, meter.HighWater);
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolchainProcessMeter_UsesParentChainsAndPidStartIdentity()
+    {
+        using var current = Process.GetCurrentProcess();
+        var rootNode = new ToolchainProcessMeter.ProcessNode(
+            current.Id,
+            0,
+            current.StartTime.ToUniversalTime().Ticks);
+        IReadOnlyList<ToolchainProcessMeter.ProcessNode> snapshot =
+        [
+            rootNode,
+            new(910001, current.Id, 1),
+            new(910002, 910001, 2),
+            new(910003, 999999, 3),
+        ];
+        using var meter = new ToolchainProcessMeter(
+            () => snapshot,
+            TimeSpan.FromDays(1));
+
+        Assert.Equal(2, meter.Count);
+        snapshot =
+        [
+            rootNode,
+            new(910001, current.Id, 4),
+        ];
+
+        Assert.Equal(3, meter.Reconcile());
+        Assert.Equal(3, meter.ToFact().Measured);
+    }
+
+    [Fact]
+    public void ValidationActivation_RejectsMixedCliAndRoslynMetadata()
+    {
+        Assert.False(HostValidationSubjectAdapter.IsEnabledFor(
+            typeof(ProductionAuditHostTests).Assembly));
+        var dynamicAssembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("ContractScribe.MixedValidationMetadata"),
+            AssemblyBuilderAccess.Run);
+        var constructor = typeof(AssemblyMetadataAttribute).GetConstructor(
+            [typeof(string), typeof(string)])!;
+        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
+            constructor,
+            ["ContractScribeHostValidationSubject", "enabled"]));
+        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
+            constructor,
+            ["ContractScribeSourceRevision", new string('1', 40)]));
+        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
+            constructor,
+            ["ContractScribeSourceConfigurationId", "source." + new string('2', 64)]));
+        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
+            constructor,
+            ["ContractScribeBuildSdkVersion", "10.0.102"]));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            HostValidationSubjectAdapter.IsEnabledFor(dynamicAssembly));
     }
 
     [Fact]
@@ -140,6 +448,332 @@ public sealed class ProductionAuditHostTests
         Assert.False(File.Exists(resultPath));
         Assert.Contains("terminal-commit-cancelled", outcome.TransitionEvents);
         Assert.Contains("competing-terminal-attempt-rejected", outcome.TransitionEvents);
+    }
+
+    [Fact]
+    public async Task CancellationRegistration_WinsAtomicPublicationDecisionAndCleanupCannotReclassifyIt()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var cancellation = new CancellationTokenSource();
+        var controls = new ProductionAuditHostControls(
+            Fault: ProductionHostFault.PublicationCleanup,
+            Gate: (point, _) =>
+            {
+                if (point == ProductionHostControlPoint.BeforePublicationDecision)
+                {
+                    cancellation.Cancel();
+                }
+                return Task.CompletedTask;
+            });
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            controls,
+            cancellation.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.publication.cancelled", outcome.Terminal.Failure?.Code);
+        Assert.Contains(
+            outcome.Terminal.Diagnostics,
+            diagnostic => diagnostic.Code == "host.publication.cleanup-failed");
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task UnexpectedSdkBoundaryFailure_CommitsClosedInternalFailureRow()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                SdkDiscovery: _ => throw new InvalidOperationException("test-only")));
+
+        Assert.Equal(HostExecutionOutcome.AuditError, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.internal.unexpected", outcome.Terminal.Failure?.Code);
+        Assert.Equal(HostStage.Internal, outcome.Terminal.Failure?.Stage);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Theory]
+    [InlineData(HostStage.Classification, "host.classification.failed")]
+    [InlineData(HostStage.DocumentationObservation, "host.documentation-observation.failed")]
+    [InlineData(HostStage.PolicyEvidence, "host.policy-evidence.failed")]
+    [InlineData(HostStage.Audit, "host.audit.aggregation-failed")]
+    [InlineData(HostStage.ResultValidation, "host.result-validation.failed")]
+    [InlineData(HostStage.Shutdown, "host.shutdown.failed")]
+    [InlineData(HostStage.Publication, "host.publication.finalization-failed")]
+    public async Task ManagedStageFailure_MapsThroughTheClosedRegistry(
+        HostStage failingStage,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) => stage == failingStage
+                    ? Task.FromException(new InvalidOperationException("test-only"))
+                    : Task.CompletedTask));
+
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(failingStage, outcome.Terminal.Failure?.Stage);
+        Assert.Equal(HostTerminalState.CommittedNonSuccess, outcome.Terminal.TerminalState);
+        Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Theory]
+    [InlineData(HostStage.Input, "host.input.cancelled")]
+    [InlineData(HostStage.SdkDiscovery, "host.sdk-discovery.cancelled")]
+    [InlineData(HostStage.WorkspaceLoad, "host.workspace-load.cancelled")]
+    [InlineData(HostStage.Classification, "host.classification.cancelled")]
+    [InlineData(HostStage.DocumentationObservation, "host.documentation-observation.cancelled")]
+    [InlineData(HostStage.PolicyEvidence, "host.policy-evidence.cancelled")]
+    [InlineData(HostStage.Audit, "host.audit.cancelled")]
+    [InlineData(HostStage.ResultValidation, "host.result-validation.cancelled")]
+    [InlineData(HostStage.Shutdown, "host.shutdown.cancelled")]
+    [InlineData(HostStage.Publication, "host.publication.cancelled")]
+    public async Task CallerCancellationAtEveryManagedStage_CommitsTheStageRow(
+        HostStage cancelledStage,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var cancellation = new CancellationTokenSource();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) =>
+                {
+                    if (stage == cancelledStage)
+                    {
+                        cancellation.Cancel();
+                    }
+                    return Task.CompletedTask;
+                }),
+            cancellation.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(cancelledStage, outcome.Terminal.Failure?.Stage);
+        Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Theory]
+    [InlineData(HostStage.Input, "host.input.timeout")]
+    [InlineData(HostStage.SdkDiscovery, "host.sdk-discovery.timeout")]
+    [InlineData(HostStage.WorkspaceLoad, "host.workspace-load.timeout")]
+    [InlineData(HostStage.Classification, "host.classification.timeout")]
+    [InlineData(HostStage.DocumentationObservation, "host.documentation-observation.timeout")]
+    [InlineData(HostStage.PolicyEvidence, "host.policy-evidence.timeout")]
+    [InlineData(HostStage.Audit, "host.audit.timeout")]
+    [InlineData(HostStage.ResultValidation, "host.result-validation.timeout")]
+    [InlineData(HostStage.Shutdown, "host.shutdown.timeout")]
+    [InlineData(HostStage.Publication, "host.publication.timeout")]
+    public async Task CooperativeTimeoutAtEveryManagedStage_CommitsTheStageRow(
+        HostStage timedOutStage,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) => stage == timedOutStage
+                    ? Task.FromException(new OperationCanceledException("test-only"))
+                    : Task.CompletedTask));
+
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(timedOutStage, outcome.Terminal.Failure?.Stage);
+        Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task InvalidInputPrecedesEnvironmentFailureInTheOrderedHost()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+
+        var outcome = await new ProductionAuditHost(Provenance()).RunAsync(
+            new ProductionAuditRequest(
+                fixture.Root,
+                "App/App.csproj",
+                "{}\n"u8.ToArray(),
+                ResolvedPublicationTarget.ForValidationFixture(fixture.Root),
+                Provenance()),
+            new ProductionAuditHostControls(
+                Fault: ProductionHostFault.EnvironmentUnavailable));
+
+        Assert.Equal("host.input.invalid-request", outcome.Terminal.Failure?.Code);
+        Assert.Equal(HostStage.Input, outcome.Terminal.Failure?.Stage);
+    }
+
+    [Theory]
+    [InlineData(
+        "environment",
+        "host.sdk-discovery.unavailable",
+        HostExecutionOutcome.EnvironmentUnavailable)]
+    [InlineData(
+        "load",
+        "host.workspace-load.failed",
+        HostExecutionOutcome.LoadFailure)]
+    [InlineData(
+        "audit",
+        "host.audit.aggregation-failed",
+        HostExecutionOutcome.AuditError)]
+    public async Task NamedProductionFaults_CommitTheirClosedFailureRows(
+        string faultName,
+        string expectedCode,
+        HostExecutionOutcome expectedOutcome)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(Fault: faultName switch
+            {
+                "environment" => ProductionHostFault.EnvironmentUnavailable,
+                "load" => ProductionHostFault.LoadFailure,
+                "audit" => ProductionHostFault.AuditError,
+                _ => throw new ArgumentOutOfRangeException(nameof(faultName)),
+            }));
+
+        Assert.Equal(expectedOutcome, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task AcceptedLoaderDiagnostics_ArePreservedThroughSuccessfulComposition()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var diagnostic = new LoaderDiagnostic(
+            "workspace",
+            "loader.workspace-warning",
+            "warning");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                RepositoryLoad: async (request, token) =>
+                {
+                    var loaded = await new RepositoryLoader(observer: null)
+                        .LoadAsync(request, token)
+                        .ConfigureAwait(false);
+                    Assert.Equal(RepositoryLoadStatus.Success, loaded.Status);
+                    return RepositoryLoadOutcome.Success(loaded.Session!, [diagnostic]);
+                }));
+
+        Assert.Equal(HostExecutionOutcome.Succeeded, outcome.Terminal.ExecutionOutcome);
+        var accepted = Assert.Single(
+            outcome.Terminal.Diagnostics,
+            item => item.Code == diagnostic.Code);
+        Assert.Equal(HostStage.WorkspaceLoad, accepted.Stage);
+        Assert.Equal(HostDiagnosticSeverity.Warning, accepted.Severity);
+    }
+
+    [Fact]
+    public async Task SdkDiscoveryDeadline_RacesAProviderThatIgnoresCancellation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var late = new TaskCompletionSource<RegisteredToolchain>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "sdk-discovery-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                SdkDiscovery: _ => late.Task));
+
+        stopwatch.Stop();
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.timeout", outcome.Terminal.Failure?.Code);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+        late.SetResult(TestToolchain(fixture.Root));
+        await Task.Delay(25);
+    }
+
+    [Fact]
+    public async Task WorkspaceDeadline_RacesBlockingTailInventoryAndObservesLateCompletion()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var late = new TaskCompletionSource<RepositoryLoadOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "workspace-load-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                SdkDiscovery: _ => Task.FromResult(TestToolchain(fixture.Root)),
+                RepositoryLoad: (_, _) => late.Task));
+
+        stopwatch.Stop();
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.workspace-load.timeout", outcome.Terminal.Failure?.Code);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+        late.SetResult(RepositoryLoadOutcome.Failure(
+            new LoaderFact("workspace", "loader.test-stimulus")));
+        await Task.Delay(25);
+    }
+
+    [Fact]
+    public async Task ShutdownDeadline_RacesSynchronousDisposalEntryAndObservesLateCleanup()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "graceful-shutdown-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                Shutdown: async session =>
+                {
+                    await release.Task.ConfigureAwait(false);
+                    await session.DisposeAsync().ConfigureAwait(false);
+                }));
+
+        stopwatch.Stop();
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.shutdown.timeout", outcome.Terminal.Failure?.Code);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
+        release.SetResult();
+        await Task.Delay(50);
     }
 
     [Fact]
@@ -256,21 +890,66 @@ public sealed class ProductionAuditHostTests
         Assert.Equal("workspace-load", missingAssets.FailureStage);
     }
 
+    [Fact]
+    public async Task ValidationAdapter_NeverMasksACommittedHostResultForObservationOnlyFixture()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        CanonicalJson.WriteCanonical(
+            Path.Join(fixture.Root, ".contractscribe-fixture.json"),
+            new { fixture = "entry.slnx" });
+        var requestPath = Path.Join(fixture.Root, "request.json");
+        var responsePath = Path.Join(fixture.Root, "response.json");
+        CanonicalJson.WriteCanonical(
+            requestPath,
+            new SubjectRequest(
+                "contractscribe-m1-host-validation-subject-request-v1",
+                "production-host",
+                "observation-only-fixture",
+                "run-1",
+                fixture.Root,
+                responsePath,
+                null,
+                [],
+                "continue"));
+
+        var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
+            requestPath,
+            responsePath,
+            Provenance());
+        var response = CanonicalJson.DeserializeStrict<SubjectResponse>(
+            responsePath,
+            64 * 1024,
+            requireCanonical: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("succeeded", response.ExecutionOutcome);
+        Assert.Equal("committed", response.TerminalState);
+        Assert.Equal("published", response.ArtifactState);
+        Assert.NotNull(response.CanonicalResult);
+        Assert.Equal("committed", response.HostFacts?.OutputCommit.Status);
+        Assert.Equal(
+            response.CanonicalResult!.Sha256,
+            response.HostFacts?.OutputCommit.Sha256);
+    }
+
     private static Task<ProductionAuditOutcome> RunAsync(
         LoaderFixture fixture,
         string resultPath,
         ProductionAuditHostControls? controls = null,
-        CancellationToken cancellationToken = default) =>
-        new ProductionAuditHost(Provenance()).RunAsync(
+        CancellationToken cancellationToken = default)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        return new ProductionAuditHost(Provenance()).RunAsync(
             new ProductionAuditRequest(
                 fixture.Root,
                 "App/App.csproj",
                 OptionalPolicy,
-                resultPath,
+                ResolvedPublicationTarget.ForValidationFixture(fixture.Root),
                 Provenance(),
                 Path.Join(fixture.Root, "obj", "contractscribe-audit-temp")),
             controls ?? new ProductionAuditHostControls(),
             cancellationToken);
+    }
 
     private static HostBuildProvenance Provenance() => new(
         new string('1', 40),
@@ -279,6 +958,31 @@ public sealed class ProductionAuditHostTests
         HostContractResources.ContractBaselineSha256,
         HostContractResources.FailureRegistrySha256,
         HostContractResources.CalibratedBoundsSha256);
+
+    private static RegisteredToolchain TestToolchain(string root) => new(
+        new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),
+        root);
+
+    private static void CreateHardLinkForTest(string existingPath, string linkPath)
+    {
+        var succeeded = OperatingSystem.IsWindows()
+            ? CreateHardLinkW(linkPath, existingPath, IntPtr.Zero)
+            : Link(existingPath, linkPath) == 0;
+        if (!succeeded)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkW(
+        string fileName,
+        string existingFileName,
+        IntPtr securityAttributes);
+
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int Link(string existingPath, string newPath);
 
     private static async Task<SubjectResponse> RunMissingAssetsAdapterAsync(
         string vectorId)

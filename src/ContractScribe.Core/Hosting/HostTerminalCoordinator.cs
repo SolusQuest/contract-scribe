@@ -7,6 +7,7 @@ public sealed class HostTerminalCoordinator
     private readonly object gate = new();
     private long nextSequence;
     private bool publicationDecisionAcquired;
+    private HostTerminalRecord? registeredCause;
     private HostTerminalRecord? terminal;
     private CommittedCanonicalResult? committedResult;
 
@@ -34,16 +35,63 @@ public sealed class HostTerminalCoordinator
 
     public long NextCauseSequence() => Interlocked.Increment(ref nextSequence);
 
+    public bool TryRegisterCause(
+        HostTerminalRecord candidate,
+        out HostTerminalRecord accepted)
+    {
+        ValidateNonSuccess(candidate);
+        lock (gate)
+        {
+            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            {
+                accepted = terminal ?? candidate;
+                return false;
+            }
+            registeredCause ??= candidate;
+            accepted = registeredCause;
+            return ReferenceEquals(registeredCause, candidate);
+        }
+    }
+
+    public bool TryCommitRegisteredCause(
+        HostTerminalRecord candidate,
+        out HostTerminalRecord accepted)
+    {
+        return TryCommitRegisteredCause(candidate, candidate, out accepted);
+    }
+
+    public bool TryCommitRegisteredCause(
+        HostTerminalRecord registered,
+        HostTerminalRecord final,
+        out HostTerminalRecord accepted)
+    {
+        ValidateNonSuccess(registered);
+        ValidateNonSuccess(final);
+        ValidateSameCause(registered, final);
+        lock (gate)
+        {
+            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            {
+                accepted = terminal ?? registered;
+                return false;
+            }
+            if (!ReferenceEquals(registeredCause, registered))
+            {
+                accepted = registeredCause ?? registered;
+                return false;
+            }
+            terminal = final;
+            registeredCause = null;
+            accepted = final;
+            return true;
+        }
+    }
+
     public bool TryCommitNonSuccess(
         HostTerminalRecord candidate,
         out HostTerminalRecord accepted)
     {
-        if (candidate.ExecutionOutcome == HostExecutionOutcome.Succeeded
-            || candidate.TerminalState != HostTerminalState.CommittedNonSuccess
-            || candidate.Failure is null)
-        {
-            throw new ArgumentException("A non-success commit requires one registry failure row.", nameof(candidate));
-        }
+        ValidateNonSuccess(candidate);
 
         lock (gate)
         {
@@ -52,7 +100,13 @@ public sealed class HostTerminalCoordinator
                 accepted = terminal ?? candidate;
                 return false;
             }
+            if (registeredCause is not null && !ReferenceEquals(registeredCause, candidate))
+            {
+                accepted = registeredCause;
+                return false;
+            }
             terminal = candidate;
+            registeredCause = null;
             accepted = candidate;
             return true;
         }
@@ -60,9 +114,19 @@ public sealed class HostTerminalCoordinator
 
     public bool TryAcquirePublicationDecision(out PublicationDecisionLease? lease)
     {
+        return TryAcquirePublicationDecision(out lease, out _);
+    }
+
+    public bool TryAcquirePublicationDecision(
+        out PublicationDecisionLease? lease,
+        out HostTerminalRecord? winningCause)
+    {
         lock (gate)
         {
-            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            winningCause = terminal ?? registeredCause;
+            if (winningCause is not null
+                || committedResult is not null
+                || publicationDecisionAcquired)
             {
                 lease = null;
                 return false;
@@ -77,7 +141,10 @@ public sealed class HostTerminalCoordinator
     {
         lock (gate)
         {
-            if (terminal is not null || committedResult is not null || publicationDecisionAcquired)
+            if (terminal is not null
+                || registeredCause is not null
+                || committedResult is not null
+                || publicationDecisionAcquired)
             {
                 return false;
             }
@@ -126,7 +193,7 @@ public sealed class HostTerminalCoordinator
     {
         lock (gate)
         {
-            if (committedResult is null || terminal is not null)
+            if (committedResult is null || terminal is not null || registeredCause is not null)
             {
                 throw new InvalidOperationException(
                     "A success record can derive only from the current committed canonical result.");
@@ -152,9 +219,41 @@ public sealed class HostTerminalCoordinator
 
     private void RequireActivePublicationDecision()
     {
-        if (!publicationDecisionAcquired || terminal is not null || committedResult is not null)
+        if (!publicationDecisionAcquired
+            || terminal is not null
+            || registeredCause is not null
+            || committedResult is not null)
         {
             throw new InvalidOperationException("The publication decision is no longer authoritative.");
+        }
+    }
+
+    private static void ValidateNonSuccess(HostTerminalRecord candidate)
+    {
+        if (candidate.ExecutionOutcome == HostExecutionOutcome.Succeeded
+            || candidate.TerminalState != HostTerminalState.CommittedNonSuccess
+            || candidate.Failure is null)
+        {
+            throw new ArgumentException(
+                "A non-success cause requires one registry failure row.",
+                nameof(candidate));
+        }
+    }
+
+    private static void ValidateSameCause(
+        HostTerminalRecord registered,
+        HostTerminalRecord final)
+    {
+        if (registered.ExecutionOutcome != final.ExecutionOutcome
+            || registered.TerminalState != final.TerminalState
+            || !Equals(registered.Failure, final.Failure)
+            || !Equals(registered.Provenance, final.Provenance)
+            || !Equals(registered.Toolchain, final.Toolchain)
+            || registered.AcceptedSequence != final.AcceptedSequence)
+        {
+            throw new ArgumentException(
+                "A registered cause may gain supporting facts but its classification and sequence are immutable.",
+                nameof(final));
         }
     }
 

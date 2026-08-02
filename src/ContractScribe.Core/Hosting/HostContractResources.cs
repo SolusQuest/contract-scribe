@@ -22,6 +22,8 @@ public static class HostContractResources
 
     public static string CalibratedBoundsSha256 => Snapshot.Value.CalibratedBoundsSha256;
 
+    public static string CalibrationEvidenceSha256 => Snapshot.Value.CalibrationEvidenceSha256;
+
     public static string ContractBaselineSha256 => Snapshot.Value.ContractBaselineSha256;
 
     public static ImmutableArray<HostFailureRegistryEntry> FailureRegistry =>
@@ -66,6 +68,19 @@ public static class HostContractResources
         {
             throw new InvalidOperationException("The embedded Host failure registry is invalid.");
         }
+        var evidenceSha256 = Sha256(evidence);
+        using var parsedBounds = JsonDocument.Parse(bounds);
+        var evidenceBindings = parsedBounds.RootElement.GetProperty("entries")
+            .EnumerateArray()
+            .Select(entry => entry.GetProperty("calibrationEvidenceSha256").GetString())
+            .ToArray();
+        if (evidenceBindings.Length == 0
+            || evidenceBindings.Any(binding =>
+                !string.Equals(binding, evidenceSha256, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "The embedded Host calibrated bounds are not bound to the embedded calibration evidence.");
+        }
 
         return new ResourceSnapshot(
             failureRegistry,
@@ -74,6 +89,7 @@ public static class HostContractResources
             baseline,
             Sha256(failureRegistry),
             Sha256(bounds),
+            evidenceSha256,
             Sha256(baseline),
             rows);
     }
@@ -126,6 +142,7 @@ public static class HostContractResources
         byte[] ContractBaseline,
         string FailureRegistrySha256,
         string CalibratedBoundsSha256,
+        string CalibrationEvidenceSha256,
         string ContractBaselineSha256,
         ImmutableArray<HostFailureRegistryEntry> FailureRows);
 }

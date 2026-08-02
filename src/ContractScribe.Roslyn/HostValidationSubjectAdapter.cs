@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -19,16 +20,34 @@ internal static class HostValidationSubjectAdapter
         WriteIndented = false,
     };
 
-    public static bool IsEnabled =>
-        HostBuildMetadata.Read(typeof(HostValidationSubjectAdapter).Assembly) is not null;
+    public static bool IsEnabledFor(Assembly cliAssembly)
+    {
+        ArgumentNullException.ThrowIfNull(cliAssembly);
+        var cliMetadata = HostBuildMetadata.Read(cliAssembly);
+        var roslynMetadata = HostBuildMetadata.Read(typeof(HostValidationSubjectAdapter).Assembly);
+        if (cliMetadata is null && roslynMetadata is null)
+        {
+            return false;
+        }
+        if (cliMetadata is null || roslynMetadata is null || cliMetadata != roslynMetadata)
+        {
+            throw new InvalidOperationException(
+                "The CLI and Roslyn validation subject provenance metadata must match exactly.");
+        }
+        return true;
+    }
 
     public static async Task<int> RunAsync(
         string requestPath,
-        string responsePath)
+        string responsePath,
+        Assembly cliAssembly)
     {
-        var metadata = HostBuildMetadata.Read(typeof(HostValidationSubjectAdapter).Assembly)
-            ?? throw new InvalidOperationException(
+        if (!IsEnabledFor(cliAssembly))
+        {
+            throw new InvalidOperationException(
                 "The validation subject adapter is not enabled in this artifact.");
+        }
+        var metadata = HostBuildMetadata.Read(cliAssembly)!;
         return await RunCoreAsync(
             requestPath,
             responsePath,
@@ -64,7 +83,12 @@ internal static class HostValidationSubjectAdapter
 
         using var cancellation = new CancellationTokenSource();
         var control = new SubjectControlAdapter(request, cancellation);
-        var resultPath = ResolveResultPath(request.RepositoryRoot, request.VectorId);
+        var resultPath = Path.GetFullPath(Path.Join(
+            request.RepositoryRoot,
+            "TestResults/audit-result.json"));
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        var publicationTarget = ResolvedPublicationTarget.ForValidationFixture(
+            request.RepositoryRoot);
         var fault = ResolveFault(request.PublicationFault);
         var lateAttemptKind = ResolveLateAttempt(request);
         var transitions = new SubjectTransitionRecorder(
@@ -82,7 +106,7 @@ internal static class HostValidationSubjectAdapter
             request.RepositoryRoot,
             ResolveInputPath(fixture.Fixture),
             ResolvePolicyBytes(fixture.Fixture),
-            resultPath,
+            publicationTarget,
             provenance,
             request.AuditTemporaryRoot,
             request.TemporaryDiskGate?.OutputStagingRoot,
@@ -91,7 +115,7 @@ internal static class HostValidationSubjectAdapter
             productionRequest,
             controls,
             cancellation.Token).ConfigureAwait(false);
-        var response = CreateResponse(request, productionRequest, outcome);
+        var response = CreateResponse(request, fixture.Fixture, productionRequest, outcome);
         WriteCanonicalAtomic(responsePath, response);
         return 0;
     }
@@ -243,82 +267,42 @@ internal static class HostValidationSubjectAdapter
             ]
             : null;
 
-    private static string ResolveResultPath(
-        string repositoryRoot,
-        string vectorId)
-    {
-        var relative = UsesObservedResult(vectorId)
-            ? "TestResults/audit-result.json"
-            : "obj/contractscribe-validation/audit-result.json";
-        return Path.GetFullPath(Path.Join(repositoryRoot, relative));
-    }
-
-    private static bool UsesObservedResult(string vectorId) => vectorId is
-        "contracts.policy-conformance" or
-        "contracts.taxonomy-conformance" or
-        "contracts.audit-conformance" or
-        "contracts.profile-external-api" or
-        "contracts.profile-assembly-visible" or
-        "contracts.outcome-compliant" or
-        "contracts.outcome-violation" or
-        "contracts.outcome-skipped" or
-        "determinism.fresh-process-canonical" or
-        "failure.invalid-input" or
-        "failure.environment-unavailable" or
-        "failure.load-failure" or
-        "failure.audit-error" or
-        "failure.publication-invalidation" or
-        "failure.publication-finalization" or
-        "cancellation.before-commit" or
-        "cancellation.after-commit" or
-        "cancellation.late-completion" or
-        "cancellation.terminal-precedence" or
-        "publication.stale-invalidation" or
-        "publication.same-directory-atomic" or
-        "path.working-directory-independent" or
-        "bounds.temporary-disk" or
-        "support.generator" or
-        "support.multi-targeting";
-
     private static ValidationSubjectResponse CreateResponse(
         ValidationSubjectRequest request,
+        string fixtureProfile,
         ProductionAuditRequest productionRequest,
         ProductionAuditOutcome outcome)
     {
         var terminal = outcome.Terminal;
-        var exposeCommittedResult = terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded
-            && UsesObservedResult(request.VectorId);
-        var maskSuccessfulObservation = terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded
-            && !exposeCommittedResult;
-        var failure = maskSuccessfulObservation ? null : terminal.Failure;
-        var executionOutcome = maskSuccessfulObservation
-            ? null
-            : HostVocabulary.GetId(terminal.ExecutionOutcome);
-        var auditOutcome = maskSuccessfulObservation || terminal.AuditOutcome is null
+        var committedResult = terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded;
+        var failure = terminal.Failure;
+        var executionOutcome = HostVocabulary.GetId(terminal.ExecutionOutcome);
+        var auditOutcome = terminal.AuditOutcome is null
             ? null
             : AuditOutcomeId(terminal.AuditOutcome.Value);
-        var canonical = exposeCommittedResult && outcome.CanonicalResult is not null
+        var canonical = committedResult && outcome.CanonicalResult is not null
             ? new CanonicalResultFact(
                 Sha256(outcome.CanonicalResult),
                 outcome.CanonicalResult.LongLength,
                 "canonical-json-utf8-no-bom-single-lf",
                 true)
             : null;
-        var diagnostics = failure is null
-            ? Array.Empty<NormalizedDiagnosticResponse>()
-            : [new NormalizedDiagnosticResponse(failure.Code, HostVocabulary.GetId(failure.Stage))];
+        var diagnostics = terminal.Diagnostics
+            .Select(diagnostic => new NormalizedDiagnosticResponse(
+                diagnostic.Code,
+                HostVocabulary.GetId(diagnostic.Stage)))
+            .ToArray();
         var toolchain = terminal.Toolchain;
         var toolchainSelected = toolchain.SelectionState == HostToolchainSelectionState.Selected;
-        var measuredBounds = CreateMeasuredBounds(request.VectorId, diagnostics, terminal);
-        var loaderFact = request.VectorId == "support.multi-targeting"
-            && outcome.LoaderFact?.Code == "loader.unsupported.multi-targeting"
+        var measuredBounds = CreateMeasuredBounds(fixtureProfile, diagnostics, terminal);
+        var loaderFact = outcome.LoaderFact?.Code == "loader.unsupported.multi-targeting"
                 ? new LoaderObservationResponse(
                     "loader.unsupported.multi-targeting",
                     "whole-input-rejected",
                     false,
                     false)
                 : null;
-        var outputStatus = exposeCommittedResult ? "committed" : "not-committed";
+        var outputStatus = committedResult ? "committed" : "not-committed";
         var hostFacts = new HostFactsResponse(
             terminal.Provenance.SourceConfigurationId,
             terminal.Provenance.SourceRevision,
@@ -329,7 +313,7 @@ internal static class HostValidationSubjectAdapter
             toolchainSelected ? toolchain.RuntimeVersion : null,
             toolchainSelected ? toolchain.MsbuildVersion : null,
             diagnostics,
-            new OutputCommitResponse(outputStatus, exposeCommittedResult ? canonical?.Sha256 : null),
+            new OutputCommitResponse(outputStatus, committedResult ? canonical?.Sha256 : null),
             measuredBounds,
             loaderFact,
             toolchainSelected ? "selected" : "not-selected");
@@ -345,22 +329,20 @@ internal static class HostValidationSubjectAdapter
             failure is null ? null : terminal.Provenance.FailureRegistrySha256,
             failure?.Code,
             failure is null ? null : HostVocabulary.GetId(failure.Stage),
-            maskSuccessfulObservation ? "pending" : "committed",
-            maskSuccessfulObservation
-                ? "invalidated"
-                : HostArtifactStateId(terminal.OutputCommit.State),
-            ProjectEnforcementClass(request.VectorId, terminal, outcome.LoaderFact),
-            ProjectObservation(request, productionRequest, outcome),
+            "committed",
+            HostArtifactStateId(terminal.OutputCommit.State),
+            ProjectEnforcementClass(fixtureProfile, terminal, outcome.LoaderFact),
+            ProjectObservation(fixtureProfile, productionRequest, outcome),
             canonical,
             hostFacts);
     }
 
     private static IReadOnlyList<MeasuredBoundResponse> CreateMeasuredBounds(
-        string vectorId,
+        string fixtureProfile,
         IReadOnlyList<NormalizedDiagnosticResponse> diagnostics,
         HostTerminalRecord terminal)
     {
-        if (vectorId == "bounds.temporary-disk")
+        if (fixtureProfile == "bounds.temporary-disk")
         {
             return terminal.MeasuredBounds
                 .Where(item => item.Name == "temporary-disk-bytes")
@@ -372,7 +354,7 @@ internal static class HostValidationSubjectAdapter
                     HostVocabulary.GetId(item.EnforcementClass)))
                 .ToArray();
         }
-        if (vectorId == "diagnostics.bounded-sanitized")
+        if (fixtureProfile == "diagnostics.over-limit")
         {
             return
             [
@@ -383,9 +365,17 @@ internal static class HostValidationSubjectAdapter
                     SerializeCanonical(diagnostics).LongLength),
             ];
         }
-        if (vectorId == "toolchain.owned-subprocesses")
+        if (fixtureProfile == "process.toolchain-owned")
         {
-            return [Bound("toolchain-subprocess-count", "count", 0)];
+            return terminal.MeasuredBounds
+                .Where(item => item.Name == "toolchain-subprocess-count")
+                .Select(item => new MeasuredBoundResponse(
+                    item.Name,
+                    item.Unit,
+                    item.Measured,
+                    item.Threshold,
+                    HostVocabulary.GetId(item.EnforcementClass)))
+                .ToArray();
         }
         return [];
     }
@@ -401,12 +391,12 @@ internal static class HostValidationSubjectAdapter
                 : "internally-enforceable");
 
     private static string ProjectObservation(
-        ValidationSubjectRequest request,
+        string fixtureProfile,
         ProductionAuditRequest productionRequest,
         ProductionAuditOutcome outcome)
     {
         var terminal = outcome.Terminal;
-        if (request.VectorId == "path.lexical-escape"
+        if (fixtureProfile == "path.lexical-parent"
             && terminal.ExecutionOutcome == HostExecutionOutcome.InvalidInput
             && productionRequest.InputPath.Contains("..", StringComparison.Ordinal))
         {
@@ -441,8 +431,8 @@ internal static class HostValidationSubjectAdapter
                     "publication.invalidation-failure-committed",
                 HostExecutionOutcome.PublicationFailure =>
                     "publication.finalization-failure-committed",
-                HostExecutionOutcome.Cancelled when request.VectorId
-                    == "cancellation.before-commit" => "cancellation.cancelled-before-commit",
+                HostExecutionOutcome.Cancelled when fixtureProfile
+                    == "gate.before-commit" => "cancellation.cancelled-before-commit",
                 HostExecutionOutcome.Cancelled => "terminal.late-completion-rejected",
                 HostExecutionOutcome.Timeout => "failure.environment-unavailable",
                 _ => throw new InvalidOperationException(
@@ -450,23 +440,23 @@ internal static class HostValidationSubjectAdapter
             };
         }
 
-        return request.VectorId switch
+        return fixtureProfile switch
         {
-            "cancellation.after-commit" => "cancellation.committed-outcome-wins",
-            "diagnostics.bounded-sanitized" => "diagnostics.bounded-sanitized",
-            "repository-write.protected-files" => "repository.protected-files-unchanged",
-            "repository-write.allowed-design-time" => "repository.design-time-output-bounded",
-            "network.no-contractscribe-initiated-operation" =>
+            "gate.after-commit" => "cancellation.committed-outcome-wins",
+            "diagnostics.over-limit" => "diagnostics.bounded-sanitized",
+            "repository-write.protected" => "repository.protected-files-unchanged",
+            "repository-write.design-time" => "repository.design-time-output-bounded",
+            "network.declared-operation-markers" =>
                 "network.no-contractscribe-initiated-operation",
-            "toolchain.selected-identities" => "toolchain.identities-recorded",
-            "toolchain.process-topology" => "process.one-runtime-zero-workers",
-            "toolchain.owned-subprocesses" => "process.toolchain-subprocesses-bounded",
+            "global-json-policy" => "toolchain.identities-recorded",
+            "process.topology" => "process.one-runtime-zero-workers",
+            "process.toolchain-owned" => "process.toolchain-subprocesses-bounded",
             "bounds.temporary-disk" => "bounds.temporary-disk-calibrated",
-            "support.sln" => "support.sln-accepted",
-            "support.slnx" => "support.slnx-accepted",
-            "support.csproj" => "support.csproj-accepted",
-            "support.analyzer" => "support.analyzer-trusted-observed",
-            "support.custom-target" => "support.custom-target-trusted-observed",
+            "entry.sln" => "support.sln-accepted",
+            "entry.slnx" => "support.slnx-accepted",
+            "entry.csproj" => "support.csproj-accepted",
+            "entry.analyzer" => "support.analyzer-trusted-observed",
+            "entry.custom-target" => "support.custom-target-trusted-observed",
             _ => terminal.AuditOutcome switch
             {
                 AuditOutcome.Compliant => "audit.outcome.compliant",
@@ -479,7 +469,7 @@ internal static class HostValidationSubjectAdapter
     }
 
     private static string ProjectEnforcementClass(
-        string vectorId,
+        string fixtureProfile,
         HostTerminalRecord terminal,
         LoaderFact? loaderFact)
     {
@@ -488,15 +478,15 @@ internal static class HostValidationSubjectAdapter
         {
             return "internally-enforceable";
         }
-        return vectorId is
-            "repository-write.protected-files" or
-            "repository-write.allowed-design-time" or
-            "network.no-contractscribe-initiated-operation" or
-            "toolchain.process-topology" or
-            "toolchain.owned-subprocesses" or
-            "support.analyzer" or
-            "support.generator" or
-            "support.custom-target"
+        return fixtureProfile is
+            "repository-write.protected" or
+            "repository-write.design-time" or
+            "network.declared-operation-markers" or
+            "process.topology" or
+            "process.toolchain-owned" or
+            "entry.analyzer" or
+            "entry.source-generator" or
+            "entry.custom-target"
                 ? "observable-only"
                 : "internally-enforceable";
     }

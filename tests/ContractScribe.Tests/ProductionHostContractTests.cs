@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
 
@@ -17,7 +18,14 @@ public sealed class ProductionHostContractTests
         Assert.All(rows, row => Assert.Same(row, HostContractResources.RequireFailure(row.Code)));
         Assert.Equal(64, HostContractResources.FailureRegistrySha256.Length);
         Assert.Equal(64, HostContractResources.CalibratedBoundsSha256.Length);
+        Assert.Equal(64, HostContractResources.CalibrationEvidenceSha256.Length);
         Assert.Equal(64, HostContractResources.ContractBaselineSha256.Length);
+        using var bounds = JsonDocument.Parse(HostContractResources.CalibratedBoundsBytes);
+        Assert.All(
+            bounds.RootElement.GetProperty("entries").EnumerateArray(),
+            entry => Assert.Equal(
+                HostContractResources.CalibrationEvidenceSha256,
+                entry.GetProperty("calibrationEvidenceSha256").GetString()));
     }
 
     [Fact]
@@ -98,6 +106,40 @@ public sealed class ProductionHostContractTests
             HostDiagnosticSeverity.Error,
             "host.audit.fixture",
             ["access_token"]));
+        foreach (var unsafeValue in new[]
+                 {
+                     "C:\\Users\\fixture\\secret.txt",
+                     "D:/agent/_work/input.json",
+                     "/home/runner/input.json",
+                     "\\\\server\\share\\input.json",
+                     "file:///tmp/input.json",
+                     "Authorization: Bearer fixture",
+                     "api_key=fixture",
+                     "client-secret=fixture",
+                 })
+        {
+            Assert.Throws<ArgumentException>(() => new HostDiagnosticFact(
+                "host.audit.unsafe",
+                HostStage.Audit,
+                HostDiagnosticSeverity.Error,
+                "host.audit.fixture",
+                [unsafeValue]));
+        }
+        foreach (var unsafePath in new[]
+                 {
+                     "C:\\repo\\Fixture.cs",
+                     "D:/repo/Fixture.cs",
+                     "/repo/Fixture.cs",
+                     "\\\\server\\share\\Fixture.cs",
+                 })
+        {
+            Assert.Throws<ArgumentException>(() => new HostDiagnosticFact(
+                "host.audit.unsafe-path",
+                HostStage.Audit,
+                HostDiagnosticSeverity.Error,
+                "host.audit.fixture",
+                repositoryRelativePath: unsafePath));
+        }
 
         var first = new HostDiagnosticFact(
             "host.audit.duplicate",
@@ -117,11 +159,137 @@ public sealed class ProductionHostContractTests
         Assert.Single(HostDiagnosticEnvelope.Normalize([first, second], 4, 4096));
     }
 
+    [Fact]
+    public void DiagnosticEnvelope_EnforcesTheCalibratedProductionCaps()
+    {
+        var countLimit = checked((int)HostContractResources.RequireBound("diagnostic-count"));
+        var byteLimit = checked((int)HostContractResources.RequireBound("diagnostic-utf8-bytes"));
+        var countFacts = Enumerable.Range(0, countLimit + 8)
+            .Select(index => new HostDiagnosticFact(
+                $"host.audit.count-{index:D2}",
+                HostStage.Audit,
+                HostDiagnosticSeverity.Warning,
+                "host.audit.fixture"));
+
+        var countBounded = HostDiagnosticEnvelope.Normalize(countFacts, countLimit, byteLimit);
+        Assert.Equal(countLimit, countBounded.Length);
+
+        var byteFacts = Enumerable.Range(0, countLimit)
+            .Select(index => new HostDiagnosticFact(
+                $"host.audit.bytes-{index:D2}",
+                HostStage.Audit,
+                HostDiagnosticSeverity.Warning,
+                "host.audit.fixture",
+                Enumerable.Repeat(new string((char)('a' + index % 26), 128), 8)));
+        var byteBounded = HostDiagnosticEnvelope.Normalize(byteFacts, countLimit, byteLimit);
+        var serialized = JsonSerializer.SerializeToUtf8Bytes(
+            byteBounded,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+        Assert.True(byteBounded.Length < countLimit);
+        Assert.True(serialized.Length <= byteLimit);
+    }
+
+    [Fact]
+    public void RegisteredCause_AtomicallyPreventsPublicationAcquisitionUntilCommitted()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var cause = Failure(coordinator, "host.publication.cancelled");
+
+        Assert.True(coordinator.TryRegisterCause(cause, out var registered));
+        Assert.Same(cause, registered);
+        Assert.False(coordinator.TryAcquirePublicationDecision(
+            out var publication,
+            out var winner));
+        Assert.Null(publication);
+        Assert.Same(cause, winner);
+        Assert.True(coordinator.TryCommitRegisteredCause(cause, out var terminal));
+        Assert.Same(cause, terminal);
+        Assert.Same(cause, coordinator.Terminal);
+    }
+
+    [Fact]
+    public void EveryFailureRegistryRow_HasOneReachableCommittedTerminalShape()
+    {
+        foreach (var row in HostContractResources.FailureRegistry)
+        {
+            var coordinator = new HostTerminalCoordinator();
+            var candidate = Failure(coordinator, row.Code);
+
+            Assert.True(coordinator.TryCommitNonSuccess(candidate, out var accepted));
+            Assert.Same(candidate, accepted);
+            Assert.Same(candidate, coordinator.Terminal);
+            Assert.Same(row, candidate.Failure);
+            Assert.Equal(row.Stage, candidate.Diagnostics[0].Stage);
+            Assert.Equal(row.Code, candidate.Diagnostics[0].Code);
+            Assert.Equal(row.ExecutionOutcome, candidate.ExecutionOutcome);
+        }
+    }
+
+    [Fact]
+    public void PublicationLinearization_RejectsEveryLaterNonSuccessCause()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        Assert.True(coordinator.TryAcquirePublicationDecision(out var decision));
+
+        var lateCause = Failure(coordinator, "host.publication.cancelled");
+        Assert.False(coordinator.TryRegisterCause(lateCause, out _));
+        Assert.False(coordinator.TryCommitNonSuccess(lateCause, out _));
+
+        var bytes = "{}\n"u8.ToArray();
+        var committed = new CommittedCanonicalResult(
+            bytes,
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            Provenance(),
+            HostToolchainFact.Selected("10.0.102", "10.0.2", "18.0.0", "X64"));
+        decision!.CommitRename(committed);
+
+        var success = coordinator.DeriveSuccessRecord(AuditOutcome.Compliant, [], []);
+        Assert.Same(success, coordinator.Terminal);
+        Assert.Equal(HostTerminalState.CommittedResult, success.TerminalState);
+    }
+
+    [Fact]
+    public void RegisteredCause_MayGainSupportingFactsButCannotBeReclassified()
+    {
+        var coordinator = new HostTerminalCoordinator();
+        var registered = Failure(coordinator, "host.publication.cancelled");
+        Assert.True(coordinator.TryRegisterCause(registered, out _));
+
+        var cleanup = new HostDiagnosticFact(
+            "host.publication.cleanup-failed",
+            HostStage.Publication,
+            HostDiagnosticSeverity.Error,
+            "host.publication.cleanup-failed");
+        var final = registered with { Diagnostics = [.. registered.Diagnostics, cleanup] };
+
+        Assert.True(coordinator.TryCommitRegisteredCause(registered, final, out var accepted));
+        Assert.Same(final, accepted);
+        Assert.Equal(HostExecutionOutcome.Cancelled, accepted.ExecutionOutcome);
+        Assert.Equal("host.publication.cancelled", accepted.Failure!.Code);
+        Assert.Contains(accepted.Diagnostics, item => item.Code == "host.publication.cleanup-failed");
+
+        var second = new HostTerminalCoordinator();
+        var original = Failure(second, "host.publication.cancelled");
+        Assert.True(second.TryRegisterCause(original, out _));
+        var reclassified = Failure(second, "host.publication.cleanup-failed") with
+        {
+            AcceptedSequence = original.AcceptedSequence,
+        };
+        Assert.Throws<ArgumentException>(() =>
+            second.TryCommitRegisteredCause(original, reclassified, out _));
+    }
+
     private static HostTerminalRecord Failure(
         HostTerminalCoordinator coordinator,
         string code)
     {
         var row = HostContractResources.RequireFailure(code);
+        var diagnostic = new HostDiagnosticFact(
+            row.Code,
+            row.Stage,
+            HostDiagnosticSeverity.Error,
+            row.Code);
         return new HostTerminalRecord(
             row.ExecutionOutcome,
             null,
@@ -130,7 +298,7 @@ public sealed class ProductionHostContractTests
             Provenance(),
             HostToolchainFact.NotSelected,
             new HostOutputCommit(HostArtifactState.Invalidated, null, 0),
-            ImmutableArray<HostDiagnosticFact>.Empty,
+            [diagnostic],
             ImmutableArray<HostMeasuredBound>.Empty,
             coordinator.NextCauseSequence());
     }

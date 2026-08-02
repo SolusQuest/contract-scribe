@@ -292,9 +292,8 @@ public sealed record HostDiagnosticFact
         var normalized = value.Normalize(NormalizationForm.FormC);
         if (normalized.Length > 128
             || normalized.Any(character => char.IsControl(character))
-            || normalized.Contains("password", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("token", StringComparison.OrdinalIgnoreCase)
-            || Path.IsPathRooted(normalized))
+            || ContainsCredentialMarker(normalized)
+            || LooksLikeAbsolutePath(normalized))
         {
             throw new ArgumentException("Diagnostic arguments must be bounded public-safe values.");
         }
@@ -303,7 +302,7 @@ public sealed record HostDiagnosticFact
 
     private static string NormalizeRepositoryPath(string path)
     {
-        if (Path.IsPathRooted(path) || path.Contains('\0'))
+        if (LooksLikeAbsolutePath(path) || path.Contains('\0'))
         {
             throw new ArgumentException("Diagnostic paths must be repository-relative.", nameof(path));
         }
@@ -313,6 +312,41 @@ public sealed record HostDiagnosticFact
             throw new ArgumentException("Diagnostic paths must be canonical.", nameof(path));
         }
         return string.Join('/', segments);
+    }
+
+    private static bool ContainsCredentialMarker(string value) =>
+        new[]
+        {
+            "authorization",
+            "bearer",
+            "credential",
+            "password",
+            "passwd",
+            "private-key",
+            "private_key",
+            "secret",
+            "token",
+            "api-key",
+            "api_key",
+            "apikey",
+            "connection-string",
+            "connection_string",
+        }.Any(marker => value.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+    private static bool LooksLikeAbsolutePath(string value)
+    {
+        if (Path.IsPathRooted(value)
+            || value.StartsWith("/", StringComparison.Ordinal)
+            || value.StartsWith("\\\\", StringComparison.Ordinal)
+            || value.StartsWith("//", StringComparison.Ordinal)
+            || value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return value.Length >= 3
+            && char.IsAsciiLetter(value[0])
+            && value[1] == ':'
+            && value[2] is '\\' or '/';
     }
 }
 
