@@ -1075,18 +1075,16 @@ internal sealed class ProductionAuditHost
                 measuredBounds,
                 acceptedSequence),
             out var committed);
-        if (!committed)
+        if (!committed
+            && !TryCommitRegisteredCause(
+                coordinator,
+                accepted,
+                cleanupSucceeded: true,
+                diagnostics,
+                measuredBounds,
+                out accepted))
         {
-            if (!TryCommitRegisteredCause(
-                    coordinator,
-                    accepted,
-                    cleanupSucceeded: true,
-                    diagnostics,
-                    measuredBounds,
-                    out accepted))
-            {
-                throw new InvalidOperationException("The earlier accepted terminal cause could not be committed.");
-            }
+            throw new InvalidOperationException("The earlier accepted terminal cause could not be committed.");
         }
         RecordAcceptedFailure(controls, transitions, accepted);
         await RunRejectedLateAttemptAsync(
