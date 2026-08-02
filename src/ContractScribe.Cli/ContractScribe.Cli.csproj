@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ContractScribe.Core\ContractScribe.Core.csproj" />
+    <ProjectReference Include="..\ContractScribe.Roslyn\ContractScribe.Roslyn.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
