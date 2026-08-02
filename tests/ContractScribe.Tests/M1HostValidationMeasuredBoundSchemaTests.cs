@@ -55,13 +55,14 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
                          })
                 {
                     var tuple = (name, unit, enforcementClass);
+                    var bound = new MeasuredBoundFact(
+                        name,
+                        unit,
+                        1,
+                        16,
+                        enforcementClass);
                     AssertSchemaParity(
-                        ResponseNode(new MeasuredBoundFact(
-                            name,
-                            unit,
-                            1,
-                            16,
-                            enforcementClass)),
+                        ResponseNode(SchemaOnlySubject(bound)),
                         valid.Contains(tuple));
                 }
             }
@@ -69,7 +70,7 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
     }
 
     [Fact]
-    public void MeasuredBounds_DiagnosticAndToolchainTuplesReachSharedSemantics()
+    public void MeasuredBounds_SameResponsesPassBothSchemasAndVectorSemantics()
     {
         var temp = Path.Join(
             Root,
@@ -79,111 +80,121 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
         try
         {
             var boundsPath = Path.Join(temp, "bounds.json");
-            CanonicalJson.WriteCanonical(
+            WriteCalibratedBounds(boundsPath);
+            SchemaValidation.Validate(
                 boundsPath,
-                new
-                {
-                    entries = new[]
-                    {
-                        new
-                        {
-                            name = "diagnostic-count",
-                            unit = "count",
-                            limit = 100L,
-                            enforcementClass = "internally-enforceable"
-                        },
-                        new
-                        {
-                            name = "diagnostic-utf8-bytes",
-                            unit = "bytes",
-                            limit = 65536L,
-                            enforcementClass = "internally-enforceable"
-                        },
-                        new
-                        {
-                            name = "temporary-disk-bytes",
-                            unit = "bytes",
-                            limit = 1048576L,
-                            enforcementClass = "internally-enforceable"
-                        },
-                        new
-                        {
-                            name = "toolchain-subprocess-count",
-                            unit = "count",
-                            limit = 16L,
-                            enforcementClass = "observable-only"
-                        }
-                    },
-                    formatVersion = "contractscribe-m1-host-calibrated-bounds-v1"
-                });
+                Path.Join(
+                    Root,
+                    "schemas",
+                    "validation",
+                    "m1-host-calibrated-bounds-v1.schema.json"),
+                requireCanonical: true);
             var identity = new ArtifactIdentity(
                 RepositoryPaths.ToRepositoryRelative(Root, boundsPath),
                 CanonicalJson.Sha256File(boundsPath));
-            var source = new SubjectSourceConfiguration(
-                $"source.{Sha}",
-                HostRevision,
-                $"operations.{Sha}",
-                [],
-                [],
-                identity,
-                identity,
-                identity,
-                identity,
-                identity,
-                identity,
-                identity);
+            var source = Source(identity);
+            var materialization = ExactMaterialization();
+            var context = BundleValidator.Validate(Root);
+            var diagnosticBytes = RunSemantics.MeasureCanonicalDiagnosticBytes([]);
 
-            var diagnostics = new[]
+            var cases = new[]
             {
-                new NormalizedDiagnosticFact("host.synthetic", "audit")
+                new SemanticCase(
+                    "diagnostics.bounded-sanitized",
+                    [
+                        new MeasuredBoundFact(
+                            "diagnostic-count",
+                            "count",
+                            0,
+                            100,
+                            "internally-enforceable"),
+                        new MeasuredBoundFact(
+                            "diagnostic-utf8-bytes",
+                            "bytes",
+                            diagnosticBytes,
+                            65536,
+                            "internally-enforceable")
+                    ],
+                    BasicProcess(),
+                    [new ObservedProcess(700, 1, "subject-runtime", "dotnet")]),
+                new SemanticCase(
+                    "bounds.temporary-disk",
+                    [
+                        new MeasuredBoundFact(
+                            "temporary-disk-bytes",
+                            "bytes",
+                            2048,
+                            1048576,
+                            "internally-enforceable")
+                    ],
+                    new ProcessObservation(
+                        0,
+                        "started",
+                        "normal",
+                        false,
+                        true,
+                        true,
+                        "temporary-disk-high-water",
+                        "measure-temporary-disk",
+                        false,
+                        TemporaryDiskHighWater: new TemporaryDiskHighWaterEvidence(
+                            "peak-concurrent-logical-file-bytes",
+                            "contractscribe-temporary-work-and-output-staging.v1",
+                            "pre-subject-to-temporary-disk-high-water.v1",
+                            1024,
+                            1024,
+                            2048,
+                            true,
+                            false)),
+                    [new ObservedProcess(700, 1, "subject-runtime", "dotnet")]),
+                new SemanticCase(
+                    "toolchain.owned-subprocesses",
+                    [
+                        new MeasuredBoundFact(
+                            "toolchain-subprocess-count",
+                            "count",
+                            1,
+                            16,
+                            "observable-only")
+                    ],
+                    new ProcessObservation(
+                        0,
+                        "started",
+                        "normal",
+                        false,
+                        true,
+                        true,
+                        "process-observation",
+                        "observe",
+                        true),
+                    [
+                        new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                        new ObservedProcess(701, 700, "toolchain-owned", "dotnet")
+                    ])
             };
-            var diagnosticBytes = RunSemantics.MeasureCanonicalDiagnosticBytes(diagnostics);
-            var diagnosticFacts = Facts(
-                source,
-                diagnostics,
-                [
-                    new MeasuredBoundFact(
-                        "diagnostic-count",
-                        "count",
-                        diagnostics.Length,
-                        100,
-                        "internally-enforceable"),
-                    new MeasuredBoundFact(
-                        "diagnostic-utf8-bytes",
-                        "bytes",
-                        diagnosticBytes,
-                        65536,
-                        "internally-enforceable")
-                ]);
-            RunSemantics.ValidateMeasuredBounds(
-                Root,
-                source,
-                diagnosticFacts,
-                new Dictionary<string, long>(StringComparer.Ordinal)
-                {
-                    ["diagnostic-count"] = diagnostics.Length,
-                    ["diagnostic-utf8-bytes"] = diagnosticBytes
-                });
 
-            var toolchainFacts = Facts(
-                source,
-                [],
-                [
-                    new MeasuredBoundFact(
-                        "toolchain-subprocess-count",
-                        "count",
-                        1,
-                        16,
-                        "observable-only")
-                ]);
-            RunSemantics.ValidateMeasuredBounds(
-                Root,
-                source,
-                toolchainFacts,
-                new Dictionary<string, long>(StringComparer.Ordinal)
-                {
-                    ["toolchain-subprocess-count"] = 1
-                });
+            foreach (var item in cases)
+            {
+                var vector = context.Vectors.Vectors.Single(candidate =>
+                    candidate.VectorId == item.VectorId);
+                var subject = SuccessfulSubject(
+                    vector,
+                    source,
+                    materialization,
+                    item.Bounds);
+                AssertSchemaParity(ResponseNode(subject), expected: true);
+
+                var derived = RunSemantics.Derive(
+                    context,
+                    vector,
+                    Run(vector, subject, item.Process, item.ObservedProcesses),
+                    Fixture(vector),
+                    source,
+                    materialization);
+                Assert.Equal("matched", derived.Verdict);
+                Assert.Equal(vector.ExpectedObservation, derived.Observation);
+                Assert.Equal(vector.ExpectedEnforcementClass, derived.EnforcementClass);
+            }
         }
         finally
         {
@@ -191,30 +202,10 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
         }
     }
 
-    private static HostObservationFacts Facts(
-        SubjectSourceConfiguration source,
-        IReadOnlyList<NormalizedDiagnosticFact> diagnostics,
-        IReadOnlyList<MeasuredBoundFact> bounds) => new(
-        source.SourceConfigurationId,
-        source.HostRevision,
-        source.ContractBaseline.Sha256,
-        source.FailureRegistry.Sha256,
-        source.CalibratedBounds.Sha256,
-        "10.0.102",
-        "10.0.0",
-        "18.0.0",
-        diagnostics,
-        new OutputCommitFact("not-committed", null),
-        bounds);
-
-    private static JsonObject ResponseNode(MeasuredBoundFact bound)
+    private static SubjectResponse SchemaOnlySubject(MeasuredBoundFact bound)
     {
-        var commitment = new CanonicalResultCommitment(
-            Sha,
-            1,
-            "canonical-json-utf8-no-bom-single-lf",
-            true);
-        var subject = new SubjectResponse(
+        var commitment = Commitment();
+        return new SubjectResponse(
             "contractscribe-m1-host-validation-subject-response-v1",
             "self-test.fake-subject",
             "run-1",
@@ -227,7 +218,7 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
             null,
             "committed",
             "published",
-            "internally-enforceable",
+            bound.EnforcementClass,
             "self-test.measured-bounds",
             commitment,
             new HostObservationFacts(
@@ -242,9 +233,172 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
                 [],
                 new OutputCommitFact("committed", Sha),
                 [bound]));
-        return JsonNode.Parse(Encoding.UTF8.GetString(
-            CanonicalJson.SerializeCanonical(subject)))!.AsObject();
     }
+
+    private static SubjectResponse SuccessfulSubject(
+        VectorDefinition vector,
+        SubjectSourceConfiguration source,
+        CellMaterialization materialization,
+        IReadOnlyList<MeasuredBoundFact> bounds)
+    {
+        var commitment = Commitment();
+        return new SubjectResponse(
+            "contractscribe-m1-host-validation-subject-response-v1",
+            vector.VectorId,
+            "run-1",
+            "started",
+            "normal",
+            "compliant",
+            "succeeded",
+            null,
+            null,
+            null,
+            "committed",
+            "published",
+            vector.ExpectedEnforcementClass,
+            vector.ExpectedObservation,
+            commitment,
+            new HostObservationFacts(
+                source.SourceConfigurationId,
+                source.HostRevision,
+                source.ContractBaseline.Sha256,
+                source.FailureRegistry.Sha256,
+                source.CalibratedBounds.Sha256,
+                materialization.SelectedSdk,
+                materialization.SelectedRuntime,
+                materialization.SelectedMsbuild,
+                [],
+                new OutputCommitFact("committed", commitment.Sha256),
+                bounds));
+    }
+
+    private static RunEvidence Run(
+        VectorDefinition vector,
+        SubjectResponse subject,
+        ProcessObservation process,
+        IReadOnlyList<ObservedProcess> observedProcesses) => new(
+        vector.VectorId,
+        "run-1",
+        "unvalidated",
+        vector.ExpectedObservation,
+        "unvalidated",
+        vector.ExpectedEnforcementClass,
+        "unvalidated",
+        subject,
+        process,
+        subject.CanonicalResult,
+        null,
+        EmptyDelta(),
+        observedProcesses,
+        []);
+
+    private static FixtureRealization Fixture(VectorDefinition vector) => new(
+        vector.VectorId,
+        vector.ExecutorKind,
+        "tests/fixtures",
+        Sha,
+        true,
+        null,
+        null,
+        [],
+        null,
+        [],
+        [],
+        vector.VectorId == "toolchain.owned-subprocesses"
+            ? "synchronized-tree"
+            : "bounded-polling",
+        "TestResults/audit-result.json",
+        "absent",
+        [new RunWorkingDirectory("run-1", "repository-root")],
+        null);
+
+    private static ProcessObservation BasicProcess() => new(
+        0,
+        "started",
+        "normal",
+        false,
+        false,
+        true);
+
+    private static RepositoryDelta EmptyDelta() => new(
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []);
+
+    private static SubjectSourceConfiguration Source(ArtifactIdentity identity) => new(
+        $"source.{Sha}",
+        HostRevision,
+        $"operations.{Sha}",
+        [],
+        [],
+        identity,
+        identity,
+        identity,
+        identity,
+        identity,
+        identity,
+        identity);
+
+    private static CellMaterialization ExactMaterialization() => new(
+        "ubuntu-x64",
+        "1",
+        "https://example.invalid/jobs/1",
+        "self-test",
+        "linux-x64",
+        "X64",
+        "10.0.102",
+        "10.0.0",
+        "18.0.0",
+        []);
+
+    private static CanonicalResultCommitment Commitment() => new(
+        Sha,
+        1,
+        "canonical-json-utf8-no-bom-single-lf",
+        true);
+
+    private static void WriteCalibratedBounds(string path) =>
+        CanonicalJson.WriteCanonical(
+            path,
+            new
+            {
+                boundsVersion = 1,
+                entries = new[]
+                {
+                    BoundEntry("sdk-discovery-timeout", "milliseconds", 30000, "internally-enforceable"),
+                    BoundEntry("workspace-load-timeout", "milliseconds", 30000, "internally-enforceable"),
+                    BoundEntry("total-audit-timeout", "milliseconds", 120000, "internally-enforceable"),
+                    BoundEntry("graceful-shutdown-timeout", "milliseconds", 30000, "internally-enforceable"),
+                    BoundEntry("diagnostic-count", "count", 100, "internally-enforceable"),
+                    BoundEntry("diagnostic-utf8-bytes", "bytes", 65536, "internally-enforceable"),
+                    BoundEntry("temporary-disk-bytes", "bytes", 1048576, "internally-enforceable"),
+                    BoundEntry("toolchain-subprocess-count", "count", 16, "observable-only")
+                },
+                formatVersion = "contractscribe-host-calibrated-bounds-v1"
+            });
+
+    private static object BoundEntry(
+        string name,
+        string unit,
+        long limit,
+        string enforcementClass) => new
+        {
+            calibrationEvidenceSha256 = Sha,
+            enforcementClass,
+            limit,
+            name,
+            unit
+        };
+
+    private static JsonObject ResponseNode(SubjectResponse subject) =>
+        JsonNode.Parse(Encoding.UTF8.GetString(
+            CanonicalJson.SerializeCanonical(subject)))!.AsObject();
 
     private static void AssertSchemaParity(JsonObject response, bool expected)
     {
@@ -314,4 +468,10 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
         }
         throw new InvalidOperationException("Repository root not found.");
     }
+
+    private sealed record SemanticCase(
+        string VectorId,
+        IReadOnlyList<MeasuredBoundFact> Bounds,
+        ProcessObservation Process,
+        IReadOnlyList<ObservedProcess> ObservedProcesses);
 }
