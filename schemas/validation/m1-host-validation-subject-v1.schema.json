@@ -1820,12 +1820,16 @@
       "properties": {
         "name": {
           "enum": [
-            "temporary-disk-bytes"
+            "diagnostic-count",
+            "diagnostic-utf8-bytes",
+            "temporary-disk-bytes",
+            "toolchain-subprocess-count"
           ]
         },
         "unit": {
           "enum": [
-            "bytes"
+            "bytes",
+            "count"
           ]
         },
         "measured": {
@@ -1839,12 +1843,64 @@
         "enforcementClass": {
           "enum": [
             "internally-enforceable",
-            "caller-or-os-enforced",
-            "observable-only",
-            "not-enforceable-selected-topology"
+            "observable-only"
           ]
         }
       },
+      "oneOf": [
+        {
+          "properties": {
+            "name": {
+              "const": "diagnostic-count"
+            },
+            "unit": {
+              "const": "count"
+            },
+            "enforcementClass": {
+              "const": "internally-enforceable"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "diagnostic-utf8-bytes"
+            },
+            "unit": {
+              "const": "bytes"
+            },
+            "enforcementClass": {
+              "const": "internally-enforceable"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "temporary-disk-bytes"
+            },
+            "unit": {
+              "const": "bytes"
+            },
+            "enforcementClass": {
+              "const": "internally-enforceable"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "toolchain-subprocess-count"
+            },
+            "unit": {
+              "const": "count"
+            },
+            "enforcementClass": {
+              "const": "observable-only"
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "loaderObservationFact": {
