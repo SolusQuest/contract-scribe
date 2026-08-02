@@ -766,6 +766,20 @@ public static class RunSemantics
         }
         if (vector.VectorId == "toolchain.no-automatic-restore")
         {
+            if (run.Subject is not
+                {
+                    ObservationCode: "toolchain.missing-assets-classified",
+                    EnforcementClass: "internally-enforceable"
+                })
+            {
+                return "process.no-valid-subject-response";
+            }
+            if (run.ObservedProcesses.Count(process => process.Role == "subject-runtime") != 1
+                || run.ObservedProcesses.Any(process =>
+                    process.Role is not ("subject-runtime" or "toolchain-owned")))
+            {
+                return "process.unowned-subprocess-observed";
+            }
             return "toolchain.no-restore-observed";
         }
         if (vector.VectorId == "toolchain.process-topology")

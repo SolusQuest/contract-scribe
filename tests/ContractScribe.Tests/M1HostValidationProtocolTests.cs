@@ -2654,14 +2654,20 @@ public sealed class M1HostValidationProtocolTests
             BlockedReasonCode = null,
             ProcessIdentityRegistry = []
         };
-        var baseline = CreateMatchedRun(
+        var matched = CreateMatchedRun(
             context,
             subject,
             vector.VectorId,
             "run-1",
             702,
-            '2') with
+            '2');
+        var baseline = matched with
         {
+            Subject = matched.Subject! with
+            {
+                ObservationCode = "toolchain.missing-assets-classified",
+                EnforcementClass = "internally-enforceable"
+            },
             Process = new ProcessObservation(
                 0,
                 "started",

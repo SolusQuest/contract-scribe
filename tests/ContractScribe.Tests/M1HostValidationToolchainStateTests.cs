@@ -529,6 +529,35 @@ public sealed class M1HostValidationToolchainStateTests
     }
 
     [Fact]
+    public void ToolchainClaims_NoRestoreRequiresCommonSubjectProjection()
+    {
+        var context = BundleValidator.Validate(Root);
+        var vector = context.Vectors.Vectors.Single(candidate =>
+            candidate.VectorId == "toolchain.no-automatic-restore");
+
+        foreach (var (observation, enforcement) in new[]
+                 {
+                     ("toolchain.no-restore-observed", "observable-only"),
+                     ("toolchain.subject-actual", "internally-enforceable"),
+                     ("toolchain.missing-assets-classified", "observable-only")
+                 })
+        {
+            var derived = DeriveToolchainClaim(
+                context,
+                vector,
+                subjectObservation: observation,
+                subjectEnforcement: enforcement);
+            Assert.Equal("process.no-valid-subject-response", derived.Observation);
+            Assert.Equal("subject-nonconformance", derived.Verdict);
+        }
+
+        var missing = DeriveToolchainClaim(context, vector, includeSubject: false);
+        Assert.Equal("process.no-valid-subject-response", missing.Observation);
+        Assert.Equal("protocol-invalid-observation", missing.Verdict);
+        Assert.Contains("HV208_SUBJECT_RESPONSE_MISSING", missing.DiagnosticCodes);
+    }
+
+    [Fact]
     public void ToolchainClaims_NoRestoreRejectsIndependentRestoreMarkers()
     {
         var context = BundleValidator.Validate(Root);
@@ -565,6 +594,41 @@ public sealed class M1HostValidationToolchainStateTests
             "toolchain.restore-or-runtime-download-marker-observed",
             repositoryMarker.Observation);
         Assert.Equal("subject-nonconformance", repositoryMarker.Verdict);
+
+        var directRestoreRole = ProcessTreeObserver.ClassifyIdentity(
+            "dotnet",
+            null,
+            ["restore"],
+            []);
+        Assert.Equal("contractscribe-worker", directRestoreRole);
+        var directRestore = DeriveToolchainClaim(
+            context,
+            vector,
+            observedProcesses:
+            [
+                new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                new ObservedProcess(701, 700, directRestoreRole, "dotnet")
+            ]);
+        Assert.Equal("process.unowned-subprocess-observed", directRestore.Observation);
+        Assert.Equal("subject-nonconformance", directRestore.Verdict);
+
+        foreach (var processes in new IReadOnlyList<ObservedProcess>[]
+                 {
+                     [new ObservedProcess(701, 700, "unknown-descendant", "custom")],
+                     [],
+                     [
+                         new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
+                         new ObservedProcess(701, 1, "subject-runtime", "dotnet")
+                     ]
+                 })
+        {
+            var unclosedTree = DeriveToolchainClaim(
+                context,
+                vector,
+                observedProcesses: processes);
+            Assert.Equal("process.unowned-subprocess-observed", unclosedTree.Observation);
+            Assert.Equal("subject-nonconformance", unclosedTree.Verdict);
+        }
     }
 
     private static DerivedRun DeriveToolchainClaim(
@@ -573,7 +637,8 @@ public sealed class M1HostValidationToolchainStateTests
         RepositoryDelta? repositoryDelta = null,
         IReadOnlyList<ObservedProcess>? observedProcesses = null,
         string subjectObservation = "toolchain.missing-assets-classified",
-        string subjectEnforcement = "internally-enforceable")
+        string subjectEnforcement = "internally-enforceable",
+        bool includeSubject = true)
     {
         var artifact = new ArtifactIdentity(
             "src/ContractScribe.Core/ContractScribe.Core.csproj",
@@ -645,7 +710,7 @@ public sealed class M1HostValidationToolchainStateTests
             "unvalidated",
             vector.ExpectedEnforcementClass,
             "unvalidated",
-            subject,
+            includeSubject ? subject : null,
             process,
             commitment,
             new ObservedAuditResultFacts(

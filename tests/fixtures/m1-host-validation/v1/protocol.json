@@ -6,7 +6,7 @@
     "disposition": "pending-main-reconciliation",
     "mergeCommit": null,
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-    "contractManifestSha256": "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85",
+    "contractManifestSha256": "ca6d85035960a706cfadcf998a43005285b9789831b7d78337c233845b5c2aa3",
     "predecessor": {
       "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/35",
       "contractRevision": "issue-35-pre-release-v1",
