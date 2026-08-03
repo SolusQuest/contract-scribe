@@ -29,6 +29,27 @@ public sealed class ProductionHostContractTests
     }
 
     [Fact]
+    public void ObservableOnlyBound_CanReportAboveItsCalibrationThreshold()
+    {
+        var threshold = HostContractResources.RequireBound("toolchain-subprocess-count");
+
+        var observed = new HostMeasuredBound(
+            "toolchain-subprocess-count",
+            "count",
+            threshold + 1,
+            threshold,
+            HostEnforcementClass.ObservableOnly);
+
+        Assert.Equal(threshold + 1, observed.Measured);
+        Assert.Throws<ArgumentException>(() => new HostMeasuredBound(
+            "temporary-disk-bytes",
+            "bytes",
+            threshold + 1,
+            threshold,
+            HostEnforcementClass.InternallyEnforceable));
+    }
+
+    [Fact]
     public void TerminalCoordinator_RejectsLateSuccessAfterCommittedFailure()
     {
         var coordinator = new HostTerminalCoordinator();

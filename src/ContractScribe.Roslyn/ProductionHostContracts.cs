@@ -54,6 +54,7 @@ internal sealed record ProductionAuditHostControls(
     ProductionLateAttemptKind LateAttemptKind = ProductionLateAttemptKind.LateCompletion,
     Func<string, TimeSpan?>? DeadlineOverride = null,
     Func<CancellationToken, Task<RegisteredToolchain>>? SdkDiscovery = null,
+    Func<ToolchainProcessMeter>? ProcessMeterFactory = null,
     Func<RepositoryLoadRequest, CancellationToken, Task<RepositoryLoadOutcome>>? RepositoryLoad = null,
     Func<LoadedRepositorySession, Task>? Shutdown = null,
     Func<HostStage, CancellationToken, Task>? StageBoundary = null,

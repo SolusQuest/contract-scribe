@@ -78,17 +78,9 @@ internal sealed class TemporaryDiskMeter : IDisposable
             long total = 0;
             foreach (var root in roots)
             {
-                if (!Directory.Exists(root))
+                foreach (var path in EnumerateGovernedFiles(root))
                 {
-                    continue;
-                }
-                foreach (var path in EnumerateRegularFiles(root))
-                {
-                    var relative = Path.GetRelativePath(root, path)
-                        .Replace(Path.DirectorySeparatorChar, '/');
-                    var name = Path.GetFileName(relative);
-                    if (name.StartsWith(".contractscribe-hv-freeze-", StringComparison.Ordinal)
-                        || name.StartsWith(".contractscribe-hv-release-", StringComparison.Ordinal))
+                    if (IsIgnoredSentinel(path))
                     {
                         continue;
                     }
@@ -356,6 +348,28 @@ internal sealed class TemporaryDiskMeter : IDisposable
                     yield return entry;
                 }
             }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateGovernedFiles(string root)
+    {
+        if (File.Exists(root))
+        {
+            var attributes = File.GetAttributes(root);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException("A governed temporary entry is a reparse point.");
+            }
+            yield return root;
+            yield break;
+        }
+        if (!Directory.Exists(root))
+        {
+            yield break;
+        }
+        foreach (var path in EnumerateRegularFiles(root))
+        {
+            yield return path;
         }
     }
 

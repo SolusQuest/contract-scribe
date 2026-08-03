@@ -493,7 +493,8 @@ public sealed record HostMeasuredBound
             || string.IsNullOrWhiteSpace(unit)
             || measured < 0
             || threshold < 1
-            || measured > threshold)
+            || measured > threshold
+                && enforcementClass != HostEnforcementClass.ObservableOnly)
         {
             throw new ArgumentException("The measured bound fact is inconsistent.");
         }

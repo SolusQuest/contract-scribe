@@ -61,8 +61,9 @@ internal sealed class ProductionAuditHost
 
             using var meter = new TemporaryDiskMeter(
                 request.AuditTemporaryRoot,
-                request.OutputStagingRoot ?? Path.GetDirectoryName(publisher.StagingPath));
-            using var processMeter = new ToolchainProcessMeter();
+                request.OutputStagingRoot ?? publisher.StagingPath);
+            using var processMeter = controls.ProcessMeterFactory?.Invoke()
+                ?? new ToolchainProcessMeter();
             using var totalDeadline = new CancellationTokenSource();
             totalDeadline.CancelAfter(controls.Deadline("total-audit-timeout"));
             using var totalTimeout = CancellationTokenSource.CreateLinkedTokenSource(
@@ -233,7 +234,15 @@ internal sealed class ProductionAuditHost
             catch (Exception) when (
                 toolchain.SelectionState == HostToolchainSelectionState.NotSelected)
             {
-                throw;
+                return await CommitFailureAsync(
+                    coordinator,
+                    actualProvenance,
+                    toolchain,
+                    "host.sdk-discovery.unavailable",
+                    HostArtifactState.Invalidated,
+                    controls,
+                    transitions,
+                    loaderFact).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -662,6 +671,7 @@ internal sealed class ProductionAuditHost
                     diagnostics: hostDiagnostics).ConfigureAwait(false);
             }
 
+            HostMeasuredBound processFact;
             coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
             try
             {
@@ -731,6 +741,8 @@ internal sealed class ProductionAuditHost
                     ProductionHostControlPoint.BeforeCommit,
                     totalToken).ConfigureAwait(false);
                 totalToken.ThrowIfCancellationRequested();
+                _ = processMeter.Reconcile();
+                processFact = processMeter.ToFact();
             }
             catch (OperationCanceledException)
             {
@@ -842,7 +854,7 @@ internal sealed class ProductionAuditHost
             var success = coordinator.DeriveSuccessRecord(
                 auditOutcome,
                 diagnostics: hostDiagnostics,
-                measuredBounds: ResourceFactsWithinThreshold(meter, processMeter));
+                measuredBounds: ResourceFactsWithinThreshold(meter, processFact));
             return new ProductionAuditOutcome(success, canonical, loaderFact, transitions);
         }
     }
@@ -882,13 +894,10 @@ internal sealed class ProductionAuditHost
 
     private static IReadOnlyList<HostMeasuredBound> ResourceFactsWithinThreshold(
         TemporaryDiskMeter meter,
-        ToolchainProcessMeter processMeter)
-    {
-        _ = processMeter.Reconcile();
-        return MeasuredBoundsWithinThreshold(meter)
-            .Append(processMeter.ToFact())
+        HostMeasuredBound processFact) =>
+        MeasuredBoundsWithinThreshold(meter)
+            .Append(processFact)
             .ToArray();
-    }
 
     private async Task<ProductionAuditOutcome> CompleteComponentFailureAsync(
         LoadedRepositorySession session,

@@ -122,11 +122,8 @@ internal sealed class ToolchainProcessMeter : IDisposable
                     case ProcessRole.PlatformInfrastructure:
                         break;
                     default:
-                        throw new IOException(
-                            $"A Host descendant could not be classified against the selected toolchain: "
-                            + $"image={Path.GetFileName(node.ImageName)},"
-                            + $"entry={Path.GetFileName(node.EntryPointPath)},"
-                            + $"complete={node.ClassificationComplete}.");
+                        observed.Add(identity);
+                        break;
                 }
             }
             return observed.Count;
@@ -191,9 +188,7 @@ internal sealed class ToolchainProcessMeter : IDisposable
             || entryPointName.ToLowerInvariant() is not (
                 "msbuild" or "vbcscompiler" or "csc" or "vbc"))
         {
-            return imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-                ? ProcessRole.ContractScribeWorker
-                : ProcessRole.Unknown;
+            return ProcessRole.Unknown;
         }
 
         var entryPoint = Path.GetFullPath(node.EntryPointPath);

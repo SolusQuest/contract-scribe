@@ -251,6 +251,34 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
+    public async Task DefaultOutputMeter_IgnoresFilesNotOwnedByTheAuditInvocation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var outputDirectory = Path.Join(fixture.Root, "TestResults");
+        var resultPath = Path.Join(outputDirectory, "audit-result.json");
+        Directory.CreateDirectory(outputDirectory);
+        var unrelated = Path.Join(outputDirectory, "unrelated.bin");
+        using (var stream = new FileStream(
+                   unrelated,
+                   FileMode.CreateNew,
+                   FileAccess.Write,
+                   FileShare.Read))
+        {
+            stream.SetLength(HostContractResources.RequireBound("temporary-disk-bytes") + 1);
+        }
+
+        var outcome = await RunAsync(fixture, resultPath);
+
+        Assert.Equal(HostExecutionOutcome.Succeeded, outcome.Terminal.ExecutionOutcome);
+        Assert.True(File.Exists(resultPath));
+        Assert.True(File.Exists(unrelated));
+        Assert.All(
+            outcome.Terminal.MeasuredBounds,
+            fact => Assert.True(
+                fact.Name != "temporary-disk-bytes" || fact.Measured <= fact.Threshold));
+    }
+
+    [Fact]
     public async Task TemporaryDiskMeter_TracksTransientHighWaterAcrossDistinctAndNestedRoots()
     {
         var root = Path.Join(
@@ -426,7 +454,7 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
-    public void ToolchainProcessMeter_FailsClosedForUnclassifiedDescendant()
+    public void ToolchainProcessMeter_ObservesUnclassifiedTrustedDescendant()
     {
         using var current = Process.GetCurrentProcess();
         IReadOnlyList<ToolchainProcessMeter.ProcessNode> snapshot =
@@ -445,9 +473,61 @@ public sealed class ProductionAuditHostTests
             () => snapshot,
             TimeSpan.FromDays(1));
 
-        Assert.Throws<IOException>(() => meter.SelectToolchain(new RegisteredToolchain(
+        Assert.Equal(1, meter.SelectToolchain(new RegisteredToolchain(
             new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),
             Path.GetTempPath())));
+        Assert.Equal(1, meter.ToFact().Measured);
+    }
+
+    [Fact]
+    public async Task ProcessFacts_FinalizeBeforeRenameAndMayExceedObservableThreshold()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var current = Process.GetCurrentProcess();
+        var rootNode = new ToolchainProcessMeter.ProcessNode(
+            current.Id,
+            0,
+            current.StartTime.ToUniversalTime().Ticks,
+            current.ProcessName,
+            current.MainModule?.FileName,
+            [],
+            true);
+        var count = checked((int)HostContractResources.RequireBound("toolchain-subprocess-count") + 1);
+        IReadOnlyList<ToolchainProcessMeter.ProcessNode> snapshot =
+        [
+            rootNode,
+            .. Enumerable.Range(0, count).Select(index =>
+                new ToolchainProcessMeter.ProcessNode(
+                    930000 + index,
+                    current.Id,
+                    index + 1,
+                    $"custom-target-{index}",
+                    null,
+                    [],
+                    true)),
+        ];
+        var failObservationAfterRenameStarts = false;
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                ProcessMeterFactory: () => new ToolchainProcessMeter(
+                    () => failObservationAfterRenameStarts
+                        ? throw new IOException("test-only post-finalization observation")
+                        : snapshot,
+                    TimeSpan.FromDays(1)),
+                BeforeAtomicRename: () => failObservationAfterRenameStarts = true));
+
+        Assert.Equal(HostExecutionOutcome.Succeeded, outcome.Terminal.ExecutionOutcome);
+        Assert.True(File.Exists(resultPath));
+        var fact = Assert.Single(
+            outcome.Terminal.MeasuredBounds,
+            item => item.Name == "toolchain-subprocess-count");
+        Assert.Equal(count, fact.Measured);
+        Assert.True(fact.Measured > fact.Threshold);
+        Assert.Equal(HostEnforcementClass.ObservableOnly, fact.EnforcementClass);
     }
 
     [Fact]
@@ -630,17 +710,24 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
-    public async Task UnexpectedSdkBoundaryFailure_EscapesBeforeToolchainSelection()
+    public async Task UnexpectedSdkBoundaryFailure_CommitsBoundedPreselectionFailure()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(
+        var outcome = await RunAsync(
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                SdkDiscovery: _ => throw new InvalidOperationException("test-only"))));
+                SdkDiscovery: _ => throw new InvalidOperationException("test-only")));
 
+        Assert.Equal(HostExecutionOutcome.EnvironmentUnavailable, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.sdk-discovery.unavailable", outcome.Terminal.Failure?.Code);
+        Assert.Equal(HostTerminalState.CommittedNonSuccess, outcome.Terminal.TerminalState);
+        Assert.Equal(
+            HostToolchainSelectionState.NotSelected,
+            outcome.Terminal.Toolchain.SelectionState);
+        Assert.Null(outcome.CanonicalResult);
         Assert.False(File.Exists(resultPath));
     }
 
