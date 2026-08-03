@@ -7,12 +7,23 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BaselineCommit,
     [string]$Configuration = "Release",
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [string]$EvidencePrHeadCommit,
+    [string]$EvidenceValidationMergeCommit,
+    [string]$EvidenceRunId,
+    [string]$EvidenceRunAttempt,
+    [string]$EvidenceRunnerOs,
+    [string]$EvidenceRid,
+    [string]$EvidenceEventPath
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resolve-m0.7-terminal-identity.ps1")
 $script:failureOutcome = "inconclusive"
 $script:failureReasonCode = "untyped-verifier-error"
+$script:terminalIdentity = $null
+$manifest = $null
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $PSScriptRoot "..\..\TestResults\m0.7-independent-validation"
 }
@@ -39,12 +50,20 @@ function Write-FailureEvidence([string]$message, [string]$outcome, [string]$reas
         formatVersion = "contractscribe-m0.7-failure-evidence-v1"
         aggregateOutcome = $outcome
         reasonCode = $reasonCode
-        protocolPrHeadCommit = if (-not [string]::IsNullOrWhiteSpace($env:M07_PR_HEAD_SHA)) { $env:M07_PR_HEAD_SHA } else { $null }
-        validationMergeCommit = if (-not [string]::IsNullOrWhiteSpace($env:M07_VALIDATION_MERGE_SHA)) { $env:M07_VALIDATION_MERGE_SHA } else { $env:GITHUB_SHA }
+        protocolPrHeadCommit = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.protocolPrHeadCommit } else { $null }
+        validationMergeCommit = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.validationMergeCommit } else { $null }
+        runnerOs = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.runnerOs } else { $null }
+        rid = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.rid } else { $null }
         selectedBaselineCommit = if ($null -ne $manifest) { $manifest.selectedBaseline.commit } else { $BaselineCommit }
         fixtureCommit = if ($null -ne $manifest) { $manifest.fixture.commit } else { $null }
-        protocolCommit = $env:GITHUB_SHA
-        ci = [ordered]@{ runId = $env:GITHUB_RUN_ID; job = $env:GITHUB_JOB; sha = $env:GITHUB_SHA }
+        oracleSha256 = if ($null -ne $manifest) { $manifest.fixture.oracleSha256 } else { $null }
+        protocolCommit = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.protocolCommit } else { $null }
+        ci = [ordered]@{
+            runId = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.runId } else { $null }
+            runAttempt = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.runAttempt } else { $null }
+            job = $env:GITHUB_JOB
+            sha = if ($null -ne $script:terminalIdentity) { $script:terminalIdentity.validationMergeCommit } else { $null }
+        }
         retainedFailure = $true
     }
     $failurePath = Join-Path $OutputRoot "m0.7-failure-evidence.json"
@@ -59,7 +78,19 @@ trap {
     Write-FailureEvidence $exception.Message $outcome $reasonCode
     exit 1
 }
-$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+try {
+    $script:terminalIdentity = Resolve-M07TerminalIdentity `
+        -PrHeadCommit $EvidencePrHeadCommit `
+        -ValidationMergeCommit $EvidenceValidationMergeCommit `
+        -RunId $EvidenceRunId `
+        -RunAttempt $EvidenceRunAttempt `
+        -RunnerOs $EvidenceRunnerOs `
+        -Rid $EvidenceRid `
+        -EventPath $EvidenceEventPath
+}
+catch {
+    Throw-M07Failure $_.Exception.Message "protocol-failure" "evidence-identity-invalid"
+}
 $baselineRoot = (Resolve-Path -LiteralPath $BaselineRepositoryPath).Path
 $fixtureRoot = (Resolve-Path -LiteralPath $FixtureRepositoryPath).Path
 $manifestPath = Join-Path $repositoryRoot "tests\fixtures\roslyn-msbuild\m0.7-independent-validation-manifest.json"
@@ -213,9 +244,13 @@ catch {
     Throw-M07Failure "The required dotnet SDK could not be resolved." "inconclusive" "sdk-unavailable"
 }
 Assert-Condition ($resolvedSdkVersion -match "^10\.0\.\d+$") "The selected SDK version is outside the repository policy family."
-$rid = [System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier
-Assert-Condition ($rid -in @("linux-x64", "win-x64")) "The observed runtime identifier is outside the M0.7 matrix."
-$runnerOs = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_OS)) { $env:RUNNER_OS } elseif ($IsWindows) { "Windows" } else { "Linux" }
+$observedRid = [System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier
+$observedRunnerOs = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_OS)) { $env:RUNNER_OS } elseif ($IsWindows) { "Windows" } else { "Linux" }
+Set-FailureContext "protocol-failure" "evidence-identity-invalid"
+Assert-Condition ($observedRid -ceq $script:terminalIdentity.rid) "The observed runtime identifier contradicts the terminal evidence identity."
+Assert-Condition ($observedRunnerOs -ceq $script:terminalIdentity.runnerOs) "The observed runner OS contradicts the terminal evidence identity."
+$rid = $script:terminalIdentity.rid
+$runnerOs = $script:terminalIdentity.runnerOs
 $runDirectories = @()
 $runRecords = @()
 Set-FailureContext "baseline-failure" "conforming-baseline-failure"
@@ -303,8 +338,11 @@ foreach ($directory in $runDirectories[1..($runDirectories.Count - 1)]) {
     Assert-ByteEqual $firstPayload (Get-CanonicalUtf8Bytes (Join-Path $directory "semantic-payload.json")) "Fresh selected-baseline processes are not byte-identical."
 }
 
-$protocolPrHeadCommit = if (-not [string]::IsNullOrWhiteSpace($env:M07_PR_HEAD_SHA)) { $env:M07_PR_HEAD_SHA } else { Get-GitHead $repositoryRoot }
-$validationMergeCommit = if (-not [string]::IsNullOrWhiteSpace($env:M07_VALIDATION_MERGE_SHA)) { $env:M07_VALIDATION_MERGE_SHA } else { Get-GitHead $repositoryRoot }
+$protocolPrHeadCommit = $script:terminalIdentity.protocolPrHeadCommit
+$validationMergeCommit = $script:terminalIdentity.validationMergeCommit
+$protocolCommit = Get-GitHead $repositoryRoot
+Set-FailureContext "protocol-failure" "evidence-identity-invalid"
+Assert-Condition ($protocolCommit -ceq $script:terminalIdentity.protocolCommit) "The checked-out protocol commit contradicts the validation-merge identity."
 $evidence = [ordered]@{
     formatVersion = "contractscribe-m0.7-evidence-v1"
     aggregateOutcome = "succeeded"
@@ -313,7 +351,7 @@ $evidence = [ordered]@{
     runnerOs = $runnerOs
     rid = $rid
     selectedBaselineCommit = Get-GitHead $baselineRoot
-    protocolCommit = Get-GitHead $repositoryRoot
+    protocolCommit = $protocolCommit
     semanticSourceRevision = $manifest.selectedBaseline.semanticSourceRevision
     transferManifestSha256 = $manifest.selectedBaseline.transferManifestSha256
     fixtureRepository = $manifest.fixture.repository
@@ -333,9 +371,10 @@ $evidence = [ordered]@{
     executionPolicy = $manifest.executionPolicy
     runs = $runRecords
     ci = [ordered]@{
-        runId = $env:GITHUB_RUN_ID
+        runId = $script:terminalIdentity.runId
+        runAttempt = $script:terminalIdentity.runAttempt
         job = $env:GITHUB_JOB
-        sha = $env:GITHUB_SHA
+        sha = $script:terminalIdentity.validationMergeCommit
     }
     unresolvedRisks = @($manifest.unresolvedRisks)
 }

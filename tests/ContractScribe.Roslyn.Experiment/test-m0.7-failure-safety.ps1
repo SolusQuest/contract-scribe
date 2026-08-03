@@ -8,6 +8,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$headCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+$runnerOs = if ($IsWindows) { "Windows" } else { "Linux" }
+$rid = if ($IsWindows) { "win-x64" } else { "linux-x64" }
+$identityArguments = @{
+    EvidencePrHeadCommit = $headCommit
+    EvidenceValidationMergeCommit = $headCommit
+    EvidenceRunId = "201"
+    EvidenceRunAttempt = "1"
+    EvidenceRunnerOs = $runnerOs
+    EvidenceRid = $rid
+}
 $outputRoot = Join-Path $repositoryRoot "TestResults\m0.7-failure-safety"
 if (Test-Path -LiteralPath $outputRoot) { Remove-Item -LiteralPath $outputRoot -Recurse -Force }
 New-Item -ItemType Directory -Path (Join-Path $outputRoot "run-1") | Out-Null
@@ -19,11 +30,13 @@ $output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") `
     -BaselineRepositoryPath $BaselineRepositoryPath `
     -FixtureRepositoryPath $missingFixture `
     -BaselineCommit $BaselineCommit `
-    -OutputRoot $outputRoot 2>&1
+    -OutputRoot $outputRoot @identityArguments 2>&1
 if ($LASTEXITCODE -eq 0) { throw "Failure-safety regression unexpectedly succeeded." }
 $failurePath = Join-Path $outputRoot "m0.7-failure-evidence.json"
 if (-not (Test-Path -LiteralPath $failurePath)) { throw "Failure-safety regression did not retain bounded failure evidence." }
 if ((Get-ChildItem -LiteralPath $outputRoot -Directory -Filter "run-*").Count -ne 0) { throw "Failure-safety regression retained raw run directories." }
 if ((Get-Content -LiteralPath $failurePath -Raw) -match "Authorization|Bearer|synthetic-test-token|stdout") { throw "Failure-safety regression leaked raw failure content." }
+$failure = Get-Content -LiteralPath $failurePath -Raw | ConvertFrom-Json
+if ($failure.runnerOs -cne $runnerOs -or $failure.rid -cne $rid -or $failure.ci.runAttempt -ne 1 -or $failure.ci.runAttempt -is [string] -or $failure.protocolPrHeadCommit -cne $headCommit -or $failure.validationMergeCommit -cne $headCommit) { throw "Failure-safety regression did not retain bounded terminal identity." }
 Remove-Item -LiteralPath $outputRoot -Recurse -Force
 Write-Output "M0.7 failure-safety regression passed: raw run output is removed and only bounded failure evidence remains."
