@@ -18,6 +18,7 @@ public sealed record ProtocolManifest(
 
 public sealed record BaselineIdentity(
     string CoordinatingIssue,
+    string ContractRevision,
     string Disposition,
     string? MergeCommit,
     string ContractManifest,

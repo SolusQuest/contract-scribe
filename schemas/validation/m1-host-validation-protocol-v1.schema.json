@@ -26,6 +26,7 @@
       "type": "object",
       "required": [
         "coordinatingIssue",
+        "contractRevision",
         "disposition",
         "mergeCommit",
         "contractManifest",
@@ -34,7 +35,10 @@
       ],
       "properties": {
         "coordinatingIssue": {
-          "const": "https://github.com/SolusQuest/contract-scribe/issues/55"
+          "const": "https://github.com/SolusQuest/contract-scribe/issues/70"
+        },
+        "contractRevision": {
+          "const": "issue-70-host-validation-baseline-lineage-v1"
         },
         "disposition": {
           "enum": [
@@ -65,19 +69,19 @@
           ],
           "properties": {
             "coordinatingIssue": {
-              "const": "https://github.com/SolusQuest/contract-scribe/issues/35"
+              "const": "https://github.com/SolusQuest/contract-scribe/issues/55"
             },
             "contractRevision": {
-              "const": "issue-35-pre-release-v1"
+              "const": "issue-55-classification-origin-closure-v1"
             },
             "mergeCommit": {
-              "const": "bb4654edc180e2953dda6b89a29211b18778b78e"
+              "const": "95933c5dc134dfe6adeb92765920a8eb5c96d7db"
             },
             "contractManifest": {
               "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
             },
             "contractManifestSha256": {
-              "const": "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+              "const": "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
             }
           },
           "additionalProperties": false

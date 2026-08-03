@@ -52,6 +52,13 @@ public static class Program
                     Console.WriteLine($"HV000_PROTECTED_INPUTS {manifest.Entries.Count}");
                     return 0;
                 }
+            case "lock-pending-review":
+                {
+                    var review = BundleValidator.CreatePendingReview(
+                        Required(options, "--root"));
+                    Console.WriteLine($"HV000_OK {review.ReviewId}");
+                    return 0;
+                }
             case "validate-bundle":
                 {
                     var context = BundleValidator.Validate(
@@ -804,7 +811,7 @@ public static class Program
     {
         string[]? allowed = command switch
         {
-            "lock-bundle" or "lock-protected-inputs" or "self-test" =>
+            "lock-bundle" or "lock-protected-inputs" or "lock-pending-review" or "self-test" =>
                 ["--root"],
             "validate-bundle" =>
                 ["--root", "--require-review", "--review"],

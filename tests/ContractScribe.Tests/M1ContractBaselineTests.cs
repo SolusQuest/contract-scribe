@@ -239,12 +239,17 @@ public sealed class M1ContractBaselineTests
     }
 
     [Fact]
-    public void CurrentManifest_BindsTheIssue55SuccessorAndExactCurrentInputClosure()
+    public void CurrentManifest_BindsTheIssue70SuccessorAndExactCurrentInputClosure()
     {
         using var manifest = Load("manifest.json");
         var root = manifest.RootElement;
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal("issue-55-classification-origin-closure-v1", root.GetProperty("contractRevision").GetString());
+        Assert.Equal(
+            "https://github.com/SolusQuest/contract-scribe/issues/70",
+            root.GetProperty("coordinatingIssue").GetString());
+        Assert.Equal(
+            "issue-70-host-validation-baseline-lineage-v1",
+            root.GetProperty("contractRevision").GetString());
         Assert.Equal(
             new[] { "profile.external-api", "profile.assembly-visible" },
             root.GetProperty("profiles").EnumerateArray()
@@ -252,19 +257,19 @@ public sealed class M1ContractBaselineTests
 
         var predecessor = root.GetProperty("predecessor");
         Assert.Equal(
-            "https://github.com/SolusQuest/contract-scribe/issues/35",
+            "https://github.com/SolusQuest/contract-scribe/issues/55",
             predecessor.GetProperty("coordinatingIssue").GetString());
         Assert.Equal(
-            "issue-35-pre-release-v1",
+            "issue-55-classification-origin-closure-v1",
             predecessor.GetProperty("contractRevision").GetString());
         Assert.Equal(
-            "bb4654edc180e2953dda6b89a29211b18778b78e",
+            "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
             predecessor.GetProperty("mergeCommit").GetString());
         Assert.Equal(
             "tests/fixtures/m1-contract-baseline/v1/manifest.json",
             predecessor.GetProperty("contractManifest").GetString());
         Assert.Equal(
-            "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31",
+            "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85",
             predecessor.GetProperty("contractManifestSha256").GetString());
 
         var expectedInputs = ExpectedCurrentInputs();
@@ -307,13 +312,12 @@ public sealed class M1ContractBaselineTests
 
         var disposition = root.GetProperty("implementationDisposition");
         Assert.Equal(
-            new[] { 36 },
+            new[] { 36, 37, 38, 39, 40 },
             disposition.GetProperty("completedImplementationIssues")
                 .EnumerateArray().Select(value => value.GetInt32()));
-        Assert.Equal(
-            new[] { 37, 38, 39, 40 },
+        Assert.Empty(
             disposition.GetProperty("activeImplementationIssues")
-                .EnumerateArray().Select(value => value.GetInt32()));
+                .EnumerateArray());
         Assert.Equal(
             new[] { 41 },
             disposition.GetProperty("activeValidationIssues")
@@ -363,8 +367,30 @@ public sealed class M1ContractBaselineTests
         Assert.False(IsValidSuccessorManifest(wrongIssueSet, expectedInputs));
         var wrongPredecessor = (JsonObject)value.DeepClone();
         wrongPredecessor["predecessor"]!["contractRevision"] =
-            "issue-35-pre-release-v2";
+            "issue-55-classification-origin-closure-v2";
         Assert.False(IsValidSuccessorManifest(wrongPredecessor, expectedInputs));
+        var missingCoordinator = (JsonObject)value.DeepClone();
+        missingCoordinator.Remove("coordinatingIssue");
+        Assert.False(IsValidSuccessorManifest(missingCoordinator, expectedInputs));
+        var wrongCoordinator = (JsonObject)value.DeepClone();
+        wrongCoordinator["coordinatingIssue"] =
+            "https://github.com/SolusQuest/contract-scribe/issues/55";
+        Assert.False(IsValidSuccessorManifest(wrongCoordinator, expectedInputs));
+        var wrongRevision = (JsonObject)value.DeepClone();
+        wrongRevision["contractRevision"] =
+            "issue-55-classification-origin-closure-v1";
+        Assert.False(IsValidSuccessorManifest(wrongRevision, expectedInputs));
+        var missingPredecessorField = (JsonObject)value.DeepClone();
+        missingPredecessorField["predecessor"]!.AsObject().Remove("mergeCommit");
+        Assert.False(IsValidSuccessorManifest(
+            missingPredecessorField,
+            expectedInputs));
+        var selfDescribingCurrentManifest = (JsonObject)value.DeepClone();
+        selfDescribingCurrentManifest["contractManifest"] =
+            "tests/fixtures/m1-contract-baseline/v1/manifest.json";
+        Assert.False(IsValidSuccessorManifest(
+            selfDescribingCurrentManifest,
+            expectedInputs));
     }
 
     [Fact]
@@ -1187,7 +1213,7 @@ public sealed class M1ContractBaselineTests
             "tests/ContractScribe.Tests/AuditResultConformance.cs",
             "tests/ContractScribe.Tests/AuditResultContractTests.cs",
             "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
-            "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",
+            "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs",
             "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs",
             "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs",
             "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs"
@@ -1239,6 +1265,7 @@ public sealed class M1ContractBaselineTests
             if (!HasExactProperties(
                     value,
                     "schemaVersion",
+                    "coordinatingIssue",
                     "contractRevision",
                     "inventory",
                     "profiles",
@@ -1247,8 +1274,10 @@ public sealed class M1ContractBaselineTests
                     "fixtures",
                     "implementationDisposition")
                 || value["schemaVersion"]?.GetValue<int>() != 1
+                || value["coordinatingIssue"]?.GetValue<string>()
+                    != "https://github.com/SolusQuest/contract-scribe/issues/70"
                 || value["contractRevision"]?.GetValue<string>()
-                    != "issue-55-classification-origin-closure-v1"
+                    != "issue-70-host-validation-baseline-lineage-v1"
                 || value["inventory"]?.GetValue<string>()
                     != "docs/20_architecture/contracts/pre-release-v1-baseline.md"
                 || value["profiles"] is not JsonArray profiles
@@ -1268,15 +1297,15 @@ public sealed class M1ContractBaselineTests
                     "contractManifest",
                     "contractManifestSha256")
                 || predecessor["coordinatingIssue"]?.GetValue<string>()
-                    != "https://github.com/SolusQuest/contract-scribe/issues/35"
+                    != "https://github.com/SolusQuest/contract-scribe/issues/55"
                 || predecessor["contractRevision"]?.GetValue<string>()
-                    != "issue-35-pre-release-v1"
+                    != "issue-55-classification-origin-closure-v1"
                 || predecessor["mergeCommit"]?.GetValue<string>()
-                    != "bb4654edc180e2953dda6b89a29211b18778b78e"
+                    != "95933c5dc134dfe6adeb92765920a8eb5c96d7db"
                 || predecessor["contractManifest"]?.GetValue<string>()
                     != "tests/fixtures/m1-contract-baseline/v1/manifest.json"
                 || predecessor["contractManifestSha256"]?.GetValue<string>()
-                    != "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+                    != "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
                 || value["currentInputs"] is not JsonObject inputs
                 || value["fixtures"] is not JsonObject fixtures
                 || !HasExactProperties(
@@ -1313,13 +1342,13 @@ public sealed class M1ContractBaselineTests
                     "activeValidationIssues")
                 || !MatchesIntegerArray(
                     disposition["completedImplementationIssues"],
-                    36)
-                || !MatchesIntegerArray(
-                    disposition["activeImplementationIssues"],
+                    36,
                     37,
                     38,
                     39,
                     40)
+                || !MatchesIntegerArray(
+                    disposition["activeImplementationIssues"])
                 || !MatchesIntegerArray(
                     disposition["activeValidationIssues"],
                     41))

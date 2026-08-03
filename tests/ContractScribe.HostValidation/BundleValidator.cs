@@ -26,6 +26,18 @@ public static class BundleValidator
         "tests/fixtures/m1-host-validation/v1/network-evidence-profile.json";
 
     private const int ManifestLimit = 4 * 1024 * 1024;
+    private const string CurrentCoordinatingIssue =
+        "https://github.com/SolusQuest/contract-scribe/issues/70";
+    private const string CurrentContractRevision =
+        "issue-70-host-validation-baseline-lineage-v1";
+    private const string ContractManifestPath =
+        "tests/fixtures/m1-contract-baseline/v1/manifest.json";
+    private static readonly PredecessorBaselineIdentity ExpectedPredecessor = new(
+        "https://github.com/SolusQuest/contract-scribe/issues/55",
+        "issue-55-classification-origin-closure-v1",
+        "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
+        ContractManifestPath,
+        "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85");
 
     public static BundleContext Validate(
         string root,
@@ -117,6 +129,40 @@ public static class BundleValidator
         var artifactLock = new ArtifactLock("contractscribe-m1-host-validation-artifact-lock-v1", bundleId, entries);
         CanonicalJson.WriteCanonical(Path.Join(root, LockRelativePath.Replace('/', Path.DirectorySeparatorChar)), artifactLock);
         return artifactLock;
+    }
+
+    public static ReviewRecord CreatePendingReview(string root)
+    {
+        root = RepositoryPaths.NormalizeRoot(root);
+        var protocolPath = RepositoryPaths.ResolveConfined(root, ProtocolRelativePath);
+        SchemaValidation.Validate(
+            protocolPath,
+            RepositoryPaths.ResolveConfined(root, "schemas/validation/m1-host-validation-protocol-v1.schema.json"));
+        var protocol = CanonicalJson.DeserializeStrict<ProtocolManifest>(
+            protocolPath,
+            ManifestLimit);
+        var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(
+            RepositoryPaths.ResolveConfined(root, LockRelativePath),
+            ManifestLimit,
+            requireCanonical: true);
+        ValidateLock(root, protocol, artifactLock);
+
+        var review = new ReviewRecord(
+            "contractscribe-m1-host-validation-review-v1",
+            string.Empty,
+            artifactLock.BundleId,
+            null,
+            null,
+            null,
+            null,
+            "pending",
+            ["baseline.main-reconciliation-pending"],
+            null);
+        review = review with { ReviewId = ComputeReviewId(review) };
+        CanonicalJson.WriteCanonical(
+            RepositoryPaths.ResolveConfined(root, ReviewRelativePath),
+            review);
+        return review;
     }
 
     public static ProtectedInputManifest CreateProtectedInputs(string root)
@@ -333,27 +379,27 @@ public static class BundleValidator
     {
         if (protocol.FormatVersion != "contractscribe-m1-host-validation-protocol-v1"
             || catalog.FormatVersion != "contractscribe-m1-host-validation-vectors-v1"
-            || protocol.Baseline.CoordinatingIssue
-                != "https://github.com/SolusQuest/contract-scribe/issues/55"
+            || protocol.Baseline.CoordinatingIssue != CurrentCoordinatingIssue
+            || protocol.Baseline.ContractRevision != CurrentContractRevision
             || protocol.Baseline.Disposition
                 is not ("pending-main-reconciliation" or "main-reachable")
-            || protocol.Baseline.Predecessor
-                != new PredecessorBaselineIdentity(
-                    "https://github.com/SolusQuest/contract-scribe/issues/35",
-                    "issue-35-pre-release-v1",
-                    "bb4654edc180e2953dda6b89a29211b18778b78e",
-                    "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-                    "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"))
+            || protocol.Baseline.ContractManifest != ContractManifestPath
+            || protocol.Baseline.Predecessor != ExpectedPredecessor)
         {
             throw new ProtocolException("HV122_PROTOCOL_VERSION_OR_BASELINE");
         }
 
         ValidateInventoryPaths(protocol.ArtifactInventory);
+        var contractManifestPath = RepositoryPaths.ResolveConfined(
+            root,
+            protocol.Baseline.ContractManifest);
         if (protocol.Baseline.ContractManifestSha256
-            != CanonicalJson.Sha256File(RepositoryPaths.ResolveConfined(root, protocol.Baseline.ContractManifest)))
+            != CanonicalJson.Sha256File(contractManifestPath))
         {
             throw new ProtocolException("HV123_CONTRACT_BASELINE_DRIFT");
         }
+        ValidateContractManifestIdentity(contractManifestPath, protocol.Baseline);
+        ValidatePredecessorBaselineCommit(root, protocol.Baseline.Predecessor);
         if (protocol.Baseline.Disposition == "pending-main-reconciliation")
         {
             if (protocol.Baseline.MergeCommit is not null)
@@ -734,6 +780,10 @@ public static class BundleValidator
         var mergeCommit = baseline.MergeCommit
             ?? throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
         if (RunGit(root, ["cat-file", "-e", $"{mergeCommit}^{{commit}}"], captureOutput: false).ExitCode != 0
+            || RunGit(
+                root,
+                ["merge-base", "--is-ancestor", baseline.Predecessor.MergeCommit, mergeCommit],
+                captureOutput: false).ExitCode != 0
             || RunGit(root, ["merge-base", "--is-ancestor", mergeCommit, "HEAD"], captureOutput: false).ExitCode != 0)
         {
             throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
@@ -748,6 +798,105 @@ public static class BundleValidator
         {
             throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
         }
+    }
+
+    private static void ValidatePredecessorBaselineCommit(
+        string root,
+        PredecessorBaselineIdentity predecessor)
+    {
+        if (RunGit(
+                root,
+                ["cat-file", "-e", $"{predecessor.MergeCommit}^{{commit}}"],
+                captureOutput: false).ExitCode != 0
+            || RunGit(
+                root,
+                ["merge-base", "--is-ancestor", predecessor.MergeCommit, "HEAD"],
+                captureOutput: false).ExitCode != 0)
+        {
+            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
+        }
+
+        var manifest = RunGit(
+            root,
+            ["show", $"{predecessor.MergeCommit}:{predecessor.ContractManifest}"],
+            captureOutput: true);
+        if (manifest.ExitCode != 0
+            || CanonicalJson.Sha256(manifest.Output)
+                != predecessor.ContractManifestSha256)
+        {
+            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
+        }
+    }
+
+    private static void ValidateContractManifestIdentity(
+        string manifestPath,
+        BaselineIdentity baseline)
+    {
+        using var manifest = CanonicalJson.ReadStrict(manifestPath, ManifestLimit);
+        var root = manifest.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !TryGetExactString(root, "coordinatingIssue", baseline.CoordinatingIssue)
+            || !TryGetExactString(root, "contractRevision", baseline.ContractRevision)
+            || root.TryGetProperty("contractManifest", out _)
+            || root.TryGetProperty("contractManifestSha256", out _)
+            || !root.TryGetProperty("predecessor", out var predecessor)
+            || predecessor.ValueKind != JsonValueKind.Object
+            || !HasExactProperties(
+                predecessor,
+                "coordinatingIssue",
+                "contractRevision",
+                "mergeCommit",
+                "contractManifest",
+                "contractManifestSha256")
+            || !TryGetExactString(
+                predecessor,
+                "coordinatingIssue",
+                baseline.Predecessor.CoordinatingIssue)
+            || !TryGetExactString(
+                predecessor,
+                "contractRevision",
+                baseline.Predecessor.ContractRevision)
+            || !TryGetExactString(
+                predecessor,
+                "mergeCommit",
+                baseline.Predecessor.MergeCommit)
+            || !TryGetExactString(
+                predecessor,
+                "contractManifest",
+                baseline.Predecessor.ContractManifest)
+            || !TryGetExactString(
+                predecessor,
+                "contractManifestSha256",
+                baseline.Predecessor.ContractManifestSha256))
+        {
+            throw new ProtocolException("HV122_PROTOCOL_VERSION_OR_BASELINE");
+        }
+    }
+
+    private static bool TryGetExactString(
+        JsonElement value,
+        string propertyName,
+        string expected) =>
+        value.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+        && property.GetString() == expected;
+
+    private static bool HasExactProperties(
+        JsonElement value,
+        params string[] expected)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var actual = value.EnumerateObject()
+            .Select(property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return actual.SequenceEqual(
+            expected.Order(StringComparer.Ordinal),
+            StringComparer.Ordinal);
     }
 
     private static (int ExitCode, byte[] Output) RunGit(
