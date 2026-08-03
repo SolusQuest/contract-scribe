@@ -21,6 +21,49 @@ internal static class MsBuildBootstrap
         var sdkVersion = await ProbeSdkVersionAsync(dotnetHost, workingDirectory, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
+        return RegisterExact(dotnetHost, sdkVersion);
+    }
+
+    internal static async Task<RegisteredToolchain> EnsureRegisteredForProductionHostAsync(
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var registration = Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var dotnetHost = ResolveDotnetHost();
+            var sdkVersion = DotnetSdkResolver.Resolve(dotnetHost, workingDirectory);
+            cancellationToken.ThrowIfCancellationRequested();
+            return RegisterExact(dotnetHost, sdkVersion);
+        }, CancellationToken.None);
+        try
+        {
+            return await registration.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _ = ObserveLateRegistrationAsync(registration);
+            throw;
+        }
+    }
+
+    private static async Task ObserveLateRegistrationAsync(Task<RegisteredToolchain> registration)
+    {
+        try
+        {
+            _ = await registration.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The authoritative timeout/cancellation is already fixed; observe late faults.
+        }
+    }
+
+    private static RegisteredToolchain RegisterExact(
+        string dotnetHost,
+        string sdkVersion)
+    {
         lock (Gate)
         {
             if (registered is not null)

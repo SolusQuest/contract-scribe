@@ -20,6 +20,7 @@ public sealed class RepositoryLoader
     private readonly Func<ReadOnlyMemory<byte>, byte[]> digest;
     private readonly Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>> inventory;
     private readonly Action<int>? generatedAuthorityComparisonObserver;
+    private readonly RegisteredToolchain? preselectedToolchain;
 
     public RepositoryLoader()
         : this(null, null)
@@ -30,13 +31,15 @@ public sealed class RepositoryLoader
         Action<LoaderStage>? observer,
         Func<ReadOnlyMemory<byte>, byte[]>? digest = null,
         Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory = null,
-        Action<int>? generatedAuthorityComparisonObserver = null)
+        Action<int>? generatedAuthorityComparisonObserver = null,
+        RegisteredToolchain? preselectedToolchain = null)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
         this.inventory = inventory ?? RepositoryInventory.Capture;
         this.generatedAuthorityComparisonObserver =
             generatedAuthorityComparisonObserver;
+        this.preselectedToolchain = preselectedToolchain;
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -62,9 +65,10 @@ public sealed class RepositoryLoader
             Observe(LoaderStage.PathResolution, cancellationToken);
             before = inventory(paths.PhysicalRoot, cancellationToken);
             Observe(LoaderStage.BaselineCapture, cancellationToken);
-            selectedToolchain = await MsBuildBootstrap.EnsureRegisteredAsync(
-                Path.GetDirectoryName(paths.PhysicalInput)!,
-                cancellationToken);
+            selectedToolchain = preselectedToolchain
+                ?? await MsBuildBootstrap.EnsureRegisteredAsync(
+                    Path.GetDirectoryName(paths.PhysicalInput)!,
+                    cancellationToken);
             Observe(LoaderStage.ToolchainRegistration, cancellationToken);
             loaded = await PostRegistrationLoader.LoadAsync(
                 paths,

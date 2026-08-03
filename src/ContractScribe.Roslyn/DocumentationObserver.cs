@@ -323,9 +323,13 @@ public sealed class DocumentationObserver
             var declarationSpan = DocumentationObservationInput.Span(
                 owner.FullSpan.Start,
                 owner.FullSpan.End);
-            var leadingSpan = DocumentationObservationInput.Span(
-                leading.FullSpan.Start,
-                leading.FullSpan.End);
+            var leadingSpan = leading.Count == 0
+                ? DocumentationObservationInput.Span(
+                    owner.FullSpan.Start,
+                    owner.FullSpan.Start)
+                : DocumentationObservationInput.Span(
+                    leading.FullSpan.Start,
+                    leading.FullSpan.End);
             var declarationId = "decl." + DomainSeparatedHash(
                 "contract-scribe/documentation-declaration/v1",
                 project.ProjectIdentity,

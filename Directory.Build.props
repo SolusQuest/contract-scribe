@@ -7,5 +7,28 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <LangVersion>latest</LangVersion>
     <Version>0.1.0-dev</Version>
+    <ContractScribeHostValidationSubject Condition="'$(ContractScribeHostValidationSubject)' == ''">false</ContractScribeHostValidationSubject>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'ContractScribe.Cli' or '$(MSBuildProjectName)' == 'ContractScribe.Roslyn'">
+    <_ContractScribeValidationSubjectArtifact>true</_ContractScribeValidationSubjectArtifact>
+  </PropertyGroup>
+
+  <Target Name="ValidateContractScribeHostValidationMaterialization"
+          BeforeTargets="CoreCompile"
+          Condition="'$(_ContractScribeValidationSubjectArtifact)' == 'true' and '$(ContractScribeHostValidationSubject)' == 'true'">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(ContractScribeSourceRevision)', '^[0-9a-f]{40}$'))"
+           Text="ContractScribeSourceRevision must be exactly 40 lowercase hexadecimal characters." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(ContractScribeSourceConfigurationId)', '^source\.[0-9a-f]{64}$'))"
+           Text="ContractScribeSourceConfigurationId must be a canonical source.&lt;sha256&gt; identity." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(NETCoreSdkVersion)', '^[0-9]+\.[0-9]+\.[0-9]+$'))"
+           Text="NETCoreSdkVersion must be available as exact build provenance." />
+  </Target>
+
+  <ItemGroup Condition="'$(_ContractScribeValidationSubjectArtifact)' == 'true' and '$(ContractScribeHostValidationSubject)' == 'true'">
+    <AssemblyMetadata Include="ContractScribeHostValidationSubject" Value="enabled" />
+    <AssemblyMetadata Include="ContractScribeSourceRevision" Value="$(ContractScribeSourceRevision)" />
+    <AssemblyMetadata Include="ContractScribeSourceConfigurationId" Value="$(ContractScribeSourceConfigurationId)" />
+    <AssemblyMetadata Include="ContractScribeBuildSdkVersion" Value="$(NETCoreSdkVersion)" />
+  </ItemGroup>
 </Project>
