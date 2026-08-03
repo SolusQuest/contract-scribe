@@ -29,6 +29,20 @@ if (mode is "classification" or "policy-evidence")
     TimeZoneInfo.ClearCachedData();
 }
 
+if (mode == "observed-success")
+{
+    if (args.Length != 5)
+    {
+        return 64;
+    }
+
+    await File.WriteAllTextAsync(args[3], "ready");
+    while (!File.Exists(args[4]))
+    {
+        await Task.Delay(10);
+    }
+}
+
 using var cancellation = new CancellationTokenSource();
 var loader = mode == "cancellation"
     ? new RepositoryLoader(stage =>
@@ -159,7 +173,7 @@ if (outcome?.Session is not null)
 Console.WriteLine($"{outcome?.Status}:{outcome?.PrimaryFailure?.Code}");
 var expected = mode switch
 {
-    "success" or "churn" => RepositoryLoadStatus.Success,
+    "success" or "observed-success" or "churn" => RepositoryLoadStatus.Success,
     "failure" => RepositoryLoadStatus.Failure,
     "cancellation" => RepositoryLoadStatus.Cancelled,
     _ => (RepositoryLoadStatus)(-1),

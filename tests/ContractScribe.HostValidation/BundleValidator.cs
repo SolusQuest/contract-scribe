@@ -51,6 +51,7 @@ public static class BundleValidator
         bool allowProtectedInputDrift = false)
     {
         root = RepositoryPaths.NormalizeRoot(root);
+        EnsureNoGitGrafts(root, "HV246_BASELINE_NOT_MAIN_REACHABLE");
         var protocolPath = RepositoryPaths.ResolveConfined(root, ProtocolRelativePath);
         var vectorsPath = RepositoryPaths.ResolveConfined(root, VectorsRelativePath);
         var crosswalkPath = RepositoryPaths.ResolveConfined(root, CrosswalkRelativePath);
@@ -306,6 +307,7 @@ public static class BundleValidator
         IEnumerable<ArtifactIdentity> identities)
     {
         root = RepositoryPaths.NormalizeRoot(root);
+        EnsureNoGitGrafts(root, "HV225_SOURCE_REVISION_INVALID");
         if (revision.Length != 40
             || !revision.All(Uri.IsHexDigit)
             || RunGit(root, ["cat-file", "-e", $"{revision}^{{commit}}"], captureOutput: false).ExitCode != 0)
@@ -325,6 +327,7 @@ public static class BundleValidator
     public static void ValidateCommitAncestry(string root, string ancestor, string descendant)
     {
         root = RepositoryPaths.NormalizeRoot(root);
+        EnsureNoGitGrafts(root, "HV225_SOURCE_REVISION_INVALID");
         if (ancestor.Length != 40
             || descendant.Length != 40
             || !ancestor.All(Uri.IsHexDigit)
@@ -342,6 +345,7 @@ public static class BundleValidator
         IReadOnlyList<string> roots)
     {
         root = RepositoryPaths.NormalizeRoot(root);
+        EnsureNoGitGrafts(root, "HV225_SOURCE_REVISION_INVALID");
         ValidateInventoryPaths(roots);
         if (revision.Length != 40 || !revision.All(Uri.IsHexDigit))
         {
@@ -751,6 +755,7 @@ public static class BundleValidator
 
     private static void ValidateReviewedCommit(string root, ReviewRecord review, string bundleId)
     {
+        EnsureNoGitGrafts(root, "HV202_REVIEWED_COMMIT_INVALID");
         var lockPath = RepositoryPaths.ResolveConfined(root, LockRelativePath);
         var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(
             lockPath,
@@ -931,6 +936,7 @@ public static class BundleValidator
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        startInfo.Environment["GIT_NO_REPLACE_OBJECTS"] = "1";
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
@@ -950,6 +956,44 @@ public static class BundleValidator
             throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
         }
         return (process.ExitCode, output.ToArray());
+    }
+
+    private static void EnsureNoGitGrafts(string root, string diagnosticCode)
+    {
+        var result = RunGit(
+            root,
+            ["rev-parse", "--git-path", "info/grafts"],
+            captureOutput: true);
+        if (result.ExitCode != 0)
+        {
+            throw new ProtocolException(diagnosticCode);
+        }
+
+        string gitPath;
+        try
+        {
+            gitPath = new UTF8Encoding(false, true).GetString(result.Output).Trim();
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new ProtocolException(diagnosticCode, exception);
+        }
+
+        if (gitPath.Length == 0
+            || gitPath.Contains('\0', StringComparison.Ordinal)
+            || gitPath.Contains('\n', StringComparison.Ordinal)
+            || gitPath.Contains('\r', StringComparison.Ordinal))
+        {
+            throw new ProtocolException(diagnosticCode);
+        }
+
+        var graftPath = Path.IsPathRooted(gitPath)
+            ? Path.GetFullPath(gitPath)
+            : Path.GetFullPath(gitPath, root);
+        if (File.Exists(graftPath) && new FileInfo(graftPath).Length != 0)
+        {
+            throw new ProtocolException(diagnosticCode);
+        }
     }
 
     private static void ValidateInventoryPaths(IReadOnlyList<string> inventory)
