@@ -8,6 +8,25 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$headCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+$runnerOs = if ($IsWindows) { "Windows" } else { "Linux" }
+$rid = if ($IsWindows) { "win-x64" } else { "linux-x64" }
+$identityArguments = @{
+    EvidencePrHeadCommit = $headCommit
+    EvidenceValidationMergeCommit = $headCommit
+    EvidenceRunId = "203"
+    EvidenceRunAttempt = "1"
+    EvidenceRunnerOs = $runnerOs
+    EvidenceRid = $rid
+}
+function Add-TerminalIdentityArguments([hashtable]$Parameters) {
+    foreach ($key in $identityArguments.Keys) { $Parameters[$key] = $identityArguments[$key] }
+}
+function Assert-TerminalIdentity([object]$Document) {
+    if ($Document.runnerOs -cne $runnerOs -or $Document.rid -cne $rid -or $Document.ci.runId -cne "203" -or $Document.ci.runAttempt -ne 1 -or $Document.ci.runAttempt -is [string] -or $Document.protocolPrHeadCommit -cne $headCommit -or $Document.validationMergeCommit -cne $headCommit) {
+        throw "Verifier classification evidence did not retain bounded terminal identity."
+    }
+}
 $outputRoot = Join-Path $repositoryRoot "TestResults\m0.7-verifier-classification"
 if (Test-Path -LiteralPath $outputRoot) { Remove-Item -LiteralPath $outputRoot -Recurse -Force }
 
@@ -21,6 +40,7 @@ $fixtureMismatch = @{
     BaselineCommit = "645c0946b8b811d633b471b232b0654c10e6d7f6"
     OutputRoot = $fixtureMismatchOutput
 }
+Add-TerminalIdentityArguments $fixtureMismatch
 $output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") @fixtureMismatch 2>&1
 if ($LASTEXITCODE -eq 0) { throw "Fixture checkout classification regression unexpectedly succeeded." }
 $fixtureFailurePath = Join-Path $fixtureMismatchOutput "m0.7-failure-evidence.json"
@@ -28,6 +48,7 @@ $fixtureFailure = Get-Content -LiteralPath $fixtureFailurePath -Raw | ConvertFro
 if ($fixtureFailure.aggregateOutcome -ne "protocol-failure" -or $fixtureFailure.reasonCode -ne "fixture-checkout-drift") {
     throw "Fixture checkout drift was not routed through the typed protocol-failure classifier."
 }
+Assert-TerminalIdentity $fixtureFailure
 Remove-Item -LiteralPath $fixtureMismatchRoot -Recurse -Force
 Remove-Item -LiteralPath $fixtureMismatchOutput -Recurse -Force
 
@@ -46,6 +67,7 @@ $baselineManifestParameters = @{
     BaselineCommit = "645c0946b8b811d633b471b232b0654c10e6d7f6"
     OutputRoot = $baselineManifestOutput
 }
+Add-TerminalIdentityArguments $baselineManifestParameters
 $output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") @baselineManifestParameters 2>&1
 if ($LASTEXITCODE -eq 0) { throw "Baseline transfer-manifest classification regression unexpectedly succeeded." }
 $baselineManifestFailurePath = Join-Path $baselineManifestOutput "m0.7-failure-evidence.json"
@@ -53,6 +75,7 @@ $baselineManifestFailure = Get-Content -LiteralPath $baselineManifestFailurePath
 if ($baselineManifestFailure.aggregateOutcome -ne "baseline-invalidated" -or $baselineManifestFailure.reasonCode -ne "selected-baseline-transfer-manifest-drift") {
     throw "Baseline transfer-manifest drift was not routed through the typed baseline-invalidated classifier."
 }
+Assert-TerminalIdentity $baselineManifestFailure
 Remove-Item -LiteralPath $baselineManifestDriftRoot -Recurse -Force
 Remove-Item -LiteralPath $baselineManifestOutput -Recurse -Force
 
@@ -63,6 +86,7 @@ $verifyParameters = @{
     BaselineCommit = "0000000000000000000000000000000000000000"
     OutputRoot = $outputRoot
 }
+Add-TerminalIdentityArguments $verifyParameters
 $output = & pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-m0.7.ps1") @verifyParameters 2>&1
 if ($LASTEXITCODE -eq 0) { throw "Verifier classification regression unexpectedly succeeded." }
 $failurePath = Join-Path $outputRoot "m0.7-failure-evidence.json"
@@ -71,6 +95,7 @@ $failure = Get-Content -LiteralPath $failurePath -Raw | ConvertFrom-Json
 if ($failure.aggregateOutcome -ne "baseline-invalidated" -or $failure.reasonCode -ne "selected-baseline-drift") {
     throw "Verifier classification regression did not route baseline drift through the typed classifier."
 }
+Assert-TerminalIdentity $failure
 if ((Get-ChildItem -LiteralPath $outputRoot -Directory -Filter "run-*").Count -ne 0) { throw "Verifier classification regression retained raw run output." }
 Remove-Item -LiteralPath $outputRoot -Recurse -Force
 . (Join-Path $PSScriptRoot "m0.7-output-policy.ps1")
