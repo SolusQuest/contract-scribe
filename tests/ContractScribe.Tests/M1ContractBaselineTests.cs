@@ -335,6 +335,32 @@ public sealed class M1ContractBaselineTests
         var changed = (JsonObject)value.DeepClone();
         changed["currentInputs"]![expectedInputs.Keys.First()] = new string('f', 64);
         Assert.False(IsValidSuccessorManifest(changed, expectedInputs));
+        const string dedicatedConsumer =
+            "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs";
+        const string lifecycleSuite =
+            "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs";
+        var missingDedicatedConsumer = (JsonObject)value.DeepClone();
+        missingDedicatedConsumer["currentInputs"]!.AsObject().Remove(
+            dedicatedConsumer);
+        Assert.False(IsValidSuccessorManifest(
+            missingDedicatedConsumer,
+            expectedInputs));
+        var substitutedLifecycleSuite = (JsonObject)value.DeepClone();
+        substitutedLifecycleSuite["currentInputs"]!.AsObject().Remove(
+            dedicatedConsumer);
+        substitutedLifecycleSuite["currentInputs"]![lifecycleSuite] =
+            Sha256(Path.Join(
+                Root,
+                lifecycleSuite.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.False(IsValidSuccessorManifest(
+            substitutedLifecycleSuite,
+            expectedInputs));
+        var staleDedicatedConsumer = (JsonObject)value.DeepClone();
+        staleDedicatedConsumer["currentInputs"]![dedicatedConsumer] =
+            new string('f', 64);
+        Assert.False(IsValidSuccessorManifest(
+            staleDedicatedConsumer,
+            expectedInputs));
         var reordered = (JsonObject)value.DeepClone();
         var reversedInputs = new JsonObject(
             reordered["currentInputs"]!.AsObject().Reverse()

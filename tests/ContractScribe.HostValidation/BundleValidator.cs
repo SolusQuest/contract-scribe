@@ -38,6 +38,11 @@ public static class BundleValidator
         "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
         ContractManifestPath,
         "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85");
+    private static readonly string[] RequiredProtectedTestPaths =
+    [
+        "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs",
+        "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs"
+    ];
 
     public static BundleContext Validate(
         string root,
@@ -175,12 +180,17 @@ public static class BundleValidator
             throw new ProtocolException("HV163_PROTECTED_INPUT_VERSION");
         }
 
-        var entries = ExpandProtectedInputPaths(root, manifest.Roots)
+        var roots = manifest.Roots
+            .Concat(RequiredProtectedTestPaths)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var entries = ExpandProtectedInputPaths(root, roots)
             .Select(relativePath => new ArtifactIdentity(
                 relativePath,
                 CanonicalJson.Sha256File(RepositoryPaths.ResolveConfined(root, relativePath))))
             .ToArray();
-        var updated = manifest with { Entries = entries };
+        var updated = manifest with { Roots = roots, Entries = entries };
         CanonicalJson.WriteCanonical(path, updated);
         return updated;
     }
@@ -835,10 +845,19 @@ public static class BundleValidator
         using var manifest = CanonicalJson.ReadStrict(manifestPath, ManifestLimit);
         var root = manifest.RootElement;
         if (root.ValueKind != JsonValueKind.Object
+            || !HasExactProperties(
+                root,
+                "schemaVersion",
+                "coordinatingIssue",
+                "contractRevision",
+                "inventory",
+                "profiles",
+                "predecessor",
+                "currentInputs",
+                "fixtures",
+                "implementationDisposition")
             || !TryGetExactString(root, "coordinatingIssue", baseline.CoordinatingIssue)
             || !TryGetExactString(root, "contractRevision", baseline.ContractRevision)
-            || root.TryGetProperty("contractManifest", out _)
-            || root.TryGetProperty("contractManifestSha256", out _)
             || !root.TryGetProperty("predecessor", out var predecessor)
             || predecessor.ValueKind != JsonValueKind.Object
             || !HasExactProperties(

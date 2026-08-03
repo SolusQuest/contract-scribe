@@ -7,7 +7,7 @@
     "disposition": "pending-main-reconciliation",
     "mergeCommit": null,
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-    "contractManifestSha256": "686e395d656ab4c4bb6fb820989862d372b90652b32fdd05a90f97cefb5281ad",
+    "contractManifestSha256": "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2",
     "predecessor": {
       "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/55",
       "contractRevision": "issue-55-classification-origin-closure-v1",
