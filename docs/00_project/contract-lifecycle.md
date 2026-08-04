@@ -12,6 +12,8 @@ This document separates three concepts:
 
 The repository revision is authoritative for pre-release draft semantics. A version number alone never identifies an un-released draft precisely.
 
+The amount of workflow, review, identity, and validation machinery maintained before release is governed by [Pre-release engineering proportionality](pre-release-engineering.md). Contract integrity does not justify extra pull requests, merges, review boundaries, or repeated validation unless each protects a distinct current failure.
+
 ## Lifecycle states
 
 ### Draft
@@ -66,6 +68,8 @@ A coordinated pre-release contract amendment may close with a candidate bundle w
 Any protected-input or bundle-member drift invalidates the prior current identity and cannot inherit an older accepted review. When a repository keeps structural bundle validation in ordinary CI, every pull request that changes a protected input must restore a structurally valid pending candidate in that same pull request: regenerate the protected-input manifest, update the direct artifact inventory when its closed set changes, regenerate the artifact lock and candidate bundle identity, regenerate the matching non-authorizing pending review and review identity, and pass the structural validator, deterministic dry-runs, harness self-test, and ordinary CI. A pull request that does not change protected inputs records a reviewed no-change disposition. The replaced pending bundle remains historical candidate lineage and gains no authorizing status.
 
 That mechanical candidate refresh is not independent acceptance. A milestone promotion selects one stable main-reachable candidate only after every native protected-input-owner blocker needed by the evidence gate is closed at an accepted exact commit. Any later-discovered protected-input owner is added as a native blocker and must also close before promotion begins.
+
+A certification design that requires multiple ordered pull requests, human merges, or post-merge mutations for one content identity must pass the pre-release process-complexity checkpoint. Prefer content-bound acceptance when it protects the actual integrity boundary. If exact post-merge commit identity is required, document the irreversible consumer or authorization failure that a content identity cannot prevent, and use proportional validation for any later review-record-only change.
 
 This separation does not relax released compatibility, evidence integrity, or exact-revision requirements. An accepted bundle authorizes only the exact identity it binds, and an older accepted baseline remains historical evidence for its exact revision rather than authority for changed current bytes.
 
