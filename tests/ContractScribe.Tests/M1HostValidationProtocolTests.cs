@@ -4039,6 +4039,27 @@ public sealed class M1HostValidationProtocolTests
         RunGit(destinationRoot, "fetch", "--no-tags", Root, S1);
         RunGit(destinationRoot, "checkout", "--detach", S1);
         CopyHostBundleClosure(destinationRoot);
+        var protocolPath = Path.Join(
+            destinationRoot,
+            BundleValidator.ProtocolRelativePath.Replace(
+                '/',
+                Path.DirectorySeparatorChar));
+        var protocol = CanonicalJson.DeserializeStrict<ProtocolManifest>(
+            protocolPath,
+            2 * 1024 * 1024);
+        CanonicalJson.WriteCanonical(
+            protocolPath,
+            protocol with
+            {
+                Baseline = protocol.Baseline with
+                {
+                    Disposition = "pending-main-reconciliation",
+                    MergeCommit = null
+                }
+            });
+        _ = BundleValidator.CreateProtectedInputs(destinationRoot);
+        _ = BundleValidator.CreateLock(destinationRoot);
+        _ = BundleValidator.CreatePendingReview(destinationRoot);
         RunGit(destinationRoot, "add", ".");
         RunGit(destinationRoot, "commit", "-m", "pending successor baseline");
         return RunGit(destinationRoot, "rev-parse", "HEAD").Trim();

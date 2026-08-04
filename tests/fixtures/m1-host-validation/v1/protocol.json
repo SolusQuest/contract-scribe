@@ -4,8 +4,8 @@
   "baseline": {
     "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/70",
     "contractRevision": "issue-70-host-validation-baseline-lineage-v1",
-    "disposition": "pending-main-reconciliation",
-    "mergeCommit": null,
+    "disposition": "main-reachable",
+    "mergeCommit": "67c149fbc105d2ccae94becd6b2158b68027cbfd",
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
     "contractManifestSha256": "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2",
     "predecessor": {
