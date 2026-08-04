@@ -1,22 +1,23 @@
 {
   "schemaVersion": 1,
-  "contractRevision": "issue-55-classification-origin-closure-v1",
+  "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/70",
+  "contractRevision": "issue-70-host-validation-baseline-lineage-v1",
   "inventory": "docs/20_architecture/contracts/pre-release-v1-baseline.md",
   "profiles": [
     "profile.external-api",
     "profile.assembly-visible"
   ],
   "predecessor": {
-    "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/35",
-    "contractRevision": "issue-35-pre-release-v1",
-    "mergeCommit": "bb4654edc180e2953dda6b89a29211b18778b78e",
+    "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/55",
+    "contractRevision": "issue-55-classification-origin-closure-v1",
+    "mergeCommit": "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-    "contractManifestSha256": "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+    "contractManifestSha256": "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
   },
   "currentInputs": {
     "docs/20_architecture/contracts/audit-result-v1.md": "e324ea5cdf0c8778009842a01f2ebb8ca1cd3b0f434674b02c40edadf7ee223e",
     "docs/20_architecture/contracts/policy-configuration-v1.md": "9d283f2ad5e25adb748fb4121625999b220ebf0901fd928b0d422da951c977cf",
-    "docs/20_architecture/contracts/pre-release-v1-baseline.md": "3fd015d15bccc4b8c413371715966f3e71362fb8c3675cbf1278562fbdf4ad9b",
+    "docs/20_architecture/contracts/pre-release-v1-baseline.md": "36a79b2307b5f4d9982341d1839a909b488542d7712c4e29f4b9e29a582813aa",
     "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md": "d503d3b816d49cad6cb8f809e15e4ecf6ee3fcf8a2642eac3ff1e11e586280c5",
     "docs/20_architecture/decisions/0003-target-profiles-and-documentation-observation.md": "f0c9cba3881fdcdbc11bedd3de1ae738d05d431f7b274b6c234e325dbbb43bf4",
     "schemas/audit-result/v1.registry.json": "961b342e314dae5f59bd9aac9d86634787f08b2fc2540227f13c2e4ac480634e",
@@ -30,8 +31,8 @@
     "tests/ContractScribe.HostValidation/AuditResultSemanticValidator.cs": "804e1001f5e6c7e19eb80f7e12ebfce6bda8c0fb2b05d058fdac7d77b29ec50a",
     "tests/ContractScribe.Tests/AuditResultConformance.cs": "e511b41cf9366655b483ff935bd2ac655e3969ffc340470683279a7915c033d9",
     "tests/ContractScribe.Tests/AuditResultContractTests.cs": "831b3c4f90dcd8fca883d9489f2805ea75595185c475a44d1269aba667aeb699",
-    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "a89f8e6c6440141c7d16babbc04881b5f0a4e7c8fd1287fd0cdf96abfd47c32d",
-    "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs": "a78f30f9d6608e6a8f7f0e1b55ba6003e72d978ab9d0ecca6cb3d25bf975c6de",
+    "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs": "49df06d2f517d10e0fc7eea51e3df6c7369c64383483b72666359b1471659906",
+    "tests/ContractScribe.Tests/M1ContractBaselineTests.cs": "98a00c134bf2c6f4e4466494578d0ced06a0c74f315fbdf676c57b78605c49a5",
     "tests/ContractScribe.Tests/M1TargetObservationDecisionTests.cs": "f3ef7864f63fb98c26265a4e38c5c7e17b46ae8f04729707077e8e707e487e2c",
     "tests/ContractScribe.Tests/PolicyConfigurationConformanceTests.cs": "fd1ffb4732900e0495cf2718e21185622aafdd7855ac17b275ee123515e0ee59",
     "tests/ContractScribe.Tests/SymbolEvidenceTaxonomyContractTests.cs": "9882a6dc2e9a175064fd54f2e674814387afc0d09ce43257fbf5052a1fba2862",
@@ -141,14 +142,13 @@
   },
   "implementationDisposition": {
     "completedImplementationIssues": [
-      36
-    ],
-    "activeImplementationIssues": [
+      36,
       37,
       38,
       39,
       40
     ],
+    "activeImplementationIssues": [],
     "activeValidationIssues": [
       41
     ]

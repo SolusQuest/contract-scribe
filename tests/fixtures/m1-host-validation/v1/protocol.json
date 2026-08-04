@@ -2,17 +2,18 @@
   "formatVersion": "contractscribe-m1-host-validation-protocol-v1",
   "protocolId": "m1-host-validation-v1",
   "baseline": {
-    "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/55",
+    "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/70",
+    "contractRevision": "issue-70-host-validation-baseline-lineage-v1",
     "disposition": "pending-main-reconciliation",
     "mergeCommit": null,
     "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-    "contractManifestSha256": "ca6d85035960a706cfadcf998a43005285b9789831b7d78337c233845b5c2aa3",
+    "contractManifestSha256": "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2",
     "predecessor": {
-      "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/35",
-      "contractRevision": "issue-35-pre-release-v1",
-      "mergeCommit": "bb4654edc180e2953dda6b89a29211b18778b78e",
+      "coordinatingIssue": "https://github.com/SolusQuest/contract-scribe/issues/55",
+      "contractRevision": "issue-55-classification-origin-closure-v1",
+      "mergeCommit": "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
       "contractManifest": "tests/fixtures/m1-contract-baseline/v1/manifest.json",
-      "contractManifestSha256": "2872387ce9cfd8578c8f473ec26ab9f10dd44381edfbc0248e6fa370d797ab31"
+      "contractManifestSha256": "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
     }
   },
   "artifactInventory": [
@@ -80,6 +81,7 @@
     "tests/ContractScribe.HostValidation/TemporaryDiskHighWaterObserver.cs",
     "tests/ContractScribe.Tests/ContractScribe.Tests.csproj",
     "tests/ContractScribe.Tests/AuditResultConformance.cs",
+    "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs",
     "tests/ContractScribe.Tests/M1ContractBaselineTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationMeasuredBoundSchemaTests.cs",
     "tests/ContractScribe.Tests/M1HostValidationProtocolTests.cs",

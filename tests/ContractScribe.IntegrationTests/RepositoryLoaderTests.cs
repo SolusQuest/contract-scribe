@@ -908,7 +908,10 @@ public sealed class RepositoryLoaderTests
                     TimeSpan.FromSeconds(30)),
                 "The unrelated loader probe did not expose its own BuildHost descendant.");
 
-            var spawned = await RunLoaderProbeAsync(fixture.Root, "success");
+            await using var successFixture = await LoaderFixture.CreateAsync();
+            var spawned = await RunLoaderProbeAsync(
+                successFixture.Root,
+                "observed-success");
 
             Assert.False(unrelated.HasExited);
             Assert.Empty(spawned.Intersect(unrelatedHosts));
@@ -1650,15 +1653,62 @@ public sealed class RepositoryLoaderTests
 
     private static async Task<int[]> RunLoaderProbeAsync(string repositoryRoot, string mode)
     {
-        using var probe = StartLoaderProbe(repositoryRoot, mode);
+        var synchronizedObservation = mode == "observed-success";
+        var ready = Path.Combine(repositoryRoot, "observed-success.ready");
+        var release = Path.Combine(repositoryRoot, "observed-success.release");
+        using var probe = synchronizedObservation
+            ? StartLoaderProbe(repositoryRoot, mode, ready, release)
+            : StartLoaderProbe(repositoryRoot, mode);
         var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
         using var monitoring = new CancellationTokenSource();
-        var monitor = MonitorBuildHostDescendantsAsync(probe.Id, observed, monitoring.Token);
         var stdout = probe.StandardOutput.ReadToEndAsync();
         var stderr = probe.StandardError.ReadToEndAsync();
-        await probe.WaitForExitAsync();
-        monitoring.Cancel();
-        await monitor;
+        if (synchronizedObservation)
+        {
+            var readyReached = SpinWait.SpinUntil(
+                () => File.Exists(ready) || probe.HasExited,
+                TimeSpan.FromSeconds(30));
+            if (!readyReached || !File.Exists(ready))
+            {
+                await File.WriteAllTextAsync(release, "release");
+                if (!probe.HasExited)
+                {
+                    await probe.WaitForExitAsync();
+                }
+                Assert.Fail(
+                    "The observed loader probe did not reach its pre-load synchronization point.");
+            }
+        }
+
+        var monitor = Task.Factory.StartNew(
+            () => MonitorBuildHostDescendants(
+                probe.Id,
+                observed,
+                monitoring.Token),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        try
+        {
+            if (synchronizedObservation)
+            {
+                await File.WriteAllTextAsync(release, "release");
+            }
+            await probe.WaitForExitAsync();
+        }
+        finally
+        {
+            if (synchronizedObservation)
+            {
+                await File.WriteAllTextAsync(release, "release");
+            }
+            if (!probe.HasExited)
+            {
+                await probe.WaitForExitAsync();
+            }
+            monitoring.Cancel();
+            await monitor;
+        }
         var spawned = observed.Keys.Order().ToArray();
         var output = await stdout;
         var error = await stderr;
@@ -1882,26 +1932,19 @@ public sealed class RepositoryLoaderTests
         }
     }
 
-    private static async Task MonitorBuildHostDescendantsAsync(
+    private static void MonitorBuildHostDescendants(
         int ancestorProcessId,
         System.Collections.Concurrent.ConcurrentDictionary<int, byte> observed,
         CancellationToken cancellationToken)
     {
-        try
+        while (!cancellationToken.IsCancellationRequested)
         {
-            while (true)
+            foreach (var processId in CurrentBuildHostDescendants(ancestorProcessId))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                foreach (var processId in CurrentBuildHostDescendants(ancestorProcessId))
-                {
-                    observed.TryAdd(processId, 0);
-                }
-
-                await Task.Delay(10, cancellationToken);
+                observed.TryAdd(processId, 0);
             }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
+
+            cancellationToken.WaitHandle.WaitOne(1);
         }
     }
 
