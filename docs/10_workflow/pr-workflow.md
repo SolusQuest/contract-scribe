@@ -4,6 +4,8 @@ Create substantive changes on a branch and open a draft pull request unless the 
 
 PR bodies must explain the change, identify the tracking issue or state `None` with a no-issue justification, record validation actually performed, and list remaining risks. A PR must not claim validation that did not run.
 
+For pre-release planning, implementation, review, publishing, validation, and closure, apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Complete its process-complexity checkpoint before publishing or expanding a plan that matches any canonical trigger, and select validation from the changed failure surface.
+
 ## No-issue exception
 
 A tracking issue remains the default whenever work benefits from separate planning, coordination, acceptance criteria, dependency tracking, or durable history. A pull request may proceed without one only when all of the following are true:

@@ -18,6 +18,8 @@ One independently acceptable executable outcome should ordinarily require:
 - one independent review boundary for each distinct risk-bearing artifact or state transition;
 - validation selected from the changed failure surface.
 
+One coherent review may cover multiple related artifacts, transitions, and risks. Separate review boundaries only when a distinct authority, expertise, or independence requirement prevents one reviewer from accepting them together.
+
 Repository visibility, a milestone label, a possible future consumer, a desire for perfect lineage, or the availability of automation does not by itself justify more process.
 
 An existing frozen issue remains authoritative until it is explicitly amended. This rule does not silently reinterpret work already in progress; an agent reports the conflict and proposed simplification before changing the accepted issue contract.
@@ -38,6 +40,13 @@ Precedent check
 
 The check is not a market survey and routine local implementation does not require it. Stop when one or a small number of sufficiently comparable, verifiable patterns establish a viable default. Established use is evidence for a starting point, not proof that a pattern fits ContractScribe; validate it against the current product and security boundaries. Do not copy compatibility layers, migration frameworks, enterprise governance, scale machinery, or operational infrastructure whose triggering constraints do not exist in ContractScribe. If the design diverges, name the concrete repository constraint that makes the established pattern insufficient. Pattern reuse does not authorize copying code or assets without satisfying their licenses.
 
+### Precedent check for this rule
+
+- **Similar systems or standards inspected:** [GitHub flow](https://docs.github.com/en/get-started/using-github/github-flow), Google's [Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html) and [code review standard](https://google.github.io/eng-practices/review/reviewer/standard.html), and [Semantic Versioning 2.0.0](https://semver.org/).
+- **Patterns adopted:** use a lightweight branch, pull request, review, and merge path; keep one change self-contained with the related validation needed to understand it; accept a change when it materially improves the current system rather than delaying for theoretical perfection; and treat initial-development interfaces as unstable until an external compatibility boundary is declared.
+- **Parts intentionally omitted:** GitHub deployment steps, Google-scale stacked-change and reviewer-organization practices, and released-version deprecation or migration machinery. ContractScribe does not inherit those mechanisms without their current deployment, team-scale, or consumer constraints.
+- **ContractScribe-specific divergence:** independently accepted production evidence may require content identity, fail-closed validation, or authority separation beyond an ordinary code review. Those additions remain only where the issue records the concrete evidence-integrity failure they prevent.
+
 ## Maintain one current pre-release version
 
 Before the first downstream-consumable release, ContractScribe maintains one current production implementation per capability and one current shape for each draft contract by default. When a draft API, schema, fixture, configuration, identifier, or implementation path is superseded, replace or delete it in the same coherent change that updates its producers, consumers, validators, tests, and documentation.
@@ -50,11 +59,11 @@ This rule removes obsolete active behavior, not historical truth. Git history an
 
 ## Mandatory process-complexity checkpoint
 
-An architecture proposal or executable issue is not agent-ready until it completes a process-complexity checkpoint when any of the following is planned:
+An architecture proposal, executable issue, or pull-request plan is not ready until it completes a process-complexity checkpoint when any of the following is planned:
 
-- more than one ordered implementation or review pull request for one primary outcome;
+- more than one pull request for one primary outcome, whether serial or parallel;
 - more than one human merge before the outcome becomes usable;
-- a review or attestation that can only be persisted by a post-merge mutation;
+- any required post-merge mutation stage beyond the human merge itself;
 - repeated independent review of the same unchanged risk-bearing bytes;
 - repeated full build, test, or platform matrices after a change limited to metadata outside the runtime, public contract, protected-input set, or content-identity preimage;
 - compatibility, migration, coexistence, deprecation, or multiple artifact versions before a real consumer requires them;
@@ -80,7 +89,7 @@ Pre-release process profile
 
 Every item above the default budget must protect a distinct current failure boundary. If the evidence is absent, combine or remove the extra stage. An agent that encounters an unjustified item reports `PROCESS_COMPLEXITY_BLOCKER`, presents the minimum sufficient alternative, and does not silently normalize the heavier process.
 
-In `auto` execution, deterministic implementation-local work may continue, but the agent must stop before publishing or expanding an unjustified multi-stage process when fixing it would amend an accepted product, contract, review, or workflow decision.
+When an agent has prior authorization to continue deterministic implementation-local work without another user decision, it may do so, but it must stop before publishing or expanding an unjustified multi-stage process when correction would amend an accepted product, contract, review, or workflow decision.
 
 ## Evidence that may justify additional process
 
@@ -102,7 +111,7 @@ When a validation contract, schema, harness, or adapter will be consumed by a pr
 1. **Validation design gate** — early work fixes the validation goal, invariants, evidence ownership, anti-cheating boundary, platform matrix, and fail-closed behavior needed for implementation to begin.
 2. **Freeze or certification gate** — later work fixes the final producer-consumer schema, fixtures, adapter behavior, protected inputs, content identity, and independent acceptance only after the real producer and consumer path is executable.
 
-Do not freeze an implementation-level schema, fixture projection, or final bundle identity solely from an oracle or synthetic consumer when the real producer is not yet available. Before the freeze gate, run one end-to-end satisfiability sweep that proves the production producer, schema, semantic validator, fixtures, observers, and harness can all satisfy the same contract without special-casing a vector or oracle identity.
+Do not freeze an implementation-level schema, fixture projection, or final bundle identity solely from an oracle or synthetic consumer when the real producer is not yet available. Before the freeze gate, run one end-to-end satisfiability sweep proving that the production producer's output is accepted and interpreted by the production consumer, and that every applicable schema, semantic validator, fixture, observer, and harness required by the accepted design agrees with that same contract without vector- or oracle-specific special cases.
 
 Defects found by that sweep should be collected into the narrowest coherent correction. Do not automatically create and merge one correction pull request per serially exposed contradiction when the remaining producer-consumer surface can be audited together.
 
@@ -122,7 +131,7 @@ Select validation by the changed failure surface:
 | --- | --- |
 | Runtime behavior, public contract, protected input, content-identity preimage, schema, fixture semantics, or platform behavior | Affected build, focused tests, contract or schema checks, relevant integration and platform coverage, and repository CI. |
 | Review or provenance metadata outside the protected-input and content-identity preimages | Schema and canonicality checks, identity recomputation, authorization-gate tests, focused lifecycle coverage, diff checks, and existing repository CI. Do not duplicate a full local product test matrix without a concrete affected path. |
-| Documentation or tracker metadata with no executable contract change | Documentation, link, rendering, and remote readback checks appropriate to the changed surface. |
+| Documentation or tracker metadata with no executable contract change | Documentation, link, and rendering checks appropriate to the changed surface; add remote readback only when the changed surface is a remote tracker record or rendered remote representation. |
 
 Existing repository CI may still run a broader fixed matrix. That does not justify repeating the same broad matrix manually, adding another independent review, or turning a metadata-only change into a second implementation cycle.
 
@@ -155,7 +164,9 @@ That stop requires:
 - comparison of one coherent correction, moving the freeze gate, or simplifying the identity/review design;
 - an explicit user decision before another correction or reopen is published.
 
-Do not publish a third serial correction against the same frozen boundary unless the sweep found a genuinely independent failure that could not have been discovered together and the user explicitly accepts the additional cycle.
+Do not publish a third isolated serial correction against the same frozen boundary unless new concrete evidence requires another cycle and the user explicitly accepts it. When the remaining failures could have been discovered together, aggregate them into one coherent correction instead of continuing the serial pattern.
+
+The recurrence stop does not delay immediate containment or the narrowest safe correction of an observed security, privacy, legal, destructive-operation, publication-authority, or evidence-integrity failure. It stops normal dependent work and prevents the emergency correction from becoming justification for another unexamined serial cycle.
 
 ## Review and closure proportionality
 
