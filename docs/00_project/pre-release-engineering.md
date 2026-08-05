@@ -22,6 +22,32 @@ Repository visibility, a milestone label, a possible future consumer, a desire f
 
 An existing frozen issue remains authoritative until it is explicitly amended. This rule does not silently reinterpret work already in progress; an agent reports the conflict and proposed simplification before changing the accepted issue contract.
 
+## Reuse proven patterns before invention
+
+Before creating a new architecture boundary, machine contract, protocol, persisted format, validation or security mechanism, distribution design, or workflow mechanism, inspect mature systems or standards that solve a materially similar problem. Prefer the smallest pattern with public evidence of real use over a repository-specific invention.
+
+Use primary sources when available: standards, official documentation, source code, and public design records. A non-trivial decision records a bounded precedent check:
+
+```text
+Precedent check
+- Similar systems or standards inspected:
+- Pattern adopted:
+- Parts intentionally omitted:
+- Project constraint requiring any divergence:
+```
+
+The check is not a market survey and routine local implementation does not require it. Stop when one or a small number of sufficiently comparable, verifiable patterns establish a viable default. Established use is evidence for a starting point, not proof that a pattern fits ContractScribe; validate it against the current product and security boundaries. Do not copy compatibility layers, migration frameworks, enterprise governance, scale machinery, or operational infrastructure whose triggering constraints do not exist in ContractScribe. If the design diverges, name the concrete repository constraint that makes the established pattern insufficient. Pattern reuse does not authorize copying code or assets without satisfying their licenses.
+
+## Maintain one current pre-release version
+
+Before the first downstream-consumable release, ContractScribe maintains one current production implementation per capability and one current shape for each draft contract by default. When a draft API, schema, fixture, configuration, identifier, or implementation path is superseded, replace or delete it in the same coherent change that updates its producers, consumers, validators, tests, and documentation.
+
+Do not add a compatibility layer, old-version reader or writer, deprecated alias, dual-read or dual-write path, migration framework, silent fallback to superseded behavior, or multiple active artifact versions merely to preserve an unreleased repository revision. A one-time mechanical repository rewrite is allowed when needed to update checked-in state; it must not leave a permanent migration surface behind. Unsupported obsolete shapes fail closed instead of silently selecting the old path.
+
+Compatibility before release requires evidence of a current boundary that cannot be updated atomically, such as a real external consumer, persisted state that cannot be discarded, an explicit public commitment, or an irreversible data, authorization, security, or publication risk. The owning issue or decision records that boundary, why a coordinated replacement is insufficient, the compatibility lifetime, its owner, and the condition for removing it. Possible future consumers and generic best practice are insufficient.
+
+This rule removes obsolete active behavior, not historical truth. Git history and closed tracker records are not rewritten. An immutable evidence artifact remains in the current tree only when another current claim or external obligation explicitly depends on it; retention does not make it a supported runtime entrypoint. It also does not prohibit test-only alternatives, intentional product defaults, or fail-closed error handling defined by the current contract; it prohibits compatibility fallback to superseded behavior.
+
 ## Mandatory process-complexity checkpoint
 
 An architecture proposal or executable issue is not agent-ready until it completes a process-complexity checkpoint when any of the following is planned:

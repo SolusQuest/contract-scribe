@@ -20,6 +20,8 @@ The amount of workflow, review, identity, and validation machinery maintained be
 
 A draft contract may change incompatibly in place while the owning capability is still being designed or implemented. The artifact version may remain unchanged when no supported consumer needs the previous and current shapes to coexist.
 
+A draft contract has one current active shape by default. Remove superseded fields, identifiers, readers, writers, fixtures, aliases, and fallback paths as part of the coordinated change; do not retain a compatibility or migration surface for an unreleased repository revision. A one-time mechanical rewrite of checked-in state may support the change, but it must not become a shipped migration framework. Historical commits and accepted evidence remain available as history rather than supported runtime inputs.
+
 Every behavioral change must update the normative specification, schema or registry, public fixtures, conformance oracle, and dependent contract references as one coordinated change. References to draft semantics must pin a full repository commit.
 
 There is no promise that a current implementation can read an artifact produced by a different pre-release commit merely because both artifacts carry the same integer version.
@@ -92,6 +94,8 @@ Do not increment the artifact version only because:
 - a documentation-only editorial change clarifies behavior without changing it.
 
 If coexistence becomes necessary before public release, the compatibility need takes precedence over the pre-release simplification and a new version is required.
+
+That exception must identify the current consumer or persisted state that cannot be updated atomically, explain why rejecting the obsolete shape is unsafe, and record the owner and removal condition for the compatibility surface. A hypothetical future consumer does not qualify.
 
 ## Interpretation of the M0 contract baseline
 
