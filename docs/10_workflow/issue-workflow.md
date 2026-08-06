@@ -30,6 +30,8 @@ Every executable work issue must state:
 
 An executable issue should ordinarily complete through one focused pull request and review cycle. Split it when it contains multiple independently useful outcomes with separate acceptance contracts, independently unblockable dependency states, or changes that require independent pull-request or review cycles.
 
+Before declaring pre-release work agent-ready, apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Complete its process-complexity checkpoint whenever any trigger in that rule applies; do not narrow or extend the canonical trigger set in an issue. Record the complete process profile in the issue. If an extra stage does not protect a distinct current failure and lacks evidence against a simpler reversible alternative, remove or combine it.
+
 Every resulting child must remain coherent and independently acceptable with its own complete acceptance contract. A dependency state may justify a split, but it never substitutes for an acceptable child outcome. Keep implementation with the tests, contract artifacts, fixtures, and validation required to accept it; separate one of those artifacts only when the separated result is independently useful and acceptable.
 
 A coordination parent may be intentionally broader because it owns a dependency graph, blocker classification, or closure evidence. It must not retain unbounded executable work. Delegate executable outcomes to complete child issues and make each parent/child relationship explicit.
@@ -81,6 +83,8 @@ Do not place a non-gating research item, release gate, or later-track task in a 
 ## Contract changes
 
 Before refining a contract issue, read [Contract lifecycle](../00_project/contract-lifecycle.md).
+
+For a pre-release contract, also apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Separate early validation design from final producer-consumer freeze, and require an end-to-end satisfiability sweep before freezing implementation-level schemas, fixtures, adapters, or certification identities.
 
 A pre-release breaking amendment does not automatically require a new artifact version. It does require a coordinated acceptance contract that names every affected specification, schema, registry, fixture, oracle, implementation, and validation gate.
 

@@ -4,6 +4,8 @@ Read this document after `AGENTS.md`. Then read `collaboration-layers.md`, the r
 
 Route long-lived rules to `docs/00_project`, `docs/10_workflow`, `docs/20_architecture`, or `docs/90_roadmap`. Route tool-neutral agent procedures to `docs/50_ai/skills`. Keep platform entrypoints thin.
 
+Before planning, refining, implementing, reviewing, publishing, validating, or closing pre-release architecture, issues, contracts, certification lifecycles, artifact identities, or pull requests, read `docs/00_project/pre-release-engineering.md`. Apply its mandatory process-complexity checkpoint instead of treating multi-PR, multi-merge, repeated-review, repeated-validation, compatibility, migration, post-merge mutation, manual ceremony, or closed-issue reopen costs as normal.
+
 For an issue or PR, use a full-commit-SHA repository-file link only after verifying that the commit is reachable from `main`. Treat live issue, pull-request, and milestone URLs as mutable tracker references. Do not use private downstream material as repository implementation context.
 
 Before changing a machine contract or claiming that a new artifact version is required, read `docs/00_project/contract-lifecycle.md`. Before changing milestone or issue scope, read `docs/90_roadmap/roadmap.md`, the milestone plan, and `docs/10_workflow/issue-workflow.md`.
