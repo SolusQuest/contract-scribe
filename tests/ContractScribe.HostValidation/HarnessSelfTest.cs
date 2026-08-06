@@ -85,6 +85,8 @@ public static class HarnessSelfTest
                 "10.0.102",
                 "10.0.0",
                 "18.0.0",
+                [],
+                [],
                 []);
 
             foreach (var finalization in new[] { false, true })
@@ -286,6 +288,8 @@ public static class HarnessSelfTest
                 "10.0.102",
                 "10.0.0",
                 "18.0.0",
+                [],
+                [],
                 []);
             var toolchainCases = new[]
             {

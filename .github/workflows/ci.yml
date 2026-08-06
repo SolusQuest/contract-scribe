@@ -6,6 +6,18 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Workflow mode"
+        required: true
+        default: ordinary-ci
+        type: choice
+        options:
+          - ordinary-ci
+          - host-validation-execution
+      expected_head_sha:
+        description: "Exact branch head required for Host Validation execution"
+        required: false
+        type: string
       pr_head_sha:
         description: "PR head SHA represented by this validation run"
         required: false
@@ -16,6 +28,7 @@ permissions:
 
 jobs:
   validate:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'ordinary-ci'
     strategy:
       fail-fast: false
       matrix:
@@ -106,7 +119,7 @@ jobs:
           if-no-files-found: ignore
 
   aggregate-m07:
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.mode == 'ordinary-ci')
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -133,3 +146,121 @@ jobs:
           name: m0.7-aggregate-evidence
           path: TestResults/m0.7-independent-validation/m0.7-aggregate-evidence.json
           if-no-files-found: error
+
+  host-validation-common:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'host-validation-execution'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require exact requested head
+        shell: pwsh
+        run: |
+          if ("${{ inputs.expected_head_sha }}" -notmatch '^[0-9a-f]{40}$') {
+            throw 'expected_head_sha must be exactly 40 lowercase hexadecimal characters'
+          }
+          if ("${{ github.sha }}" -ne "${{ inputs.expected_head_sha }}") {
+            throw 'workflow checkout does not match expected_head_sha'
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - run: dotnet restore tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj
+      - run: dotnet build tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-restore
+      - name: Validate accepted content-bound bundle
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- validate-bundle --root . --require-review --review tests/fixtures/m1-host-validation/v1/independent-review.json
+      - name: Materialize common source manifest
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- materialize-common --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --output TestResults/m1-host-validation/artifact-set/common-source-manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m1-host-validation-common-source
+          path: TestResults/m1-host-validation/artifact-set/common-source-manifest.json
+          if-no-files-found: error
+
+  host-validation-cell:
+    needs: host-validation-common
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: ubuntu-x64
+            os: ubuntu-latest
+          - cell: windows-x64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: m1-host-validation-common-source
+          path: TestResults/m1-host-validation/artifact-set
+      - id: common-identity
+        name: Read repository-owned common identity
+        shell: pwsh
+        run: |
+          $common = Get-Content -LiteralPath TestResults/m1-host-validation/artifact-set/common-source-manifest.json -Raw | ConvertFrom-Json
+          "source_revision=$($common.sourceConfiguration.hostRevision)" >> $env:GITHUB_OUTPUT
+          "source_configuration_id=$($common.sourceConfiguration.sourceConfigurationId)" >> $env:GITHUB_OUTPUT
+      - run: dotnet restore ContractScribe.slnx
+      - run: dotnet build tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-restore
+      - name: Build exact production subject
+        run: dotnet build src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-restore -p:ContractScribeHostValidationSubject=true -p:ContractScribeSourceRevision=${{ steps.common-identity.outputs.source_revision }} -p:ContractScribeSourceConfigurationId=${{ steps.common-identity.outputs.source_configuration_id }}
+      - name: Materialize cell subject manifest
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- materialize-cell --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --common-manifest TestResults/m1-host-validation/artifact-set/common-source-manifest.json --cell ${{ matrix.cell }} --output TestResults/m1-host-validation/artifact-set/${{ matrix.cell }}/cell-subject-manifest.json
+      - name: Execute exact cell
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- execute-cell --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --common-manifest TestResults/m1-host-validation/artifact-set/common-source-manifest.json --cell-manifest TestResults/m1-host-validation/artifact-set/${{ matrix.cell }}/cell-subject-manifest.json --output TestResults/m1-host-validation/artifact-set/${{ matrix.cell }}/cell-evidence.json --incomplete-output TestResults/m1-host-validation/artifact-set/${{ matrix.cell }}/incomplete-evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ${{ matrix.cell }}
+          path: TestResults/m1-host-validation/artifact-set/${{ matrix.cell }}
+          if-no-files-found: error
+
+  host-validation-aggregate:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'host-validation-execution'
+    needs:
+      - host-validation-common
+      - host-validation-cell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - run: dotnet restore tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj
+      - run: dotnet build tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-restore
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: m1-host-validation-common-source
+          path: TestResults/m1-host-validation/artifact-set
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ubuntu-x64
+          path: TestResults/m1-host-validation/artifact-set/ubuntu-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-x64
+          path: TestResults/m1-host-validation/artifact-set/windows-x64
+      - name: Aggregate exact artifact set
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- aggregate --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --artifact-root TestResults/m1-host-validation/artifact-set --publication-base-revision ${{ github.sha }} --output TestResults/m1-host-validation/aggregate-evidence.json
+      - name: Prepare public-safe aggregate
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- prepare-public --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --artifact-root TestResults/m1-host-validation/artifact-set --kind aggregate --source TestResults/m1-host-validation/aggregate-evidence.json --output TestResults/m1-host-validation/public/aggregate-evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: m1-host-validation-aggregate
+          path: TestResults/m1-host-validation/public/aggregate-evidence.json
+          if-no-files-found: error
+      - name: Require repository-validated passing aggregate
+        run: dotnet run --project tests/ContractScribe.HostValidation/ContractScribe.HostValidation.csproj --configuration Release --no-build -- require-passing-aggregate --root . --review tests/fixtures/m1-host-validation/v1/independent-review.json --artifact-root TestResults/m1-host-validation/artifact-set --evidence TestResults/m1-host-validation/aggregate-evidence.json

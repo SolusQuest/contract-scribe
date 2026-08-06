@@ -121,6 +121,27 @@
       "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
     },
     {
+      "caseId": "aggregate.mixed-source-configuration",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-second-cell-source-configuration",
+      "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
+    },
+    {
+      "caseId": "aggregate.mixed-common-manifest",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-second-cell-common-manifest",
+      "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
+    },
+    {
+      "caseId": "aggregate.mixed-review",
+      "seed": "two-cell-aggregate",
+      "target": "validate-aggregate",
+      "operation": "replace-second-cell-review",
+      "expectedCode": "HV160_MIXED_EXECUTION_ATTEMPT"
+    },
+    {
       "caseId": "aggregate.cross-cell-nondeterminism",
       "seed": "two-cell-aggregate",
       "target": "validate-aggregate",
@@ -139,6 +160,20 @@
       "seed": "incomplete-record",
       "target": "validate-incomplete",
       "operation": "replace-classification",
+      "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
+    },
+    {
+      "caseId": "incomplete.common-manifest-mismatch",
+      "seed": "incomplete-record",
+      "target": "validate-incomplete",
+      "operation": "replace-incomplete-common-manifest",
+      "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
+    },
+    {
+      "caseId": "incomplete.cell-manifest-mismatch",
+      "seed": "incomplete-record",
+      "target": "validate-incomplete",
+      "operation": "replace-incomplete-cell-manifest",
       "expectedCode": "HV158_INCOMPLETE_EVIDENCE_BINDING"
     },
     {

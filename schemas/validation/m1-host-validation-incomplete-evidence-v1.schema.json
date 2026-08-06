@@ -8,6 +8,8 @@
     "networkClaimSetId",
     "reviewId",
     "sourceConfigurationId",
+    "commonManifestSha256",
+    "cellManifestSha256",
     "validationAttempt",
     "cellId",
     "classification",
@@ -30,14 +32,9 @@
       "pattern": "^review\\.[0-9a-f]{64}$"
     },
     "cellId": {
-      "type": [
-        "string",
-        "null"
-      ],
       "enum": [
         "ubuntu-x64",
-        "windows-x64",
-        null
+        "windows-x64"
       ]
     },
     "classification": {
@@ -72,6 +69,12 @@
     },
     "validationAttempt": {
       "$ref": "#/$defs/validationAttempt"
+    },
+    "commonManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "cellManifestSha256": {
+      "$ref": "#/$defs/sha256"
     }
   },
   "additionalProperties": false,
@@ -115,6 +118,10 @@
         }
       },
       "additionalProperties": false
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     }
   }
 }

@@ -27,17 +27,17 @@ public static class BundleValidator
 
     private const int ManifestLimit = 4 * 1024 * 1024;
     private const string CurrentCoordinatingIssue =
-        "https://github.com/SolusQuest/contract-scribe/issues/70";
+        "https://github.com/SolusQuest/contract-scribe/issues/75";
     private const string CurrentContractRevision =
-        "issue-70-host-validation-baseline-lineage-v1";
+        "m1-host-validation-content-bound-execution-v1";
     private const string ContractManifestPath =
         "tests/fixtures/m1-contract-baseline/v1/manifest.json";
     private static readonly PredecessorBaselineIdentity ExpectedPredecessor = new(
-        "https://github.com/SolusQuest/contract-scribe/issues/55",
-        "issue-55-classification-origin-closure-v1",
-        "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
+        "https://github.com/SolusQuest/contract-scribe/issues/70",
+        "issue-70-host-validation-baseline-lineage-v1",
+        "67c149fbc105d2ccae94becd6b2158b68027cbfd",
         ContractManifestPath,
-        "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85");
+        "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2");
     private static readonly string[] RequiredProtectedTestPaths =
     [
         "tests/ContractScribe.Tests/M1ContractBaselineHostConsumerTests.cs",
@@ -51,7 +51,7 @@ public static class BundleValidator
         bool allowProtectedInputDrift = false)
     {
         root = RepositoryPaths.NormalizeRoot(root);
-        EnsureNoGitGrafts(root, "HV246_BASELINE_NOT_MAIN_REACHABLE");
+        EnsureNoGitGrafts(root, "HV246_BASELINE_PREDECESSOR_INVALID");
         var protocolPath = RepositoryPaths.ResolveConfined(root, ProtocolRelativePath);
         var vectorsPath = RepositoryPaths.ResolveConfined(root, VectorsRelativePath);
         var crosswalkPath = RepositoryPaths.ResolveConfined(root, CrosswalkRelativePath);
@@ -105,7 +105,6 @@ public static class BundleValidator
 
         if (requireReview)
         {
-            RequireAuthorizingBaseline(protocol);
             ValidateReview(
                 root,
                 reviewPath ?? ReviewRelativePath,
@@ -162,7 +161,7 @@ public static class BundleValidator
             null,
             null,
             "pending",
-            ["baseline.main-reconciliation-pending"],
+            ["independent-review.pending"],
             null);
         review = review with { ReviewId = ComputeReviewId(review) };
         CanonicalJson.WriteCanonical(
@@ -203,7 +202,6 @@ public static class BundleValidator
         {
             throw new ProtocolException("HV121_REVIEW_NOT_ACCEPTED");
         }
-        ValidateReviewedCommit(root, review, bundleId);
         return review;
     }
 
@@ -231,13 +229,13 @@ public static class BundleValidator
         if (review.Verdict == "pending")
         {
             if (review.BundleId != bundleId
-                || review.ReviewedHead is not null
+                || review.ReviewedSourceRevision is not null
                 || review.ReviewerKind is not null
                 || review.RelaySessionId is not null
                 || review.RelayTaskId is not null
                 || review.ReviewedAtUtc is not null
                 || !review.BlockingFindingIds.SequenceEqual(
-                    ["baseline.main-reconciliation-pending"],
+                    ["independent-review.pending"],
                     StringComparer.Ordinal))
             {
                 throw new ProtocolException("HV247_PENDING_REVIEW_INVALID");
@@ -248,9 +246,10 @@ public static class BundleValidator
         if (review.BundleId != bundleId
             || review.Verdict != "accepted"
             || review.BlockingFindingIds.Count != 0
-            || review.ReviewedHead is null
-            || !review.ReviewedHead.All(Uri.IsHexDigit)
-            || review.ReviewedHead.Length != 40
+            || review.ReviewedSourceRevision is null
+            || review.ReviewedSourceRevision.Length != 40
+            || !review.ReviewedSourceRevision.All(character =>
+                character is >= '0' and <= '9' or >= 'a' and <= 'f')
             || review.ReviewerKind != "independent-relay"
             || review.RelaySessionId is null
             || review.RelayTaskId is null
@@ -290,7 +289,7 @@ public static class BundleValidator
         {
             review.FormatVersion,
             review.BundleId,
-            review.ReviewedHead,
+            review.ReviewedSourceRevision,
             review.ReviewerKind,
             review.RelaySessionId,
             review.RelayTaskId,
@@ -395,8 +394,6 @@ public static class BundleValidator
             || catalog.FormatVersion != "contractscribe-m1-host-validation-vectors-v1"
             || protocol.Baseline.CoordinatingIssue != CurrentCoordinatingIssue
             || protocol.Baseline.ContractRevision != CurrentContractRevision
-            || protocol.Baseline.Disposition
-                is not ("pending-main-reconciliation" or "main-reachable")
             || protocol.Baseline.ContractManifest != ContractManifestPath
             || protocol.Baseline.Predecessor != ExpectedPredecessor)
         {
@@ -414,17 +411,6 @@ public static class BundleValidator
         }
         ValidateContractManifestIdentity(contractManifestPath, protocol.Baseline);
         ValidatePredecessorBaselineCommit(root, protocol.Baseline.Predecessor);
-        if (protocol.Baseline.Disposition == "pending-main-reconciliation")
-        {
-            if (protocol.Baseline.MergeCommit is not null)
-            {
-                throw new ProtocolException("HV122_PROTOCOL_VERSION_OR_BASELINE");
-            }
-        }
-        else
-        {
-            ValidateMainBaselineCommit(root, protocol.Baseline);
-        }
 
         var expectedCells = new[] { "ubuntu-x64", "windows-x64" };
         if (!protocol.RequiredCells.Select(cell => cell.CellId).SequenceEqual(expectedCells, StringComparer.Ordinal)
@@ -465,7 +451,7 @@ public static class BundleValidator
         }
     }
 
-    private static void ValidateLock(string root, ProtocolManifest protocol, ArtifactLock artifactLock)
+    public static void ValidateLock(string root, ProtocolManifest protocol, ArtifactLock artifactLock)
     {
         if (artifactLock.FormatVersion != "contractscribe-m1-host-validation-artifact-lock-v1")
         {
@@ -581,9 +567,6 @@ public static class BundleValidator
             schema);
         SchemaValidation.Validate(
             RepositoryPaths.ResolveConfined(root, "tests/fixtures/m1-host-validation/v1/self-test-subject.json"),
-            schema);
-        SchemaValidation.Validate(
-            RepositoryPaths.ResolveConfined(root, "tests/fixtures/m1-host-validation/v1/execution-subject.template.json"),
             schema);
     }
 
@@ -743,76 +726,13 @@ public static class BundleValidator
             AuthoritativeSourcesRelativePath,
             "tests/fixtures/m1-host-validation/v1/evidence-mutation-corpus.json",
             "tests/fixtures/m1-host-validation/v1/production-subject.template.json",
-            "tests/fixtures/m1-host-validation/v1/self-test-subject.json",
-            "tests/fixtures/m1-host-validation/v1/execution-subject.template.json"
+            "tests/fixtures/m1-host-validation/v1/self-test-subject.json"
         };
         foreach (var path in paths)
         {
             PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(RepositoryPaths.ResolveConfined(root, path)));
         }
         ValidateProhibitedClaims(root);
-    }
-
-    private static void ValidateReviewedCommit(string root, ReviewRecord review, string bundleId)
-    {
-        EnsureNoGitGrafts(root, "HV202_REVIEWED_COMMIT_INVALID");
-        var lockPath = RepositoryPaths.ResolveConfined(root, LockRelativePath);
-        var artifactLock = CanonicalJson.DeserializeStrict<ArtifactLock>(
-            lockPath,
-            ManifestLimit,
-            requireCanonical: true);
-        var reviewedHead = review.ReviewedHead
-            ?? throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
-        if (artifactLock.BundleId != bundleId
-            || RunGit(root, ["cat-file", "-e", $"{reviewedHead}^{{commit}}"], captureOutput: false).ExitCode != 0
-            || RunGit(root, ["merge-base", "--is-ancestor", reviewedHead, "HEAD"], captureOutput: false).ExitCode != 0)
-        {
-            throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
-        }
-
-        foreach (var entry in artifactLock.Entries)
-        {
-            var result = RunGit(root, ["show", $"{reviewedHead}:{entry.Path}"], captureOutput: true);
-            if (result.ExitCode != 0 || CanonicalJson.Sha256(result.Output) != entry.Sha256)
-            {
-                throw new ProtocolException("HV203_REVIEWED_BUNDLE_MISMATCH");
-            }
-        }
-    }
-
-    private static void RequireAuthorizingBaseline(ProtocolManifest protocol)
-    {
-        if (protocol.Baseline.Disposition != "main-reachable")
-        {
-            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
-        }
-    }
-
-    private static void ValidateMainBaselineCommit(
-        string root,
-        BaselineIdentity baseline)
-    {
-        var mergeCommit = baseline.MergeCommit
-            ?? throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
-        if (RunGit(root, ["cat-file", "-e", $"{mergeCommit}^{{commit}}"], captureOutput: false).ExitCode != 0
-            || RunGit(
-                root,
-                ["merge-base", "--is-ancestor", baseline.Predecessor.MergeCommit, mergeCommit],
-                captureOutput: false).ExitCode != 0
-            || RunGit(root, ["merge-base", "--is-ancestor", mergeCommit, "HEAD"], captureOutput: false).ExitCode != 0)
-        {
-            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
-        }
-        var manifest = RunGit(
-            root,
-            ["show", $"{mergeCommit}:{baseline.ContractManifest}"],
-            captureOutput: true);
-        if (manifest.ExitCode != 0
-            || CanonicalJson.Sha256(manifest.Output)
-                != baseline.ContractManifestSha256)
-        {
-            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
-        }
     }
 
     private static void ValidatePredecessorBaselineCommit(
@@ -828,7 +748,7 @@ public static class BundleValidator
                 ["merge-base", "--is-ancestor", predecessor.MergeCommit, "HEAD"],
                 captureOutput: false).ExitCode != 0)
         {
-            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
+            throw new ProtocolException("HV246_BASELINE_PREDECESSOR_INVALID");
         }
 
         var manifest = RunGit(
@@ -839,7 +759,7 @@ public static class BundleValidator
             || CanonicalJson.Sha256(manifest.Output)
                 != predecessor.ContractManifestSha256)
         {
-            throw new ProtocolException("HV246_BASELINE_NOT_MAIN_REACHABLE");
+            throw new ProtocolException("HV246_BASELINE_PREDECESSOR_INVALID");
         }
     }
 
@@ -943,7 +863,7 @@ public static class BundleValidator
         }
 
         using var process = Process.Start(startInfo)
-            ?? throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
+            ?? throw new ProtocolException("HV249_GIT_OPERATION_INVALID");
         using var output = new MemoryStream();
         if (captureOutput)
         {
@@ -953,7 +873,7 @@ public static class BundleValidator
         process.WaitForExit();
         if (error.Length > 4096)
         {
-            throw new ProtocolException("HV202_REVIEWED_COMMIT_INVALID");
+            throw new ProtocolException("HV249_GIT_OPERATION_INVALID");
         }
         return (process.ExitCode, output.ToArray());
     }

@@ -212,10 +212,9 @@ public sealed class M1AuditCliContractTests
             meta.GetProperty("reconciliationGate").GetString()!;
         Assert.Contains("Issue #55", reconciliationGate, StringComparison.Ordinal);
         Assert.Contains("S1", reconciliationGate, StringComparison.Ordinal);
-        Assert.Contains(
-            "Host Validation promotion Task",
-            reconciliationGate,
-            StringComparison.Ordinal);
+        Assert.Contains("Issue #75", reconciliationGate, StringComparison.Ordinal);
+        Assert.Contains("exact content", reconciliationGate, StringComparison.Ordinal);
+        Assert.Contains("no post-merge mutation", reconciliationGate, StringComparison.Ordinal);
         Assert.Contains("Issue #41", reconciliationGate, StringComparison.Ordinal);
 
         var document = File.ReadAllText(DocPath);

@@ -8,11 +8,11 @@
     "networkClaimSetId",
     "reviewId",
     "sourceConfigurationId",
+    "commonManifestSha256",
     "validationAttempt",
     "finalization",
     "cells",
-    "outcome",
-    "supersedes"
+    "outcome"
   ],
   "properties": {
     "formatVersion": {
@@ -40,15 +40,6 @@
     "outcome": {
       "$ref": "#/$defs/outcome"
     },
-    "supersedes": {
-      "type": "array",
-      "maxItems": 64,
-      "uniqueItems": true,
-      "items": {
-        "type": "string",
-        "pattern": "^evidence\\.[0-9a-f]{64}$"
-      }
-    },
     "sourceConfigurationId": {
       "type": "string",
       "pattern": "^source\\.[0-9a-f]{64}$"
@@ -58,6 +49,10 @@
     },
     "finalization": {
       "$ref": "#/$defs/finalization"
+    },
+    "commonManifestSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     }
   },
   "additionalProperties": false,
@@ -66,7 +61,9 @@
       "type": "object",
       "required": [
         "cellId",
-        "evidenceSha256",
+        "cellManifestSha256",
+        "terminalKind",
+        "terminalEvidenceSha256",
         "outcome"
       ],
       "properties": {
@@ -76,7 +73,17 @@
             "windows-x64"
           ]
         },
-        "evidenceSha256": {
+        "cellManifestSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "terminalKind": {
+          "enum": [
+            "cell-evidence",
+            "incomplete-evidence"
+          ]
+        },
+        "terminalEvidenceSha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },

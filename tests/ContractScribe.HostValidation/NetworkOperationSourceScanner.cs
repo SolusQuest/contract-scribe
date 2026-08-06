@@ -38,13 +38,17 @@ public static partial class NetworkOperationSourceScanner
         {
             return false;
         }
-        var declared = materialization.BuiltArtifacts
+        var declared = materialization.ProductionArtifacts
+            .Concat(materialization.RuntimeDependencies)
             .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
             .Select(artifact => Path.GetFullPath(
                 RepositoryPaths.ResolveConfined(root, artifact.Path)))
             .ToArray();
-        var closure = BuildManagedClosure(declared, materialization.SelectedRuntime);
-        return closure.Any(HasForbiddenMemberReference);
+        _ = BuildManagedClosure(declared, materialization.SelectedRuntime);
+        return materialization.ProductionArtifacts
+            .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            .Select(artifact => RepositoryPaths.ResolveConfined(root, artifact.Path))
+            .Any(HasForbiddenMemberReference);
     }
 
     public static string SelectedRuntimeManifestIdentity(string selectedRuntime)

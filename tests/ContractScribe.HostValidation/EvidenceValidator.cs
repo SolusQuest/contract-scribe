@@ -2,62 +2,50 @@ namespace ContractScribe.HostValidation;
 
 public static class EvidenceValidator
 {
+    private sealed record ValidatedTerminal(
+        string CellId,
+        CellSubjectManifest Manifest,
+        string ManifestPath,
+        string TerminalKind,
+        string TerminalPath,
+        string Outcome,
+        CellEvidence? Cell,
+        IncompleteEvidence? Incomplete);
+
+    private sealed record ValidatedArtifactSet(
+        BundleContext Context,
+        ReviewRecord Review,
+        CommonSourceManifest Common,
+        HostValidationArtifactSet Paths,
+        IReadOnlyList<ValidatedTerminal> Cells);
+
     public static CellEvidence ValidateCell(
         string root,
         string evidencePath,
         string? reviewPath,
-        string subjectManifestPath)
-    {
-        var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
-        var review = BundleValidator.ValidateReview(
-            context.Root,
-            reviewPath ?? BundleValidator.ReviewRelativePath,
-            context.Lock.BundleId);
-        var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifestPath);
-        SchemaValidation.Validate(
+        string commonManifestPath,
+        string cellManifestPath) =>
+        ValidateCellCore(
+            BundleValidator.Validate(root, requireReview: true, reviewPath),
             evidencePath,
-            RepositoryPaths.ResolveConfined(context.Root, "schemas/validation/m1-host-validation-cell-evidence-v1.schema.json"),
-            requireCanonical: true);
-        var evidence = CanonicalJson.DeserializeStrict<CellEvidence>(
-            evidencePath,
-            context.Protocol.ExecutionContract.EvidenceByteLimit,
-            requireCanonical: true);
-        if (evidence.BundleId != context.Lock.BundleId
-            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId)
-        {
-            throw new ProtocolException("HV150_EVIDENCE_BUNDLE_MISMATCH");
-        }
-        if (evidence.ReviewId != review.ReviewId)
-        {
-            throw new ProtocolException("HV151_EVIDENCE_REVIEW_MISMATCH");
-        }
-        if (evidence.SourceConfigurationId != subject.SourceConfiguration.SourceConfigurationId
-            || evidence.SubjectManifestSha256 != CanonicalJson.Sha256File(subjectManifestPath)
-            || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
-                .SequenceEqual(CanonicalJson.SerializeCanonical(subject.ValidationAttempt)))
-        {
-            throw new ProtocolException("HV212_EVIDENCE_SUBJECT_BINDING");
-        }
-
-        ValidateCellSemantics(context, subject, evidence);
-        PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(evidencePath));
-        return evidence;
-    }
+            reviewPath,
+            commonManifestPath,
+            cellManifestPath,
+            allowMaterializationDrift: false);
 
     public static void ValidateCellSemantics(
         BundleContext context,
-        ExecutionSubjectManifest subject,
+        CommonSourceManifest common,
+        CellSubjectManifest cellManifest,
         CellEvidence evidence)
     {
-        var executionCell = subject.Cells.SingleOrDefault(cell =>
-            cell.Materialization.CellId == evidence.Cell.CellId)
-            ?? throw new ProtocolException("HV152_EVIDENCE_CELL_UNKNOWN");
-        if (!CanonicalJson.SerializeCanonical(executionCell.Materialization).AsSpan()
-            .SequenceEqual(CanonicalJson.SerializeCanonical(evidence.Cell)))
+        var executionCell = cellManifest.Subject;
+        if (executionCell.Materialization.CellId != evidence.Cell.CellId
+            || !CanonicalJson.SerializeCanonical(executionCell.Materialization).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(evidence.Cell)))
         {
             throw new ProtocolException("HV153_EVIDENCE_MATERIALIZATION_MISMATCH");
         }
-
         ValidateRunSet(context, evidence);
         var vectors = context.Vectors.Vectors.ToDictionary(vector => vector.VectorId, StringComparer.Ordinal);
         var fixtures = executionCell.Fixtures.ToDictionary(fixture => fixture.VectorId, StringComparer.Ordinal);
@@ -70,7 +58,7 @@ public static class EvidenceValidator
                 vector,
                 run,
                 fixture,
-                subject.SourceConfiguration,
+                common.SourceConfiguration,
                 executionCell.Materialization);
             if (run.ObservedObservation != derived.Observation
                 || run.ObservedEnforcementClass != derived.EnforcementClass
@@ -92,32 +80,50 @@ public static class EvidenceValidator
         IReadOnlyList<CellEvidence> cells)
     {
         ValidateCellSet(context, cells);
-        ValidateSharedIdentities(cells);
+        ValidateSharedCellIdentities(cells);
         ValidateCrossCellEquality(context, cells);
     }
 
     public static void ValidateIncompleteSemantics(
         BundleContext context,
         ReviewRecord review,
-        ExecutionSubjectManifest subject,
-        IncompleteEvidence evidence) =>
-        ValidateIncompleteBinding(context, review, subject, evidence, requireCurrentAttempt: true);
+        CommonSourceManifest common,
+        CellSubjectManifest cell,
+        IncompleteEvidence evidence)
+    {
+        if (evidence.BundleId != context.Lock.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
+            || evidence.ReviewId != review.ReviewId
+            || evidence.SourceConfigurationId != common.SourceConfiguration.SourceConfigurationId
+            || evidence.CommonManifestSha256
+                != CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(common))
+            || evidence.CellManifestSha256
+                != CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(cell))
+            || evidence.CellId != cell.CellId
+            || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(common.ValidationAttempt))
+            || !evidence.Immutable
+            || evidence.DiagnosticCodes.Count != 1
+            || evidence.Classification != IncompleteEvidenceWriter.Classify(evidence.DiagnosticCodes[0]))
+        {
+            throw new ProtocolException("HV158_INCOMPLETE_EVIDENCE_BINDING");
+        }
+    }
 
     public static void ValidateAggregateDerivation(
         AggregateEvidence evidence,
         CellEvidence baseline,
         IReadOnlyList<CellAggregate> expectedCells,
-        IReadOnlyList<string> expectedSupersedes,
         string expectedOutcome)
     {
         if (evidence.BundleId != baseline.BundleId
             || evidence.ReviewId != baseline.ReviewId
             || evidence.SourceConfigurationId != baseline.SourceConfigurationId
+            || evidence.CommonManifestSha256 != baseline.CommonManifestSha256
             || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
                 .SequenceEqual(CanonicalJson.SerializeCanonical(baseline.ValidationAttempt))
             || !CanonicalJson.SerializeCanonical(evidence.Cells).AsSpan()
                 .SequenceEqual(CanonicalJson.SerializeCanonical(expectedCells))
-            || !evidence.Supersedes.SequenceEqual(expectedSupersedes, StringComparer.Ordinal)
             || evidence.Outcome != expectedOutcome)
         {
             throw new ProtocolException("HV214_AGGREGATE_DERIVATION_MISMATCH");
@@ -128,191 +134,144 @@ public static class EvidenceValidator
         string root,
         string evidencePath,
         string? reviewPath,
-        string subjectManifestPath)
+        string commonManifestPath,
+        string cellManifestPath)
     {
         var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
         var review = BundleValidator.ValidateReview(
             context.Root,
             reviewPath ?? BundleValidator.ReviewRelativePath,
             context.Lock.BundleId);
-        var subject = CellExecutor.ValidateSubjectManifest(
+        var manifests = CellExecutor.ValidateSubjectManifests(
             context,
-            subjectManifestPath,
+            commonManifestPath,
+            cellManifestPath,
             allowMaterializationDrift: true);
-        SchemaValidation.Validate(
+        return ValidateIncompleteCore(
+            context,
+            review,
+            manifests,
             evidencePath,
-            RepositoryPaths.ResolveConfined(context.Root, "schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json"),
-            requireCanonical: true);
-        var evidence = CanonicalJson.DeserializeStrict<IncompleteEvidence>(
-            evidencePath,
-            context.Protocol.ExecutionContract.EvidenceByteLimit,
-            requireCanonical: true);
-        ValidateIncompleteBinding(context, review, subject, evidence, requireCurrentAttempt: true);
-        PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(evidencePath));
-        return evidence;
+            commonManifestPath,
+            cellManifestPath);
     }
 
     public static AggregateEvidence Aggregate(
         string root,
-        IReadOnlyList<string> cellEvidencePaths,
+        string artifactRoot,
         string outputPath,
         string? reviewPath,
-        string subjectManifestPath,
-        AggregateFinalizationIdentity finalization,
-        IReadOnlyList<string> supersededEvidencePaths)
+        string evidencePublicationBaseRevision)
     {
-        var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
-        var cells = cellEvidencePaths
-            .Select(path => ValidateCell(root, path, reviewPath, subjectManifestPath))
-            .ToArray();
-        ValidateCellSet(context, cells);
-        ValidateSharedIdentities(cells);
-        ValidateCrossCellEquality(context, cells);
-        ValidateFinalization(finalization, cells[0].ValidationAttempt, cells);
-        var review = BundleValidator.ValidateReview(
-            context.Root,
-            reviewPath ?? BundleValidator.ReviewRelativePath,
-            context.Lock.BundleId);
-        var subject = CellExecutor.ValidateSubjectManifest(
-            context,
-            subjectManifestPath,
-            allowMaterializationDrift: true);
-        var supersedes = ValidateSupersedes(
-            supersededEvidencePaths,
-            context,
-            review,
-            subject,
-            cells[0].ValidationAttempt);
+        var validated = ValidateArtifactSet(root, artifactRoot, reviewPath);
+        var finalization = new AggregateFinalizationIdentity(
+            DeriveMatrixResult(validated.Cells),
+            evidencePublicationBaseRevision);
+        ValidateFinalization(finalization, validated.Common.ValidationAttempt, validated.Cells);
         var outcome = SelectOutcome(
-            context.Protocol.Taxonomies.ValidationPrecedence,
-            cells.Select(cell => cell.Outcome));
-        var evidenceHashes = cells
-            .Select((cell, index) => KeyValuePair.Create(
-                cell.Cell.CellId,
-                CanonicalJson.Sha256File(cellEvidencePaths[index])))
-            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            validated.Context.Protocol.Taxonomies.ValidationPrecedence,
+            validated.Cells.Select(cell => cell.Outcome));
         var aggregate = new AggregateEvidence(
             "contractscribe-m1-host-validation-aggregate-evidence-v1",
-            cells[0].BundleId,
+            validated.Common.BundleId,
             NetworkClaimSetRegistry.ClaimSetId,
-            cells[0].ReviewId,
-            cells[0].SourceConfigurationId,
-            cells[0].ValidationAttempt,
+            validated.Review.ReviewId,
+            validated.Common.SourceConfiguration.SourceConfigurationId,
+            CanonicalJson.Sha256File(validated.Paths.CommonManifestPath),
+            validated.Common.ValidationAttempt,
             finalization,
-            cells.OrderBy(cell => cell.Cell.CellId, StringComparer.Ordinal)
-                .Select(cell => new CellAggregate(
-                    cell.Cell.CellId,
-                    evidenceHashes[cell.Cell.CellId],
-                    cell.Outcome))
-                .ToArray(),
-            outcome,
-            supersedes);
+            ExpectedCellAggregates(validated.Cells),
+            outcome);
         CanonicalJson.WriteCanonical(outputPath, aggregate);
-        _ = ValidateAggregate(
-            root,
-            outputPath,
-            cellEvidencePaths,
-            reviewPath,
-            subjectManifestPath,
-            supersededEvidencePaths);
+        _ = ValidateAggregate(root, outputPath, artifactRoot, reviewPath);
         return aggregate;
     }
 
     public static AggregateEvidence ValidateAggregate(
         string root,
         string evidencePath,
-        IReadOnlyList<string> cellEvidencePaths,
-        string? reviewPath,
-        string subjectManifestPath,
-        IReadOnlyList<string> supersededEvidencePaths)
+        string artifactRoot,
+        string? reviewPath)
     {
-        var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
+        var validated = ValidateArtifactSet(root, artifactRoot, reviewPath);
         SchemaValidation.Validate(
             evidencePath,
-            RepositoryPaths.ResolveConfined(context.Root, "schemas/validation/m1-host-validation-aggregate-evidence-v1.schema.json"),
+            RepositoryPaths.ResolveConfined(
+                validated.Context.Root,
+                "schemas/validation/m1-host-validation-aggregate-evidence-v1.schema.json"),
             requireCanonical: true);
         var evidence = CanonicalJson.DeserializeStrict<AggregateEvidence>(
             evidencePath,
-            context.Protocol.ExecutionContract.EvidenceByteLimit,
+            validated.Context.Protocol.ExecutionContract.EvidenceByteLimit,
             requireCanonical: true);
-        var cells = cellEvidencePaths
-            .Select(path => ValidateCell(root, path, reviewPath, subjectManifestPath))
-            .ToArray();
-        ValidateCellSet(context, cells);
-        ValidateSharedIdentities(cells);
-        ValidateCrossCellEquality(context, cells);
-        ValidateFinalization(evidence.Finalization, cells[0].ValidationAttempt, cells);
-        var review = BundleValidator.ValidateReview(
-            context.Root,
-            reviewPath ?? BundleValidator.ReviewRelativePath,
-            context.Lock.BundleId);
-        var subject = CellExecutor.ValidateSubjectManifest(
-            context,
-            subjectManifestPath,
-            allowMaterializationDrift: true);
-        var supersedes = ValidateSupersedes(
-            supersededEvidencePaths,
-            context,
-            review,
-            subject,
-            cells[0].ValidationAttempt);
-        var expectedAggregates = cells
-            .Select((cell, index) => new CellAggregate(
-                cell.Cell.CellId,
-                CanonicalJson.Sha256File(cellEvidencePaths[index]),
-                cell.Outcome))
-            .OrderBy(cell => cell.CellId, StringComparer.Ordinal)
-            .ToArray();
-        ValidateAggregateDerivation(
-            evidence,
-            cells[0],
-            expectedAggregates,
-            supersedes,
-            SelectOutcome(
-                context.Protocol.Taxonomies.ValidationPrecedence,
-                cells.Select(cell => cell.Outcome)));
+        ValidateFinalization(evidence.Finalization, validated.Common.ValidationAttempt, validated.Cells);
+        var expectedOutcome = SelectOutcome(
+            validated.Context.Protocol.Taxonomies.ValidationPrecedence,
+            validated.Cells.Select(cell => cell.Outcome));
+        if (evidence.FormatVersion != "contractscribe-m1-host-validation-aggregate-evidence-v1"
+            || evidence.BundleId != validated.Common.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
+            || evidence.ReviewId != validated.Review.ReviewId
+            || evidence.SourceConfigurationId != validated.Common.SourceConfiguration.SourceConfigurationId
+            || evidence.CommonManifestSha256 != CanonicalJson.Sha256File(validated.Paths.CommonManifestPath)
+            || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(validated.Common.ValidationAttempt))
+            || !CanonicalJson.SerializeCanonical(evidence.Cells).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(ExpectedCellAggregates(validated.Cells)))
+            || evidence.Outcome != expectedOutcome)
+        {
+            throw new ProtocolException("HV214_AGGREGATE_DERIVATION_MISMATCH");
+        }
         PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(evidencePath));
         return evidence;
+    }
+
+    public static AggregateEvidence RequirePassingAggregate(
+        string root,
+        string aggregatePath,
+        string artifactRoot,
+        string? reviewPath)
+    {
+        var aggregate = ValidateAggregate(root, aggregatePath, artifactRoot, reviewPath);
+        if (aggregate.Outcome != "passed"
+            || aggregate.Cells.Any(cell =>
+                cell.TerminalKind != "cell-evidence" || cell.Outcome != "passed"))
+        {
+            throw new ProtocolException("HV252_AGGREGATE_NOT_PASSING");
+        }
+        return aggregate;
     }
 
     public static EvidencePublicationRecord ValidatePublicationRecord(
         string root,
         string recordPath,
         string aggregatePath,
-        IReadOnlyList<string> cellEvidencePaths,
-        string? reviewPath,
-        string subjectManifestPath,
-        IReadOnlyList<string> supersededEvidencePaths)
+        string artifactRoot,
+        string? reviewPath)
     {
-        var aggregate = ValidateAggregate(
-            root,
-            aggregatePath,
-            cellEvidencePaths,
-            reviewPath,
-            subjectManifestPath,
-            supersededEvidencePaths);
-        var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
+        var aggregate = ValidateAggregate(root, aggregatePath, artifactRoot, reviewPath);
+        var validated = ValidateArtifactSet(root, artifactRoot, reviewPath);
         SchemaValidation.Validate(
             recordPath,
             RepositoryPaths.ResolveConfined(
-                context.Root,
+                validated.Context.Root,
                 "schemas/validation/m1-host-validation-publication-record-v1.schema.json"),
             requireCanonical: true);
         var record = CanonicalJson.DeserializeStrict<EvidencePublicationRecord>(
             recordPath,
-            context.Protocol.ExecutionContract.EvidenceByteLimit,
+            validated.Context.Protocol.ExecutionContract.EvidenceByteLimit,
             requireCanonical: true);
-        var expectedEvidence = cellEvidencePaths
+        var expectedEvidence = validated.Cells
+            .Select(cell => cell.TerminalPath)
             .Append(aggregatePath)
             .Select(path => new ArtifactIdentity(
-                RepositoryPaths.ToRepositoryRelative(context.Root, Path.GetFullPath(path)),
+                RepositoryPaths.ToRepositoryRelative(validated.Context.Root, Path.GetFullPath(path)),
                 CanonicalJson.Sha256File(path)))
             .OrderBy(identity => identity.Path, StringComparer.Ordinal)
             .ToArray();
         if (record.FormatVersion != "contractscribe-m1-host-validation-publication-record-v1"
             || record.BundleId != aggregate.BundleId
             || record.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
-            || aggregate.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
             || record.ReviewId != aggregate.ReviewId
             || record.SourceConfigurationId != aggregate.SourceConfigurationId
             || !CanonicalJson.SerializeCanonical(record.ValidationAttempt).AsSpan()
@@ -324,15 +283,15 @@ public static class EvidenceValidator
             throw new ProtocolException("HV227_PUBLICATION_RECORD_INVALID");
         }
         BundleValidator.ValidateCommitAncestry(
-            context.Root,
+            validated.Context.Root,
             record.ValidationAttempt.HostRevision,
             record.EvidenceRecordRevision);
         BundleValidator.ValidateCommitAncestry(
-            context.Root,
+            validated.Context.Root,
             record.ValidationAttempt.ValidationExecutionSha,
             record.EvidenceRecordRevision);
         BundleValidator.ValidateCommitBoundArtifacts(
-            context.Root,
+            validated.Context.Root,
             record.EvidenceRecordRevision,
             record.PublishedEvidence);
         PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(recordPath));
@@ -345,9 +304,7 @@ public static class EvidenceValidator
         string sourcePath,
         string outputPath,
         string? reviewPath,
-        string subjectManifestPath,
-        IReadOnlyList<string> cellEvidencePaths,
-        IReadOnlyList<string> supersededEvidencePaths,
+        string artifactRoot,
         string? aggregateEvidencePath = null)
     {
         var expectedFileName = kind switch
@@ -362,23 +319,27 @@ public static class EvidenceValidator
         {
             throw new ProtocolException("HV171_PUBLIC_ALLOWLIST");
         }
-
+        var validated = ValidateArtifactSet(root, artifactRoot, reviewPath);
         switch (kind)
         {
             case "cell":
-                _ = ValidateCell(root, sourcePath, reviewPath, subjectManifestPath);
-                break;
-            case "aggregate":
-                _ = ValidateAggregate(
-                    root,
-                    sourcePath,
-                    cellEvidencePaths,
-                    reviewPath,
-                    subjectManifestPath,
-                    supersededEvidencePaths);
+                if (!validated.Cells.Any(cell =>
+                    cell.TerminalKind == "cell-evidence"
+                    && SamePath(cell.TerminalPath, sourcePath)))
+                {
+                    throw new ProtocolException("HV250_ARTIFACT_SET_INVALID");
+                }
                 break;
             case "incomplete":
-                _ = ValidateIncomplete(root, sourcePath, reviewPath, subjectManifestPath);
+                if (!validated.Cells.Any(cell =>
+                    cell.TerminalKind == "incomplete-evidence"
+                    && SamePath(cell.TerminalPath, sourcePath)))
+                {
+                    throw new ProtocolException("HV250_ARTIFACT_SET_INVALID");
+                }
+                break;
+            case "aggregate":
+                _ = ValidateAggregate(root, sourcePath, artifactRoot, reviewPath);
                 break;
             case "publication-record":
                 _ = ValidatePublicationRecord(
@@ -386,18 +347,213 @@ public static class EvidenceValidator
                     sourcePath,
                     aggregateEvidencePath
                         ?? throw new ProtocolException("HV173_PUBLIC_COMPANION_MISSING"),
-                    cellEvidencePaths,
-                    reviewPath,
-                    subjectManifestPath,
-                    supersededEvidencePaths);
+                    artifactRoot,
+                    reviewPath);
                 break;
         }
         var bytes = File.ReadAllBytes(sourcePath);
         PublicSafetyScanner.EnsureSafeBytes(bytes);
-        var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath))
-            ?? throw new ProtocolException("HV172_PUBLIC_OUTPUT_INVALID");
-        Directory.CreateDirectory(directory);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))
+            ?? throw new ProtocolException("HV172_PUBLIC_OUTPUT_INVALID"));
         CanonicalJson.WriteBytesAtomic(outputPath, bytes);
+    }
+
+    private static CellEvidence ValidateCellCore(
+        BundleContext context,
+        string evidencePath,
+        string? reviewPath,
+        string commonManifestPath,
+        string cellManifestPath,
+        bool allowMaterializationDrift)
+    {
+        var review = BundleValidator.ValidateReview(
+            context.Root,
+            reviewPath ?? BundleValidator.ReviewRelativePath,
+            context.Lock.BundleId);
+        var manifests = CellExecutor.ValidateSubjectManifests(
+            context,
+            commonManifestPath,
+            cellManifestPath,
+            allowMaterializationDrift);
+        SchemaValidation.Validate(
+            evidencePath,
+            RepositoryPaths.ResolveConfined(
+                context.Root,
+                "schemas/validation/m1-host-validation-cell-evidence-v1.schema.json"),
+            requireCanonical: true);
+        var evidence = CanonicalJson.DeserializeStrict<CellEvidence>(
+            evidencePath,
+            context.Protocol.ExecutionContract.EvidenceByteLimit,
+            requireCanonical: true);
+        if (evidence.FormatVersion != "contractscribe-m1-host-validation-cell-evidence-v1"
+            || evidence.BundleId != context.Lock.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId)
+        {
+            throw new ProtocolException("HV150_EVIDENCE_BUNDLE_MISMATCH");
+        }
+        if (evidence.ReviewId != review.ReviewId)
+        {
+            throw new ProtocolException("HV151_EVIDENCE_REVIEW_MISMATCH");
+        }
+        if (evidence.SourceConfigurationId != manifests.Common.SourceConfiguration.SourceConfigurationId
+            || evidence.CommonManifestSha256 != CanonicalJson.Sha256File(commonManifestPath)
+            || evidence.CellManifestSha256 != CanonicalJson.Sha256File(cellManifestPath)
+            || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(manifests.Common.ValidationAttempt)))
+        {
+            throw new ProtocolException("HV212_EVIDENCE_SUBJECT_BINDING");
+        }
+        ValidateCellSemantics(context, manifests.Common, manifests.Cell, evidence);
+        PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(evidencePath));
+        return evidence;
+    }
+
+    private static IncompleteEvidence ValidateIncompleteCore(
+        BundleContext context,
+        ReviewRecord review,
+        SubjectManifestSet manifests,
+        string evidencePath,
+        string commonManifestPath,
+        string cellManifestPath)
+    {
+        SchemaValidation.Validate(
+            evidencePath,
+            RepositoryPaths.ResolveConfined(
+                context.Root,
+                "schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json"),
+            requireCanonical: true);
+        var evidence = CanonicalJson.DeserializeStrict<IncompleteEvidence>(
+            evidencePath,
+            context.Protocol.ExecutionContract.EvidenceByteLimit,
+            requireCanonical: true);
+        if (evidence.FormatVersion != "contractscribe-m1-host-validation-incomplete-evidence-v1"
+            || evidence.BundleId != context.Lock.BundleId
+            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
+            || evidence.ReviewId != review.ReviewId
+            || evidence.SourceConfigurationId != manifests.Common.SourceConfiguration.SourceConfigurationId
+            || evidence.CommonManifestSha256 != CanonicalJson.Sha256File(commonManifestPath)
+            || evidence.CellManifestSha256 != CanonicalJson.Sha256File(cellManifestPath)
+            || evidence.CellId != manifests.Cell.CellId
+            || !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(manifests.Common.ValidationAttempt))
+            || !evidence.Immutable
+            || evidence.DiagnosticCodes.Count != 1
+            || evidence.Classification != IncompleteEvidenceWriter.Classify(evidence.DiagnosticCodes[0]))
+        {
+            throw new ProtocolException("HV158_INCOMPLETE_EVIDENCE_BINDING");
+        }
+        PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(evidencePath));
+        return evidence;
+    }
+
+    private static ValidatedArtifactSet ValidateArtifactSet(
+        string root,
+        string artifactRoot,
+        string? reviewPath)
+    {
+        var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
+        var review = BundleValidator.ValidateReview(
+            context.Root,
+            reviewPath ?? BundleValidator.ReviewRelativePath,
+            context.Lock.BundleId);
+        var paths = HostValidationArtifactSet.Load(context, artifactRoot);
+        var common = CellExecutor.ValidateCommonManifest(
+            context,
+            paths.CommonManifestPath,
+            allowMaterializationDrift: true);
+        var terminals = new List<ValidatedTerminal>();
+        foreach (var artifact in paths.Cells)
+        {
+            var manifests = CellExecutor.ValidateSubjectManifests(
+                context,
+                paths.CommonManifestPath,
+                artifact.CellManifestPath,
+                allowMaterializationDrift: true);
+            if (manifests.Cell.CellId != artifact.CellId)
+            {
+                throw new ProtocolException("HV250_ARTIFACT_SET_INVALID");
+            }
+            if (artifact.TerminalKind == "cell-evidence")
+            {
+                var cell = ValidateCellCore(
+                    context,
+                    artifact.TerminalPath,
+                    reviewPath,
+                    paths.CommonManifestPath,
+                    artifact.CellManifestPath,
+                    allowMaterializationDrift: true);
+                terminals.Add(new(
+                    artifact.CellId,
+                    manifests.Cell,
+                    artifact.CellManifestPath,
+                    artifact.TerminalKind,
+                    artifact.TerminalPath,
+                    cell.Outcome,
+                    cell,
+                    null));
+            }
+            else
+            {
+                var incomplete = ValidateIncompleteCore(
+                    context,
+                    review,
+                    manifests,
+                    artifact.TerminalPath,
+                    paths.CommonManifestPath,
+                    artifact.CellManifestPath);
+                terminals.Add(new(
+                    artifact.CellId,
+                    manifests.Cell,
+                    artifact.CellManifestPath,
+                    artifact.TerminalKind,
+                    artifact.TerminalPath,
+                    incomplete.Classification,
+                    null,
+                    incomplete));
+            }
+        }
+        ValidateSharedTerminalIdentities(common, review.ReviewId, terminals);
+        var completeCells = terminals.Where(cell => cell.Cell is not null).Select(cell => cell.Cell!).ToArray();
+        if (completeCells.Length == context.Protocol.RequiredCells.Count)
+        {
+            ValidateAggregateCellSemantics(context, completeCells);
+        }
+        return new(context, review, common, paths, terminals);
+    }
+
+    private static IReadOnlyList<CellAggregate> ExpectedCellAggregates(
+        IReadOnlyList<ValidatedTerminal> cells) =>
+        cells.OrderBy(cell => cell.CellId, StringComparer.Ordinal)
+            .Select(cell => new CellAggregate(
+                cell.CellId,
+                CanonicalJson.Sha256File(cell.ManifestPath),
+                cell.TerminalKind,
+                CanonicalJson.Sha256File(cell.TerminalPath),
+                cell.Outcome))
+            .ToArray();
+
+    private static void ValidateSharedTerminalIdentities(
+        CommonSourceManifest common,
+        string expectedReviewId,
+        IReadOnlyList<ValidatedTerminal> cells)
+    {
+        foreach (var terminal in cells)
+        {
+            var bundleId = terminal.Cell?.BundleId ?? terminal.Incomplete!.BundleId;
+            var reviewId = terminal.Cell?.ReviewId ?? terminal.Incomplete!.ReviewId;
+            var sourceId = terminal.Cell?.SourceConfigurationId ?? terminal.Incomplete!.SourceConfigurationId;
+            var commonSha = terminal.Cell?.CommonManifestSha256 ?? terminal.Incomplete!.CommonManifestSha256;
+            var attempt = terminal.Cell?.ValidationAttempt ?? terminal.Incomplete!.ValidationAttempt;
+            if (bundleId != common.BundleId
+                || reviewId != expectedReviewId
+                || sourceId != common.SourceConfiguration.SourceConfigurationId
+                || commonSha != terminal.Manifest.CommonManifestSha256
+                || !CanonicalJson.SerializeCanonical(attempt).AsSpan()
+                    .SequenceEqual(CanonicalJson.SerializeCanonical(common.ValidationAttempt)))
+            {
+                throw new ProtocolException("HV160_MIXED_EXECUTION_ATTEMPT");
+            }
+        }
     }
 
     private static void ValidateRunSet(BundleContext context, CellEvidence evidence)
@@ -466,9 +622,7 @@ public static class EvidenceValidator
         }
     }
 
-    private static void ValidateCrossCellEquality(
-        BundleContext context,
-        IReadOnlyList<CellEvidence> cells)
+    private static void ValidateCrossCellEquality(BundleContext context, IReadOnlyList<CellEvidence> cells)
     {
         foreach (var vector in context.Vectors.Vectors.Where(vector => vector.CrossCellEquality))
         {
@@ -487,8 +641,7 @@ public static class EvidenceValidator
     {
         var mismatch = vector.EqualityFields
             .Select(field => runs.Select(run => EqualityValue(field, run)).ToArray())
-            .Any(values =>
-                values.Any(string.IsNullOrWhiteSpace)
+            .Any(values => values.Any(string.IsNullOrWhiteSpace)
                 || values.Distinct(StringComparer.Ordinal).Count() != 1);
         if (mismatch)
         {
@@ -510,8 +663,7 @@ public static class EvidenceValidator
             "subject.executionOutcome" => run.Subject?.ExecutionOutcome,
             "subject.failureStage" => run.Subject?.FailureStage,
             "subject.failureCode" => run.Subject?.FailureCode,
-            "subject.hostFacts.toolchainSelectionState" =>
-                run.Subject?.HostFacts?.ToolchainSelectionState,
+            "subject.hostFacts.toolchainSelectionState" => run.Subject?.HostFacts?.ToolchainSelectionState,
             "subject.processStart" => run.Subject?.ProcessStart ?? run.Process.ProcessStart,
             "subject.processTermination" => run.Subject?.ProcessTermination ?? run.Process.ProcessTermination,
             "subject.terminalState" => run.Subject?.TerminalState ?? "not-entered",
@@ -532,7 +684,7 @@ public static class EvidenceValidator
         }
     }
 
-    private static void ValidateSharedIdentities(IReadOnlyList<CellEvidence> cells)
+    private static void ValidateSharedCellIdentities(IReadOnlyList<CellEvidence> cells)
     {
         var first = cells[0];
         if (cells.Skip(1).Any(cell =>
@@ -540,7 +692,7 @@ public static class EvidenceValidator
             || cell.NetworkClaimSetId != first.NetworkClaimSetId
             || cell.ReviewId != first.ReviewId
             || cell.SourceConfigurationId != first.SourceConfigurationId
-            || cell.SubjectManifestSha256 != first.SubjectManifestSha256
+            || cell.CommonManifestSha256 != first.CommonManifestSha256
             || !CanonicalJson.SerializeCanonical(cell.ValidationAttempt).AsSpan()
                 .SequenceEqual(CanonicalJson.SerializeCanonical(first.ValidationAttempt))))
         {
@@ -551,125 +703,33 @@ public static class EvidenceValidator
     private static void ValidateFinalization(
         AggregateFinalizationIdentity finalization,
         ValidationAttemptIdentity attempt,
-        IReadOnlyList<CellEvidence> cells)
+        IReadOnlyList<ValidatedTerminal> cells)
     {
-        var expectedMatrixResult = cells.All(cell => cell.Outcome == "passed")
-            ? "passed"
-            : cells.Any(cell => cell.Outcome is "protocol-failure" or "subject-nonconformance")
-                ? "failed"
-                : "incomplete";
-        if (finalization.MatrixResult != expectedMatrixResult
-            || finalization.EvidencePublicationBaseRevision.Length != 40
-            || !finalization.EvidencePublicationBaseRevision.All(Uri.IsHexDigit)
+        if (finalization.MatrixResult != DeriveMatrixResult(cells)
             || finalization.EvidencePublicationBaseRevision != attempt.ValidationExecutionSha)
         {
             throw new ProtocolException("HV218_FINALIZATION_IDENTITY_INVALID");
         }
     }
 
-    private static IReadOnlyList<string> ValidateSupersedes(
-        IReadOnlyList<string> evidencePaths,
-        BundleContext context,
-        ReviewRecord review,
-        ExecutionSubjectManifest subject,
-        ValidationAttemptIdentity currentAttempt)
-    {
-        var identities = new List<string>();
-        foreach (var path in evidencePaths)
-        {
-            SchemaValidation.Validate(
-                path,
-                RepositoryPaths.ResolveConfined(
-                    context.Root,
-                    "schemas/validation/m1-host-validation-incomplete-evidence-v1.schema.json"),
-                requireCanonical: true);
-            var evidence = CanonicalJson.DeserializeStrict<IncompleteEvidence>(
-                path,
-                context.Protocol.ExecutionContract.EvidenceByteLimit,
-                requireCanonical: true);
-            ValidateIncompleteBinding(
-                context,
-                review,
-                subject,
-                evidence,
-                requireCurrentAttempt: false);
-            ValidateSupersededAttemptIdentity(
-                context.Root,
-                subject.SourceConfiguration,
-                currentAttempt,
-                evidence.ValidationAttempt);
-            PublicSafetyScanner.EnsureSafeBytes(File.ReadAllBytes(path));
-            identities.Add($"evidence.{CanonicalJson.Sha256File(path)}");
-        }
-        var ordered = identities.Order(StringComparer.Ordinal).ToArray();
-        if (ordered.Distinct(StringComparer.Ordinal).Count() != ordered.Length)
-        {
-            throw new ProtocolException("HV221_SUPERSEDES_INVALID");
-        }
-        return ordered;
-    }
+    private static string DeriveMatrixResult(IReadOnlyList<ValidatedTerminal> cells) =>
+        cells.All(cell => cell.TerminalKind == "cell-evidence" && cell.Outcome == "passed")
+            ? "passed"
+            : cells.Any(cell => cell.Outcome is
+                "protected-input-invalidated" or "protocol-failure" or "subject-nonconformance")
+                ? "failed"
+                : "incomplete";
 
-    public static void ValidateSupersededAttemptIdentity(
-        string root,
-        SubjectSourceConfiguration source,
-        ValidationAttemptIdentity current,
-        ValidationAttemptIdentity candidate)
+    private static string SelectOutcome(IReadOnlyList<string> precedence, IEnumerable<string> outcomes)
     {
-        if (candidate.HostRevision != source.HostRevision
-            || candidate.Workflow != source.Workflow.Path
-            || candidate.WorkflowRevision != source.Workflow.Sha256
-            || !IsEarlierAttempt(candidate, current))
-        {
-            throw new ProtocolException("HV221_SUPERSEDES_INVALID");
-        }
-        BundleValidator.ValidateCommitAncestry(
-            root,
-            candidate.HostRevision,
-            candidate.ValidationExecutionSha);
-    }
-
-    private static void ValidateIncompleteBinding(
-        BundleContext context,
-        ReviewRecord review,
-        ExecutionSubjectManifest subject,
-        IncompleteEvidence evidence,
-        bool requireCurrentAttempt)
-    {
-        if (evidence.BundleId != context.Lock.BundleId
-            || evidence.NetworkClaimSetId != NetworkClaimSetRegistry.ClaimSetId
-            || evidence.ReviewId != review.ReviewId
-            || evidence.SourceConfigurationId != subject.SourceConfiguration.SourceConfigurationId
-            || requireCurrentAttempt
-                && !CanonicalJson.SerializeCanonical(evidence.ValidationAttempt).AsSpan()
-                    .SequenceEqual(CanonicalJson.SerializeCanonical(subject.ValidationAttempt))
-            || !evidence.Immutable
-            || evidence.DiagnosticCodes.Count == 0
-            || evidence.Classification != IncompleteEvidenceWriter.Classify(evidence.DiagnosticCodes[0]))
-        {
-            throw new ProtocolException("HV158_INCOMPLETE_EVIDENCE_BINDING");
-        }
-    }
-
-    private static bool IsEarlierAttempt(
-        ValidationAttemptIdentity candidate,
-        ValidationAttemptIdentity current)
-    {
-        if (!ulong.TryParse(candidate.WorkflowRunId, out var candidateRun)
-            || !ulong.TryParse(current.WorkflowRunId, out var currentRun)
-            || candidate.ValidationExecutionSha == current.ValidationExecutionSha)
-        {
-            return false;
-        }
-        return candidateRun < currentRun
-            || candidateRun == currentRun && candidate.RunAttempt < current.RunAttempt;
-    }
-
-    private static string SelectOutcome(
-        IReadOnlyList<string> precedence,
-        IEnumerable<string> cellOutcomes)
-    {
-        var outcomes = cellOutcomes.ToHashSet(StringComparer.Ordinal);
-        return precedence.FirstOrDefault(outcomes.Contains)
+        var set = outcomes.ToHashSet(StringComparer.Ordinal);
+        return precedence.FirstOrDefault(set.Contains)
             ?? throw new ProtocolException("HV162_AGGREGATE_OUTCOME_UNKNOWN");
     }
+
+    private static bool SamePath(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }

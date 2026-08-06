@@ -27,30 +27,16 @@
       "required": [
         "coordinatingIssue",
         "contractRevision",
-        "disposition",
-        "mergeCommit",
         "contractManifest",
         "contractManifestSha256",
         "predecessor"
       ],
       "properties": {
         "coordinatingIssue": {
-          "const": "https://github.com/SolusQuest/contract-scribe/issues/70"
+          "const": "https://github.com/SolusQuest/contract-scribe/issues/75"
         },
         "contractRevision": {
-          "const": "issue-70-host-validation-baseline-lineage-v1"
-        },
-        "disposition": {
-          "enum": [
-            "pending-main-reconciliation",
-            "main-reachable"
-          ]
-        },
-        "mergeCommit": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "const": "m1-host-validation-content-bound-execution-v1"
         },
         "contractManifest": {
           "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
@@ -69,54 +55,25 @@
           ],
           "properties": {
             "coordinatingIssue": {
-              "const": "https://github.com/SolusQuest/contract-scribe/issues/55"
+              "const": "https://github.com/SolusQuest/contract-scribe/issues/70"
             },
             "contractRevision": {
-              "const": "issue-55-classification-origin-closure-v1"
+              "const": "issue-70-host-validation-baseline-lineage-v1"
             },
             "mergeCommit": {
-              "const": "95933c5dc134dfe6adeb92765920a8eb5c96d7db"
+              "const": "67c149fbc105d2ccae94becd6b2158b68027cbfd"
             },
             "contractManifest": {
               "const": "tests/fixtures/m1-contract-baseline/v1/manifest.json"
             },
             "contractManifestSha256": {
-              "const": "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
+              "const": "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2"
             }
           },
           "additionalProperties": false
         }
       },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "disposition": {
-                "const": "pending-main-reconciliation"
-              }
-            },
-            "required": [
-              "disposition"
-            ]
-          },
-          "then": {
-            "properties": {
-              "mergeCommit": {
-                "type": "null"
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "mergeCommit": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{40}$"
-              }
-            }
-          }
-        }
-      ]
+      "additionalProperties": false
     },
     "artifactInventory": {
       "type": "array",
@@ -415,12 +372,14 @@
         "bundle.inventory",
         "bundle.schema",
         "crosswalk.bidirectional",
+        "evidence.artifact-set",
         "evidence.canonical",
         "evidence.execution-set",
         "evidence.public-safety",
         "evidence.review-binding",
         "evidence.incomplete-retention",
         "evidence.network-bounded-profile",
+        "evidence.passing-gate",
         "execution.stream-boundary",
         "execution.vector-runner",
         "observer.process-tree",

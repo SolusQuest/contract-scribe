@@ -157,7 +157,8 @@ public static class NetworkEvidenceEvaluator
         var closureIdentity = $"closure.{CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(new
         {
             source.SourceConfigurationId,
-            BuiltArtifacts = materialization.BuiltArtifacts
+            ManagedArtifacts = materialization.ProductionArtifacts
+                .Concat(materialization.RuntimeDependencies)
                 .Where(artifact => artifact.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(artifact => artifact.Path, StringComparer.Ordinal)
                 .ToArray(),
@@ -369,7 +370,9 @@ public static class NetworkEvidenceEvaluator
                 source.EnvironmentPolicy,
                 source.Workflow
             ])
-            .Concat(materialization.BuiltArtifacts)
+            .Concat(materialization.ProductionArtifacts)
+            .Concat(materialization.RuntimeDependencies)
+            .Concat(materialization.HarnessArtifacts)
             .GroupBy(identity => identity.Path, StringComparer.Ordinal)
             .ToArray();
         if (identities.Any(group =>

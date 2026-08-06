@@ -6,7 +6,7 @@
     "formatVersion",
     "reviewId",
     "bundleId",
-    "reviewedHead",
+    "reviewedSourceRevision",
     "reviewerKind",
     "relaySessionId",
     "relayTaskId",
@@ -26,7 +26,7 @@
       "type": "string",
       "pattern": "^m1hvp1\\.[0-9a-f]{64}$"
     },
-    "reviewedHead": {
+    "reviewedSourceRevision": {
       "type": [
         "string",
         "null"
@@ -88,7 +88,7 @@
       },
       "then": {
         "properties": {
-          "reviewedHead": {
+          "reviewedSourceRevision": {
             "type": "null"
           },
           "reviewerKind": {
@@ -102,7 +102,7 @@
           },
           "blockingFindingIds": {
             "const": [
-              "baseline.main-reconciliation-pending"
+              "independent-review.pending"
             ]
           },
           "reviewedAtUtc": {
@@ -112,7 +112,7 @@
       },
       "else": {
         "properties": {
-          "reviewedHead": {
+          "reviewedSourceRevision": {
             "type": "string",
             "pattern": "^[0-9a-f]{40}$"
           },

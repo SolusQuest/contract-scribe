@@ -19,8 +19,6 @@ public sealed record ProtocolManifest(
 public sealed record BaselineIdentity(
     string CoordinatingIssue,
     string ContractRevision,
-    string Disposition,
-    string? MergeCommit,
     string ContractManifest,
     string ContractManifestSha256,
     PredecessorBaselineIdentity Predecessor);
@@ -149,7 +147,7 @@ public sealed record ReviewRecord(
     string FormatVersion,
     string ReviewId,
     string BundleId,
-    string? ReviewedHead,
+    string? ReviewedSourceRevision,
     string? ReviewerKind,
     string? RelaySessionId,
     string? RelayTaskId,
@@ -312,15 +310,24 @@ public sealed record SubjectControl(
     Func<TimeSpan, Action, CancellationToken, Task<CanonicalResultCommitment>>?
         ObserveStagedCanonical = null);
 
-public sealed record ExecutionSubjectManifest(
+public sealed record CommonSourceManifest(
     string FormatVersion,
     string BundleId,
     string SubjectKind,
     string ImplementationOwner,
     string EntryPointContract,
     SubjectSourceConfiguration SourceConfiguration,
-    ValidationAttemptIdentity ValidationAttempt,
-    IReadOnlyList<ExecutionCell> Cells);
+    ValidationAttemptIdentity ValidationAttempt);
+
+public sealed record CellSubjectManifest(
+    string FormatVersion,
+    string CommonManifestSha256,
+    string CellId,
+    ExecutionCell Subject);
+
+public sealed record SubjectManifestSet(
+    CommonSourceManifest Common,
+    CellSubjectManifest Cell);
 
 public sealed record SubjectSourceConfiguration(
     string SourceConfigurationId,
@@ -421,7 +428,8 @@ public sealed record CellEvidence(
     string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
-    string SubjectManifestSha256,
+    string CommonManifestSha256,
+    string CellManifestSha256,
     ValidationAttemptIdentity ValidationAttempt,
     CellMaterialization Cell,
     IReadOnlyList<RunEvidence> Runs,
@@ -441,15 +449,17 @@ public sealed record AggregateFinalizationIdentity(
 
 public sealed record CellMaterialization(
     string CellId,
-    string JobId,
-    string JobUrl,
+    string WorkflowJobKey,
+    string WorkflowRunUrl,
     string RunnerImage,
     string Rid,
     string Architecture,
     string SelectedSdk,
     string SelectedRuntime,
     string SelectedMsbuild,
-    IReadOnlyList<ArtifactIdentity> BuiltArtifacts);
+    IReadOnlyList<ArtifactIdentity> ProductionArtifacts,
+    IReadOnlyList<ArtifactIdentity> RuntimeDependencies,
+    IReadOnlyList<ArtifactIdentity> HarnessArtifacts);
 
 public sealed record RunEvidence(
     string VectorId,
@@ -503,11 +513,11 @@ public sealed record AggregateEvidence(
     string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
+    string CommonManifestSha256,
     ValidationAttemptIdentity ValidationAttempt,
     AggregateFinalizationIdentity Finalization,
     IReadOnlyList<CellAggregate> Cells,
-    string Outcome,
-    IReadOnlyList<string> Supersedes);
+    string Outcome);
 
 public sealed record EvidencePublicationRecord(
     string FormatVersion,
@@ -521,7 +531,9 @@ public sealed record EvidencePublicationRecord(
 
 public sealed record CellAggregate(
     string CellId,
-    string EvidenceSha256,
+    string CellManifestSha256,
+    string TerminalKind,
+    string TerminalEvidenceSha256,
     string Outcome);
 
 public sealed record IncompleteEvidence(
@@ -530,8 +542,10 @@ public sealed record IncompleteEvidence(
     string NetworkClaimSetId,
     string ReviewId,
     string SourceConfigurationId,
+    string CommonManifestSha256,
+    string CellManifestSha256,
     ValidationAttemptIdentity ValidationAttempt,
-    string? CellId,
+    string CellId,
     string Classification,
     IReadOnlyList<string> DiagnosticCodes,
     bool Immutable);

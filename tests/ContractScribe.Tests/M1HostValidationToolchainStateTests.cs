@@ -425,11 +425,9 @@ public sealed class M1HostValidationToolchainStateTests
             Assert.All(testOnlyCodes, code => Assert.DoesNotContain(code, productionText, StringComparison.Ordinal));
         }
         var productionTemplate = File.ReadAllText(Path.Join(FixtureRoot, "production-subject.template.json"));
-        var executionTemplate = File.ReadAllText(Path.Join(FixtureRoot, "execution-subject.template.json"));
         Assert.All(testOnlyCodes, code =>
         {
             Assert.DoesNotContain(code, productionTemplate, StringComparison.Ordinal);
-            Assert.DoesNotContain(code, executionTemplate, StringComparison.Ordinal);
         });
     }
 
@@ -1080,6 +1078,8 @@ public sealed class M1HostValidationToolchainStateTests
         "10.0.102",
         "10.0.0",
         "18.0.0",
+        [],
+        [],
         []);
 
     private static string FindRepositoryRoot()

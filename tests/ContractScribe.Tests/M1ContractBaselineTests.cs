@@ -239,16 +239,16 @@ public sealed class M1ContractBaselineTests
     }
 
     [Fact]
-    public void CurrentManifest_BindsTheIssue70SuccessorAndExactCurrentInputClosure()
+    public void CurrentManifest_BindsTheIssue75SuccessorAndExactCurrentInputClosure()
     {
         using var manifest = Load("manifest.json");
         var root = manifest.RootElement;
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(
-            "https://github.com/SolusQuest/contract-scribe/issues/70",
+            "https://github.com/SolusQuest/contract-scribe/issues/75",
             root.GetProperty("coordinatingIssue").GetString());
         Assert.Equal(
-            "issue-70-host-validation-baseline-lineage-v1",
+            "m1-host-validation-content-bound-execution-v1",
             root.GetProperty("contractRevision").GetString());
         Assert.Equal(
             new[] { "profile.external-api", "profile.assembly-visible" },
@@ -257,19 +257,19 @@ public sealed class M1ContractBaselineTests
 
         var predecessor = root.GetProperty("predecessor");
         Assert.Equal(
-            "https://github.com/SolusQuest/contract-scribe/issues/55",
+            "https://github.com/SolusQuest/contract-scribe/issues/70",
             predecessor.GetProperty("coordinatingIssue").GetString());
         Assert.Equal(
-            "issue-55-classification-origin-closure-v1",
+            "issue-70-host-validation-baseline-lineage-v1",
             predecessor.GetProperty("contractRevision").GetString());
         Assert.Equal(
-            "95933c5dc134dfe6adeb92765920a8eb5c96d7db",
+            "67c149fbc105d2ccae94becd6b2158b68027cbfd",
             predecessor.GetProperty("mergeCommit").GetString());
         Assert.Equal(
             "tests/fixtures/m1-contract-baseline/v1/manifest.json",
             predecessor.GetProperty("contractManifest").GetString());
         Assert.Equal(
-            "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85",
+            "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2",
             predecessor.GetProperty("contractManifestSha256").GetString());
 
         var expectedInputs = ExpectedCurrentInputs();
@@ -1301,9 +1301,9 @@ public sealed class M1ContractBaselineTests
                     "implementationDisposition")
                 || value["schemaVersion"]?.GetValue<int>() != 1
                 || value["coordinatingIssue"]?.GetValue<string>()
-                    != "https://github.com/SolusQuest/contract-scribe/issues/70"
+                    != "https://github.com/SolusQuest/contract-scribe/issues/75"
                 || value["contractRevision"]?.GetValue<string>()
-                    != "issue-70-host-validation-baseline-lineage-v1"
+                    != "m1-host-validation-content-bound-execution-v1"
                 || value["inventory"]?.GetValue<string>()
                     != "docs/20_architecture/contracts/pre-release-v1-baseline.md"
                 || value["profiles"] is not JsonArray profiles
@@ -1323,15 +1323,15 @@ public sealed class M1ContractBaselineTests
                     "contractManifest",
                     "contractManifestSha256")
                 || predecessor["coordinatingIssue"]?.GetValue<string>()
-                    != "https://github.com/SolusQuest/contract-scribe/issues/55"
+                    != "https://github.com/SolusQuest/contract-scribe/issues/70"
                 || predecessor["contractRevision"]?.GetValue<string>()
-                    != "issue-55-classification-origin-closure-v1"
+                    != "issue-70-host-validation-baseline-lineage-v1"
                 || predecessor["mergeCommit"]?.GetValue<string>()
-                    != "95933c5dc134dfe6adeb92765920a8eb5c96d7db"
+                    != "67c149fbc105d2ccae94becd6b2158b68027cbfd"
                 || predecessor["contractManifest"]?.GetValue<string>()
                     != "tests/fixtures/m1-contract-baseline/v1/manifest.json"
                 || predecessor["contractManifestSha256"]?.GetValue<string>()
-                    != "e89c1769ca7f725bd813d345023bfcbcf57319ffc11268423d57b6b304999a85"
+                    != "4ca9d7d7ba60650a1a3838486fc80f6d44e22cfbf451f07c47e4aa4796d5c7b2"
                 || value["currentInputs"] is not JsonObject inputs
                 || value["fixtures"] is not JsonObject fixtures
                 || !HasExactProperties(

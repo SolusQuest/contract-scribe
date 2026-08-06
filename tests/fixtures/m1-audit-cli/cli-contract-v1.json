@@ -45,7 +45,7 @@
         "role": "Independent Taxonomy classification oracle cross-checking the origin and skip applicability boundary consumed by the Audit Result semantic oracle."
       }
     ],
-    "reconciliationGate": "Issue #55 PR #56 pins the complete successor candidate and squash-merges as exact contract baseline S1. A separate Host Validation promotion Task waits for the active protected-input producers, then records the main-reachable baseline and accepted review before Issue #41 may consume production evidence. Run classification depends only on auditOutcome values."
+    "reconciliationGate": "Issue #55 and baseline S1 remain immutable historical evidence. Issue #75 authorizes the current Host Validation bundle by exact content in one pull request and one human merge, with the exact reviewed-head correction run before merge and no post-merge mutation. Issue #41 later owns final exact-revision Host evidence. Run classification depends only on auditOutcome values."
   },
   "vocabularies": {
     "terminalLayers": ["usage", "preflight", "execution", "audit", "host-contract-error"],

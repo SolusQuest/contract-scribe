@@ -116,7 +116,9 @@
         "cell.selectedSdk",
         "cell.selectedRuntime",
         "cell.selectedMsbuild",
-        "cell.builtArtifacts"
+        "cell.productionArtifacts",
+        "cell.runtimeDependencies",
+        "cell.harnessArtifacts"
       ],
       "deferredOwner": null
     },
@@ -341,7 +343,9 @@
       "evidenceFields": [
         "bundleId",
         "validationExecution.hostRevision",
-        "cell.builtArtifacts"
+        "cell.productionArtifacts",
+        "cell.runtimeDependencies",
+        "cell.harnessArtifacts"
       ],
       "deferredOwner": null
     },
@@ -479,6 +483,35 @@
       "evidenceFields": [
         "reviewId",
         "bundleId"
+      ],
+      "deferredOwner": null
+    },
+    {
+      "sourceKey": "issue-75.content-bound-execution-correction",
+      "source": "Issue #75 correction: one content-bound review, one common source manifest, one manifest and terminal record per required cell, one closed aggregate artifact set, and a repository-owned passing gate",
+      "disposition": "executable",
+      "vectorIds": [
+        "project.graph-boundary",
+        "toolchain.selected-identities"
+      ],
+      "validatorIds": [
+        "evidence.artifact-set",
+        "evidence.passing-gate",
+        "evidence.review-binding",
+        "subject.materialization",
+        "validation.attempt-identity"
+      ],
+      "requiredCells": [
+        "ubuntu-x64",
+        "windows-x64"
+      ],
+      "evidenceFields": [
+        "bundleId",
+        "reviewId",
+        "commonManifestSha256",
+        "cells.cellManifestSha256",
+        "cells.terminalEvidenceSha256",
+        "outcome"
       ],
       "deferredOwner": null
     },
@@ -728,7 +761,9 @@
       ],
       "evidenceFields": [
         "validationExecution.hostRevision",
-        "cell.builtArtifacts"
+        "cell.productionArtifacts",
+        "cell.runtimeDependencies",
+        "cell.harnessArtifacts"
       ],
       "deferredOwner": "issue-24"
     },

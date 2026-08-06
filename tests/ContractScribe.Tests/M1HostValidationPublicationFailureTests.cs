@@ -61,19 +61,20 @@ public sealed class M1HostValidationPublicationFailureTests
             finalization.VectorId,
             FinalizationTransitions));
 
-        var template = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
-            Path.Join(FixtureRoot, "execution-subject.template.json"),
-            4 * 1024 * 1024);
-        Assert.Equal(2, template.Cells.Count);
-        foreach (var cell in template.Cells)
+        Assert.Equal(2, context.Protocol.RequiredCells.Count);
+        foreach (var requiredCell in context.Protocol.RequiredCells)
         {
-            var invalidationFixture = cell.Fixtures.Single(item =>
-                item.VectorId == invalidation.VectorId);
+            var invalidationFixture = FrozenFixtureRegistry.Materialize(
+                Root,
+                requiredCell.CellId,
+                invalidation);
             Assert.Equal("prior-valid", invalidationFixture.ResultPrestate);
             Assert.Equal("TestResults/audit-result.json", invalidationFixture.ResultPath);
 
-            var finalizationFixture = cell.Fixtures.Single(item =>
-                item.VectorId == finalization.VectorId);
+            var finalizationFixture = FrozenFixtureRegistry.Materialize(
+                Root,
+                requiredCell.CellId,
+                finalization);
             Assert.Equal("absent", finalizationFixture.ResultPrestate);
             Assert.Equal("TestResults/audit-result.json", finalizationFixture.ResultPath);
         }
@@ -706,7 +707,9 @@ public sealed class M1HostValidationPublicationFailureTests
             [
                 new ArtifactIdentity("src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll", Sha),
                 new ArtifactIdentity("src/ContractScribe.Core/bin/Release/net10.0/ContractScribe.Core.dll", Sha)
-            ]);
+            ],
+            [new ArtifactIdentity("src/ContractScribe.Cli/bin/Release/net10.0/System.Text.Json.dll", Sha)],
+            [new ArtifactIdentity("tests/ContractScribe.HostValidation/bin/Release/net10.0/ContractScribe.HostValidation.dll", Sha)]);
         var fixture = new FixtureRealization(
             vectorId,
             "production-host",
@@ -834,6 +837,7 @@ public sealed class M1HostValidationPublicationFailureTests
             context.Protocol.PublicSafety.NetworkClaimSetId,
             $"review.{Sha}",
             source.SourceConfigurationId,
+            Sha,
             Sha,
             new ValidationAttemptIdentity(
                 ".github/workflows/ci.yml",

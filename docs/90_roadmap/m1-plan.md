@@ -119,7 +119,7 @@ The current v1 artifacts are pre-release drafts. The target-surface and observat
 
 The amendment retains version `1` unless incompatible revisions must coexist or a consumer compatibility condition in [Contract lifecycle](../00_project/contract-lifecycle.md) is met.
 
-The corrected contract-content baseline and accepted Host Validation bundle establish historical evidence identities, but they do not yet provide an executable path for exact-revision Host evidence. Repository CI cannot currently materialize and run the production subject through the accepted harness, and the active accepted-review validator still depends on the historical two-merge `S2`/`S3` topology. One bounded Host Validation acceptance and execution correction must complete before #41 begins. Exact Issue #55 squash commit `S1`, also called contract baseline `C1`, owns the original successor manifest identity. Issue #57 completed main-reachable acceptance at bundle target `S2` (`9da769486aae370403ddd06a5172a6ddc5b25a0d`) and review-record commit `S3` (`35f9ec815108ec9934027dd67d97dd69a85c6d07`).
+The corrected contract-content baseline and accepted Host Validation bundle establish historical evidence identities, but they did not provide an executable path for exact-revision Host evidence. Issue #75 replaces the active two-merge authorization lifecycle with content-bound review, repository-owned common/cell materialization, an exact artifact set, and explicit cross-platform execution and aggregation. It must complete before #41 begins. Exact Issue #55 squash commit `S1`, also called contract baseline `C1`, owns the original successor manifest identity. Issue #57's bundle target `S2` (`9da769486aae370403ddd06a5172a6ddc5b25a0d`) and review-record commit `S3` (`35f9ec815108ec9934027dd67d97dd69a85c6d07`) remain historical records only.
 
 M0, Issue #35, Issue #55, and Issue #57 historical evidence remain pinned to their exact revisions. Frozen evidence artifacts may retain process language that described their own acceptance lifecycle; those records do not override the current [pre-release engineering rules](../00_project/pre-release-engineering.md) for new tracker actions.
 
@@ -176,11 +176,11 @@ Use issue #30 for the thin CLI implementation and integration tests only. Its ex
 
 ### W5 — Executable validation
 
-Issue #26 froze the M1 validation protocol, matrix, expected observations, failure classification, evidence schema, and executable harness against the completed contracts and ADRs. Issue #57 then promoted one stable candidate into the accepted, main-reachable bundle without executing production evidence. Those closed issues remain historical authorities.
+Issue #26 froze the M1 validation protocol, matrix, expected observations, failure classification, evidence schema, and executable harness against the completed contracts and ADRs. Issue #57 then accepted one stable bundle without executing production evidence. Those closed issues remain historical authorities, but their commit-topology lifecycle is not active behavior.
 
 The historical accepted bundle identity is `m1hvp1.17a0515ea992abaaa39c2111836891c5e87c0322f93c0b51f349712839008d28`; its accepted review identity is `review.ea3cbe944821d110ec28cdbbf86a8056890fa9f9b2a6442f4809931067f63fe0`. A repository audit found that `.github/workflows/ci.yml` validates this bundle structurally, performs platform dry-runs, and self-tests the harness, but does not materialize a production execution subject or invoke the existing production cell and aggregate commands. The reviewed-commit validator also requires the reviewed commit to remain in current ancestry, turning the historical squash topology into an active authorization constraint.
 
-After this documentation baseline merges, one bounded direct-child Bug replaces that active lifecycle with a content-bound accepted validation snapshot, adds the deterministic production-subject materializer and GitHub Actions execution/aggregation path, and completes one producer-schema-validator-fixture-consumer satisfiability sweep. It uses one implementation pull request, one substantive review of the unchanged protected-content identity, one human merge, and no post-merge mutation, compatibility layer, migration, or closed-issue reopen. One reviewed tracker synchronization publishes that Bug, makes it a native blocker of #41, and replaces the stale #41 body and #33 dependency graph before implementation begins.
+Issue #75 is that bounded direct-child Bug. It replaces the active lifecycle with a content-bound accepted validation snapshot, adds the deterministic production-subject materializer and GitHub Actions execution/aggregation path, and completes one producer-schema-validator-fixture-consumer satisfiability sweep. It uses one implementation pull request, one substantive review of the unchanged protected-content identity, one human merge, and no post-merge mutation, compatibility layer, migration, fallback, or closed-issue reopen. It is a native blocker of #41.
 
 Real protected-content drift belongs to the smallest current owner and invalidates only evidence that consumes the changed content. Tracker metadata, documentation, or review metadata outside the content-identity preimage does not replay certification. Immediate safety containment may proceed without waiting for ordinary correction limits. The correction's accepted exact-head snapshot and cross-platform correction-validation run are its pre-merge executable gate; after the human merge closes that Bug, Issue #41 owns the remaining exact-revision execution and bounded aggregate evidence. That validated host baseline is not final CLI-composition evidence; final M1 evidence combines it with #30's exact-revision cross-platform CLI integration record and #42's independent smoke, all bound to one compatible exact revision set.
 
@@ -233,7 +233,7 @@ The tracker graph uses the following ownership and expected review boundaries. F
 | #25 CLI contract | Direct M1 child | One CLI-contract PR with executable acceptance fixtures where applicable |
 | #26 host-validation protocol | Direct M1 child | One frozen-protocol and executable-harness PR |
 | #57 Host Validation accepted-bundle promotion | Completed direct sibling M1 child | Historical two-commit acceptance sequence that established exact `S2` and `S3`; not a reusable default for new work |
-| Host Validation acceptance and execution correction | Planned direct sibling M1 child | One correction PR replacing commit-bound authorization, adding the production-subject workflow path, and establishing one current content-bound validation snapshot |
+| #75 Host Validation acceptance and execution correction | Active direct sibling M1 child | One correction PR replacing commit-bound authorization, adding the production-subject workflow path, and establishing one current content-bound validation snapshot |
 | Host-validation execution | Direct sibling M1 child | One exact-revision aggregate-evidence PR against #26 |
 | #30 CLI implementation | Direct M1 child | One focused CLI implementation PR including integration tests |
 | Independent read-only smoke | Direct M1 child | One exact-revision evidence PR or bounded attestation PR |
@@ -247,7 +247,7 @@ The one-time tracker synchronization and Host Validation certification sequence 
 
 The remaining critical path is intentionally small:
 
-- planned Host Validation acceptance and execution correction: one focused implementation pull request after this documentation baseline merges;
+- #75 Host Validation acceptance and execution correction: one focused implementation pull request;
 - #41: one focused exact-revision Host evidence pull request by default;
 - #30: one focused CLI implementation and cross-platform integration pull request by default;
 - #42: one focused independent smoke or bounded attestation pull request by default;
@@ -269,7 +269,7 @@ Target/observation decision
 
 #24 host composition + focused implementation siblings + #26 frozen protocol
     --> completed #57 accepted bundle at S2/S3
-    --> planned Host Validation acceptance and execution correction
+    --> #75 Host Validation acceptance and execution correction
     --> #41 exact-revision validation execution
     --> validated host baseline
 
@@ -291,8 +291,8 @@ The one-time synchronization described by earlier revisions of this plan is comp
 | #27 | Deferred process-topology research | Outside M1; refine before activation |
 | #29 | Release governance | Outside M1; no current body change required |
 | #57 | Closed accepted-bundle certification at exact `S2` and `S3` | Completed direct child |
-| Host Validation acceptance and execution correction | Publish after this documentation baseline merges; then block #41 until its one correction PR is accepted | Planned direct child |
-| #41 | Blocked pending the planned acceptance and execution correction; then exact-revision Host validation evidence | Direct child |
+| #75 | Active; block #41 until its one correction PR is accepted | Direct child |
+| #41 | Blocked pending #75; then exact-revision Host validation evidence | Direct child |
 | #30 | After #41: CLI implementation and integration evidence | Direct child |
 | #42 | After #30: independent read-only smoke | Direct child |
 | #33 | M1 coordination and closure evidence | Coordination-only parent |

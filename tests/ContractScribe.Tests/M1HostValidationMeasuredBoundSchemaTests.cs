@@ -355,6 +355,8 @@ public sealed class M1HostValidationMeasuredBoundSchemaTests
         "10.0.102",
         "10.0.0",
         "18.0.0",
+        [],
+        [],
         []);
 
     private static CanonicalResultCommitment Commitment() => new(

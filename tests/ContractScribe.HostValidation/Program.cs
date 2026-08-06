@@ -80,100 +80,128 @@ public static class Program
                     Console.WriteLine($"HV000_DRY_RUN {cellId} {runCount}");
                     return 0;
                 }
-            case "provision-fixtures":
+            case "materialize-common":
                 {
                     var root = Required(options, "--root");
-                    var subjectPath = Required(options, "--subject-manifest");
-                    var context = BundleValidator.Validate(root, requireReview: true);
-                    var subject = CanonicalJson.DeserializeStrict<ExecutionSubjectManifest>(
-                        subjectPath,
-                        4 * 1024 * 1024,
-                        requireCanonical: true);
-                    foreach (var cell in subject.Cells)
-                    {
-                        foreach (var fixture in cell.Fixtures)
-                        {
-                            var vector = context.Vectors.Vectors.Single(candidate =>
-                                candidate.VectorId == fixture.VectorId);
-                            var expectedRoot =
-                                $"tests/fixtures/m1-host-validation/runtime/{cell.Materialization.CellId}/{vector.VectorId}";
-                            if (fixture.RepositoryRoot != expectedRoot)
-                            {
-                                throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
-                            }
-                            FixtureRecipeRegistry.Provision(
-                                RepositoryPaths.ResolveConfined(root, expectedRoot, mustExist: false),
-                                cell.Materialization.CellId,
-                                vector);
-                            Console.WriteLine(
-                                $"HV000_FIXTURE {cell.Materialization.CellId} {vector.VectorId} {FixtureRecipeRegistry.ExpectedRepositoryIdentity(cell.Materialization.CellId, vector)}");
-                        }
-                    }
+                    var review = Required(options, "--review");
+                    var output = Required(options, "--output");
+                    var context = BundleValidator.Validate(root, requireReview: true, review);
+                    OutputPathGuard.Validate(
+                        context,
+                        [review],
+                        output);
+                    CanonicalJson.InvalidateOutput(output);
+                    var manifest = SubjectManifestMaterializer.MaterializeCommon(
+                        root,
+                        review,
+                        output);
+                    Console.WriteLine($"HV000_COMMON_MATERIALIZED {manifest.SourceConfiguration.SourceConfigurationId}");
                     return 0;
                 }
-            case "run-cell":
+            case "materialize-cell":
                 {
                     var root = Required(options, "--root");
-                    var subjectManifest = Required(options, "--subject-manifest");
                     var review = Required(options, "--review");
-                    var cell = Required(options, "--cell");
+                    var commonManifest = Required(options, "--common-manifest");
+                    var output = Required(options, "--output");
+                    var context = BundleValidator.Validate(root, requireReview: true, review);
+                    OutputPathGuard.Validate(
+                        context,
+                        [review, commonManifest],
+                        output);
+                    CanonicalJson.InvalidateOutput(output);
+                    var manifest = SubjectManifestMaterializer.MaterializeCell(
+                        root,
+                        review,
+                        commonManifest,
+                        Required(options, "--cell"),
+                        output);
+                    Console.WriteLine($"HV000_CELL_MATERIALIZED {manifest.CellId}");
+                    return 0;
+                }
+            case "execute-cell":
+                {
+                    var root = Required(options, "--root");
+                    var commonManifest = Required(options, "--common-manifest");
+                    var cellManifest = Required(options, "--cell-manifest");
+                    var review = Required(options, "--review");
                     var incompleteOutput = Required(options, "--incomplete-output");
                     var output = Required(options, "--output");
                     var context = BundleValidator.Validate(root, requireReview: true, review);
-                    _ = BundleValidator.ValidateReview(context.Root, review, context.Lock.BundleId);
-                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
+                    var reviewRecord = BundleValidator.ValidateReview(context.Root, review, context.Lock.BundleId);
+                    var manifests = CellExecutor.ValidateSubjectManifests(
+                        context,
+                        commonManifest,
+                        cellManifest);
                     OutputPathGuard.Validate(
                         context,
-                        SubjectInputPaths(context.Root, subject).Append(subjectManifest).Append(review),
+                        SubjectInputPaths(context.Root, manifests.Common)
+                            .Append(commonManifest)
+                            .Append(cellManifest)
+                            .Append(review),
                         output,
                         incompleteOutput);
                     CanonicalJson.InvalidateOutput(output);
                     CanonicalJson.InvalidateOutput(incompleteOutput);
                     try
                     {
+                        ProvisionFixtures(context, manifests.Cell);
+                        CellExecutor.ValidateProvisionedFixtures(context.Root, manifests.Cell.Subject);
                         var evidence = await CellExecutor.RunAsync(
                             root,
-                            subjectManifest,
+                            commonManifest,
+                            cellManifest,
                             review,
-                            cell,
                             output).ConfigureAwait(false);
+                        _ = EvidenceValidator.ValidateCell(
+                            root,
+                            output,
+                            review,
+                            commonManifest,
+                            cellManifest);
                         Console.WriteLine($"HV000_CELL_EXECUTED {evidence.Cell.CellId} {evidence.Outcome}");
                         return 0;
                     }
                     catch (ProtocolException exception)
                     {
-                        IncompleteEvidenceWriter.TryWrite(
-                            root,
-                            subjectManifest,
+                        CanonicalJson.InvalidateOutput(output);
+                        _ = IncompleteEvidenceWriter.WriteTrusted(
+                            context,
+                            reviewRecord,
+                            manifests,
                             review,
-                            cell,
+                            commonManifest,
+                            cellManifest,
                             incompleteOutput,
-                            exception.Code,
-                            IncompleteEvidenceWriter.Classify(exception.Code));
+                            exception.Code);
                         throw;
                     }
                     catch (OperationCanceledException)
                     {
-                        IncompleteEvidenceWriter.TryWrite(
-                            root,
-                            subjectManifest,
+                        CanonicalJson.InvalidateOutput(output);
+                        _ = IncompleteEvidenceWriter.WriteTrusted(
+                            context,
+                            reviewRecord,
+                            manifests,
                             review,
-                            cell,
+                            commonManifest,
+                            cellManifest,
                             incompleteOutput,
-                            "HV998_CANCELLED",
-                            "harness-or-ci-cancelled");
+                            "HV998_CANCELLED");
                         throw;
                     }
                     catch
                     {
-                        IncompleteEvidenceWriter.TryWrite(
-                            root,
-                            subjectManifest,
+                        CanonicalJson.InvalidateOutput(output);
+                        _ = IncompleteEvidenceWriter.WriteTrusted(
+                            context,
+                            reviewRecord,
+                            manifests,
                             review,
-                            cell,
+                            commonManifest,
+                            cellManifest,
                             incompleteOutput,
-                            "HV999_INTERNAL_ERROR",
-                            "protocol-failure");
+                            "HV999_INTERNAL_ERROR");
                         throw;
                     }
                 }
@@ -183,7 +211,8 @@ public static class Program
                         Required(options, "--root"),
                         Required(options, "--evidence"),
                         Optional(options, "--review"),
-                        Required(options, "--subject-manifest"));
+                        Required(options, "--common-manifest"),
+                        Required(options, "--cell-manifest"));
                     Console.WriteLine($"HV000_CELL_VALID {evidence.Cell.CellId}");
                     return 0;
                 }
@@ -193,70 +222,59 @@ public static class Program
                         Required(options, "--root"),
                         Required(options, "--evidence"),
                         Optional(options, "--review"),
-                        Required(options, "--subject-manifest"));
+                        Required(options, "--common-manifest"),
+                        Required(options, "--cell-manifest"));
                     Console.WriteLine("HV000_INCOMPLETE_VALID");
                     return 0;
                 }
             case "aggregate":
                 {
                     var root = Required(options, "--root");
-                    var evidencePaths = Required(options, "--evidence").Split(';', StringSplitOptions.RemoveEmptyEntries);
                     var output = Required(options, "--output");
                     var review = Required(options, "--review");
-                    var subjectManifest = Required(options, "--subject-manifest");
-                    var supersedes = Optional(options, "--supersedes")?
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     var context = BundleValidator.Validate(root, requireReview: true, review);
-                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
                     OutputPathGuard.Validate(
                         context,
-                        evidencePaths.Concat(supersedes).Append(review).Append(subjectManifest)
-                            .Concat(SubjectInputPaths(context.Root, subject)),
+                        [review],
                         output);
                     CanonicalJson.InvalidateOutput(output);
                     var aggregate = EvidenceValidator.Aggregate(
                         root,
-                        evidencePaths,
+                        Required(options, "--artifact-root"),
                         output,
                         review,
-                        subjectManifest,
-                        new AggregateFinalizationIdentity(
-                            Required(options, "--matrix-result"),
-                            Required(options, "--publication-base-revision")),
-                        supersedes);
+                        Required(options, "--publication-base-revision"));
                     Console.WriteLine($"HV000_AGGREGATE {aggregate.Outcome}");
                     return 0;
                 }
             case "validate-aggregate":
                 {
-                    var evidencePaths = Required(options, "--cell-evidence")
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries);
-                    var supersedes = Optional(options, "--supersedes")?
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     var aggregate = EvidenceValidator.ValidateAggregate(
                         Required(options, "--root"),
                         Required(options, "--evidence"),
-                        evidencePaths,
-                        Optional(options, "--review"),
-                        Required(options, "--subject-manifest"),
-                        supersedes);
+                        Required(options, "--artifact-root"),
+                        Optional(options, "--review"));
                     Console.WriteLine($"HV000_AGGREGATE_VALID {aggregate.Outcome}");
+                    return 0;
+                }
+            case "require-passing-aggregate":
+                {
+                    var aggregate = EvidenceValidator.RequirePassingAggregate(
+                        Required(options, "--root"),
+                        Required(options, "--evidence"),
+                        Required(options, "--artifact-root"),
+                        Optional(options, "--review"));
+                    Console.WriteLine($"HV000_AGGREGATE_PASSING {aggregate.Outcome}");
                     return 0;
                 }
             case "validate-publication-record":
                 {
-                    var cellEvidence = Required(options, "--cell-evidence")
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries);
-                    var supersedes = Optional(options, "--supersedes")?
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     var record = EvidenceValidator.ValidatePublicationRecord(
                         Required(options, "--root"),
                         Required(options, "--record"),
                         Required(options, "--aggregate-evidence"),
-                        cellEvidence,
-                        Optional(options, "--review"),
-                        Required(options, "--subject-manifest"),
-                        supersedes);
+                        Required(options, "--artifact-root"),
+                        Optional(options, "--review"));
                     Console.WriteLine($"HV000_PUBLICATION_RECORD_VALID {record.EvidenceRecordRevision}");
                     return 0;
                 }
@@ -266,19 +284,12 @@ public static class Program
                     var source = Required(options, "--source");
                     var output = Required(options, "--output");
                     var review = Required(options, "--review");
-                    var subjectManifest = Required(options, "--subject-manifest");
-                    var cells = Optional(options, "--cell-evidence")?
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
-                    var supersedes = Optional(options, "--supersedes")?
-                        .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     var aggregateEvidence = Optional(options, "--aggregate-evidence");
                     var context = BundleValidator.Validate(root, requireReview: true, review);
-                    var subject = CellExecutor.ValidateSubjectManifest(context, subjectManifest);
                     OutputPathGuard.Validate(
                         context,
-                        cells.Concat(supersedes).Append(source).Append(review).Append(subjectManifest)
-                            .Concat(aggregateEvidence is null ? [] : [aggregateEvidence])
-                            .Concat(SubjectInputPaths(context.Root, subject)),
+                        new[] { source, review }
+                            .Concat(aggregateEvidence is null ? [] : [aggregateEvidence]),
                         output);
                     CanonicalJson.InvalidateOutput(output);
                     EvidenceValidator.PreparePublicArtifact(
@@ -287,9 +298,7 @@ public static class Program
                         source,
                         output,
                         review,
-                        subjectManifest,
-                        cells,
-                        supersedes,
+                        Required(options, "--artifact-root"),
                         aggregateEvidence);
                     Console.WriteLine("HV000_PUBLIC_PREPARED");
                     return 0;
@@ -817,48 +826,43 @@ public static class Program
                 ["--root", "--require-review", "--review"],
             "dry-run" =>
                 ["--root", "--cell"],
-            "provision-fixtures" =>
-                ["--root", "--subject-manifest"],
-            "run-cell" =>
+            "materialize-common" =>
+                ["--root", "--review", "--output"],
+            "materialize-cell" =>
+                ["--root", "--review", "--common-manifest", "--cell", "--output"],
+            "execute-cell" =>
                 [
                     "--root",
-                    "--subject-manifest",
+                    "--common-manifest",
+                    "--cell-manifest",
                     "--review",
-                    "--cell",
                     "--incomplete-output",
                     "--output"
                 ],
             "validate-cell" or "validate-incomplete" =>
-                ["--root", "--evidence", "--review", "--subject-manifest"],
+                ["--root", "--evidence", "--review", "--common-manifest", "--cell-manifest"],
             "aggregate" =>
                 [
                     "--root",
-                    "--evidence",
+                    "--artifact-root",
                     "--output",
                     "--review",
-                    "--subject-manifest",
-                    "--supersedes",
-                    "--matrix-result",
                     "--publication-base-revision"
                 ],
-            "validate-aggregate" =>
+            "validate-aggregate" or "require-passing-aggregate" =>
                 [
                     "--root",
                     "--evidence",
-                    "--cell-evidence",
-                    "--supersedes",
-                    "--review",
-                    "--subject-manifest"
+                    "--artifact-root",
+                    "--review"
                 ],
             "validate-publication-record" =>
                 [
                     "--root",
                     "--record",
                     "--aggregate-evidence",
-                    "--cell-evidence",
-                    "--supersedes",
-                    "--review",
-                    "--subject-manifest"
+                    "--artifact-root",
+                    "--review"
                 ],
             "prepare-public" =>
                 [
@@ -866,9 +870,7 @@ public static class Program
                     "--source",
                     "--output",
                     "--review",
-                    "--subject-manifest",
-                    "--cell-evidence",
-                    "--supersedes",
+                    "--artifact-root",
                     "--aggregate-evidence",
                     "--kind"
                 ],
@@ -900,7 +902,7 @@ public static class Program
 
     private static IEnumerable<string> SubjectInputPaths(
         string root,
-        ExecutionSubjectManifest subject) =>
+        CommonSourceManifest subject) =>
         subject.SourceConfiguration.SourceAndBuildInputs
             .Concat(
             [
@@ -913,4 +915,23 @@ public static class Program
                 subject.SourceConfiguration.Workflow
             ])
             .Select(identity => RepositoryPaths.ResolveConfined(root, identity.Path));
+
+    private static void ProvisionFixtures(BundleContext context, CellSubjectManifest cellManifest)
+    {
+        var cell = cellManifest.Subject;
+        foreach (var fixture in cell.Fixtures)
+        {
+            var vector = context.Vectors.Vectors.Single(candidate =>
+                candidate.VectorId == fixture.VectorId);
+            FixtureRecipeRegistry.Provision(
+                RepositoryPaths.ResolveConfined(
+                    context.Root,
+                    fixture.RepositoryRoot,
+                    mustExist: false),
+                cellManifest.CellId,
+                vector);
+            Console.WriteLine(
+                $"HV000_FIXTURE {cellManifest.CellId} {vector.VectorId} {fixture.RepositoryIdentitySha256}");
+        }
+    }
 }
