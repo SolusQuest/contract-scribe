@@ -280,6 +280,7 @@ public sealed class M1HostValidationProtocolTests
     public void HostValidation_MaterializerRejectsMissingOrDriftedExecutionCommit()
     {
         var context = BundleValidator.Validate(Root);
+        var executionRevision = RunGit(Root, "rev-parse", "HEAD").Trim();
         var temp = Path.Join(
             Root,
             "TestResults",
@@ -287,31 +288,82 @@ public sealed class M1HostValidationProtocolTests
             $"materializer-execution-drift-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
         var reviewPath = Path.Join(temp, "review.json");
+        var driftWorktree = Path.Join(
+            Path.GetTempPath(),
+            $"contractscribe-execution-drift-{Guid.NewGuid():N}");
+        var worktreeRegistered = false;
         try
         {
             CanonicalJson.WriteCanonical(
                 reviewPath,
                 CreateAcceptedReview(
                     context.Lock.BundleId,
-                    RunGit(Root, "rev-parse", "HEAD").Trim()));
-            foreach (var executionRevision in new[]
+                    executionRevision));
+            var missingRevision = new string('f', 40);
+            var missingOutput = Path.Join(temp, $"{missingRevision}.json");
+            using (GitHubEnvironment(missingRevision))
             {
-                new string('f', 40),
-                RunGit(Root, "rev-parse", "HEAD~1").Trim()
-            })
-            {
-                var output = Path.Join(temp, $"{executionRevision}.json");
-                using var environment = GitHubEnvironment(executionRevision);
-                _ = Assert.Throws<ProtocolException>(() =>
-                    SubjectManifestMaterializer.MaterializeCommon(
-                        Root,
-                        reviewPath,
-                        output));
-                Assert.False(File.Exists(output));
+                Assert.Equal(
+                    "HV225_SOURCE_REVISION_INVALID",
+                    Assert.Throws<ProtocolException>(() =>
+                        SubjectManifestMaterializer.MaterializeCommon(
+                            Root,
+                            reviewPath,
+                            missingOutput)).Code);
             }
+            Assert.False(File.Exists(missingOutput));
+
+            RunGit(Root, "worktree", "add", "--detach", driftWorktree, executionRevision);
+            worktreeRegistered = true;
+            var sourcePath = Path.Join(
+                driftWorktree,
+                "src",
+                "ContractScribe.Core",
+                "Hosting",
+                "HostContractResources.cs");
+            var originalSource = File.ReadAllBytes(sourcePath);
+            File.WriteAllBytes(
+                sourcePath,
+                originalSource.Concat("\n"u8.ToArray()).ToArray());
+            RunGit(driftWorktree, "add", "--", "src/ContractScribe.Core/Hosting/HostContractResources.cs");
+            RunGit(
+                driftWorktree,
+                "-c",
+                "user.name=ContractScribe Host Validation",
+                "-c",
+                "user.email=host-validation@example.invalid",
+                "commit",
+                "-m",
+                "test: synthesize execution source drift");
+            var driftRevision = RunGit(driftWorktree, "rev-parse", "HEAD").Trim();
+            File.WriteAllBytes(sourcePath, originalSource);
+            var driftReviewPath = Path.Join(driftWorktree, "TestResults", "review.json");
+            var driftOutput = Path.Join(driftWorktree, "TestResults", "common.json");
+            CanonicalJson.WriteCanonical(
+                driftReviewPath,
+                CreateAcceptedReview(context.Lock.BundleId, executionRevision));
+            using (GitHubEnvironment(driftRevision))
+            {
+                Assert.Equal(
+                    "HV226_SOURCE_REVISION_MISMATCH",
+                    Assert.Throws<ProtocolException>(() =>
+                    SubjectManifestMaterializer.MaterializeCommon(
+                        driftWorktree,
+                        driftReviewPath,
+                        driftOutput)).Code);
+            }
+            Assert.False(File.Exists(driftOutput));
         }
         finally
         {
+            if (worktreeRegistered)
+            {
+                RunGit(Root, "worktree", "remove", "--force", driftWorktree);
+            }
+            else if (Directory.Exists(driftWorktree))
+            {
+                Directory.Delete(driftWorktree, recursive: true);
+            }
             Directory.Delete(temp, recursive: true);
         }
     }
