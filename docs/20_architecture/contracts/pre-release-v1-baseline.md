@@ -1,5 +1,7 @@
 # Coordinated pre-release v1 baseline
 
+> **Status:** Historical Issue #55/#70 lineage description pending Issue #75 cleanup. The checked-in manifest, successor identities, protected-input maintenance, bundle/review lifecycle, and reopen rules below are not current development authority. PR #77 removes the exact-current-manifest test that made this historical baseline an ordinary change gate. Issue #75 removes the remaining current-tree machinery while retaining the actual Policy, Taxonomy, Audit Result, fixture, cross-contract, and downstream-ownership coverage under the current draft contracts and tests.
+
 ## Status and identity
 
 Issue #70 coordinates a one-time successor correction to the M1 Policy/Taxonomy/Audit contract baseline after Host Validation work changed an input still owned by the Issue #55 manifest. Issue #55 and its exact squash commit remain closed, immutable historical authority; this correction establishes a new current identity instead of reopening or rewriting them. The artifacts remain unreleased pre-release version `1` drafts because no released or coexisting consumer must distinguish the incompatible M0 and M1 shapes. M0 artifacts remain valid historical evidence only at their pinned M0 revision; there is no default profile, silent migration, or cross-revision compatibility promise.

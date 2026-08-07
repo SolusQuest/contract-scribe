@@ -4,7 +4,7 @@
 
 ContractScribe uses project boundaries to enforce dependency and authority boundaries, not to mirror roadmap milestones or create one assembly per feature.
 
-The recommended long-lived product graph contains six production projects:
+The current planning sketch separates up to six production concerns. `Core`, `Roslyn`, and `Cli` are existing M1 projects; the other names are candidate future splits rather than project contracts:
 
 1. `ContractScribe.Core`
 2. `ContractScribe.Roslyn`
@@ -13,7 +13,7 @@ The recommended long-lived product graph contains six production projects:
 5. `ContractScribe.GitHub`
 6. `ContractScribe.Cli`
 
-This is a target shape for the completed M5 product, not an instruction to create empty projects in advance. Each project is added only when its owning milestone begins and has production code to place in it.
+The existing M1 project boundaries are current architecture. The M2-M5 entries are candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing milestone applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
 
 The normal test graph contains two long-lived projects:
 
@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The six-project product graph and its forbidden reference edges are the default implementation architecture for M1 through M5.
+The existing M1 `Core` / `Roslyn` / `Cli` graph and its implemented dependency constraints are current architecture. The six-concern M2-M5 graph, future project names, reference edges, API boundaries, friend access, and negative-test mechanisms are candidates selected by each implementing milestone from executable dependency and authority evidence.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
@@ -77,16 +77,16 @@ This project structure does not:
 
 ### `ContractScribe.Core`
 
-`ContractScribe.Core` owns provider-neutral and platform-neutral product contracts and application behavior:
+`ContractScribe.Core` owns current provider-neutral and platform-neutral product contracts and application behavior. Future milestones add only the contracts their executable paths require:
 
 - policy and normalized target-selection inputs;
 - normalized symbol facts and documentation observations;
-- audit, proposal, patch, project-context identity, usage, work-plan, campaign-state, and publication DTOs;
+- current audit DTOs, plus proposal, patch, context, usage, work, state, or publication DTOs only when their owning milestone implements a real producer-consumer boundary;
 - canonical serialization and stable product-owned failure codes;
-- budget, context-grouping, retry, ordering, and state-transition rules;
-- ports such as audit, semantic evidence, proposal generation, patching, state storage, and publication interfaces.
+- the budget, context, retry, ordering, and state-transition rules selected by current executable evidence;
+- ports needed by implemented audit, evidence, proposal, patch, state, or publication use cases.
 
-Core contract visibility is authority-sensitive. Pure DTOs, identities, state transitions, and the closed read-only Scribe-port surface may be public. Capability-bearing ports that authorize candidate source writes, state persistence, or platform publication are internal by default and production-friend-visible only to `ContractScribe.Cli`. Patching and GitHub expose their validated high-level operations from their own assemblies; Cli adapts those operations to the internal Core capabilities at the composition boundary. `ContractScribe.Agent` is never a friend assembly for those capabilities. Test-only friend access does not grant a production composition path and is checked separately. If this visibility model becomes unworkable, the authority boundary meets the split threshold for a separately reviewed capability-specific contract project; it must not be weakened by making mutation ports generally public.
+Core contract visibility is authority-sensitive. The implemented Scribe must receive only closed read-only capabilities, while source-write, state-persistence, and platform-publication authority remains inaccessible to it and is composed only by the CLI. Each implementing milestone selects the smallest visibility, project, and negative-test mechanism that makes that boundary executable; the pre-M3 roadmap does not require a future friend-assembly allowlist, public API shape, or project name. If an implemented boundary becomes unworkable, apply the split thresholds rather than making mutation capabilities generally public.
 
 It may use the .NET base class libraries and narrowly justified contract libraries. It must not reference:
 
@@ -110,8 +110,8 @@ It may use the .NET base class libraries and narrowly justified contract librari
 - XML-documentation observation;
 - bounded evidence extraction;
 - deterministic repository-entrypoint and nested-`AGENTS.md` discovery;
-- context-pack construction inputs and repository/scope content identities;
-- implementations of the agent's bounded semantic and repository-read ports;
+- repository-confined evidence inputs selected by M3;
+- implementations of bounded semantic and repository-read ports when M3 assigns them here;
 - deterministic Roslyn diagnostics and normalized failure mapping.
 
 It depends on `ContractScribe.Core` and Roslyn/MSBuild packages. It must not reference:
@@ -125,9 +125,9 @@ It depends on `ContractScribe.Core` and Roslyn/MSBuild packages. It must not ref
 
 The project may read repository files only through repository-root-confined services. It does not own candidate source writes.
 
-### `ContractScribe.Patching`
+### Candidate `ContractScribe.Patching`
 
-`ContractScribe.Patching` owns the only product path that may create candidate source modifications:
+If M2 evidence meets the split thresholds, `ContractScribe.Patching` owns the only product path that may create candidate source modifications:
 
 - stale-source and declaration-identity validation;
 - XML-documentation rendering and escaping;
@@ -140,17 +140,16 @@ It depends on `ContractScribe.Core` and may depend on the read-only declaration-
 
 It must not reference a model-provider or GitHub SDK. It accepts only validated structured proposals; it never accepts arbitrary diffs or model-generated source text.
 
-### `ContractScribe.Agent`
+### Candidate `ContractScribe.Agent`
 
-`ContractScribe.Agent` owns the narrow Scribe Runtime:
+If M3 evidence meets the split thresholds, `ContractScribe.Agent` owns the narrow Scribe Runtime:
 
 - context and tool-call orchestration;
-- repository/scope/target context assembly over Core-owned identities and injected read ports;
+- repository/scope/target context assembly over the minimum M3-selected inputs and injected read ports;
 - provider-neutral model request and response contracts;
 - the closed read-only tool registry;
-- stable prompt-prefix construction and local prefix identity;
-- OpenAI-compatible DeepSeek and MiMo transport behavior and usage normalization;
-- tool, cached/uncached token, cost, attempt, and time budgets;
+- the provider transport and usage normalization selected from M3 executable evidence;
+- tool, input/output, cost when observable, attempt, and time budgets;
 - structured proposal submission and validation;
 - deterministic fake runtime;
 - the initial real provider transport unless its dependency footprint justifies a separate adapter project.
@@ -165,18 +164,18 @@ It must not reference:
 - GitHub tokens or APIs;
 - shell or general-purpose edit runtimes.
 
-Project-reference direction prevents `Agent` from depending on concrete mutation implementations. Core API visibility separately prevents it from declaring, accepting, returning, or resolving candidate-write, state-storage, or publication capabilities. The CLI composition root injects only the closed read-only Scribe tool registry and read ports. Together with negative compilation and public-API tests, this makes the absence of product mutation capabilities an executable compile/build-time property rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
+The implemented project/reference and API boundaries must prevent the Scribe runtime from receiving concrete mutation, state-storage, or publication capabilities. The CLI composition root injects only the selected closed read-only tool registry and read ports. M3 chooses the minimum negative compilation, API-surface, or composition tests needed to make this an executable property rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
 
-`ProjectContextBootstrapper` and `ProjectContextSession` are component responsibilities, not reasons to create another agent or production project. Core owns provider-neutral identities and rules, Roslyn owns repository-confined discovery and read implementations, Agent owns model-visible assembly and semantic traversal, and Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
+Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. M3 places them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
-### `ContractScribe.GitHub`
+### Candidate `ContractScribe.GitHub`
 
-`ContractScribe.GitHub` owns the GitHub platform adapter:
+If M5 evidence meets the split thresholds, `ContractScribe.GitHub` owns the GitHub platform adapter:
 
-- Issue checkpoint and append-only run-record reconciliation;
-- branch, commit, and pull-request ownership;
-- creation or continuation of at most one active bot-owned proposal pull request per campaign, created as draft, with successive snapshot-bound draft generations only after terminal predecessors;
-- operation IDs and idempotent mutation;
+- the minimum durable state needed to reconcile GitHub Issues, branches, commits, and pull requests safely;
+- explicit branch and pull-request ownership;
+- at most one compatible active bot-owned proposal pull request for current work, created as draft;
+- idempotent mutation and safe retry using only the identity or operation mechanism demonstrated necessary by M5;
 - base drift, conflict, human-change, corruption, closure, and replay handling;
 - GitHub permission, API failure, rate-limit, and response validation;
 - publication records expressed through Core contracts.
@@ -200,7 +199,9 @@ It may reference every production project because it composes them. It must not 
 
 The same CLI is the payload invoked locally, from validation workflows, and by a future GitHub Action wrapper.
 
-## Dependency graph
+## Candidate future dependency graph
+
+The following graph is one candidate if M2, M3, and M5 independently meet their split thresholds. Only edges between projects that actually exist are current architecture requirements.
 
 ```text
 ContractScribe.Cli
@@ -225,7 +226,7 @@ GitHub -X-> Agent
 Core -X-> any infrastructure project
 ```
 
-Architecture tests enumerate project references and fail when a forbidden edge appears. They also inspect the Core and Agent public API surfaces, verify that mutation-capable Core ports are not publicly visible, verify that the production friend allowlist contains only Cli and never Agent, and compile a negative Agent fixture that attempts to reference or receive candidate-write, state-storage, and publication capabilities. That fixture must fail for accessibility or contract-surface reasons, not merely because a concrete implementation assembly is absent.
+Current architecture tests enumerate existing project references and fail when a forbidden edge appears. When a future Scribe, patching, state, or GitHub boundary is implemented, its milestone adds the minimum API-surface, negative-capability, and composition tests needed to prove that the Scribe cannot receive mutation authority. Do not create future assemblies, friend allowlists, or negative fixtures solely to satisfy this candidate graph.
 
 ## Milestone evolution
 
@@ -233,23 +234,23 @@ Architecture tests enumerate project references and fail when a forbidden edge a
 | --- | --- |
 | M0 | `Core` and `Cli` remain the minimal product skeleton; Roslyn projects remain test-only experiments. |
 | M1 | Add production `ContractScribe.Roslyn`; keep `Core` and `Cli`; add integration tests when real workspace/process behavior requires them. |
-| M2 | Add `ContractScribe.Patching`. |
-| M3 | Add `ContractScribe.Agent`. |
-| M4 | Add campaign planning and state-machine behavior to `Core`; do not create a milestone-named orchestration project by default. |
-| M5 | Add `ContractScribe.GitHub`. |
-| M6 | Add the selected Action wrapper and release artifacts; no additional C# project is expected by default. |
+| M2 | Candidate: add `ContractScribe.Patching` if the source-write authority and dependency graph meet the split thresholds. |
+| M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
+| M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
+| M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |
+| M6 | Add the selected Action wrapper and release artifacts; add no C# project without an observed split need. |
 
-This sequence prevents later projects from becoming speculative dependencies of M1.
+This candidate sequence prevents later projects from becoming speculative dependencies of M1; milestone implementation evidence, not this table alone, decides the final placement.
 
 ## Test, fixture, experiment, and evaluation projects
 
 ### `ContractScribe.Tests`
 
-The default test project contains fast deterministic tests:
+The default test project contains fast deterministic tests for current behavior and adds future capability tests only when that capability is implemented:
 
 - schemas, registries, manifests, and canonical serialization;
-- pure policy, context identity/grouping, ordering, budget, and state-transition behavior;
-- fake-agent and fake-adapter orchestration;
+- pure policy and current contract behavior, plus context, ordering, budget, or state rules selected by later milestones;
+- fake Scribe or platform-adapter orchestration when those components exist;
 - invalid-input and failure-precedence tests;
 - dependency-boundary tests.
 
@@ -257,15 +258,15 @@ It must not require a provider secret, GitHub token, external repository, or liv
 
 ### `ContractScribe.IntegrationTests`
 
-Create this project when M1 production loading begins. It contains tests whose cost or host interaction makes them unsuitable for the fast suite:
+This existing project contains tests whose cost or host interaction makes them unsuitable for the fast suite:
 
 - MSBuild and Roslyn workspace loading;
 - repository-root and symlink/reparse behavior;
 - nested agent-entrypoint discovery and repository/scope context loading;
 - candidate workspace and filesystem validation;
-- CLI process, prompt-prefix fixture, and cancellation behavior;
-- fake HTTP provider and GitHub server integration;
-- cross-component audit-to-publication scenarios with deterministic substitutes.
+- CLI process and cancellation behavior, plus any provider/context behavior selected by M3;
+- fake HTTP provider and GitHub server integration when their milestones implement them;
+- implemented cross-component scenarios with deterministic substitutes.
 
 Live provider calls and live GitHub writes do not belong in the ordinary integration suite.
 
@@ -275,15 +276,15 @@ Synthetic `.csproj` and `.sln` inputs under `tests/fixtures` are analyzed subjec
 
 ### M0 experiment projects
 
-The existing test-only Roslyn and Native AOT experiment projects remain historical evidence inputs. M1 may migrate reusable implementation knowledge into `src/ContractScribe.Roslyn`, but production code must not reference the experiment assemblies.
+The existing test-only Roslyn, Native AOT, and independent-validation projects are historical M0 evidence, not current validation inputs. Production code must not reference the experiment assemblies.
 
-After M1 establishes replacement evidence, a separate cleanup decision may retire an experiment executable from the active solution while preserving its source, manifests, and historical records where reproducibility requires them.
+Issue #75 removes their executable, ordinary-CI, manifest, compatibility, tombstone, provenance, aggregation, publication, and preservation-only machinery when no production consumer remains. Reusable semantic fixtures or regression cases move under the current production owner; the experiment questions, conditions, results, limitations, and exact commits remain in documentation and Git history without a separate cleanup decision.
 
 ### Optional evaluation tool
 
 M3 may add `tools/ContractScribe.Evaluation` when a repeatable real-provider evaluation needs an executable harness. It is not a product library and is not part of ordinary `dotnet test`.
 
-The tool must require explicit opt-in, use synthetic inputs without secrets or private repository data by default, record bounded DeepSeek/MiMo usage, cache, cost, and provenance, and never make live provider availability a merge prerequisite.
+The tool must require explicit opt-in, use synthetic inputs without secrets or private repository data by default, record only the bounded provider usage, cost, and provenance needed by the current evaluation claim, and never make live provider availability a merge prerequisite.
 
 ## Split thresholds
 
@@ -299,11 +300,11 @@ Create an additional project only when at least one concrete condition exists:
 - a second provider makes SDK isolation, optional dependencies, or support policy materially clearer;
 - circular dependencies cannot be removed through a Core-owned port.
 
-Any split issue must name the dependency or authority problem, demonstrate it in the current graph, define migration and tests, and identify whether an ADR is required.
+Any split issue must name the dependency or authority problem, demonstrate it in the current graph, define the coherent code movement and tests, and identify whether an ADR is required. Compatibility or migration machinery is included only for a real boundary that cannot be updated atomically.
 
 ## GitHub Action host boundary
 
-TypeScript is not required for branch, commit, Issue, or pull-request operations. Those operations belong to `ContractScribe.GitHub` so the same reconciliation behavior can run and be tested outside GitHub Actions.
+TypeScript is not required for branch, commit, Issue, or pull-request operations. Those operations belong to the M5 GitHub adapter, whose final project placement is selected from dependency and authority evidence, so the same reconciliation behavior can run and be tested outside GitHub Actions.
 
 The initial Action-host candidates are:
 
@@ -332,21 +333,19 @@ It must not:
 - duplicate Core contracts or GitHub adapter rules;
 - turn Action event payloads into trusted instructions without validation.
 
-The wrapper and payload have separate identities and provenance. Changing the wrapper does not silently change the payload, and changing the payload does not silently rewrite wrapper behavior.
+If the selected distribution boundary requires the wrapper and payload to be verified independently, M6 defines the minimum separate identity and provenance needed to prevent substitution. The pre-release project graph does not reserve that mechanism in advance.
 
 ## Acceptance checks
 
-The project graph is healthy when:
+The current project graph is healthy when:
 
-- production reference edges match this document;
-- Core's public API exposes only the approved read-only Scribe capabilities, while candidate-write, state-storage, and publication ports remain inaccessible to Agent;
-- a negative Agent compilation fixture cannot reference, accept, return, or resolve those mutation-capable ports;
-- Agent constructors, properties, methods, and dependency-registration paths accept only the closed read-only Scribe tool registry and read ports;
-- deterministic tests can load `Core`, `Roslyn`, and `Patching` without provider or GitHub packages;
-- agent tests can run with fake semantic ports and no source-write implementation;
-- GitHub adapter tests can run with fake publication plans and no Roslyn or model runtime;
+- existing production reference edges match the current boundaries in this document;
+- when the Scribe is implemented, its public API, constructors, dependency registration, and negative-capability tests prove that it receives only the selected closed read-only tools and ports;
+- when patching is implemented, deterministic tests can load its implemented boundary without provider or GitHub packages;
+- when the Scribe is implemented, its tests can run with fake semantic ports and no source-write implementation;
+- when the GitHub adapter is implemented, its tests can run with fake publication plans and no Roslyn or model runtime;
 - the CLI is the only production composition root;
-- Action-wrapper tests treat the CLI as an external payload contract;
+- when an Action wrapper is implemented, its tests treat the CLI as an external payload contract;
 - no M0 experiment assembly is referenced from `src`;
 - no empty future-milestone project is added only to reserve a name.
 

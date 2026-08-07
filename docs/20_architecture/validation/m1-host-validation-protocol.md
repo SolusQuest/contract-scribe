@@ -1,5 +1,7 @@
 # M1 host-validation protocol
 
+> **Status:** Historical Issue #26/#57 design and defective current-tree implementation assigned to Issue #75. Its protected inputs, locks, bundle/review identities, evidence schemas, manifests, self-test, aggregation, publication, and certification lifecycle are not current pre-release requirements and must not be repaired, refreshed, or used to authorize execution. PR #77 removes its dedicated exact-bundle tests from ordinary test authority. Issue #75 deletes or collapses the remaining machinery into the production-focused validation defined by the current M1 plan; retain only product behavior and focused tests that protect a concrete current failure.
+
 ## Status and ownership
 
 This document and the machine-readable bundle under `tests/fixtures/m1-host-validation/v1` freeze version 1 of the M1 validation oracle for the production in-process audit host.

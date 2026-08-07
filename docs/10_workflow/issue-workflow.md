@@ -9,13 +9,13 @@ Use the native GitHub issue type as the authoritative type metadata. Apply these
 
 Choose the type from the issue's primary outcome. Do not repeat a native type as a title prefix such as `Task:`, `Bug:`, `Feature:`, or `Enhancement:`. Titles describe the concrete outcome. A work-mode qualifier such as `Design:` or `Experiment:` may be used only when it materially disambiguates the outcome; it does not replace the native `Task` type.
 
-## Native type publication gate
+## Native type handling
 
-Before any remote issue mutation, resolve the reviewed type against the repository's currently enabled native issue types. A configured name is insufficient if the type is disabled or no longer available; this check applies to organization-managed types such as `Enhancement` as well as the default types.
+Before creating an issue or intentionally changing its native type, resolve the reviewed type against the repository's currently enabled native issue types. A configured name is insufficient if the type is disabled or no longer available; this check applies to organization-managed types such as `Enhancement` as well as the default types.
 
-Prove before the first mutation that the selected publishing client sequence can set or correct the resolved type and read the remote native type field back. The sequence may include a separate follow-up client only when its mutation and readback capabilities have already been established. Stop before creating or updating an issue if the complete sequence is unavailable.
+For that create or type-changing operation, verify that the selected client can set and read the native type. Stop before that operation if the type cannot be applied safely. A body-, title-, or relationship-only correction preserves the existing type and is not blocked by unavailable type-mutation capability; read the type back with the changed fields instead.
 
-After a mutation, read back the native type and compare it with the reviewed value. If mutation or readback fails after a partial remote write, mark the synchronization failed, record the target and observed state, stop dependent writes, and reconcile the issue to the reviewed manifest or perform explicit cleanup before resuming. Do not treat a partially written or unverified issue as published.
+After a create or type change, read back the native type and compare it with the reviewed value. If mutation or readback fails after a partial remote write, record the target and observed state, stop dependent writes that rely on the type, and reconcile before resuming. Do not infer the native type from a title prefix.
 
 Every executable work issue must state:
 
@@ -25,16 +25,16 @@ Every executable work issue must state:
 - validation and evidence required for acceptance;
 - dependencies and independently unblockable states;
 - the expected pull-request and review boundary, or why no repository change is expected;
-- its owning parent or why it is an external dependency;
-- relevant authoritative documentation links, using full commit SHAs in tracker bodies after the referenced baseline has merged.
+- its owning parent when a parent adds real coordination value, or its milestone/track otherwise;
+- relevant authoritative documentation links, using full commit SHAs for immutable historical evidence rather than every living planning reference.
 
 An executable issue should ordinarily complete through one focused pull request and review cycle. Split it when it contains multiple independently useful outcomes with separate acceptance contracts, independently unblockable dependency states, or changes that require independent pull-request or review cycles.
 
-Before declaring pre-release work agent-ready, apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Complete its process-complexity checkpoint whenever any trigger in that rule applies; do not narrow or extend the canonical trigger set in an issue. Record the complete process profile in the issue. If an extra stage does not protect a distinct current failure and lacks evidence against a simpler reversible alternative, remove or combine it.
+Before declaring pre-release work agent-ready, apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). When the plan actually exceeds the default PR, merge, review, mutation, compatibility, or validation budget, record its concise process exception. A routine issue does not need a process-profile section. If an extra stage does not protect a distinct current failure, remove or combine it.
 
 Every resulting child must remain coherent and independently acceptable with its own complete acceptance contract. A dependency state may justify a split, but it never substitutes for an acceptable child outcome. Keep implementation with the tests, contract artifacts, fixtures, and validation required to accept it; separate one of those artifacts only when the separated result is independently useful and acceptable.
 
-A coordination parent may be intentionally broader because it owns a dependency graph, blocker classification, or closure evidence. It must not retain unbounded executable work. Delegate executable outcomes to complete child issues and make each parent/child relationship explicit.
+A coordination parent may be intentionally broader when it adds a useful dependency graph, blocker classification, or closure view beyond the milestone. It must not retain unbounded executable work. Do not create or maintain a parent merely to duplicate GitHub milestone membership, issue state, or CI links.
 
 Use repository-local parent/sub-issue relationships for decomposed work; use full URLs for cross-repository traceability.
 
@@ -42,41 +42,41 @@ M0 experiments must report observed evidence and unresolved risks. They must not
 
 ## Roadmap and milestone changes
 
-Long-lived milestone scope and exit criteria must land in repository docs before GitHub milestone descriptions or issue graphs are treated as authoritative. Tracker drafts may be prepared locally while the docs are under review, but tracker synchronization begins only after the complete documentation baseline has merged.
+Long-lived milestone scope and exit criteria live in repository docs. Tracker drafts may be prepared while the docs are under review, but dependent implementation begins only after the applicable documentation is merged. Ordinary issue-body corrections may follow the current `main` document path without creating an immutable publication package.
 
-Before the first tracker write:
+Use a reviewed synchronization manifest only for a bulk milestone, parent/sub-issue, dependency-graph, or multi-record migration whose partial application would create ambiguous planning state. Before the first write in such a migration:
 
-1. record the merged baseline commit and verify that it is reachable from `main`;
-2. construct authoritative repository-file links with that full commit SHA;
-3. review one synchronization manifest entry for every proposed tracker write;
-4. complete the native type publication gate for every proposed issue write.
+1. verify the governing documentation is reachable from `main`;
+2. choose living `main` links or immutable full-SHA evidence links according to the rule below;
+3. review one synchronization manifest entry for every proposed structural tracker write;
+4. complete native type handling for issues being created or intentionally retyped.
 
-Each synchronization entry records:
+Each bulk synchronization entry records only the fields the migration intends to change:
 
 - the existing target or proposed issue or milestone;
 - operation: `create`, `update`, `close`, `move`, or `no change`;
 - reviewed title and body draft, or title and description draft for a milestone;
-- native issue type for every issue entry;
-- verified native-type mutation and readback path for every issue entry;
+- native issue type when the migration creates, retypes, or structurally depends on it;
+- verified native-type mutation and readback path for created or retyped issues;
 - expected state;
 - owning parent;
 - milestone or non-product track;
 - native dependencies;
 - labels when they carry contractual meaning;
-- authoritative full-commit-SHA documentation links.
+- immutable documentation links when the entry makes a historical claim.
 
-Repository-file links in issues and milestones identify immutable semantics and must use a full commit SHA whose commit is reachable from `main`. Live issue, pull-request, and milestone URLs are mutable tracker references and are recorded separately. A per-body digest is not required; the reviewed synchronization manifest is the comparison source.
+Living issue and milestone guidance may link the current `main` repository path. Use a full commit SHA whose commit is reachable from `main` when the link is evidence for an immutable historical acceptance or external claim. Live issue, pull-request, and milestone URLs remain mutable tracker references. A per-body digest is not required.
 
-After applying the writes, read back the rendered remote state and compare the title, body, native issue type, state, milestone, parent/sub-issue relationships, dependencies, contractual labels, and pinned links with the reviewed manifest. A title prefix or body field is not evidence that the native type was set.
+After applying writes, read back the fields and relationships actually changed. A bulk migration reads back its complete changed graph; an ordinary body or title update does not require a repository-wide graph snapshot, source/target digest table, or publication-capability proof.
 
-A milestone parent issue owns:
+A milestone parent issue may own, when that view is useful:
 
 - the dependency graph;
 - the exit-evidence checklist;
 - blocking versus non-blocking follow-ups;
 - the final closure record.
 
-Every executable issue counted by a milestone must be owned by its milestone parent or identified as an external dependency with an owner, milestone or track, and rationale.
+Every executable issue belongs to its actual milestone or track. Add a parent/sub-issue relationship only when it contributes coordination beyond that membership.
 
 Do not place a non-gating research item, release gate, or later-track task in a milestone merely to keep it visible. Use the milestone that owns its actual completion condition.
 
@@ -84,9 +84,9 @@ Do not place a non-gating research item, release gate, or later-track task in a 
 
 Before refining a contract issue, read [Contract lifecycle](../00_project/contract-lifecycle.md).
 
-For a pre-release contract, also apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Separate early validation design from final producer-consumer freeze, and require an end-to-end satisfiability sweep before freezing implementation-level schemas, fixtures, adapters, or certification identities.
+For a pre-release contract, also apply [Pre-release engineering proportionality](../00_project/pre-release-engineering.md). Define only the minimum early validation boundary, test the affected producer-consumer path when executable, and defer any release freeze or certification identity to a concrete release boundary.
 
-A pre-release breaking amendment does not automatically require a new artifact version. It does require a coordinated acceptance contract that names every affected specification, schema, registry, fixture, oracle, implementation, and validation gate.
+A pre-release breaking amendment does not automatically require a new artifact version. Its acceptance contract names the specification, producer, consumer, schema or registry, fixture, validator, implementation, and validation surfaces that are actually affected.
 
 Create a separate decision issue when the amendment must choose among materially different semantics. Create a separate experiment issue when executable evidence is needed before the choice can be made. Do not hide an unresolved contract choice inside a production implementation issue.
 

@@ -26,7 +26,6 @@
     <ProjectReference Include="..\..\src\ContractScribe.Cli\ContractScribe.Cli.csproj" />
     <ProjectReference Include="..\ContractScribe.Roslyn\ContractScribe.Roslyn.csproj" />
     <ProjectReference Include="..\ContractScribe.ContractBaselineProbe\ContractScribe.ContractBaselineProbe.csproj" />
-    <ProjectReference Include="..\ContractScribe.HostValidation\ContractScribe.HostValidation.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,7 @@
 # Scribe context and prompt economics
 
+> **Status:** M3 candidate design record. Its privacy, repository-authority, bounded-tool, and cache-not-correctness boundaries remain guidance; concrete provider names, manifest and identity shapes, prompt-prefix rules, budget fields, storage, and routing mechanisms are not frozen requirements before M3 refinement and executable evaluation.
+
 ## Decision
 
 ContractScribe uses one model-assisted agent role: the Documentation Scribe. Project-context bootstrap, context identity, snapshot storage, target grouping, and campaign scheduling are deterministic runtime responsibilities, not separate agents.

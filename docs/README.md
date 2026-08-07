@@ -19,7 +19,7 @@ This directory is the durable source for product, workflow, architecture, contra
 - [Pull-request workflow](10_workflow/pr-workflow.md)
 - [Release policy](10_workflow/release-policy.md)
 
-The contract lifecycle is especially important before the first release: version numbers identify compatibility families, while a full repository commit identifies exact draft semantics. Milestone baselines require controlled revalidation, but they do not force version-number churn when incompatible consumers do not need to coexist.
+The contract lifecycle is especially important before the first release: version numbers identify compatibility families, while a repository revision identifies exact draft semantics. Milestone closure records historical evidence for their exact revision; they do not create an active baseline that later changes must preserve or supersede.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ audit decides what is missing
   -> platform adapter decides how to publish
 ```
 
-The long-lived product graph uses six incrementally created production projects. TypeScript is not part of the product core and remains an optional thin GitHub Action host selected only by the payload-distribution decision. The planned initial Scribe Runtime transport uses an OpenAI-compatible protocol, evaluates DeepSeek as the primary provider and MiMo as a compatibility provider through an M3 executable corpus, and treats stable prompt-prefix reuse as a required economic design property rather than provider-owned correctness state.
+The long-lived product graph uses production projects only when their milestone needs a real boundary. TypeScript is not part of the product core and remains an optional thin GitHub Action host selected only by the payload-distribution decision. M3 selects the smallest provider transport and evaluation set that can validate the executable Scribe path; provider names, compatibility corpora, prompt-prefix identities, and economics protocols are not frozen by the pre-M3 roadmap.
 
 ## Machine contracts
 
