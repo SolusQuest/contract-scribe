@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The six-project product graph and its forbidden reference edges are the default implementation architecture for M1 through M5.
+The existing M1 `Core` / `Roslyn` / `Cli` graph and its implemented dependency constraints are current architecture. The six-concern M2-M5 graph, future project names, reference edges, API boundaries, friend access, and negative-test mechanisms are candidates selected by each implementing milestone from executable dependency and authority evidence.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
