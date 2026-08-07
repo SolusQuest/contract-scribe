@@ -1,6 +1,6 @@
 # Coordinated pre-release v1 baseline
 
-> **Status:** Historical Issue #55/#70 lineage description pending Issue #75 cleanup. The checked-in manifest, successor identities, protected-input maintenance, bundle/review lifecycle, and reopen rules below are not current development authority. Issue #75 removes their current-tree machinery while retaining the actual Policy, Taxonomy, Audit Result, fixture, cross-contract, and downstream-ownership coverage under the current draft contracts and tests.
+> **Status:** Historical Issue #55/#70 lineage description pending Issue #75 cleanup. The checked-in manifest, successor identities, protected-input maintenance, bundle/review lifecycle, and reopen rules below are not current development authority. PR #77 removes the exact-current-manifest test that made this historical baseline an ordinary change gate. Issue #75 removes the remaining current-tree machinery while retaining the actual Policy, Taxonomy, Audit Result, fixture, cross-contract, and downstream-ownership coverage under the current draft contracts and tests.
 
 ## Status and identity
 

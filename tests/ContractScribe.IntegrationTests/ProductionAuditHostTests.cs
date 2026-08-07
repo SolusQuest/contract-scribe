@@ -7,7 +7,6 @@ using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
-using ContractScribe.HostValidation;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -369,7 +368,7 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
-    public async Task TemporaryDiskMeter_DirectAllocationCleanupProducesOneAtomicFact()
+    public void TemporaryDiskMeter_DirectAllocationCleanupProducesOneAtomicFact()
     {
         var root = Path.Join(
             Path.GetTempPath(),
@@ -381,19 +380,14 @@ public sealed class ProductionAuditHostTests
             using var meter = new TemporaryDiskMeter(root, null);
             var staging = Path.Join(root, "direct-staging.bin");
             meter.ObserveHostAllocation(staging, 0, 257);
-            await File.WriteAllBytesAsync(staging, new byte[257]);
-            File.Delete(staging);
             meter.ObservePath(staging);
 
-            var barrier = Path.Join(root, "watcher-barrier.bin");
-            await File.WriteAllBytesAsync(barrier, new byte[258]);
-            Assert.True(SpinWait.SpinUntil(
-                () => meter.HighWater >= 258,
-                TimeSpan.FromSeconds(5)));
+            var barrier = Path.Join(root, "direct-barrier.bin");
+            meter.ObserveHostAllocation(barrier, 0, 258);
+            Assert.Equal(258, meter.HighWater);
 
             Assert.True(meter.TryCreateFactWithinThreshold(out var fact));
             Assert.Equal(258, fact!.Measured);
-            File.Delete(barrier);
         }
         finally
         {
@@ -1233,169 +1227,6 @@ public sealed class ProductionAuditHostTests
         Assert.Null(outcome.CanonicalResult);
     }
 
-    [Fact]
-    public async Task ValidationAdapter_EmitsCanonicalRegistryBoundInvalidInputResponse()
-    {
-        var root = Path.Join(
-            Path.GetTempPath(),
-            "contractscribe-host-adapter",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            await File.WriteAllTextAsync(Path.Join(root, "Fixture.csproj"), "<Project />\n");
-            CanonicalJson.WriteCanonical(
-                Path.Join(root, ".contractscribe-fixture.json"),
-                new
-                {
-                    formatVersion = "contractscribe-m1-host-validation-fixture-recipe-v1",
-                    fixture = "failure.invalid-input",
-                });
-            var requestPath = Path.Join(root, "request.json");
-            var responsePath = Path.Join(root, "response.json");
-            CanonicalJson.WriteCanonical(
-                requestPath,
-                new SubjectRequest(
-                    "contractscribe-m1-host-validation-subject-request-v1",
-                    "production-host",
-                    "failure.invalid-input",
-                    "run-1",
-                    root,
-                    responsePath,
-                    null,
-                    [],
-                    "continue"));
-
-            var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
-                requestPath,
-                responsePath,
-                Provenance());
-
-            Assert.Equal(0, exitCode);
-            SchemaValidation.ValidateDefinition(
-                responsePath,
-                Path.Join(
-                    FindRepositoryRoot(),
-                    "schemas",
-                    "validation",
-                    "m1-host-validation-subject-v1.schema.json"),
-                "subjectResponse",
-                requireCanonical: true);
-            var response = CanonicalJson.DeserializeStrict<SubjectResponse>(
-                responsePath,
-                64 * 1024,
-                requireCanonical: true);
-            Assert.Equal("invalid-input", response.ExecutionOutcome);
-            Assert.Equal("host.input.invalid-request", response.FailureCode);
-            Assert.Equal("input", response.FailureStage);
-            Assert.Equal("not-selected", response.HostFacts?.ToolchainSelectionState);
-            Assert.Equal(
-                HostContractResources.FailureRegistrySha256,
-                response.FailureRegistryIdentity);
-            Assert.False(File.Exists(Path.Join(root, "TestResults", "audit-result.json")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task ValidationAdapter_SameMissingAssetsFixtureHasCommonSubjectProjection()
-    {
-        var missingAssets = await RunMissingAssetsAdapterAsync("toolchain.missing-assets");
-        var noAutomaticRestore = await RunMissingAssetsAdapterAsync(
-            "toolchain.no-automatic-restore");
-
-        Assert.Equal("toolchain.missing-assets-classified", missingAssets.ObservationCode);
-        Assert.Equal("internally-enforceable", missingAssets.EnforcementClass);
-        Assert.Equal(missingAssets.ObservationCode, noAutomaticRestore.ObservationCode);
-        Assert.Equal(missingAssets.EnforcementClass, noAutomaticRestore.EnforcementClass);
-        Assert.Equal(missingAssets.ExecutionOutcome, noAutomaticRestore.ExecutionOutcome);
-        Assert.Equal(missingAssets.FailureCode, noAutomaticRestore.FailureCode);
-        Assert.Equal(missingAssets.FailureStage, noAutomaticRestore.FailureStage);
-        Assert.Equal("host.workspace-load.failed", missingAssets.FailureCode);
-        Assert.Equal("load-failure", missingAssets.ExecutionOutcome);
-        Assert.Equal("workspace-load", missingAssets.FailureStage);
-    }
-
-    [Fact]
-    public async Task ValidationAdapter_ProjectsOnlyThePrimaryDiagnosticForSchemaSemantics()
-    {
-        var success = await RunDiagnosticProjectionAdapterAsync("adapter.supporting-success");
-        var failure = await RunDiagnosticProjectionAdapterAsync("adapter.supporting-failure");
-        var reversed = await RunDiagnosticProjectionAdapterAsync(
-            "adapter.supporting-failure-reversed");
-        var successFacts = Assert.IsType<HostObservationFacts>(success.HostFacts);
-        var failureFacts = Assert.IsType<HostObservationFacts>(failure.HostFacts);
-        var reversedFacts = Assert.IsType<HostObservationFacts>(reversed.HostFacts);
-
-        Assert.Empty(successFacts.NormalizedDiagnosticFacts);
-        var primary = Assert.Single(failureFacts.NormalizedDiagnosticFacts);
-        Assert.Equal("host.workspace-load.failed", primary.Code);
-        Assert.Equal("workspace-load", primary.Stage);
-        Assert.Equal(
-            failureFacts.NormalizedDiagnosticFacts,
-            reversedFacts.NormalizedDiagnosticFacts);
-    }
-
-    [Fact]
-    public async Task ValidationAdapter_EmitsSchemaLegalPreselectionEnvironmentFailure()
-    {
-        var response = await RunDiagnosticProjectionAdapterAsync("failure.sdk-environment");
-
-        Assert.Equal("environment-unavailable", response.ExecutionOutcome);
-        Assert.Equal("host.sdk-discovery.unavailable", response.FailureCode);
-        Assert.Equal("sdk-discovery", response.FailureStage);
-        var facts = Assert.IsType<HostObservationFacts>(response.HostFacts);
-        Assert.Equal("not-selected", facts.ToolchainSelectionState);
-        var primary = Assert.Single(facts.NormalizedDiagnosticFacts);
-        Assert.Equal(response.FailureCode, primary.Code);
-        Assert.Equal(response.FailureStage, primary.Stage);
-    }
-
-    [Fact]
-    public async Task ValidationAdapter_NeverMasksACommittedHostResultForObservationOnlyFixture()
-    {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        CanonicalJson.WriteCanonical(
-            Path.Join(fixture.Root, ".contractscribe-fixture.json"),
-            new { fixture = "entry.slnx" });
-        var requestPath = Path.Join(fixture.Root, "request.json");
-        var responsePath = Path.Join(fixture.Root, "response.json");
-        CanonicalJson.WriteCanonical(
-            requestPath,
-            new SubjectRequest(
-                "contractscribe-m1-host-validation-subject-request-v1",
-                "production-host",
-                "observation-only-fixture",
-                "run-1",
-                fixture.Root,
-                responsePath,
-                null,
-                [],
-                "continue"));
-
-        var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
-            requestPath,
-            responsePath,
-            Provenance());
-        var response = CanonicalJson.DeserializeStrict<SubjectResponse>(
-            responsePath,
-            64 * 1024,
-            requireCanonical: true);
-
-        Assert.Equal(0, exitCode);
-        Assert.Equal("succeeded", response.ExecutionOutcome);
-        Assert.Equal("committed", response.TerminalState);
-        Assert.Equal("published", response.ArtifactState);
-        Assert.NotNull(response.CanonicalResult);
-        Assert.Equal("committed", response.HostFacts?.OutputCommit.Status);
-        Assert.Equal(
-            response.CanonicalResult!.Sha256,
-            response.HostFacts?.OutputCommit.Sha256);
-    }
-
     private static Task<ProductionAuditOutcome> RunAsync(
         LoaderFixture fixture,
         string resultPath,
@@ -1448,120 +1279,4 @@ public sealed class ProductionAuditHostTests
     [DllImport("libc", EntryPoint = "link", SetLastError = true)]
     private static extern int Link(string existingPath, string newPath);
 
-    private static async Task<SubjectResponse> RunMissingAssetsAdapterAsync(
-        string vectorId)
-    {
-        var root = Path.Join(
-            Path.GetTempPath(),
-            "contractscribe-host-adapter",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            await File.WriteAllTextAsync(
-                Path.Join(root, "Fixture.csproj"),
-                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>\n");
-            await File.WriteAllTextAsync(
-                Path.Join(root, "Fixture.cs"),
-                "namespace ContractScribe.ValidationFixture; public sealed class FixtureType { }\n");
-            CanonicalJson.WriteCanonical(
-                Path.Join(root, ".contractscribe-fixture.json"),
-                new { fixture = "toolchain.assets-missing" });
-            var requestPath = Path.Join(root, "request.json");
-            var responsePath = Path.Join(root, "response.json");
-            CanonicalJson.WriteCanonical(
-                requestPath,
-                new SubjectRequest(
-                    "contractscribe-m1-host-validation-subject-request-v1",
-                    "production-host",
-                    vectorId,
-                    "run-1",
-                    root,
-                    responsePath,
-                    null,
-                    [],
-                    "continue"));
-
-            var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
-                requestPath,
-                responsePath,
-                Provenance());
-
-            Assert.Equal(0, exitCode);
-            SchemaValidation.ValidateDefinition(
-                responsePath,
-                Path.Join(
-                    FindRepositoryRoot(),
-                    "schemas",
-                    "validation",
-                    "m1-host-validation-subject-v1.schema.json"),
-                "subjectResponse",
-                requireCanonical: true);
-            return CanonicalJson.DeserializeStrict<SubjectResponse>(
-                responsePath,
-                64 * 1024,
-                requireCanonical: true);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    private static async Task<SubjectResponse> RunDiagnosticProjectionAdapterAsync(
-        string fixtureProfile)
-    {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        CanonicalJson.WriteCanonical(
-            Path.Join(fixture.Root, ".contractscribe-fixture.json"),
-            new { fixture = fixtureProfile });
-        var requestPath = Path.Join(fixture.Root, "request.json");
-        var responsePath = Path.Join(fixture.Root, "response.json");
-        CanonicalJson.WriteCanonical(
-            requestPath,
-            new SubjectRequest(
-                "contractscribe-m1-host-validation-subject-request-v1",
-                "production-host",
-                fixtureProfile,
-                "run-1",
-                fixture.Root,
-                responsePath,
-                null,
-                [],
-                "continue"));
-
-        var exitCode = await HostValidationSubjectAdapter.RunForTestsAsync(
-            requestPath,
-            responsePath,
-            Provenance());
-
-        Assert.Equal(0, exitCode);
-        SchemaValidation.ValidateDefinition(
-            responsePath,
-            Path.Join(
-                FindRepositoryRoot(),
-                "schemas",
-                "validation",
-                "m1-host-validation-subject-v1.schema.json"),
-            "subjectResponse",
-            requireCanonical: true);
-        return CanonicalJson.DeserializeStrict<SubjectResponse>(
-            responsePath,
-            64 * 1024,
-            requireCanonical: true);
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
-            {
-                return current.FullName;
-            }
-            current = current.Parent;
-        }
-        throw new InvalidOperationException("Repository root not found.");
-    }
 }

@@ -240,21 +240,6 @@ public sealed class M1AuditCliContractTests
     }
 
     [Fact]
-    public void ProtectedInputs_MatchCurrentFilesExactly()
-    {
-        using var annex = LoadAnnex();
-        var pins = annex.RootElement.GetProperty("meta").GetProperty("protectedInputs");
-        var paths = pins.EnumerateObject().Select(property => property.Name).ToArray();
-        ValidateProtectedInputClosure(paths);
-        foreach (var property in pins.EnumerateObject())
-        {
-            var path = Path.Join(Root, property.Name.Replace('/', Path.DirectorySeparatorChar));
-            Assert.True(File.Exists(path), $"Missing protected input: {property.Name}");
-            Assert.Equal(property.Value.GetString(), Sha256(path));
-        }
-    }
-
-    [Fact]
     public void ProtectedInputClosure_RejectsEitherMissingOracleSourcePin()
     {
         using var annex = LoadAnnex();

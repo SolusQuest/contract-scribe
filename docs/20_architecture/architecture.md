@@ -97,7 +97,7 @@ The Documentation Scribe must not receive source-write, state-persistence, or pu
 
 M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, and atomic `ProductionAuditHost` path. The remaining M1 path is #75 validation cleanup and production-focused replacement, #41 exact-main validation, #30 production CLI audit command, and #42 read-only smoke. The patch engine, Documentation Scribe, campaign state, GitHub adapter, and consumable Action remain later-milestone work.
 
-M0 experiment questions, conditions, results, limitations, and exact revisions remain historical evidence. Their current-tree runners, manifests, compatibility paths, and preservation-only tests are removed by #75 unless a concrete production regression is migrated under the current production owner.
+M0 experiment questions, conditions, results, limitations, and exact revisions remain historical evidence. PR #77 removes their preservation tests and historical Roslyn experiment project from ordinary test and solution authority. Issue #75 removes the remaining current-tree runners, manifests, and compatibility paths unless a concrete production regression is migrated under the current production owner.
 
 The current candidate M5 graph separates `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`. Existing project boundaries are authoritative; future projects are added only when their implementing milestone demonstrates a real dependency or authority boundary. M1 does not create empty projects for later work.
 
