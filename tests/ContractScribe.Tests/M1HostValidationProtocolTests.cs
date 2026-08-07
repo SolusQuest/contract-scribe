@@ -79,7 +79,7 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
-    public void HostValidation_CheckedInPendingReviewHasOneCanonicalNonAuthorizingShape()
+    public void HostValidation_CheckedInReviewHasOneCanonicalLifecycleShape()
     {
         var context = BundleValidator.Validate(Root);
         var review = BundleValidator.ValidateReviewStructure(
@@ -87,19 +87,27 @@ public sealed class M1HostValidationProtocolTests
             BundleValidator.ReviewRelativePath,
             context.Lock.BundleId);
 
-        Assert.Equal("pending", review.Verdict);
-        Assert.Null(review.ReviewedSourceRevision);
-        Assert.Null(review.ReviewerKind);
-        Assert.Null(review.RelaySessionId);
-        Assert.Null(review.RelayTaskId);
-        Assert.Null(review.ReviewedAtUtc);
-        Assert.Equal(["independent-review.pending"], review.BlockingFindingIds);
-        Assert.Equal(
-            "HV121_REVIEW_NOT_ACCEPTED",
-            Assert.Throws<ProtocolException>(() =>
-                BundleValidator.Validate(Root, requireReview: true)).Code);
+        Assert.Equal(context.Lock.BundleId, review.BundleId);
+        Assert.Equal(BundleValidator.ComputeReviewId(review), review.ReviewId);
+        switch (review.Verdict)
+        {
+            case "pending":
+                AssertCanonicalPendingReview(review);
+                AssertPendingReview(() =>
+                    BundleValidator.Validate(Root, requireReview: true));
+                break;
+            case "accepted":
+                AssertCanonicalAcceptedReview(review);
+                Assert.Equal(
+                    context.Lock.BundleId,
+                    BundleValidator.Validate(Root, requireReview: true).Lock.BundleId);
+                break;
+            default:
+                Assert.Fail($"Unexpected checked-in review verdict: {review.Verdict}");
+                break;
+        }
 
-        var obsolete = review with
+        var obsolete = CreatePendingReviewRecord(context.Lock.BundleId) with
         {
             BlockingFindingIds = ["baseline.main-reconciliation-pending"],
             ReviewId = string.Empty
@@ -124,6 +132,63 @@ public sealed class M1HostValidationProtocolTests
         finally
         {
             File.Delete(temp);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_PendingAndAcceptedReviewsShareOneProtectedBundle()
+    {
+        var context = BundleValidator.Validate(Root);
+        var protectedInputsPath = RepositoryPaths.ResolveConfined(
+            Root,
+            BundleValidator.ProtectedInputsRelativePath);
+        var protectedInputsIdentity = CanonicalJson.Sha256File(protectedInputsPath);
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            $"contractscribe-review-lifecycle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var pendingPath = Path.Join(temp, "pending.json");
+        var acceptedPath = Path.Join(temp, "accepted.json");
+        try
+        {
+            CanonicalJson.WriteCanonical(
+                pendingPath,
+                CreatePendingReviewRecord(context.Lock.BundleId));
+            CanonicalJson.WriteCanonical(
+                acceptedPath,
+                CreateAcceptedReview(context.Lock.BundleId, new string('f', 40)));
+
+            var pending = BundleValidator.ValidateReviewStructure(
+                Root,
+                pendingPath,
+                context.Lock.BundleId);
+            var accepted = BundleValidator.ValidateReview(
+                Root,
+                acceptedPath,
+                context.Lock.BundleId);
+
+            AssertCanonicalPendingReview(pending);
+            AssertCanonicalAcceptedReview(accepted);
+            Assert.Equal(pending.BundleId, accepted.BundleId);
+            AssertPendingReview(() =>
+                BundleValidator.Validate(
+                    Root,
+                    requireReview: true,
+                    reviewPath: pendingPath));
+            Assert.Equal(
+                context.Lock.BundleId,
+                BundleValidator.Validate(
+                    Root,
+                    requireReview: true,
+                    reviewPath: acceptedPath).Lock.BundleId);
+            Assert.Equal(
+                protectedInputsIdentity,
+                CanonicalJson.Sha256File(protectedInputsPath));
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
         }
     }
 
@@ -354,19 +419,24 @@ public sealed class M1HostValidationProtocolTests
     [Fact]
     public void HostValidation_PendingReviewBlocksEvidenceBeforeInputReadsOrOutputCreation()
     {
-        _ = BundleValidator.Validate(Root);
+        var context = BundleValidator.Validate(Root);
         var temp = Path.Join(
             Root,
             "TestResults",
             $"host-validation-pending-gate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var reviewPath = Path.Join(temp, "pending-review.json");
         var missing = Path.Join(temp, "missing.json");
         var output = Path.Join(temp, "aggregate-evidence.json");
         try
         {
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreatePendingReviewRecord(context.Lock.BundleId));
             AssertPendingReview(() =>
                 SubjectManifestMaterializer.MaterializeCommon(
                     Root,
-                    BundleValidator.ReviewRelativePath,
+                    reviewPath,
                     output));
             Assert.False(File.Exists(output));
 
@@ -375,7 +445,7 @@ public sealed class M1HostValidationProtocolTests
                     Root,
                     missing,
                     missing,
-                    BundleValidator.ReviewRelativePath,
+                    reviewPath,
                     output).GetAwaiter().GetResult());
             Assert.False(File.Exists(output));
 
@@ -384,7 +454,7 @@ public sealed class M1HostValidationProtocolTests
                     Root,
                     Path.Join(temp, "missing-artifact-root"),
                     output,
-                    BundleValidator.ReviewRelativePath,
+                    reviewPath,
                     new string('1', 40)));
             Assert.False(File.Exists(output));
 
@@ -394,7 +464,7 @@ public sealed class M1HostValidationProtocolTests
                     "aggregate",
                     missing,
                     output,
-                    BundleValidator.ReviewRelativePath,
+                    reviewPath,
                     Path.Join(temp, "missing-artifact-root")));
             Assert.False(File.Exists(output));
         }
@@ -3911,6 +3981,32 @@ public sealed class M1HostValidationProtocolTests
             "HV121_REVIEW_NOT_ACCEPTED",
             Assert.Throws<ProtocolException>(action).Code);
 
+    private static void AssertCanonicalPendingReview(ReviewRecord review)
+    {
+        Assert.Equal("pending", review.Verdict);
+        Assert.Null(review.ReviewedSourceRevision);
+        Assert.Null(review.ReviewerKind);
+        Assert.Null(review.RelaySessionId);
+        Assert.Null(review.RelayTaskId);
+        Assert.Null(review.ReviewedAtUtc);
+        Assert.Equal(["independent-review.pending"], review.BlockingFindingIds);
+        Assert.Equal(BundleValidator.ComputeReviewId(review), review.ReviewId);
+    }
+
+    private static void AssertCanonicalAcceptedReview(ReviewRecord review)
+    {
+        Assert.Equal("accepted", review.Verdict);
+        Assert.Matches("^[0-9a-f]{40}$", review.ReviewedSourceRevision!);
+        Assert.Equal("independent-relay", review.ReviewerKind);
+        Assert.True(Guid.TryParse(review.RelaySessionId, out var relaySessionId));
+        Assert.NotEqual(Guid.Empty, relaySessionId);
+        Assert.True(Guid.TryParse(review.RelayTaskId, out var relayTaskId));
+        Assert.NotEqual(Guid.Empty, relayTaskId);
+        Assert.NotNull(review.ReviewedAtUtc);
+        Assert.Empty(review.BlockingFindingIds);
+        Assert.Equal(BundleValidator.ComputeReviewId(review), review.ReviewId);
+    }
+
     private static string FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -3939,6 +4035,19 @@ public sealed class M1HostValidationProtocolTests
             "accepted",
             [],
             "2026-07-29T00:00:00Z"));
+
+    private static ReviewRecord CreatePendingReviewRecord(string bundleId) =>
+        WithComputedReviewId(new ReviewRecord(
+            "contractscribe-m1-host-validation-review-v1",
+            string.Empty,
+            bundleId,
+            null,
+            null,
+            null,
+            null,
+            "pending",
+            ["independent-review.pending"],
+            null));
 
     private static ReviewRecord WithComputedReviewId(ReviewRecord review) =>
         review with
