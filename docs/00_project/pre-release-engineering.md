@@ -45,7 +45,7 @@ The check is not a market survey and routine local implementation does not requi
 - **Similar systems or standards inspected:** [GitHub flow](https://docs.github.com/en/get-started/using-github/github-flow), Google's [Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html) and [code review standard](https://google.github.io/eng-practices/review/reviewer/standard.html), and [Semantic Versioning 2.0.0](https://semver.org/).
 - **Patterns adopted:** use a lightweight branch, pull request, review, and merge path; keep one change self-contained with the related validation needed to understand it; accept a change when it materially improves the current system rather than delaying for theoretical perfection; and treat initial-development interfaces as unstable until an external compatibility boundary is declared.
 - **Parts intentionally omitted:** GitHub deployment steps, Google-scale stacked-change and reviewer-organization practices, and released-version deprecation or migration machinery. ContractScribe does not inherit those mechanisms without their current deployment, team-scale, or consumer constraints.
-- **ContractScribe-specific divergence:** independently accepted production evidence may require content identity, fail-closed validation, or authority separation beyond an ordinary code review. Those additions remain only where the issue records the concrete evidence-integrity failure they prevent.
+- **ContractScribe-specific divergence:** externally consumed or irreversible production evidence may require content identity, fail-closed validation, or authority separation beyond an ordinary code review. Those additions remain only where the issue records the concrete evidence-integrity failure they prevent. Repository-only milestone evidence, ordinary CI artifacts, and a possible later release do not qualify by themselves.
 
 ## Maintain one current pre-release version
 
@@ -99,29 +99,36 @@ Additional process is justified only by current evidence such as:
 - incompatible persisted state that must coexist or migrate;
 - an irreversible deployment, release, publication, destructive mutation, or externally consumed evidence record;
 - a concrete security, privacy, credential, legal, or regulatory boundary;
-- authorization of production evidence whose integrity depends on an independently reviewed content identity;
+- authorization of externally consumed or irreversible production evidence whose integrity depends on an independently reviewed content identity;
 - a reproduced failure that a simpler reversible measure does not detect or contain.
 
 The justification must name the exposed consumer or state, the triggering sequence, expected versus unsafe behavior, and why the proposed gate prevents that failure. Generic best practice, future-proofing, or possible later reuse is insufficient.
 
-## Separate design from final freeze
+Repository-only milestone evidence, an internal validation handoff, ordinary CI artifacts, or a later issue that may consume the same code are reversible development state. They do not justify a checked-in protected-input bundle, artifact lock, pending or accepted review record, review-only commit, or certification lifecycle before the first downstream-consumable release. Bind such validation to the exact repository revision and uniquely identified workflow run and attempt that produced it instead.
 
-When a validation contract, schema, harness, or adapter will be consumed by a production implementation, use two different decision points:
+## Separate validation design from release freeze
+
+When a validation contract, schema, harness, or adapter will be consumed by a production implementation, use three different decision points:
 
 1. **Validation design gate** — early work fixes the validation goal, invariants, evidence ownership, anti-cheating boundary, platform matrix, and fail-closed behavior needed for implementation to begin.
-2. **Freeze or certification gate** — later work fixes the final producer-consumer schema, fixtures, adapter behavior, protected inputs, content identity, and independent acceptance only after the real producer and consumer path is executable.
+2. **Integration evidence gate** — after the real producer and consumer path is executable, run the exact-revision path end to end and fix contradictions in the current implementation, schemas, fixtures, adapters, and validators without creating a persistent authorization bundle.
+3. **Release freeze or certification gate** — the first downstream-consumable release decides whether its concrete external-consumer or irreversible-publication boundary requires fixed release inputs, a persistent content identity, independent acceptance, signing, or attestation.
 
-Do not freeze an implementation-level schema, fixture projection, or final bundle identity solely from an oracle or synthetic consumer when the real producer is not yet available. Before the freeze gate, run one end-to-end satisfiability sweep proving that the production producer's output is accepted and interpreted by the production consumer, and that every applicable schema, semantic validator, fixture, observer, and harness required by the accepted design agrees with that same contract without vector- or oracle-specific special cases.
+Do not freeze an implementation-level schema, fixture projection, protected-input set, or final bundle identity during a pre-release milestone solely because the repository has an oracle, synthetic consumer, internal evidence handoff, or completed integration run. Before release, run one end-to-end satisfiability sweep proving that the production producer's output is accepted and interpreted by the production consumer, and that every applicable schema, semantic validator, fixture, observer, and harness required by the accepted design agrees with that same contract without vector- or oracle-specific special cases. Preserve the resulting evidence against its exact revision and run instead of turning it into authorization for later development.
 
 Defects found by that sweep should be collected into the narrowest coherent correction. Do not automatically create and merge one correction pull request per serially exposed contradiction when the remaining producer-consumer surface can be audited together.
 
 ## Identity and certification
 
-Prefer a content identity such as a canonical digest, bundle ID, or verified tree identity when it protects the actual integrity boundary. Binding an acceptance record to a future squash-merge commit is allowed only when the commit identity itself is consumed or authorizes an irreversible action and a content identity is insufficient.
+When a justified release or external boundary requires persistent identity, prefer a content identity such as a canonical digest, release bundle ID, or verified tree identity that protects the actual integrity boundary. Binding an acceptance record to a future squash-merge commit is allowed only when the commit identity itself is consumed or authorizes an irreversible action and a content identity is insufficient.
+
+Before the first downstream-consumable release, repository-local validation uses the exact source commit, workflow revision, run and attempt, runner and toolchain observations, and run-generated manifest or artifact digests as provenance. Those digests may make one run internally consistent, but they are outputs of that run rather than a checked-in authorization object. They do not create a protected-input set that later pull requests must refresh, an accepted snapshot that later development must preserve, or a repository review record that authorizes execution.
+
+Do not maintain a checked-in validation bundle, artifact lock, protected-input manifest, pending or accepted review fixture, review-only commit, or independent bundle-certification gate solely for pre-release milestone validation. Ordinary code review may bind the exact pull-request head; execution evidence binds the exact revision and workflow run that executed. The first downstream-consumable release gate decides whether its concrete distribution, publication, rollback, or external-consumer boundary requires a persistent release bundle, attestation, or signature. Introduce that machinery there from the then-current release inputs rather than carrying a placeholder through earlier milestones.
 
 If a post-merge identity requirement structurally creates another pull request or human merge, the process-complexity checkpoint must compare it with a content-bound or externally stored attestation. The heavier option must identify the concrete failure that only the post-merge repository commit prevents.
 
-One accepted review should protect one unchanged content identity. A later metadata-only record must not cause another broad design review or full validation cycle unless it changes authorization semantics that those checks exercise.
+When such a justified boundary uses independent acceptance, one accepted review should protect one unchanged content identity. A later metadata-only record must not cause another broad design review or full validation cycle unless it changes authorization semantics that those checks exercise.
 
 ## Validation proportionality
 

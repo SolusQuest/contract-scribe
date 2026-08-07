@@ -311,6 +311,7 @@ Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound
 - `action.yml`, wrapper code, payload version/hash, compatibility mapping, and permissions are immutable release inputs.
 - The composite-versus-TypeScript Action host decision is recorded in the payload-distribution ADR with executable evidence.
 - Any TypeScript wrapper is a thin host around the CLI and does not duplicate provider, campaign, ledger, patch, or GitHub-publication behavior.
+- Any persistent release bundle, attestation, signature, or protected-input identity is introduced here only when the selected distribution or publication boundary demonstrates a concrete external-consumer or irreversible-release need. M1 through M5 use exact-revision workflow evidence and do not maintain placeholder bundle certification.
 - Caller-owned `schedule` and `workflow_dispatch` examples are documented.
 - Provider secrets and GitHub permissions are scoped and separated.
 - Concurrency, cancellation, failure, retry, active-pull-request uniqueness, and snapshot-bound generation behavior match M5.

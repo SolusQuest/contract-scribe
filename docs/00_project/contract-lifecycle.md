@@ -53,27 +53,15 @@ A contract becomes released when it is included in a downstream-consumable relea
 
 The first external compatibility freeze is owned by the first downstream-consumable release gate, not by repository visibility or by an experimental milestone alone.
 
-## Validation-bundle certification lifecycle
+## Pre-release validation provenance
 
-Contract revision and validation-bundle certification are related but separate lifecycles. A current pre-release contract draft does not need to become an independently accepted production-evidence baseline after every coordinated amendment.
+Pre-release contract and implementation validation is revision-bound, not bundle-authorized. A repository workflow validates the exact checked-out commit with the protocol, schemas, fixtures, validators, and production entry points present at that revision. Its evidence records the exact source commit, workflow revision, run and attempt, runner and toolchain observations, and canonical digests of the manifests and artifacts generated during that run.
 
-The validation-bundle lifecycle is:
+Run-generated digests protect transfer and aggregation inside one execution. They are evidence fields, not a checked-in authorization lifecycle. They do not require a repository-wide protected-input manifest, artifact lock, bundle ID, pending or accepted review record, review-only commit, or independent certification before another pre-release pull request may change the implementation. Ordinary pull requests update the current implementation, contracts, fixtures, and tests coherently and rely on exact-head review plus affected CI.
 
-| State | Meaning | Permitted use |
-| --- | --- | --- |
-| Stale or invalid | A protected input changed without a matching current identity, or structural validation otherwise failed. This is a validator result, not an authorizing serialized state. | Diagnose drift and rebuild a candidate; no evidence-consuming or publishing operation is authorized. |
-| Candidate or pending reconciliation | The exact current protected inputs, bundle members, bundle identity, and pending review are structurally closed, but the bundle has not been independently accepted. | Structural validation, deterministic dry-runs, harness self-test, and continued pre-release implementation only. |
-| Accepted | One exact main-reachable bundle has an independent accepted review bound to its content and reviewed revision. | Production evidence execution, acceptance, aggregation, and publication allowed by the owning protocol. |
+Historical validation bundles and reviews remain immutable evidence for the exact revisions that produced them, but they are not active inputs, compatibility surfaces, or authorization for current execution. Removing their current-tree machinery does not rewrite that history. A later pre-release change does not invalidate an older historical claim about its own exact revision; it only means new current evidence must run against the new exact revision when a downstream milestone depends on it.
 
-A coordinated pre-release contract amendment may close with a candidate bundle when its downstream implementation can proceed without consuming production validation evidence. The owning roadmap must name the later evidence-consuming gate and the issue responsible for promotion. Promotion is required before the first such gate, not immediately after every draft amendment.
-
-Any protected-input or bundle-member drift invalidates the prior current identity and cannot inherit an older accepted review. When a repository keeps structural bundle validation in ordinary CI, every pull request that changes a protected input must restore a structurally valid pending candidate in that same pull request: regenerate the protected-input manifest, update the direct artifact inventory when its closed set changes, regenerate the artifact lock and candidate bundle identity, regenerate the matching non-authorizing pending review and review identity, and pass the structural validator, deterministic dry-runs, harness self-test, and ordinary CI. A pull request that does not change protected inputs does not refresh the candidate or create a separate no-change record; its diff and ordinary CI provide that evidence. The replaced pending bundle remains historical candidate lineage and gains no authorizing status.
-
-That mechanical candidate refresh is not independent acceptance. A milestone promotion selects one stable main-reachable candidate only after every native protected-input-owner blocker needed by the evidence gate is closed at an accepted exact commit. Any later-discovered protected-input owner is added as a native blocker and must also close before promotion begins.
-
-A certification design that requires more than one pull request for one primary outcome, whether serial or parallel, more than one human merge, or any required post-merge mutation stage must pass the pre-release process-complexity checkpoint. Prefer content-bound acceptance when it protects the actual integrity boundary. If exact post-merge commit identity is required, document the irreversible consumer or authorization failure that a content identity cannot prevent, and use proportional validation for any later review-record-only change.
-
-This separation does not relax released compatibility, evidence integrity, or exact-revision requirements. An accepted bundle authorizes only the exact identity it binds, and an older accepted baseline remains historical evidence for its exact revision rather than authority for changed current bytes.
+The first downstream-consumable release gate owns any decision to introduce a persistent release bundle, attestation, signature, protected-input set, or compatibility family. That decision must identify the concrete external consumer or irreversible publication boundary, build the identity from the then-current release inputs, and define support and replacement behavior. No pre-release milestone maintains placeholder release machinery in anticipation of that decision.
 
 ## When to increment an artifact version
 
