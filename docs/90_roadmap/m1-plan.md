@@ -22,7 +22,7 @@ ADR 0001 records the framework-dependent execution evidence. ADR 0002 selects on
 
 ### Target profiles
 
-The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. ADR 0003 accepted the exact semantics. Issue #35 established their first coordinated pre-release v1 machine-contract baseline, and Issue #55 owns the corrected successor after implementation exposed a classification-origin inconsistency. The prior M0 baseline could not fully express the requirement because:
+The original product requirement includes different documentation levels, at minimum external API and internal/assembly-visible targets. ADR 0003 accepted the exact semantics. Issue #35 established their first pre-release v1 machine-contract shape, and Issues #55 and #70 record later corrections after implementation exposed classification-origin and lineage inconsistencies. Those exact revisions remain historical evidence rather than active successor authority. The prior M0 shape could not fully express the requirement because:
 
 - Policy v1 selects by project and source path only.
 - Taxonomy v1 enumerates an externally reachable target surface.
@@ -125,39 +125,37 @@ M0, Issue #35, Issue #55, Issue #57, and Issue #70 evidence remains available at
 
 ## Workstreams
 
-### W1 — M1 parent and decision gate
+### W1 — M1 parent and decision gate — Completed
 
-Create an independent M1 execution parent that owns the dependency graph, exit checklist, closure evidence, and blocker classification. It links the completed roadmap design gate as a design prerequisite but is not its child. No executable work issue is a child of the design gate. The M1 parent is coordination-only: it contains no unbounded implementation, validation, contract, documentation, or experiment work.
+Issue #33 is the existing M1 coordination parent and owns the remaining dependency graph, exit checklist, closure evidence, and blocker classification without executable work of its own. The completed roadmap design gate remains a historical prerequisite rather than a parent of executable issues.
 
-Every executable M1 issue is a direct child of the M1 parent or is recorded as an external dependency with an owner, milestone or track, and rationale. Release-gate and research work is never a child of the M1 parent.
+Existing M1 relationships remain tracker history. New relationships follow the current issue workflow and are added only when they provide coordination beyond milestone membership; release-gate and research work remain outside M1.
 
-Create one decision issue for target-surface and documentation-observation semantics. It must close before production classification or observation implementation begins.
+[ADR 0003](../20_architecture/decisions/0003-target-profiles-and-documentation-observation.md) accepted the target-surface and direct documentation-observation semantics before their production implementation. No new decision issue or reopen is required for that completed boundary.
 
-### W2 — Coordinated pre-release contract amendment
+### W2 — Pre-release contract completion — Completed
 
-Use one coordinated contract-change issue when separate planning is useful: establish the complete current pre-release v1 behavior for the selected target-surface and documentation-observation semantics. Its acceptance contract names the specifications, producers, consumers, schemas or registries, fixtures, validators, implementations, and checks that are actually affected.
+Issues #35, #55, and #70 record the completed contract lineage that established and corrected the current pre-release v1 audit semantics. Their exact accepted revisions remain historical evidence, not active baseline authority.
 
-Prefer one coordinated contract pull request while those artifacts are mutually required for acceptance. Split only when a separated artifact is independently useful and acceptable and requires its own pull request or genuinely separate authority review. Preserve historical milestone evidence without creating a new current-baseline record as a routine amendment step.
+Later draft corrections update the affected producer-consumer path coherently under the current contract lifecycle. They do not reopen these issues or create a successor baseline merely because implementation changes.
 
-The amendment is a blocker for the classification, policy, and result work in W3.
+The accepted contract work unblocked the completed classification, policy, evidence, and result implementation in W3.
 
-### W3 — Production audit host
+### W3 — Production audit host — Completed
 
-Refine current issue #24 to one focused production-host composition outcome: compose the completed M1 audit components into the in-process execution lifecycle, enforce cancellation and failure precedence, invalidate stale output, and publish the canonical result atomically. It remains a direct child of the M1 parent and does not own nested executable children.
+Closed Issue #24 composed the production audit components into the in-process `ProductionAuditHost`, including cancellation and failure precedence, stale-output invalidation, and atomic canonical-result publication.
 
-Create direct sibling M1 issues for these initial candidate outcomes:
+The completed production path includes:
 
-1. Create the production `ContractScribe.Roslyn` project while implementing explicit repository and solution/project input resolution, Roslyn/MSBuild registration, workspace loading, compilation acquisition, prerequisite behavior, bounded loader diagnostics, reference-boundary tests, and the no-auto-discovery/no-automatic-restore contract.
-2. Implement target-profile and symbol classification with its required fixtures and contract conformance.
-3. Implement XML-documentation observation with partial, generated, inherited, malformed, absent, and unavailable fixtures.
-4. Implement policy evaluation and bounded evidence binding against the completed v1 contracts.
-5. Aggregate and serialize the canonical audit result with cross-contract conformance and fresh-process determinism tests.
+1. Production `ContractScribe.Roslyn` explicit repository and solution/project input resolution, Roslyn/MSBuild registration, workspace loading, compilation acquisition, prerequisite behavior, bounded loader diagnostics, reference boundaries, and no automatic discovery or restore.
+2. Production target-profile and symbol classification with its required fixtures and contract conformance.
+3. Production XML-documentation observation with partial, generated, inherited, malformed, absent, and unavailable fixtures.
+4. Policy evaluation and bounded evidence binding against the current v1 contracts.
+5. Canonical audit-result aggregation and serialization with cross-contract conformance and fresh-process determinism tests.
 
-These are refinement candidates, not permission to create fragments mechanically. Before tracker synchronization, each candidate and the refocused #24 must be reviewed against [Issue workflow](../10_workflow/issue-workflow.md). Combine candidates when they cannot be accepted independently; split further only when every resulting issue remains a coherent, independently useful outcome. Each implementation issue includes the unit tests, contract fixtures, and validation needed for its own acceptance. All executable results remain direct children of the M1 parent; dependencies express workstream ordering without creating a second issue hierarchy.
+These outcomes and their accepted tests are current production inputs to #75 and #41; they are not instructions to create new component issues or refocus #24.
 
-Split a separate calibration experiment only when a bound cannot be selected from implementation evidence in the owning child.
-
-Internally enforceable cooperative bounds must be distinguished from externally enforced process limits and from limits that the in-process topology cannot guarantee.
+The implemented Host distinguishes internally enforceable cooperative bounds from caller- or operating-system-enforced process limits and from limits that the in-process topology cannot guarantee. New calibration work is needed only when current implementation evidence cannot select a required bound.
 
 ### W4 — CLI contract and implementation
 
@@ -230,11 +228,11 @@ The tracker graph uses the following ownership and expected review boundaries. F
 | --- | --- | --- |
 | M1 execution parent | Independent coordination root | Tracker-only dependency graph and closure evidence; no unbounded executable work |
 | Completed roadmap design gate | External completed prerequisite | Merged docs baseline and synchronized tracker contract; not an M1 child |
-| Target/observation decision | Direct M1 child | One decision-document PR defining the semantics that block contract and implementation work |
-| Coordinated v1 contract change | Direct M1 child | Ordinarily one coordinated contract PR updating the actually affected producer-consumer and conformance surfaces |
-| Production loading, classification, observation, policy/evidence, and result units | Direct sibling M1 children | One focused implementation PR per independently acceptable outcome, including its required tests, fixtures, and conformance |
-| #24 production host | Direct M1 child | One host-composition PR covering execution lifecycle, cancellation/failure precedence, stale-output invalidation, and atomic publication |
-| #25 CLI contract | Direct M1 child | One CLI-contract PR with executable acceptance fixtures where applicable |
+| Target/observation decision | Completed direct M1 child | ADR 0003 accepted the implemented semantics; no current decision work |
+| Pre-release v1 contract work | Completed direct M1 children | Historical #35/#55/#70 lineage; current corrections update only affected paths |
+| Production loading, classification, observation, policy/evidence, and result units | Completed direct sibling M1 children | Current production implementation and accepted tests used by #75/#41 |
+| #24 production host | Completed direct M1 child | Current `ProductionAuditHost` execution lifecycle, cancellation/failure precedence, stale-output invalidation, and atomic publication |
+| #25 CLI contract | Completed direct M1 child | Accepted CLI contract consumed by remaining #30 implementation |
 | #26 Host Validation design and harness | Completed direct M1 child | Historical design and harness evidence at its accepted revision; not current implementation authority |
 | #57 Host Validation accepted-bundle promotion | Completed direct sibling M1 child | Historical two-commit acceptance sequence that established exact `S2` and `S3`; not a reusable default for new work |
 | #75 pre-release validation simplification | Direct sibling M1 child | One correction PR deleting active Host certification and retired M0 experiment machinery while establishing production-focused CI |
@@ -262,18 +260,18 @@ Combine or split a remaining issue only when that creates independently acceptab
 ## Dependency graph
 
 ```text
-Target/observation decision
-    +--> coordinated v1 contract amendment
-    |        +--> focused production implementation siblings
-    |        |        +--> #24 host composition
+completed target/observation decision
+    +--> completed pre-release v1 contract work
+    |        +--> completed production implementation siblings
+    |        |        +--> completed #24 host composition
     |        |
-    |        +--> #26 frozen validation protocol
+    |        +--> completed historical #26 validation protocol
     |
-    +--> #25 CLI contract
+    +--> completed #25 CLI contract
 
-#24 host composition + focused implementation siblings + #26 validation design/harness
+completed #24 host composition + production implementation siblings + #26 validation design/harness
     --> completed #57 accepted bundle at S2/S3
-    --> #75 simplify active validation to production-focused CI
+    --> #75 delete retired machinery and add production-focused validation
     --> #41 exact-main validation execution and Issue record
     --> validated host revision
 

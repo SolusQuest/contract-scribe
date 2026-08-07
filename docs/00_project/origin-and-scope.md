@@ -10,7 +10,7 @@ A deterministic patch engine, not the model, owns source modification. It render
 
 The core does not own GitHub write side effects. A platform adapter may publish a validated proposal only after the audit, proposal, patch, and campaign-state boundaries are satisfied.
 
-An issue ledger is not a core abstraction. Campaign and run state are platform-neutral machine contracts. A GitHub Issue may be the first state-storage adapter, but it must not define core identity, retry, batching, or lifecycle semantics.
+GitHub-specific records are not core abstractions. Any durable campaign or run state needed by the implemented workflow remains platform-neutral, while a GitHub Issue may act as an adapter surface. M4 and M5 select the minimum state, identity, retry, batching, and reconciliation shapes from executable failure evidence.
 
 ## Historical bootstrap boundary
 
@@ -25,16 +25,15 @@ The initial bootstrap intentionally delivered only governance and a minimal .NET
 - GitHub mutations are optional adapter behavior with least-privilege permissions.
 - Scheduling is caller-owned workflow configuration; ContractScribe does not promise provider-specific off-peak pricing.
 - M3 selects the smallest proposal-provider transport and bounded evaluation set supported by current executable evidence; no provider name, compatibility corpus, or support claim is frozen before that refinement.
-- Stable reusable prompt prefixes, bounded uncached input, and observable token economics are product requirements; provider cache retention is not product state.
+- Bounded provider input and observable usage, cost, and latency are evaluation concerns where the selected transport exposes them; provider cache retention and any prompt-prefix mechanism are never correctness state.
 - Automatic merge is not part of the initial product.
 
 ## Open decisions
 
-- The M1 target surface and XML-documentation observation semantics, including assembly-visible targets.
 - The first released payload channel used by the GitHub Action.
 - The composite-versus-TypeScript Action host selected after payload and cross-platform invocation evidence exists.
-- The exact OpenAI-compatible transport library, model identifiers, context limits, and cache-economics thresholds used by the M3 implementation.
-- The exact campaign-state storage encoding used by the GitHub Issue adapter.
+- The provider transport, model corpus, context limits, and practical economic thresholds selected by M3 executable evaluation.
+- The minimum platform-neutral state and GitHub reconciliation shapes selected by M4 and M5 failure evidence.
 - Whether and when a Native AOT or child-process topology becomes eligible for reconsideration.
 
-The loader and semantic-analysis process boundary is decided by [ADR 0002](../20_architecture/decisions/0002-process-topology.md): the M1 deterministic audit uses an in-process production loader, with child-process topologies deferred pending their eligibility experiment. The remaining open decisions are owned by the follow-up issues referenced from ADR 0001 and ADR 0002.
+The loader and semantic-analysis process boundary is decided by [ADR 0002](../20_architecture/decisions/0002-process-topology.md): the M1 deterministic audit uses an in-process production loader, with child-process topologies deferred pending their eligibility experiment. [ADR 0003](../20_architecture/decisions/0003-target-profiles-and-documentation-observation.md) accepted the M1 target-profile and direct XML-documentation observation semantics. Remaining open decisions belong to their implementing roadmap or release track.
