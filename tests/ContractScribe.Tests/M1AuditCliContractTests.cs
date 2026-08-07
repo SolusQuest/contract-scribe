@@ -6,39 +6,11 @@ namespace ContractScribe.Tests;
 
 public sealed class M1AuditCliContractTests
 {
-    private const string DecisionInputCommit = "0806a98609b0eb97014496dcc4f4c8083ec57533";
-    private const string ProtectedInputDisposition = "current-coordinated-candidate";
     private static readonly string Root = FindRepositoryRoot();
     private static readonly string AnnexPath = Path.Join(Root, "tests", "fixtures", "m1-audit-cli", "cli-contract-v1.json");
     private static readonly string DocPath = Path.Join(Root, "docs", "20_architecture", "audit-cli.md");
 
-    private static readonly string[] ExpectedProtectedInputs =
-    [
-        "docs/20_architecture/contracts/policy-configuration-v1.md",
-        "docs/20_architecture/contracts/symbol-evidence-taxonomy-v1.md",
-        "docs/20_architecture/contracts/audit-result-v1.md",
-        "schemas/policy-configuration/v1.schema.json",
-        "schemas/symbol-evidence-taxonomy/v1.schema.json",
-        "schemas/symbol-evidence-taxonomy/v1.registry.json",
-        "schemas/symbol-evidence-taxonomy/v1.manifest.schema.json",
-        "schemas/audit-result/v1.schema.json",
-        "schemas/audit-result/v1.registry.json",
-        "tests/fixtures/audit-result/v1/payloads/empty-results.json",
-        "tests/fixtures/audit-result/v1/payloads/required-present.json",
-        "tests/fixtures/audit-result/v1/payloads/required-absent.json",
-        "tests/fixtures/audit-result/v1/payloads/classification-skipped.json",
-        "tests/fixtures/audit-result/v1/payloads/policy-unavailable.json",
-        "tests/fixtures/audit-result/v1/payloads/documentation-unavailable.json",
-        "tests/fixtures/audit-result/v1/payloads/evidence-incomplete.json",
-        "tests/fixtures/audit-result/v1/payloads/policy-conflict.json",
-        "tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json",
-        "tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json",
-        "tests/ContractScribe.Tests/AuditResultConformance.cs",
-        "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
-        "tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
-    ];
-
-    private static readonly string[] RequiredOracleProtectedInputs =
+    private static readonly string[] ExpectedOracleBindings =
     [
         "tests/ContractScribe.Tests/AuditResultConformance.cs",
         "tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs",
@@ -159,7 +131,7 @@ public sealed class M1AuditCliContractTests
     };
 
     [Fact]
-    public void Annex_IsStrictPublicSafeAndPinnedToBaseline()
+    public void Annex_IsStrictPublicSafeAndCoversSharedOracles()
     {
         var bytes = File.ReadAllBytes(AnnexPath);
         AssertNoDuplicateProperties(bytes);
@@ -168,9 +140,9 @@ public sealed class M1AuditCliContractTests
 
         Assert.Equal("contract-scribe.audit-cli/v1", root.GetProperty("contractId").GetString());
         var meta = root.GetProperty("meta");
-        Assert.False(meta.TryGetProperty("baselineCommit", out _));
-        Assert.Equal(DecisionInputCommit, meta.GetProperty("decisionInputCommit").GetString());
-        Assert.Equal(ProtectedInputDisposition, meta.GetProperty("protectedInputDisposition").GetString());
+        Assert.Equal(
+            new[] { "envelopeVersion", "oracleBindings" },
+            meta.EnumerateObject().Select(property => property.Name));
         Assert.Equal(1, meta.GetProperty("envelopeVersion").GetInt32());
 
         var text = Encoding.UTF8.GetString(bytes);
@@ -193,7 +165,7 @@ public sealed class M1AuditCliContractTests
 
         var bindings = meta.GetProperty("oracleBindings").EnumerateArray().ToArray();
         Assert.Equal(
-            RequiredOracleProtectedInputs,
+            ExpectedOracleBindings,
             bindings.Select(binding =>
                 binding.GetProperty("path").GetString()!));
         Assert.All(bindings, binding =>
@@ -207,20 +179,9 @@ public sealed class M1AuditCliContractTests
             Assert.False(string.IsNullOrWhiteSpace(
                 binding.GetProperty("role").GetString()));
         });
-        Assert.All(RequiredOracleProtectedInputs, path => Assert.True(File.Exists(Path.Join(Root, path.Replace('/', Path.DirectorySeparatorChar)))));
-        var reconciliationGate =
-            meta.GetProperty("reconciliationGate").GetString()!;
-        Assert.Contains("Issue #55", reconciliationGate, StringComparison.Ordinal);
-        Assert.Contains("S1", reconciliationGate, StringComparison.Ordinal);
-        Assert.Contains(
-            "Host Validation promotion Task",
-            reconciliationGate,
-            StringComparison.Ordinal);
-        Assert.Contains("Issue #41", reconciliationGate, StringComparison.Ordinal);
+        Assert.All(ExpectedOracleBindings, path => Assert.True(File.Exists(Path.Join(Root, path.Replace('/', Path.DirectorySeparatorChar)))));
 
         var document = File.ReadAllText(DocPath);
-        Assert.Contains("Issue #55", document, StringComparison.Ordinal);
-        Assert.Contains("S1", document, StringComparison.Ordinal);
         Assert.Contains(
             "ClassificationConformanceOracle.cs",
             document,
@@ -237,22 +198,6 @@ public sealed class M1AuditCliContractTests
             "accepted #35 baseline",
             document,
             StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void ProtectedInputClosure_RejectsEitherMissingOracleSourcePin()
-    {
-        using var annex = LoadAnnex();
-        var paths = annex.RootElement.GetProperty("meta").GetProperty("protectedInputs")
-            .EnumerateObject()
-            .Select(property => property.Name)
-            .ToArray();
-
-        foreach (var requiredPath in RequiredOracleProtectedInputs)
-        {
-            var mutant = paths.Where(path => path != requiredPath).ToArray();
-            Assert.Throws<InvalidOperationException>(() => ValidateProtectedInputClosure(mutant));
-        }
     }
 
     [Fact]
@@ -866,17 +811,6 @@ public sealed class M1AuditCliContractTests
             }
         }
         return (compliant, violation, skipped);
-    }
-
-    private static void ValidateProtectedInputClosure(IEnumerable<string> paths)
-    {
-        var expected = ExpectedProtectedInputs.Order(StringComparer.Ordinal).ToArray();
-        var actual = paths.Order(StringComparer.Ordinal).ToArray();
-        if (!expected.SequenceEqual(actual, StringComparer.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Protected-input closure mismatch. Expected [{string.Join(", ", expected)}], actual [{string.Join(", ", actual)}].");
-        }
     }
 
     private static void AssertUniqueCaseIds(JsonElement root)
