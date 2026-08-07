@@ -115,9 +115,25 @@ public static class CellExecutor
             cellManifestPath,
             context.Protocol.ExecutionContract.EvidenceByteLimit,
             requireCanonical: true);
+        ValidateCellManifest(
+            context,
+            common,
+            CanonicalJson.Sha256File(commonManifestPath),
+            cellManifest,
+            allowMaterializationDrift);
+        return new SubjectManifestSet(common, cellManifest);
+    }
+
+    public static void ValidateCellManifest(
+        BundleContext context,
+        CommonSourceManifest common,
+        string commonManifestSha256,
+        CellSubjectManifest cellManifest,
+        bool allowMaterializationDrift = false)
+    {
         var cell = cellManifest.Subject;
         if (cellManifest.FormatVersion != "contractscribe-m1-host-validation-cell-subject-v1"
-            || cellManifest.CommonManifestSha256 != CanonicalJson.Sha256File(commonManifestPath)
+            || cellManifest.CommonManifestSha256 != commonManifestSha256
             || cellManifest.CellId != cell.Materialization.CellId
             || !context.Protocol.RequiredCells.Any(required => required.CellId == cellManifest.CellId))
         {
@@ -167,14 +183,18 @@ public static class CellExecutor
         foreach (var fixture in cell.Fixtures)
         {
             var vector = context.Vectors.Vectors.Single(candidate => candidate.VectorId == fixture.VectorId);
-            var expectedFixture = FrozenFixtureRegistry.Materialize(
-                context.Root,
-                cell.Materialization.CellId,
-                vector);
-            if (!CanonicalJson.SerializeCanonical(fixture).AsSpan()
-                .SequenceEqual(CanonicalJson.SerializeCanonical(expectedFixture)))
+            if (!allowMaterializationDrift)
             {
-                throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+                var expectedFixture = FrozenFixtureRegistry.MaterializePrepared(
+                    context.Root,
+                    cell.Materialization.CellId,
+                    vector,
+                    fixture.ProcessIdentityRegistry);
+                if (!CanonicalJson.SerializeCanonical(fixture).AsSpan()
+                    .SequenceEqual(CanonicalJson.SerializeCanonical(expectedFixture)))
+                {
+                    throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+                }
             }
             if (fixture.ExecutorKind != vector.ExecutorKind
                 || fixture.CapabilityAvailable == (fixture.BlockedReasonCode is not null)
@@ -191,6 +211,15 @@ public static class CellExecutor
                     "production-subject" or "fixture-helper" or "selected-toolchain")))
             {
                 throw new ProtocolException("HV206_EXECUTOR_ARRANGEMENT_MISMATCH");
+            }
+            var expectedBuildHostRegistry = SubjectManifestMaterializer
+                .BuildHostProcessIdentityRegistry(
+                    cell.Materialization,
+                    required: !allowMaterializationDrift);
+            if (!CanonicalJson.SerializeCanonical(identityRegistry).AsSpan()
+                .SequenceEqual(CanonicalJson.SerializeCanonical(expectedBuildHostRegistry)))
+            {
+                throw new ProtocolException("HV233_PROCESS_IDENTITY_UNBOUND");
             }
             var repositoryRoot = RepositoryPaths.ResolveConfined(
                 context.Root,
@@ -236,7 +265,6 @@ public static class CellExecutor
             }
         }
 
-        return new SubjectManifestSet(common, cellManifest);
     }
 
     public static void ValidateProvisionedFixtures(string root, ExecutionCell cell)
@@ -279,6 +307,14 @@ public static class CellExecutor
             commonManifestPath,
             context.Protocol.ExecutionContract.EvidenceByteLimit,
             requireCanonical: true);
+        return ValidateCommonManifest(context, manifest, allowMaterializationDrift);
+    }
+
+    public static CommonSourceManifest ValidateCommonManifest(
+        BundleContext context,
+        CommonSourceManifest manifest,
+        bool allowMaterializationDrift = false)
+    {
         if (manifest.FormatVersion != "contractscribe-m1-host-validation-common-source-v1"
             || manifest.BundleId != context.Lock.BundleId
             || manifest.SubjectKind != "production-host"
@@ -376,6 +412,18 @@ public static class CellExecutor
         }
 
         var repositoryRoot = RepositoryPaths.ResolveConfined(context.Root, fixture.RepositoryRoot);
+        FixtureRecipeRegistry.Provision(
+            context.Root,
+            repositoryRoot,
+            cell.Materialization.CellId,
+            vector);
+        var canonicalFixture = RepositoryObserver.Capture(
+            repositoryRoot,
+            fixture.AllowedDesignTimeRoots);
+        if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(canonicalFixture))
+        {
+            throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
+        }
         var tempRoot = Path.Join(Path.GetTempPath(), $"contractscribe-hv-run-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
         var auditTemporaryRoot = Path.Join(tempRoot, "subject-temporary");
@@ -405,11 +453,6 @@ public static class CellExecutor
             preRunCanonical = preRunPublication?.Commitment;
         }
         var before = RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots);
-        if (fixture.RepositoryIdentitySha256 != ComputeRepositoryIdentity(before))
-        {
-            throw new ProtocolException("HV180_FIXTURE_IDENTITY_MISMATCH");
-        }
-
         TemporaryDiskHighWaterObserver? temporaryDiskObserver = null;
         try
         {
@@ -1839,7 +1882,7 @@ public static class CellExecutor
         return RepositoryPaths.ResolveConfined(root, executable, mustExist);
     }
 
-    private static void ValidateExecutionEnvironment(
+    public static void ValidateExecutionEnvironment(
         CommonSourceManifest manifest,
         ExecutionCell cell)
     {
@@ -1848,35 +1891,19 @@ public static class CellExecutor
             throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
         }
 
+        ValidateMaterializationEnvironment(manifest, cell.Materialization);
         var attempt = manifest.ValidationAttempt;
-        var expectedRunnerOs = cell.Materialization.CellId == "windows-x64" ? "Windows" : "Linux";
-        var observedSdk = ObserveToolVersion("dotnet", ["--version"]);
-        var observedMsbuild = ObserveToolVersion("dotnet", ["msbuild", "-version", "-nologo"]);
-        var observedRuntime = Environment.Version.ToString();
-        if (Environment.GetEnvironmentVariable("GITHUB_RUN_ID") != attempt.WorkflowRunId
-            || !int.TryParse(Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT"), out var runAttempt)
-            || runAttempt != attempt.RunAttempt
-            || Environment.GetEnvironmentVariable("GITHUB_SHA") != attempt.ValidationExecutionSha
-            || Environment.GetEnvironmentVariable("GITHUB_JOB") != cell.Materialization.WorkflowJobKey
-            || BuildWorkflowRunUrl() != cell.Materialization.WorkflowRunUrl
-            || BuildRunnerImageIdentity() != cell.Materialization.RunnerImage
-            || Environment.GetEnvironmentVariable("RUNNER_OS") != expectedRunnerOs
-            || Environment.GetEnvironmentVariable("RUNNER_ARCH") != cell.Materialization.Architecture
-            || cell.Materialization.SelectedSdk != observedSdk
-            || cell.Materialization.SelectedRuntime != observedRuntime
-            || cell.Materialization.SelectedMsbuild != observedMsbuild)
-        {
-            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
-        }
-
-        var builtArtifactHashes = cell.Materialization.ProductionArtifacts
+        var materialization = cell.Materialization;
+        var builtArtifactHashes = materialization.ProductionArtifacts
             .Select(artifact => artifact.Sha256)
             .ToHashSet(StringComparer.Ordinal);
         var fixtureArtifactHashes = cell.Fixtures
             .SelectMany(fixture => fixture.ArrangementInputs)
             .Select(artifact => artifact.Sha256)
             .ToHashSet(StringComparer.Ordinal);
-        var selectedToolchainHashes = ObserveSelectedToolchainHashes();
+        var selectedToolchainHashes = ObserveSelectedToolchainHashes()
+            .Concat(materialization.RuntimeDependencies.Select(identity => identity.Sha256))
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var rule in cell.Fixtures.SelectMany(fixture =>
                      fixture.ProcessIdentityRegistry ?? []))
         {
@@ -1891,6 +1918,37 @@ public static class CellExecutor
             {
                 throw new ProtocolException("HV233_PROCESS_IDENTITY_UNBOUND");
             }
+        }
+    }
+
+    public static void ValidateMaterializationEnvironment(
+        CommonSourceManifest manifest,
+        CellMaterialization materialization)
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+        SubjectManifestMaterializer.RequireWorkflowIdentity(manifest.ValidationAttempt.Workflow);
+        var attempt = manifest.ValidationAttempt;
+        var expectedRunnerOs = materialization.CellId == "windows-x64" ? "Windows" : "Linux";
+        var observedSdk = ObserveToolVersion("dotnet", ["--version"]);
+        var observedMsbuild = ObserveToolVersion("dotnet", ["msbuild", "-version", "-nologo"]);
+        var observedRuntime = Environment.Version.ToString();
+        if (Environment.GetEnvironmentVariable("GITHUB_RUN_ID") != attempt.WorkflowRunId
+            || !int.TryParse(Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT"), out var runAttempt)
+            || runAttempt != attempt.RunAttempt
+            || Environment.GetEnvironmentVariable("GITHUB_SHA") != attempt.ValidationExecutionSha
+            || Environment.GetEnvironmentVariable("GITHUB_JOB") != materialization.WorkflowJobKey
+            || BuildWorkflowRunUrl() != materialization.WorkflowRunUrl
+            || BuildRunnerImageIdentity() != materialization.RunnerImage
+            || Environment.GetEnvironmentVariable("RUNNER_OS") != expectedRunnerOs
+            || Environment.GetEnvironmentVariable("RUNNER_ARCH") != materialization.Architecture
+            || materialization.SelectedSdk != observedSdk
+            || materialization.SelectedRuntime != observedRuntime
+            || materialization.SelectedMsbuild != observedMsbuild)
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
         }
     }
 

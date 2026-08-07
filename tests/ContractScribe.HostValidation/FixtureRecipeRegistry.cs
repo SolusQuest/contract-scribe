@@ -8,6 +8,8 @@ namespace ContractScribe.HostValidation;
 public static class FixtureRecipeRegistry
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private static readonly string[] MissingAssetsVectors =
+        ["toolchain.missing-assets", "toolchain.no-automatic-restore"];
 
     public static IReadOnlyDictionary<string, byte[]> Files(
         string cellId,
@@ -68,11 +70,77 @@ public static class FixtureRecipeRegistry
                 new SortedDictionary<string, string>(StringComparer.Ordinal)));
     }
 
+    public static void Prepare(
+        string root,
+        string repositoryRoot,
+        string cellId,
+        VectorDefinition vector)
+    {
+        ProvisionCore(root, repositoryRoot, cellId, vector, usePreparedAssets: false);
+        var preparedAssetRoot = PreparedAssetRoot(root, cellId, vector.VectorId);
+        ResetDirectory(preparedAssetRoot);
+        if (RequiresRestoreAssets(vector))
+        {
+            RestoreFixture(repositoryRoot, vector);
+            var assetsPath = Path.Join(repositoryRoot, "obj", "project.assets.json");
+            if (!File.Exists(assetsPath) || new FileInfo(assetsPath).Length == 0)
+            {
+                throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+            }
+            CopyDirectory(Path.Join(repositoryRoot, "obj"), preparedAssetRoot);
+        }
+        else if (File.Exists(Path.Join(repositoryRoot, "obj", "project.assets.json")))
+        {
+            throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+        }
+    }
+
+    public static void Provision(
+        string root,
+        string repositoryRoot,
+        string cellId,
+        VectorDefinition vector) =>
+        ProvisionCore(root, repositoryRoot, cellId, vector, usePreparedAssets: true);
+
     public static void Provision(
         string repositoryRoot,
         string cellId,
         VectorDefinition vector)
     {
+        Directory.CreateDirectory(repositoryRoot);
+        foreach (var (relative, bytes) in Files(cellId, vector))
+        {
+            var path = Path.GetFullPath(Path.Join(repositoryRoot, relative));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, bytes);
+        }
+        ApplyAndValidatePlatformProperties(repositoryRoot, cellId, vector);
+        var actual = CellExecutor.ComputeRepositoryIdentity(
+            RepositoryObserver.Capture(repositoryRoot, ["obj"]));
+        if (actual != ExpectedRepositoryIdentity(cellId, vector))
+        {
+            throw new ProtocolException("HV243_FIXTURE_RECIPE_DRIFT");
+        }
+    }
+
+    public static string PreparedAssetRoot(
+        string root,
+        string cellId,
+        string vectorId) =>
+        RepositoryPaths.ResolveConfined(
+            root,
+            $"TestResults/m1-host-validation/prepared-fixtures/{cellId}/{vectorId}/obj",
+            mustExist: false);
+
+    private static void ProvisionCore(
+        string root,
+        string repositoryRoot,
+        string cellId,
+        VectorDefinition vector,
+        bool usePreparedAssets)
+    {
+        ValidateRepositoryRoot(root, repositoryRoot, cellId, vector.VectorId);
+        ResetDirectory(repositoryRoot);
         Directory.CreateDirectory(repositoryRoot);
         if (vector.VectorId is
             "failure.publication-invalidation" or "failure.publication-finalization")
@@ -94,12 +162,113 @@ public static class FixtureRecipeRegistry
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path, bytes);
         }
-        ApplyAndValidatePlatformProperties(repositoryRoot, cellId, vector);
-        var actual = CellExecutor.ComputeRepositoryIdentity(
-            RepositoryObserver.Capture(repositoryRoot, ["obj"]));
-        if (actual != ExpectedRepositoryIdentity(cellId, vector))
+        if (usePreparedAssets && RequiresRestoreAssets(vector))
         {
-            throw new ProtocolException("HV243_FIXTURE_RECIPE_DRIFT");
+            var preparedAssetRoot = PreparedAssetRoot(root, cellId, vector.VectorId);
+            if (!File.Exists(Path.Join(preparedAssetRoot, "project.assets.json")))
+            {
+                throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+            }
+            CopyDirectory(preparedAssetRoot, Path.Join(repositoryRoot, "obj"));
+        }
+        ApplyAndValidatePlatformProperties(repositoryRoot, cellId, vector);
+        var assets = Path.Join(repositoryRoot, "obj", "project.assets.json");
+        if (usePreparedAssets
+            && (RequiresRestoreAssets(vector) != File.Exists(assets)
+                || File.Exists(assets) && new FileInfo(assets).Length == 0))
+        {
+            throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+        }
+    }
+
+    private static bool RequiresRestoreAssets(VectorDefinition vector) =>
+        vector.ExecutorKind == "production-host"
+        && !MissingAssetsVectors.Contains(vector.VectorId, StringComparer.Ordinal);
+
+    private static void RestoreFixture(string repositoryRoot, VectorDefinition vector)
+    {
+        var projectExtension = vector.VectorId == "support.non-csharp-project"
+            ? "fsproj"
+            : "csproj";
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in new[]
+        {
+            "restore",
+            $"Fixture.{projectExtension}",
+            "--nologo",
+            "--verbosity",
+            "quiet",
+            "--ignore-failed-sources"
+        })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        using var process = Process.Start(startInfo)
+            ?? throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0 || output.Length + error.Length > 64 * 1024)
+        {
+            throw new ProtocolException("HV254_FIXTURE_RESTORE_ASSETS");
+        }
+    }
+
+    private static void ValidateRepositoryRoot(
+        string root,
+        string repositoryRoot,
+        string cellId,
+        string vectorId)
+    {
+        var expected = RepositoryPaths.ResolveConfined(
+            root,
+            $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vectorId}",
+            mustExist: false);
+        if (!string.Equals(
+                Path.GetFullPath(repositoryRoot),
+                Path.GetFullPath(expected),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new ProtocolException("HV242_FIXTURE_RECIPE_PATH");
+        }
+    }
+
+    private static void ResetDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+        RemoveProvisionedReparsePoints(path);
+        Directory.Delete(path, recursive: true);
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(
+                     source,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Join(
+                destination,
+                Path.GetRelativePath(source, directory)));
+        }
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Join(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
         }
     }
 

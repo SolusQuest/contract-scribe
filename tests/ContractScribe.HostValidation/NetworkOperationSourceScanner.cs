@@ -10,6 +10,25 @@ namespace ContractScribe.HostValidation;
 
 public static partial class NetworkOperationSourceScanner
 {
+    public static bool HasForbiddenSourceOperation(
+        string repositoryPath,
+        string physicalPath)
+    {
+        var text = StripCommentsAndLiterals(File.ReadAllText(physicalPath));
+        var exactNativeBoundary = NativeInteropAllowlist.IsAllowedSource(
+            repositoryPath,
+            CanonicalJson.Sha256File(physicalPath));
+        return ForbiddenNamespace().IsMatch(text)
+            || ForbiddenType().IsMatch(text)
+            || ForbiddenFactory().IsMatch(text)
+            || !exactNativeBoundary
+                && (ForbiddenIndirection().IsMatch(text)
+                    || ForbiddenNativeInterop().IsMatch(text));
+    }
+
+    public static bool HasForbiddenMetadataOperation(string assemblyPath) =>
+        HasForbiddenMemberReference(assemblyPath);
+
     public static bool HasContractScribeInitiatedNetworkOperation(
         string root,
         SubjectSourceConfiguration source,
@@ -23,12 +42,8 @@ public static partial class NetworkOperationSourceScanner
                 continue;
             }
 
-            var text = StripCommentsAndLiterals(
-                File.ReadAllText(RepositoryPaths.ResolveConfined(root, input.Path)));
-            if (ForbiddenNamespace().IsMatch(text)
-                || ForbiddenType().IsMatch(text)
-                || ForbiddenFactory().IsMatch(text)
-                || ForbiddenIndirection().IsMatch(text))
+            var path = RepositoryPaths.ResolveConfined(root, input.Path);
+            if (HasForbiddenSourceOperation(input.Path, path))
             {
                 return true;
             }
@@ -101,7 +116,8 @@ public static partial class NetworkOperationSourceScanner
         if (ForbiddenNamespace().IsMatch(executableSource)
             || ForbiddenType().IsMatch(executableSource)
             || ForbiddenFactory().IsMatch(executableSource)
-            || ForbiddenIndirection().IsMatch(executableSource))
+            || ForbiddenIndirection().IsMatch(executableSource)
+            || ForbiddenNativeInterop().IsMatch(executableSource))
         {
             throw new ProtocolException("HV232_NETWORK_OPERATION_SOURCE");
         }
@@ -132,11 +148,13 @@ public static partial class NetworkOperationSourceScanner
         |\bAssembly\s*\.\s*Load(?:From|File)?\s*\(
         |\bAssemblyLoadContext\b
         |\bNativeLibrary\b
-        |\b(?:DllImport|LibraryImport)\s*\(
         |\bMarshal\s*\.\s*GetDelegateForFunctionPointer\s*\(
         |\bdelegate\s*\*\s*unmanaged\b
         |\bdynamic\b")]
     private static partial Regex ForbiddenIndirection();
+
+    [GeneratedRegex(@"\b(?:DllImport|LibraryImport)\s*\(")]
+    private static partial Regex ForbiddenNativeInterop();
 
     private static bool HasForbiddenMemberReference(string assemblyPath)
     {
@@ -148,12 +166,26 @@ public static partial class NetworkOperationSourceScanner
                 "A declared managed artifact does not contain metadata.");
         }
         var metadata = peReader.GetMetadataReader();
+        var assemblyName = metadata.GetString(metadata.GetAssemblyDefinition().Name);
         foreach (var handle in metadata.MethodDefinitions)
         {
-            if ((metadata.GetMethodDefinition(handle).Attributes
-                    & System.Reflection.MethodAttributes.PinvokeImpl) != 0)
+            var method = metadata.GetMethodDefinition(handle);
+            if ((method.Attributes & System.Reflection.MethodAttributes.PinvokeImpl) != 0)
             {
-                return true;
+                var type = metadata.GetTypeDefinition(method.GetDeclaringType());
+                var import = method.GetImport();
+                var module = metadata.GetModuleReference(import.Module);
+                if (!NativeInteropAllowlist.IsAllowedMetadataInterop(
+                        assemblyName,
+                        $"{metadata.GetString(type.Namespace)}.{metadata.GetString(type.Name)}",
+                        metadata.GetString(method.Name),
+                        metadata.GetString(module.Name),
+                        metadata.GetString(import.Name),
+                        import.Attributes,
+                        Convert.ToHexStringLower(metadata.GetBlobBytes(method.Signature))))
+                {
+                    return true;
+                }
             }
         }
         foreach (var handle in metadata.MemberReferences)
@@ -171,7 +203,12 @@ public static partial class NetworkOperationSourceScanner
             };
             var memberName = metadata.GetString(member.Name);
             if (typeNamespace?.StartsWith("System.Net", StringComparison.Ordinal) == true
-                || IsForbiddenIndirection(typeNamespace, typeName, memberName))
+                || IsForbiddenIndirection(typeNamespace, typeName, memberName)
+                    && !NativeInteropAllowlist.IsAllowedMetadataIndirection(
+                        assemblyName,
+                        typeNamespace,
+                        typeName,
+                        memberName))
             {
                 return true;
             }
@@ -179,9 +216,7 @@ public static partial class NetworkOperationSourceScanner
         foreach (var handle in metadata.TypeReferences)
         {
             var (typeNamespace, typeName) = GetTypeIdentity(metadata, handle);
-            if (typeNamespace is "System.Runtime.Loader" or "Microsoft.CSharp.RuntimeBinder"
-                || typeNamespace == "System.Runtime.InteropServices"
-                    && typeName is "NativeLibrary")
+            if (typeNamespace is "System.Runtime.Loader" or "Microsoft.CSharp.RuntimeBinder")
             {
                 return true;
             }

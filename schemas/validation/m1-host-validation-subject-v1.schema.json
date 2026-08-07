@@ -673,6 +673,26 @@
         },
         "entryPointSha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "entryPointPath": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/repositoryPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "argumentGrammar": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "roslyn-buildhost-netcore-v1",
+            null
+          ]
         }
       },
       "additionalProperties": false

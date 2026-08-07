@@ -11,6 +11,11 @@ public sealed record HostValidationArtifactSet(
     string CommonManifestPath,
     IReadOnlyList<TerminalArtifact> Cells)
 {
+    public IEnumerable<string> InputPaths() =>
+        new[] { Root, CommonManifestPath }
+            .Concat(Cells.SelectMany(cell =>
+                new[] { cell.CellManifestPath, cell.TerminalPath }));
+
     public static HostValidationArtifactSet Load(BundleContext context, string artifactRoot)
     {
         var root = Path.GetFullPath(artifactRoot);

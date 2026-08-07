@@ -15,13 +15,24 @@ public static class FrozenFixtureRegistry
         FrozenExecutorCommand? command = vector.ExecutorKind is "external-process" or "platform-fixture"
             ? FrozenExecutorCommandRegistry.Get(vector.VectorId)
             : null;
-        var arrangementInputs = command is null
-            ? []
-            : command.ArrangementPaths
-                .Select(path => new ArtifactIdentity(
-                    $"{repositoryRoot}/{path}",
-                    CanonicalJson.Sha256(files[path])))
-                .ToArray();
+        var arrangementInputs = files
+            .Select(pair => new ArtifactIdentity(
+                $"{repositoryRoot}/{pair.Key}",
+                CanonicalJson.Sha256(pair.Value)))
+            .OrderBy(identity => identity.Path, StringComparer.Ordinal)
+            .ToList();
+        if (vector.ExecutorKind == "production-host"
+            && vector.VectorId is not (
+                "toolchain.missing-assets" or "toolchain.no-automatic-restore"))
+        {
+            arrangementInputs.Add(new ArtifactIdentity(
+                $"{repositoryRoot}/obj/project.assets.json",
+                CanonicalJson.Sha256(System.Text.Encoding.UTF8.GetBytes(
+                    "synthetic-prepared-restore-assets"))));
+            arrangementInputs = arrangementInputs
+                .OrderBy(identity => identity.Path, StringComparer.Ordinal)
+                .ToList();
+        }
         var executableSha256 = command?.Executable.StartsWith("repository:", StringComparison.Ordinal) == true
             ? CanonicalJson.Sha256(files[command.Executable["repository:".Length..]])
             : null;
@@ -67,6 +78,39 @@ public static class FrozenFixtureRegistry
             []);
     }
 
+    public static FixtureRealization MaterializePrepared(
+        string root,
+        string cellId,
+        VectorDefinition vector,
+        IReadOnlyList<ProcessIdentityRule>? processIdentityRegistry = null)
+    {
+        var baseline = Materialize(root, cellId, vector);
+        var repositoryRoot = RepositoryPaths.ResolveConfined(root, baseline.RepositoryRoot);
+        var snapshot = RepositoryObserver.Capture(repositoryRoot, baseline.AllowedDesignTimeRoots);
+        var arrangementInputs = snapshot.ProtectedFiles
+            .Concat(snapshot.OtherFiles)
+            .Concat(snapshot.AllowedDesignTimeFiles)
+            .Where(pair =>
+            {
+                var path = Path.Join(
+                    repositoryRoot,
+                    pair.Key.Replace('/', Path.DirectorySeparatorChar));
+                return File.Exists(path)
+                    && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+            })
+            .Select(pair => new ArtifactIdentity(
+                $"{baseline.RepositoryRoot}/{pair.Key}",
+                pair.Value))
+            .OrderBy(identity => identity.Path, StringComparer.Ordinal)
+            .ToArray();
+        return baseline with
+        {
+            RepositoryIdentitySha256 = CellExecutor.ComputeRepositoryIdentity(snapshot),
+            ArrangementInputs = arrangementInputs,
+            ProcessIdentityRegistry = processIdentityRegistry ?? []
+        };
+    }
+
     public static void Validate(
         string cellId,
         VectorDefinition vector,
@@ -103,15 +147,43 @@ public static class FrozenFixtureRegistry
         };
 
         if (fixture.RepositoryRoot != expectedRoot
-            || fixture.CapabilityAvailable
-                && fixture.RepositoryIdentitySha256
-                    != FixtureRecipeRegistry.ExpectedRepositoryIdentity(cellId, vector)
+            || fixture.RepositoryIdentitySha256.Length != 64
+            || fixture.RepositoryIdentitySha256.Any(character =>
+                character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
             || !fixture.AllowedDesignTimeRoots.SequenceEqual(["obj"], StringComparer.Ordinal)
             || fixture.ProcessObservationMode != expectedObservationMode
             || fixture.ResultPath != (requiresResultPath ? ResultPath : null)
             || fixture.ResultPrestate != expectedPrestate
             || fixture.ExternalCause != expectedExternalCause
             || !fixture.RunWorkingDirectories.SequenceEqual(expectedWorkingDirectories))
+        {
+            throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+        }
+        var arrangementPaths = fixture.ArrangementInputs.Select(input => input.Path).ToArray();
+        if (!arrangementPaths.SequenceEqual(
+                arrangementPaths.Order(StringComparer.Ordinal),
+                StringComparer.Ordinal)
+            || arrangementPaths.Distinct(StringComparer.Ordinal).Count() != arrangementPaths.Length
+            || fixture.ArrangementInputs.Any(input =>
+                !input.Path.StartsWith($"{expectedRoot}/", StringComparison.Ordinal)))
+        {
+            throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+        }
+        foreach (var (path, bytes) in FixtureRecipeRegistry.Files(cellId, vector))
+        {
+            var identity = fixture.ArrangementInputs.SingleOrDefault(input =>
+                input.Path == $"{expectedRoot}/{path}");
+            if (identity is null || identity.Sha256 != CanonicalJson.Sha256(bytes))
+            {
+                throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
+            }
+        }
+        var hasRestoreAssets = fixture.ArrangementInputs.Any(input =>
+            input.Path == $"{expectedRoot}/obj/project.assets.json");
+        var requiresRestoreAssets = vector.ExecutorKind == "production-host"
+            && vector.VectorId is not (
+                "toolchain.missing-assets" or "toolchain.no-automatic-restore");
+        if (hasRestoreAssets != requiresRestoreAssets)
         {
             throw new ProtocolException("HV234_FIXTURE_CONTRACT_MISMATCH");
         }

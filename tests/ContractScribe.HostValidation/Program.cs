@@ -109,7 +109,6 @@ public static class Program
                         context,
                         [review, commonManifest],
                         output);
-                    CanonicalJson.InvalidateOutput(output);
                     var manifest = SubjectManifestMaterializer.MaterializeCell(
                         root,
                         review,
@@ -133,12 +132,20 @@ public static class Program
                         context,
                         commonManifest,
                         cellManifest);
+                    CellExecutor.ValidateExecutionEnvironment(
+                        manifests.Common,
+                        manifests.Cell.Subject);
                     OutputPathGuard.Validate(
                         context,
                         SubjectInputPaths(context.Root, manifests.Common)
                             .Append(commonManifest)
                             .Append(cellManifest)
-                            .Append(review),
+                            .Append(review)
+                            .Concat(manifests.Cell.Subject.Fixtures.Select(fixture =>
+                                FixtureRecipeRegistry.PreparedAssetRoot(
+                                    context.Root,
+                                    manifests.Cell.CellId,
+                                    fixture.VectorId))),
                         output,
                         incompleteOutput);
                     CanonicalJson.InvalidateOutput(output);
@@ -232,15 +239,17 @@ public static class Program
                     var root = Required(options, "--root");
                     var output = Required(options, "--output");
                     var review = Required(options, "--review");
+                    var artifactRoot = Required(options, "--artifact-root");
                     var context = BundleValidator.Validate(root, requireReview: true, review);
+                    var artifactSet = HostValidationArtifactSet.Load(context, artifactRoot);
                     OutputPathGuard.Validate(
                         context,
-                        [review],
+                        artifactSet.InputPaths().Append(review),
                         output);
                     CanonicalJson.InvalidateOutput(output);
                     var aggregate = EvidenceValidator.Aggregate(
                         root,
-                        Required(options, "--artifact-root"),
+                        artifactRoot,
                         output,
                         review,
                         Required(options, "--publication-base-revision"));
@@ -285,10 +294,13 @@ public static class Program
                     var output = Required(options, "--output");
                     var review = Required(options, "--review");
                     var aggregateEvidence = Optional(options, "--aggregate-evidence");
+                    var artifactRoot = Required(options, "--artifact-root");
                     var context = BundleValidator.Validate(root, requireReview: true, review);
+                    var artifactSet = HostValidationArtifactSet.Load(context, artifactRoot);
                     OutputPathGuard.Validate(
                         context,
-                        new[] { source, review }
+                        artifactSet.InputPaths()
+                            .Concat(new[] { source, review })
                             .Concat(aggregateEvidence is null ? [] : [aggregateEvidence]),
                         output);
                     CanonicalJson.InvalidateOutput(output);
@@ -298,7 +310,7 @@ public static class Program
                         source,
                         output,
                         review,
-                        Required(options, "--artifact-root"),
+                        artifactRoot,
                         aggregateEvidence);
                     Console.WriteLine("HV000_PUBLIC_PREPARED");
                     return 0;
@@ -924,6 +936,7 @@ public static class Program
             var vector = context.Vectors.Vectors.Single(candidate =>
                 candidate.VectorId == fixture.VectorId);
             FixtureRecipeRegistry.Provision(
+                context.Root,
                 RepositoryPaths.ResolveConfined(
                     context.Root,
                     fixture.RepositoryRoot,

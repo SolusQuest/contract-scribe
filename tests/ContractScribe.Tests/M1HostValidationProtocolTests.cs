@@ -8,6 +8,10 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
+[CollectionDefinition("M1 host validation environment", DisableParallelization = true)]
+public sealed class M1HostValidationEnvironmentCollection;
+
+[Collection("M1 host validation environment")]
 public sealed class M1HostValidationProtocolTests
 {
     private static readonly string Root = FindRepositoryRoot();
@@ -169,6 +173,159 @@ public sealed class M1HostValidationProtocolTests
         finally
         {
             File.Delete(temp);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_MaterializerUsesExecutionCheckoutNotReviewRevision()
+    {
+        var context = BundleValidator.Validate(Root);
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            "m1-host-validation",
+            $"materializer-source-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var reviewPath = Path.Join(temp, "review.json");
+        var outputPath = Path.Join(temp, SubjectManifestMaterializer.CommonFileName);
+        var executionRevision = RunGit(Root, "rev-parse", "HEAD").Trim();
+        try
+        {
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(context.Lock.BundleId, new string('f', 40)));
+            using var environment = GitHubEnvironment(executionRevision);
+
+            var manifest = SubjectManifestMaterializer.MaterializeCommon(
+                Root,
+                reviewPath,
+                outputPath);
+
+            Assert.Equal(executionRevision, manifest.SourceConfiguration.HostRevision);
+            Assert.Equal(executionRevision, manifest.ValidationAttempt.HostRevision);
+            Assert.Equal(executionRevision, manifest.ValidationAttempt.ValidationExecutionSha);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_MaterializerRejectsMissingOrDriftedExecutionCommit()
+    {
+        var context = BundleValidator.Validate(Root);
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            "m1-host-validation",
+            $"materializer-execution-drift-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var reviewPath = Path.Join(temp, "review.json");
+        try
+        {
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(
+                    context.Lock.BundleId,
+                    RunGit(Root, "rev-parse", "HEAD").Trim()));
+            foreach (var executionRevision in new[]
+            {
+                new string('f', 40),
+                RunGit(Root, "rev-parse", "HEAD~1").Trim()
+            })
+            {
+                var output = Path.Join(temp, $"{executionRevision}.json");
+                using var environment = GitHubEnvironment(executionRevision);
+                _ = Assert.Throws<ProtocolException>(() =>
+                    SubjectManifestMaterializer.MaterializeCommon(
+                        Root,
+                        reviewPath,
+                        output));
+                Assert.False(File.Exists(output));
+            }
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_CellMaterializerClosesAttemptBeforeAnyMutation()
+    {
+        var context = BundleValidator.Validate(Root);
+        var temp = Path.Join(
+            Root,
+            "TestResults",
+            "m1-host-validation",
+            $"materializer-pretrust-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var reviewPath = Path.Join(temp, "review.json");
+        var commonPath = Path.Join(temp, SubjectManifestMaterializer.CommonFileName);
+        var executionRevision = RunGit(Root, "rev-parse", "HEAD").Trim();
+        var cellId = OperatingSystem.IsWindows() ? "windows-x64" : "ubuntu-x64";
+        var vector = context.Vectors.Vectors.First(candidate =>
+            candidate.ExecutorKind == "production-host"
+            && candidate.Cells.Contains(cellId, StringComparer.Ordinal));
+        var fixtureRoot = RepositoryPaths.ResolveConfined(
+            Root,
+            $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vector.VectorId}",
+            mustExist: false);
+        try
+        {
+            CanonicalJson.WriteCanonical(
+                reviewPath,
+                CreateAcceptedReview(context.Lock.BundleId, new string('f', 40)));
+            using var environment = GitHubEnvironment(executionRevision);
+            _ = SubjectManifestMaterializer.MaterializeCommon(Root, reviewPath, commonPath);
+            Assert.False(Directory.Exists(fixtureRoot));
+
+            var mutations = new (string Name, string? Value, string RequestedCell)[]
+            {
+                ("GITHUB_RUN_ID", "9002", cellId),
+                ("GITHUB_RUN_ATTEMPT", "2", cellId),
+                ("GITHUB_SHA", new string('e', 40), cellId),
+                ("GITHUB_WORKFLOW_REF", "SolusQuest/contract-scribe/.github/workflows/other.yml@refs/heads/test", cellId),
+                ("GITHUB_JOB", "other-job", cellId),
+                ("RUNNER_OS", OperatingSystem.IsWindows() ? "Linux" : "Windows", cellId),
+                ("RUNNER_ARCH", "ARM64", cellId),
+                ("GITHUB_JOB", "host-validation-cell", cellId == "windows-x64" ? "ubuntu-x64" : "windows-x64")
+            };
+            foreach (var mutation in mutations)
+            {
+                var original = Environment.GetEnvironmentVariable(mutation.Name);
+                var output = Path.Join(temp, $"cell-{Guid.NewGuid():N}.json");
+                File.WriteAllText(output, "unchanged", new UTF8Encoding(false));
+                try
+                {
+                    Environment.SetEnvironmentVariable(mutation.Name, mutation.Value);
+                    Assert.Equal(
+                        "HV211_EXECUTION_ENVIRONMENT_UNBOUND",
+                        Assert.Throws<ProtocolException>(() =>
+                            SubjectManifestMaterializer.MaterializeCell(
+                                Root,
+                                reviewPath,
+                                commonPath,
+                                mutation.RequestedCell,
+                                output)).Code);
+                    Assert.Equal("unchanged", File.ReadAllText(output));
+                    Assert.False(Directory.Exists(fixtureRoot));
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable(mutation.Name, original);
+                }
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureRoot))
+            {
+                FixtureRecipeRegistry.RemoveProvisionedReparsePoints(fixtureRoot);
+                Directory.Delete(fixtureRoot, recursive: true);
+            }
+            Directory.Delete(temp, recursive: true);
         }
     }
 
@@ -788,6 +945,78 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_NativeInteropAllowlistAcceptsOnlyExactProtectedBoundary()
+    {
+        foreach (var relative in new[]
+        {
+            "src/ContractScribe.Roslyn/AtomicResultPublisher.cs",
+            "src/ContractScribe.Roslyn/ToolchainProcessMeter.cs",
+            "src/ContractScribe.Roslyn/DotnetSdkResolver.cs"
+        })
+        {
+            var source = RepositoryPaths.ResolveConfined(Root, relative);
+            Assert.False(NetworkOperationSourceScanner.HasForbiddenSourceOperation(
+                relative,
+                source));
+            var mutated = Path.Join(
+                Root,
+                "TestResults",
+                "m1-host-validation",
+                $"native-source-{Guid.NewGuid():N}.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(mutated)!);
+            try
+            {
+                File.WriteAllText(
+                    mutated,
+                    File.ReadAllText(source) + "\n",
+                    new UTF8Encoding(false));
+                Assert.True(NetworkOperationSourceScanner.HasForbiddenSourceOperation(
+                    relative,
+                    mutated));
+            }
+            finally
+            {
+                File.Delete(mutated);
+            }
+        }
+
+        var assemblyPath = Path.Join(
+            Root,
+            "src",
+            "ContractScribe.Cli",
+            "bin",
+            "Release",
+            "net10.0",
+            "ContractScribe.Roslyn.dll");
+        Assert.False(NetworkOperationSourceScanner.HasForbiddenMetadataOperation(assemblyPath));
+        Assert.True(NativeInteropAllowlist.IsAllowedMetadataInterop(
+            "ContractScribe.Roslyn",
+            "ContractScribe.Roslyn.StablePublicationDirectory",
+            "CreateFileW",
+            "kernel32.dll",
+            "CreateFileW",
+            (System.Reflection.MethodImportAttributes)324,
+            "00071280950e090918090918"));
+        foreach (var mutation in new[]
+        {
+            (Type: "ContractScribe.Roslyn.OtherType", Library: "kernel32.dll", Entry: "CreateFileW", Signature: "00071280950e090918090918"),
+            (Type: "ContractScribe.Roslyn.StablePublicationDirectory", Library: "ws2_32.dll", Entry: "CreateFileW", Signature: "00071280950e090918090918"),
+            (Type: "ContractScribe.Roslyn.StablePublicationDirectory", Library: "kernel32.dll", Entry: "connect", Signature: "00071280950e090918090918"),
+            (Type: "ContractScribe.Roslyn.StablePublicationDirectory", Library: "kernel32.dll", Entry: "CreateFileW", Signature: "00010808")
+        })
+        {
+            Assert.False(NativeInteropAllowlist.IsAllowedMetadataInterop(
+                "ContractScribe.Roslyn",
+                mutation.Type,
+                "CreateFileW",
+                mutation.Library,
+                mutation.Entry,
+                (System.Reflection.MethodImportAttributes)324,
+                mutation.Signature));
+        }
+    }
+
+    [Fact]
     public void HostValidation_DeclaredNetworkInventoryIsDerivedFromExactInputs()
     {
         foreach (var (inputClass, text) in new[]
@@ -946,6 +1175,77 @@ public sealed class M1HostValidationProtocolTests
         {
             FixtureRecipeRegistry.RemoveProvisionedReparsePoints(temp);
             Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostValidation_FixturePreparationProvidesOnlyRequiredRestoreAssetsAndResetsRuns()
+    {
+        var context = BundleValidator.Validate(Root);
+        var cellId = OperatingSystem.IsWindows() ? "windows-x64" : "ubuntu-x64";
+        var vectorIds = new[]
+        {
+            "contracts.policy-conformance",
+            "toolchain.missing-assets",
+            "toolchain.no-automatic-restore",
+            "determinism.fresh-process-canonical"
+        };
+        try
+        {
+            foreach (var vectorId in vectorIds)
+            {
+                var vector = context.Vectors.Vectors.Single(candidate =>
+                    candidate.VectorId == vectorId);
+                var repositoryRoot = RepositoryPaths.ResolveConfined(
+                    Root,
+                    $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vectorId}",
+                    mustExist: false);
+                FixtureRecipeRegistry.Prepare(Root, repositoryRoot, cellId, vector);
+                var fixture = FrozenFixtureRegistry.MaterializePrepared(
+                    Root,
+                    cellId,
+                    vector);
+                var assetsPath = Path.Join(repositoryRoot, "obj", "project.assets.json");
+                var shouldHaveAssets = vectorId is not (
+                    "toolchain.missing-assets" or "toolchain.no-automatic-restore");
+                Assert.Equal(shouldHaveAssets, File.Exists(assetsPath));
+                Assert.Equal(
+                    shouldHaveAssets,
+                    fixture.ArrangementInputs.Any(input =>
+                        input.Path.EndsWith("/obj/project.assets.json", StringComparison.Ordinal)));
+                if (shouldHaveAssets)
+                {
+                    Assert.NotEmpty(File.ReadAllBytes(assetsPath));
+                }
+
+                FixtureRecipeRegistry.Provision(Root, repositoryRoot, cellId, vector);
+                var firstIdentity = CellExecutor.ComputeRepositoryIdentity(
+                    RepositoryObserver.Capture(repositoryRoot, fixture.AllowedDesignTimeRoots));
+                Assert.Equal(fixture.RepositoryIdentitySha256, firstIdentity);
+                Directory.CreateDirectory(Path.Join(repositoryRoot, "obj"));
+                File.WriteAllText(
+                    Path.Join(repositoryRoot, "obj", "inherited-run-state.txt"),
+                    "must be removed",
+                    new UTF8Encoding(false));
+                FixtureRecipeRegistry.Provision(Root, repositoryRoot, cellId, vector);
+                Assert.False(File.Exists(Path.Join(
+                    repositoryRoot,
+                    "obj",
+                    "inherited-run-state.txt")));
+                Assert.Equal(
+                    firstIdentity,
+                    CellExecutor.ComputeRepositoryIdentity(
+                        RepositoryObserver.Capture(
+                            repositoryRoot,
+                            fixture.AllowedDesignTimeRoots)));
+            }
+        }
+        finally
+        {
+            foreach (var vectorId in vectorIds)
+            {
+                DeletePreparedFixture(cellId, vectorId);
+            }
         }
     }
 
@@ -2352,7 +2652,7 @@ public sealed class M1HostValidationProtocolTests
                 ["build"],
                 [new ProcessIdentityRule(fingerprint, "production-subject", entryPointSha256)]));
         Assert.Equal(
-            "contractscribe-worker",
+            "restore-or-runtime-download",
             ProcessTreeObserver.ClassifyIdentity(
                 "dotnet",
                 entryPoint,
@@ -2480,6 +2780,122 @@ public sealed class M1HostValidationProtocolTests
     }
 
     [Fact]
+    public void HostValidation_ProtectedBuildHostGrammarIsExactAndFailClosed()
+    {
+        var buildHostPath = Path.Join(
+            Root,
+            "src",
+            "ContractScribe.Cli",
+            "bin",
+            "Release",
+            "net10.0",
+            "BuildHost-netcore",
+            "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll");
+        Assert.True(File.Exists(buildHostPath));
+        var relativePath = RepositoryPaths.ToRepositoryRelative(Root, buildHostPath);
+        var identity = new ArtifactIdentity(relativePath, CanonicalJson.Sha256File(buildHostPath));
+        var materialization = new CellMaterialization(
+            OperatingSystem.IsWindows() ? "windows-x64" : "ubuntu-x64",
+            "host-validation-cell",
+            "https://github.com/SolusQuest/contract-scribe/actions/runs/1",
+            "image",
+            OperatingSystem.IsWindows() ? "win-x64" : "linux-x64",
+            "X64",
+            "sdk",
+            Environment.Version.ToString(),
+            "msbuild",
+            [],
+            [identity],
+            []);
+        var registry = SubjectManifestMaterializer.BuildHostProcessIdentityRegistry(
+            materialization,
+            required: true);
+        var hostArguments = new[] { "--roll-forward", "LatestMajor" };
+        var commandArguments = new List<string>
+        {
+            "--pipe", Guid.NewGuid().ToString("D"),
+            "--property", "DesignTimeBuild=true",
+            "--property", @"NonExistentFile=__NonExistentSubDir__\__NonExistentFile__",
+            "--property", "BuildingInsideVisualStudio=true",
+            "--property", "BuildProjectReferences=false",
+            "--property", "BuildingProject=false",
+            "--property", "ProvideCommandLineArgs=true",
+            "--property", "SkipCompilerExecution=true",
+            "--property", "ContinueOnError=ErrorAndContinue",
+            "--property", "ShouldUnsetParentConfigurationAndPlatform=false",
+            "--property", $"SolutionDir={Path.Join(Root, "tests", "fixtures", "m1-host-validation", "runtime", materialization.CellId, "support.sln")}{Path.DirectorySeparatorChar}",
+            "--locale", "en-US"
+        };
+        Assert.Equal(
+            "toolchain-owned",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                hostArguments,
+                commandArguments,
+                registry));
+
+        Assert.Equal(
+            "unknown-descendant",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                ["--roll-forward"],
+                commandArguments,
+                registry));
+        Assert.Equal(
+            "unknown-descendant",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                hostArguments,
+                commandArguments.Select(argument =>
+                    argument == commandArguments[1] ? "not-a-guid" : argument).ToArray(),
+                registry));
+        Assert.Equal(
+            "unknown-descendant",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                hostArguments,
+                commandArguments.Concat(["--property", "Unexpected=true"]).ToArray(),
+                registry));
+        Assert.Equal(
+            "restore-or-runtime-download",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                hostArguments,
+                commandArguments.Concat(["restore"]).ToArray(),
+                registry));
+        Assert.Equal(
+            "unknown-descendant",
+            ProcessTreeObserver.ClassifyDotnetIdentity(
+                buildHostPath,
+                hostArguments,
+                commandArguments,
+                [registry[0] with { EntryPointSha256 = new string('0', 64) }]));
+
+        var copiedRoot = Path.Join(
+            Root,
+            "TestResults",
+            "m1-host-validation",
+            $"buildhost-copy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(copiedRoot);
+        var copied = Path.Join(copiedRoot, Path.GetFileName(buildHostPath));
+        try
+        {
+            File.Copy(buildHostPath, copied);
+            Assert.Equal(
+                "unknown-descendant",
+                ProcessTreeObserver.ClassifyDotnetIdentity(
+                    copied,
+                    hostArguments,
+                    commandArguments,
+                    registry));
+        }
+        finally
+        {
+            Directory.Delete(copiedRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HostValidation_CommitBoundEnumerationDetectsMaterializedDeletion()
     {
         var temp = Path.Join(Path.GetTempPath(), $"contractscribe-git-tree-{Guid.NewGuid():N}");
@@ -2518,7 +2934,10 @@ public sealed class M1HostValidationProtocolTests
         var temp = Path.Join(
             Root,
             "TestResults",
-            $"host-validation-artifact-set-{Guid.NewGuid():N}");
+            "m1-host-validation",
+            "artifact-set-tests",
+            Guid.NewGuid().ToString("N"),
+            "root");
         Directory.CreateDirectory(temp);
         try
         {
@@ -2542,6 +2961,30 @@ public sealed class M1HostValidationProtocolTests
 
             var exact = HostValidationArtifactSet.Load(context, temp);
             Assert.Equal(2, exact.Cells.Count);
+            var preserved = exact.InputPaths()
+                .Where(File.Exists)
+                .ToDictionary(path => path, File.ReadAllBytes);
+            foreach (var collision in new[]
+            {
+                exact.CommonManifestPath,
+                exact.Cells[0].CellManifestPath,
+                exact.Cells[0].TerminalPath,
+                exact.Cells[1].CellManifestPath,
+                exact.Cells[1].TerminalPath,
+                exact.Root,
+                Directory.GetParent(exact.Root)!.FullName
+            })
+            {
+                Assert.Equal(
+                    "HV194_OUTPUT_PATH_COLLISION",
+                    Assert.Throws<ProtocolException>(() =>
+                        OutputPathGuard.Validate(
+                            context,
+                            exact.InputPaths(),
+                            collision)).Code);
+                Assert.All(preserved, pair =>
+                    Assert.Equal(pair.Value, File.ReadAllBytes(pair.Key)));
+            }
 
             var extra = Path.Join(temp, "unreferenced.json");
             File.WriteAllText(extra, "{}\n", new UTF8Encoding(false));
@@ -3502,6 +3945,68 @@ public sealed class M1HostValidationProtocolTests
         {
             ReviewId = BundleValidator.ComputeReviewId(review)
         };
+
+    private static EnvironmentVariableScope GitHubEnvironment(string executionRevision) =>
+        new(new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["GITHUB_ACTIONS"] = "true",
+            ["GITHUB_REPOSITORY"] = "SolusQuest/contract-scribe",
+            ["GITHUB_SERVER_URL"] = "https://github.com",
+            ["GITHUB_WORKFLOW_REF"] =
+                "SolusQuest/contract-scribe/.github/workflows/ci.yml@refs/heads/test",
+            ["GITHUB_RUN_ID"] = "9001",
+            ["GITHUB_RUN_ATTEMPT"] = "1",
+            ["GITHUB_SHA"] = executionRevision,
+            ["GITHUB_JOB"] = "host-validation-cell",
+            ["RUNNER_OS"] = OperatingSystem.IsWindows() ? "Windows" : "Linux",
+            ["RUNNER_ARCH"] = "X64",
+            ["ImageOS"] = OperatingSystem.IsWindows() ? "win-test" : "ubuntu-test",
+            ["ImageVersion"] = "20260807.1"
+        });
+
+    private static void DeletePreparedFixture(string cellId, string vectorId)
+    {
+        var repositoryRoot = RepositoryPaths.ResolveConfined(
+            Root,
+            $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vectorId}",
+            mustExist: false);
+        if (Directory.Exists(repositoryRoot))
+        {
+            FixtureRecipeRegistry.RemoveProvisionedReparsePoints(repositoryRoot);
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+        var preparedObj = FixtureRecipeRegistry.PreparedAssetRoot(Root, cellId, vectorId);
+        var preparedVector = Directory.GetParent(preparedObj)?.FullName;
+        if (preparedVector is not null && Directory.Exists(preparedVector))
+        {
+            Directory.Delete(preparedVector, recursive: true);
+        }
+    }
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly IReadOnlyDictionary<string, string?> original;
+
+        public EnvironmentVariableScope(IReadOnlyDictionary<string, string?> values)
+        {
+            original = values.Keys.ToDictionary(
+                key => key,
+                Environment.GetEnvironmentVariable,
+                StringComparer.Ordinal);
+            foreach (var (key, value) in values)
+            {
+                Environment.SetEnvironmentVariable(key, value);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var (key, value) in original)
+            {
+                Environment.SetEnvironmentVariable(key, value);
+            }
+        }
+    }
 
     private static string RunGit(string workingDirectory, params string[] arguments)
     {

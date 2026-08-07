@@ -374,7 +374,9 @@ public sealed record RunWorkingDirectory(string RunId, string Mode);
 public sealed record ProcessIdentityRule(
     string FingerprintSha256,
     string ArtifactKind,
-    string EntryPointSha256);
+    string EntryPointSha256,
+    string? EntryPointPath = null,
+    string? ArgumentGrammar = null);
 
 public sealed record ObservedProcess(
     int ProcessId,

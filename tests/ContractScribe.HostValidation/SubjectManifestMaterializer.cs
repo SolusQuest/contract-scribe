@@ -18,10 +18,11 @@ public static class SubjectManifestMaterializer
         string outputPath)
     {
         var context = BundleValidator.Validate(root, requireReview: true, reviewPath);
-        var review = BundleValidator.ValidateReview(context.Root, reviewPath, context.Lock.BundleId);
+        _ = BundleValidator.ValidateReview(context.Root, reviewPath, context.Lock.BundleId);
         var executionSha = RequireLowerCommit(Environment.GetEnvironmentVariable("GITHUB_SHA"));
-        var hostRevision = RequireLowerCommit(review.ReviewedSourceRevision);
+        var hostRevision = executionSha;
         RequireGitHubActions();
+        RequireWorkflowIdentity(context.Protocol.SubjectSourceContract.Workflow);
         BundleValidator.ValidateCommitAncestry(context.Root, hostRevision, executionSha);
 
         var contract = context.Protocol.SubjectSourceContract;
@@ -74,8 +75,8 @@ public static class SubjectManifestMaterializer
             "prebuilt-in-process-test-entrypoint",
             source,
             attempt);
+        _ = CellExecutor.ValidateCommonManifest(context, manifest);
         CanonicalJson.WriteCanonical(outputPath, manifest);
-        _ = CellExecutor.ValidateCommonManifest(context, outputPath);
         return manifest;
     }
 
@@ -91,6 +92,7 @@ public static class SubjectManifestMaterializer
         var common = CellExecutor.ValidateCommonManifest(context, commonManifestPath);
         RequireGitHubActions();
         ValidateRunnerCell(context, cellId);
+        ValidateCommonAttempt(common);
         var inventories = MaterializationInventories(context.Root);
         ValidateArtifactSet(context.Root, inventories, allowDrift: false);
         var protocolCell = context.Protocol.RequiredCells.Single(cell => cell.CellId == cellId);
@@ -107,11 +109,29 @@ public static class SubjectManifestMaterializer
             inventories.ProductionArtifacts,
             inventories.RuntimeDependencies,
             inventories.HarnessArtifacts);
-        var fixtures = context.Vectors.Vectors
+        CellExecutor.ValidateMaterializationEnvironment(common, materialization);
+        var processIdentityRegistry = BuildHostProcessIdentityRegistry(
+            materialization,
+            required: true);
+        var fixtureVectors = context.Vectors.Vectors
             .Where(vector => vector.ExecutorKind != "harness-static"
                 && vector.Cells.Contains(cellId, StringComparer.Ordinal))
             .OrderBy(vector => vector.VectorId, StringComparer.Ordinal)
-            .Select(vector => FrozenFixtureRegistry.Materialize(context.Root, cellId, vector))
+            .ToArray();
+        foreach (var vector in fixtureVectors)
+        {
+            var repositoryRoot = RepositoryPaths.ResolveConfined(
+                context.Root,
+                $"tests/fixtures/m1-host-validation/runtime/{cellId}/{vector.VectorId}",
+                mustExist: false);
+            FixtureRecipeRegistry.Prepare(context.Root, repositoryRoot, cellId, vector);
+        }
+        var fixtures = fixtureVectors
+            .Select(vector => FrozenFixtureRegistry.MaterializePrepared(
+                context.Root,
+                cellId,
+                vector,
+                processIdentityRegistry))
             .ToArray();
         var cell = new CellSubjectManifest(
             "contractscribe-m1-host-validation-cell-subject-v1",
@@ -123,13 +143,12 @@ public static class SubjectManifestMaterializer
                 EntryPoint,
                 [],
                 fixtures));
+        CellExecutor.ValidateCellManifest(
+            context,
+            common,
+            CanonicalJson.Sha256File(commonManifestPath),
+            cell);
         CanonicalJson.WriteCanonical(outputPath, cell);
-        _ = CellExecutor.ValidateSubjectManifests(context, commonManifestPath, outputPath);
-        if (common.ValidationAttempt.ValidationExecutionSha
-            != RequireLowerCommit(Environment.GetEnvironmentVariable("GITHUB_SHA")))
-        {
-            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
-        }
         return cell;
     }
 
@@ -220,6 +239,39 @@ public static class SubjectManifestMaterializer
                 && identity.Sha256.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f'));
     }
 
+    public static IReadOnlyList<ProcessIdentityRule> BuildHostProcessIdentityRegistry(
+        CellMaterialization materialization,
+        bool required = false)
+    {
+        var candidates = materialization.RuntimeDependencies
+            .Where(identity => identity.Path.EndsWith(
+                "/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll",
+                StringComparison.Ordinal))
+            .ToArray();
+        if (candidates.Length == 0 && !required)
+        {
+            return [];
+        }
+        if (candidates.Length != 1)
+        {
+            throw new ProtocolException("HV233_PROCESS_IDENTITY_UNBOUND");
+        }
+        var buildHost = candidates[0];
+        return
+        [
+            new ProcessIdentityRule(
+                ProcessTreeObserver.ComputeGrammarFingerprint(
+                    "dotnet",
+                    buildHost.Path,
+                    buildHost.Sha256,
+                    ProcessTreeObserver.RoslynBuildHostArgumentGrammar),
+                "selected-toolchain",
+                buildHost.Sha256,
+                buildHost.Path,
+                ProcessTreeObserver.RoslynBuildHostArgumentGrammar)
+        ];
+    }
+
     private static ArtifactIdentity Identity(string root, string path) =>
         new(path, CanonicalJson.Sha256File(RepositoryPaths.ResolveConfined(root, path)));
 
@@ -245,7 +297,35 @@ public static class SubjectManifestMaterializer
             _ => throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND")
         };
         if (cellId != expectedId
+            || Environment.GetEnvironmentVariable("GITHUB_JOB") != "host-validation-cell"
             || !context.Protocol.RequiredCells.Any(cell => cell.CellId == cellId))
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+    }
+
+    private static void ValidateCommonAttempt(CommonSourceManifest common)
+    {
+        var attempt = common.ValidationAttempt;
+        if (Environment.GetEnvironmentVariable("GITHUB_RUN_ID") != attempt.WorkflowRunId
+            || !int.TryParse(Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT"), out var runAttempt)
+            || runAttempt != attempt.RunAttempt
+            || Environment.GetEnvironmentVariable("GITHUB_SHA") != attempt.ValidationExecutionSha)
+        {
+            throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
+        }
+        RequireWorkflowIdentity(attempt.Workflow);
+    }
+
+    internal static void RequireWorkflowIdentity(string workflowPath)
+    {
+        var repository = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
+        var workflowRef = Environment.GetEnvironmentVariable("GITHUB_WORKFLOW_REF");
+        if (string.IsNullOrWhiteSpace(repository)
+            || string.IsNullOrWhiteSpace(workflowRef)
+            || !workflowRef.StartsWith(
+                $"{repository}/{workflowPath}@",
+                StringComparison.Ordinal))
         {
             throw new ProtocolException("HV211_EXECUTION_ENVIRONMENT_UNBOUND");
         }

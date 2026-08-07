@@ -7,6 +7,8 @@ namespace ContractScribe.HostValidation;
 
 public sealed class ProcessTreeObserver : IAsyncDisposable
 {
+    public const string RoslynBuildHostArgumentGrammar = "roslyn-buildhost-netcore-v1";
+
     private readonly int subjectProcessId;
     private readonly ProcessInstanceIdentity subjectIdentity;
     private readonly IReadOnlyList<ProcessIdentityRule> identityRegistry;
@@ -346,6 +348,38 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         IReadOnlyList<string> commandArguments,
         IReadOnlyList<ProcessIdentityRule> identityRegistry)
     {
+        return ClassifyIdentityCore(
+            imageName,
+            entryPointPath,
+            [],
+            commandArguments,
+            identityRegistry);
+    }
+
+    public static string ClassifyDotnetIdentity(
+        string entryPointPath,
+        IReadOnlyList<string> hostArguments,
+        IReadOnlyList<string> commandArguments,
+        IReadOnlyList<ProcessIdentityRule> identityRegistry) =>
+        ClassifyIdentityCore(
+            "dotnet",
+            entryPointPath,
+            hostArguments,
+            commandArguments,
+            identityRegistry);
+
+    private static string ClassifyIdentityCore(
+        string imageName,
+        string? entryPointPath,
+        IReadOnlyList<string> hostArguments,
+        IReadOnlyList<string> commandArguments,
+        IReadOnlyList<ProcessIdentityRule> identityRegistry)
+    {
+        if (IsRestoreOrRuntimeDownload(hostArguments)
+            || IsRestoreOrRuntimeDownload(commandArguments))
+        {
+            return "restore-or-runtime-download";
+        }
         if (entryPointPath is not null && File.Exists(entryPointPath))
         {
             var fingerprint = ComputeIdentityFingerprint(
@@ -353,7 +387,14 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                 entryPointPath,
                 commandArguments);
             var matches = identityRegistry
-                .Where(rule => rule.FingerprintSha256 == fingerprint)
+                .Where(rule => rule.ArgumentGrammar is null
+                    ? rule.FingerprintSha256 == fingerprint
+                    : MatchesGrammarRule(
+                        imageName,
+                        entryPointPath,
+                        hostArguments,
+                        commandArguments,
+                        rule))
                 .ToArray();
             if (matches.Length == 1)
             {
@@ -365,10 +406,130 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
             }
         }
 
+        if (entryPointPath is not null
+            && identityRegistry.Any(rule =>
+                rule.ArgumentGrammar == RoslynBuildHostArgumentGrammar)
+            && Path.GetFileName(entryPointPath).Equals(
+                "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "unknown-descendant";
+        }
         return imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
             || imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
              ? "contractscribe-worker"
              : "unknown-descendant";
+    }
+
+    private static bool MatchesGrammarRule(
+        string imageName,
+        string entryPointPath,
+        IReadOnlyList<string> hostArguments,
+        IReadOnlyList<string> commandArguments,
+        ProcessIdentityRule rule)
+    {
+        if (rule.ArgumentGrammar != RoslynBuildHostArgumentGrammar
+            || rule.EntryPointPath is null
+            || !imageName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFullPath(entryPointPath).Replace('\\', '/').EndsWith(
+                "/" + rule.EntryPointPath,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal)
+            || CanonicalJson.Sha256File(entryPointPath) != rule.EntryPointSha256
+            || rule.FingerprintSha256 != ComputeGrammarFingerprint(
+                "dotnet",
+                rule.EntryPointPath,
+                rule.EntryPointSha256,
+                rule.ArgumentGrammar)
+            || !hostArguments.SequenceEqual(
+                new[] { "--roll-forward", "LatestMajor" },
+                StringComparer.Ordinal))
+        {
+            return false;
+        }
+        return MatchesRoslynBuildHostArguments(commandArguments);
+    }
+
+    private static bool MatchesRoslynBuildHostArguments(IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count < 2
+            || arguments[0] != "--pipe"
+            || !Guid.TryParseExact(arguments[1], "D", out _))
+        {
+            return false;
+        }
+        var requiredProperties = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DesignTimeBuild"] = "true",
+            ["NonExistentFile"] = @"__NonExistentSubDir__\__NonExistentFile__",
+            ["BuildingInsideVisualStudio"] = "true",
+            ["BuildProjectReferences"] = "false",
+            ["BuildingProject"] = "false",
+            ["ProvideCommandLineArgs"] = "true",
+            ["SkipCompilerExecution"] = "true",
+            ["ContinueOnError"] = "ErrorAndContinue",
+            ["ShouldUnsetParentConfigurationAndPlatform"] = "false"
+        };
+        var observedProperties = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? locale = null;
+        for (var index = 2; index < arguments.Count; index += 2)
+        {
+            if (index + 1 >= arguments.Count)
+            {
+                return false;
+            }
+            if (arguments[index] == "--property")
+            {
+                var separator = arguments[index + 1].IndexOf('=');
+                if (separator <= 0
+                    || !observedProperties.TryAdd(
+                        arguments[index + 1][..separator],
+                        arguments[index + 1][(separator + 1)..]))
+                {
+                    return false;
+                }
+            }
+            else if (arguments[index] == "--locale" && locale is null)
+            {
+                locale = arguments[index + 1];
+            }
+            else
+            {
+                return false;
+            }
+        }
+        if (locale is not null
+            && (locale.Length is < 2 or > 32
+                || locale.Any(character => !(char.IsAsciiLetterOrDigit(character)
+                    || character == '-'))))
+        {
+            return false;
+        }
+        foreach (var (key, value) in requiredProperties)
+        {
+            if (!observedProperties.Remove(key, out var observed) || observed != value)
+            {
+                return false;
+            }
+        }
+        if (observedProperties.Count == 0)
+        {
+            return true;
+        }
+        if (observedProperties.Count != 1
+            || !observedProperties.TryGetValue("SolutionDir", out var solutionDir)
+            || !Path.IsPathFullyQualified(solutionDir))
+        {
+            return false;
+        }
+        var normalized = Path.GetFullPath(solutionDir).Replace('\\', '/');
+        return normalized.Contains(
+                "/tests/fixtures/m1-host-validation/runtime/",
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal)
+            && normalized.EndsWith('/');
     }
 
     private static string ClassifyProtectedCommand(
@@ -381,11 +542,6 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         {
             return "unknown-descendant";
         }
-        if (IsRestoreOrRuntimeDownload(commandArguments))
-        {
-            return "restore-or-runtime-download";
-        }
-
         var entryPointName = Path.GetFileName(entryPointPath);
         if (rule.ArtifactKind is "production-subject" or "fixture-helper"
             && (imageName.StartsWith("ContractScribe", StringComparison.OrdinalIgnoreCase)
@@ -399,9 +555,10 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
             ? entryPointName.ToLowerInvariant() switch
             {
                 "msbuild" or "msbuild.exe" or "msbuild.dll"
-                    or "vbcscompiler" or "vbcscompiler.exe" or "vbcscompiler.dll"
-                    or "csc" or "csc.exe" or "csc.dll"
-                    or "vbc" or "vbc.exe" or "vbc.dll" => "toolchain-owned",
+                   or "microsoft.codeanalysis.workspaces.msbuild.buildhost.dll"
+                   or "vbcscompiler" or "vbcscompiler.exe" or "vbcscompiler.dll"
+                   or "csc" or "csc.exe" or "csc.dll"
+                   or "vbc" or "vbc.exe" or "vbc.dll" => "toolchain-owned",
                 _ => "unknown-descendant"
             }
             : "unknown-descendant";
@@ -436,6 +593,19 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
         return Convert.ToHexStringLower(SHA256.HashData(preimage.ToArray()));
     }
 
+    public static string ComputeGrammarFingerprint(
+        string imageName,
+        string entryPointPath,
+        string entryPointSha256,
+        string argumentGrammar) =>
+        CanonicalJson.Sha256(CanonicalJson.SerializeCanonical(new
+        {
+            imageName = SanitizeImageName(imageName).ToLowerInvariant(),
+            entryPointPath,
+            entryPointSha256,
+            argumentGrammar
+        }));
+
     private string ClassifyProcess(int processId, string imageName)
     {
         try
@@ -453,16 +623,26 @@ public sealed class ProcessTreeObserver : IAsyncDisposable
                         && Path.IsPathFullyQualified(candidate.argument))
                     .index;
                 entryPoint = entryPointIndex > 0 ? commandLine[entryPointIndex] : null;
+                var hostArguments = entryPoint is null
+                    ? []
+                    : commandLine.Skip(1).Take(entryPointIndex - 1).ToArray();
                 arguments = entryPoint is null ? [] : commandLine.Skip(entryPointIndex + 1).ToArray();
+                return ClassifyIdentityCore(
+                    imageName,
+                    entryPoint,
+                    hostArguments,
+                    arguments,
+                    identityRegistry);
             }
             else
             {
                 entryPoint = process.MainModule?.FileName;
                 arguments = commandLine.Skip(1).ToArray();
             }
-            return ClassifyIdentity(
+            return ClassifyIdentityCore(
                 imageName,
                 entryPoint,
+                [],
                 arguments,
                 identityRegistry);
         }

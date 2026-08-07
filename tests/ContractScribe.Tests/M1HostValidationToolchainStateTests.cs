@@ -598,7 +598,7 @@ public sealed class M1HostValidationToolchainStateTests
             null,
             ["restore"],
             []);
-        Assert.Equal("contractscribe-worker", directRestoreRole);
+        Assert.Equal("restore-or-runtime-download", directRestoreRole);
         var directRestore = DeriveToolchainClaim(
             context,
             vector,
@@ -607,7 +607,9 @@ public sealed class M1HostValidationToolchainStateTests
                 new ObservedProcess(700, 1, "subject-runtime", "dotnet"),
                 new ObservedProcess(701, 700, directRestoreRole, "dotnet")
             ]);
-        Assert.Equal("process.unowned-subprocess-observed", directRestore.Observation);
+        Assert.Equal(
+            "toolchain.restore-or-runtime-download-marker-observed",
+            directRestore.Observation);
         Assert.Equal("subject-nonconformance", directRestore.Verdict);
 
         foreach (var processes in new IReadOnlyList<ObservedProcess>[]
