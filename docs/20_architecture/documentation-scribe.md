@@ -1,5 +1,7 @@
 # Documentation Scribe
 
+> **Status:** M3 candidate architecture. The goal, read-only authority, structured-output boundary, deterministic patch ownership, repository confinement, and safety non-goals are current roadmap constraints. Component names, project placement, context/snapshot identities, provider behavior, tool inventory, request shapes, and orchestration details remain candidates until M3 refinement accepts them against executable evidence.
+
 ## Goal
 
 The Documentation Scribe turns a deterministic audit target, bounded repository evidence, and a style profile into a structured XML-documentation proposal. It is the product's model-assisted writing capability, but it is not a general coding agent.

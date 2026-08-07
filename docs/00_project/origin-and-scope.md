@@ -24,7 +24,7 @@ The initial bootstrap intentionally delivered only governance and a minimal .NET
 - Campaign planning and state are platform-neutral and deterministic by default.
 - GitHub mutations are optional adapter behavior with least-privilege permissions.
 - Scheduling is caller-owned workflow configuration; ContractScribe does not promise provider-specific off-peak pricing.
-- The planned initial proposal runtime uses an OpenAI-compatible protocol, with DeepSeek as the primary evaluation provider and MiMo as the compatibility-evaluation provider; support claims require the M3 executable provider corpus and evidence.
+- M3 selects the smallest proposal-provider transport and bounded evaluation set supported by current executable evidence; no provider name, compatibility corpus, or support claim is frozen before that refinement.
 - Stable reusable prompt prefixes, bounded uncached input, and observable token economics are product requirements; provider cache retention is not product state.
 - Automatic merge is not part of the initial product.
 

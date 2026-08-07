@@ -16,7 +16,7 @@ M1 turns the M0 execution and contract evidence into a production read-only audi
 - [Contract lifecycle](../00_project/contract-lifecycle.md)
 - [Security boundary](../20_architecture/security-boundary.md)
 
-ADR 0001 fixes the framework-dependent execution baseline. ADR 0002 fixes one in-process ContractScribe runtime per audit. M1 does not reopen those choices unless a recorded reconsideration trigger occurs.
+ADR 0001 records the framework-dependent execution evidence. ADR 0002 selects one in-process ContractScribe runtime per audit for the current production implementation. New evidence may reconsider that current choice in the issue that owns the affected boundary; it does not automatically reopen either closed issue.
 
 ## Product requirements owned by M1
 
@@ -108,20 +108,20 @@ M1 does not create `ContractScribe.Patching`, `ContractScribe.Agent`, `ContractS
 
 M1 does not automatically create Policy v2, Taxonomy v2, or Audit Result v2.
 
-The current v1 artifacts are pre-release drafts. The target-surface and observation decision is implemented as one coordinated amendment:
+The current v1 artifacts are pre-release drafts. A target-surface or observation change updates the affected current contract path coherently:
 
 - normative docs;
 - schemas and registries;
-- fixture manifests and raw fixtures;
+- affected fixture inventories and raw fixtures;
 - test-only oracles;
 - cross-contract conformance;
 - dependent ADR and roadmap references.
 
 The amendment retains version `1` unless incompatible revisions must coexist or a consumer compatibility condition in [Contract lifecycle](../00_project/contract-lifecycle.md) is met.
 
-The corrected contract-content baseline and Issue #57 Host Validation bundle remain historical evidence identities, but current pre-release validation is revision-bound rather than bundle-authorized. Repository CI cannot currently materialize and run the production subject through the Host Validation harness, while the checked-in protected-input, artifact-lock, bundle, and review lifecycle makes later pull requests maintain release-like identity machinery without an external consumer. Issue #75 removes that active lifecycle and adds the exact-revision production execution path before #41 begins. Exact Issue #55 squash commit `S1`, also called contract baseline `C1`, owns the original successor manifest identity. Issue #57's bundle target `S2` (`9da769486aae370403ddd06a5172a6ddc5b25a0d`) and review-record commit `S3` (`35f9ec815108ec9934027dd67d97dd69a85c6d07`) remain immutable historical records only.
+The corrected contract content and Issue #57 Host Validation bundle remain historical evidence at their original revisions, but current pre-release validation is ordinary production-focused CI rather than bundle-authorized or governed by successor-baseline identities. Repository CI currently preserves both a release-like Host certification system and completed M0 experiment protocols. Issue #75 removes those active historical authorities and establishes the minimum direct production execution and integration coverage needed before #41 runs.
 
-M0, Issue #35, Issue #55, and Issue #57 historical evidence remain pinned to their exact revisions. Frozen evidence artifacts may retain process language that described their own acceptance lifecycle; those records do not override the current [pre-release engineering rules](../00_project/pre-release-engineering.md) for new tracker actions.
+M0, Issue #35, Issue #55, Issue #57, and Issue #70 evidence remains available at the exact revisions that produced it. Historical documents may describe their original acceptance lifecycle; their current-tree harnesses, manifests, allowlists, tombstones, or compatibility modes are not retained solely to keep that history executable.
 
 ## Workstreams
 
@@ -135,9 +135,9 @@ Create one decision issue for target-surface and documentation-observation seman
 
 ### W2 — Coordinated pre-release contract amendment
 
-Create one coordinated contract-change issue with one primary outcome: establish the complete current pre-release v1 baseline for the selected target-surface and documentation-observation semantics. Its acceptance contract names every affected specification, schema, registry, fixture, oracle, implementation, compatibility consequence, and validation gate.
+Use one coordinated contract-change issue when separate planning is useful: establish the complete current pre-release v1 behavior for the selected target-surface and documentation-observation semantics. Its acceptance contract names the specifications, producers, consumers, schemas or registries, fixtures, validators, implementations, and checks that are actually affected.
 
-Prefer one coordinated contract pull request while those artifacts are mutually required for acceptance. Split only when a separated artifact is independently useful and acceptable and requires its own pull-request or review cycle. If a split is justified, every resulting issue remains a direct child of the M1 parent: component issues are dependency-linked siblings, and the coordinated contract-change issue owns final cross-contract consistency, conformance, and the current-baseline record. Dependency state alone never justifies an incomplete contract fragment.
+Prefer one coordinated contract pull request while those artifacts are mutually required for acceptance. Split only when a separated artifact is independently useful and acceptable and requires its own pull request or genuinely separate authority review. Preserve historical milestone evidence without creating a new current-baseline record as a routine amendment step.
 
 The amendment is a blocker for the classification, policy, and result work in W3.
 
@@ -172,23 +172,23 @@ Use issue #25 for the CLI contract. It defines:
 - retained `--help`, `--version`, and `doctor` behavior;
 - explicit absence of provider, GitHub, auto-discovery, and auto-restore options.
 
-Use issue #30 for the thin CLI implementation and integration tests only. Its exact-revision integration suite binds both the selected host revision and CLI revision, runs in the required Ubuntu and Windows X64 cells, and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code evidence. A later Host or validation-input change leaves earlier evidence historically true for its pinned revision but makes it ineligible as the current baseline consumed by a new #30 integration record or downstream smoke. The affected Host execution, #30 integration matrix, and downstream smoke must rerun in dependency order against one exact revision set before M1 closure. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
+Use issue #30 for the thin CLI implementation and integration tests only. Its ordinary Ubuntu and Windows X64 CI invokes the real Host and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code behavior. The pull request proves its exact head; the ordinary main-push run proves the merged revision. A later Host or CLI change leaves earlier runs historically true and requires fresh current CI only before a downstream claim consumes the changed behavior. Do not add a separate Host applicability ledger, protected-input manifest, evidence report, or post-merge repository mutation. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
 
 ### W5 — Executable validation
 
-Issue #26 froze the M1 validation design, matrix, expected observations, failure classification, evidence schema, and executable harness against the completed contracts and ADRs. Issue #57 then accepted one stable bundle without executing production evidence. Those closed issues remain historical authorities, but neither their bundle identity nor their commit topology authorizes current pre-release execution.
+Issue #26 recorded an extensive M1 validation design and harness, and Issue #57 accepted one stable bundle without executing production evidence. They remain historical evidence for those revisions, not current authorities that later implementation must preserve or repair.
 
-The historical accepted bundle identity is `m1hvp1.17a0515ea992abaaa39c2111836891c5e87c0322f93c0b51f349712839008d28`; its accepted review identity is `review.ea3cbe944821d110ec28cdbbf86a8056890fa9f9b2a6442f4809931067f63fe0`. A repository audit found that `.github/workflows/ci.yml` validates this bundle structurally, performs platform dry-runs, and self-tests the harness, but does not materialize a production execution subject or invoke the existing production cell and aggregate commands. The current checked-in bundle, protected-input, artifact-lock, review-record, and required-review machinery therefore adds development coupling without proving the execution path #41 needs.
+A repository audit found that `.github/workflows/ci.yml` validates the historical Host bundle structurally, performs platform dry-runs, self-tests the harness, and still invokes the completed M0.4 experiment verifier. The Host path does not execute the production subject needed by #41, while M0.4/M0.5 manifests and tests continue binding current files to historical experiment protocols. Both layers add development coupling without proving the current production audit path.
 
-After this documentation baseline merges, Issue #75 removes that active pre-release bundle lifecycle. It deletes the current checked-in Host Validation protected-input manifest, artifact lock, bundle and review identities, pending or accepted review fixture, review-only transition, and required-review authorization path rather than retaining aliases, migration, coexistence, or fallback. It preserves the useful validation design, schemas, synthetic fixtures, validators, vectors, and harness; adds the deterministic production-subject materializer and GitHub Actions execution and aggregation path; and completes one producer-schema-validator-fixture-consumer satisfiability sweep. It uses one implementation pull request, one ordinary exact-head review boundary, one human merge, and no post-merge mutation or closed-issue reopen. The synchronized Bug remains a native blocker of #41.
+After this documentation baseline merges, Issue #75 replaces those active pre-release validation systems with production-focused tests and CI. In one implementation pull request it deletes the Host protected-input manifest, artifact lock, bundle/review identities, review-only transition, certification commands, and the evidence schemas, manifests, validators, mutation corpus, self-test, aggregation, publication, or public-preparation machinery that has no current consumer beyond validating the validation product. It also retires M0.4/M0.5 from ordinary CI and deletes their current-tree historical manifests, compatibility modes, tombstones, provenance/aggregate scripts, and preservation-only tests when no production consumer remains. Reusable semantic fixtures and regression cases move under the current production owner rather than retaining experiment authority. There is one coherent exact-head review, one human merge, no post-merge repository mutation, and no closed-issue reopen. The Bug remains a native blocker of #41.
 
-The Issue #70 contract baseline at exact squash commit `67c149fbc105d2ccae94becd6b2158b68027cbfd` (`C2`) and revision `issue-70-host-validation-baseline-lineage-v1` remains immutable historical evidence. Issue #75 does not reopen #70, regenerate its historical manifest identity, or create a successor contract-baseline revision solely to remove Host Validation bundle authorization. Current Host protocol and execution semantics are identified by the exact #75 source revision. The reviewed #75 contract must classify the current-tree #70 manifest either as clearly historical data outside active validation or remove it from the active path; it must remove any validator dependency that exists only to enforce the historical certification lifecycle. A future substantive Policy, Taxonomy, Audit Result, or other production-contract amendment still receives its own coordinated baseline decision when the owning contract requires one.
+The Issue #70 contract evidence at exact squash commit `67c149fbc105d2ccae94becd6b2158b68027cbfd` (`C2`) remains immutable history. Issue #75 does not reopen #70, regenerate its manifest identity, or create a successor solely to remove Host lifecycle machinery. It deletes the current-tree #70 manifest and any dependency that exists only to enforce historical certification. Current Host behavior is defined by the production source, contracts, fixtures, and tests at the current revision.
 
-Until #75 merges, lower-level Host protocol, baseline, fixture, validator, harness, and CI bundle language describes the defective implementation assigned to #75, not the required future M1 lifecycle. It may remain temporarily executable for structural regression checks, but it cannot authorize a new production Host execution, accepted snapshot, bundle refresh, or #41 evidence claim. Draft PR #76 remains paused until this documentation baseline is main-reachable and the reviewed #75, #41, and #33 tracker synchronization is complete.
+Until #75 merges, lower-level Host protocol, baseline, fixture, validator, harness, historical experiment, and CI bundle language describes defective or retired machinery assigned to #75, not the required future M1 lifecycle. It cannot authorize a new production Host execution, accepted snapshot, bundle refresh, or #41 evidence claim. Draft PR #76 remains paused until this documentation baseline is main-reachable and the reviewed tracker corrections are complete.
 
-The correction workflow validates its exact pull-request head. One canonical common-source manifest and one canonical manifest per required platform cell are generated during the run and bind exact source, workflow, run, attempt, runner, toolchain, fixture, and artifact facts. Their digests protect only that execution and its aggregation; they are not checked-in authorization objects and do not constrain a later pull request. After the human merge closes #75, Issue #41 owns a fresh exact-revision execution and bounded aggregate evidence run. A later Host change leaves prior evidence historically true for its exact revision but requires new current evidence before #30 or #42 may consume the changed Host. That validated Host baseline is not final CLI-composition evidence; final M1 evidence combines it with #30's exact-revision cross-platform CLI integration record and #42's independent smoke, all bound to one compatible exact revision set.
+The correction validates its exact pull-request head through direct production entry points, focused tests, and ordinary Ubuntu and Windows CI. GitHub's source, workflow, run, attempt, and required-job facts identify the run. Add one small run-local result envelope or artifact digest only if one job actually transfers a result to another and the transfer cannot be checked safely without it; do not build a separate common/per-cell identity protocol. After the human merge closes #75, Issue #41 runs the required production validation on exact main and records its run/job links and conclusions in the Issue. A later Host change leaves older evidence historically true but requires ordinary current CI before a downstream task consumes the changed revision.
 
-The protocol covers:
+The retained production validation covers:
 
 - production project-reference and forbidden-dependency checks;
 - proof that no `src` project references an M0 experiment assembly;
@@ -210,9 +210,9 @@ Ordinary CI does not prove enforced network isolation. Claims use the precise no
 
 ### W6 — Independent read-only smoke
 
-Create one issue for a real-world public repository or private downstream read-only smoke.
+Use one issue for a real-world public repository or private downstream read-only smoke.
 
-The smoke binds the exact validated host and CLI revision. A change to either revision invalidates the smoke and requires it to rerun after the applicable host and CLI integration evidence is current. A public target pins its commit. A private target publishes only a sanitized attestation containing:
+The smoke runs the current validated host and CLI revision. A later change leaves the old smoke historically true and requires a new smoke only before a current downstream claim consumes the changed behavior. A public target pins its commit. A private target records a sanitized Issue attestation containing:
 
 - contract and tool identities;
 - high-level project-shape classification;
@@ -220,7 +220,7 @@ The smoke binds the exact validated host and CLI revision. A change to either re
 - success or bounded failure;
 - bounded unresolved risks without downstream identity or implementation detail.
 
-It never publishes repository identity, private paths, source, configuration, prompts, raw logs, or detailed evidence.
+It never publishes repository identity, private paths, source, configuration, prompts, raw logs, or detailed evidence. No evidence-only repository PR is required unless the smoke discovers a necessary repository change or adds an independently useful fixture or test.
 
 ## M1 issue ownership and review boundaries
 
@@ -231,16 +231,16 @@ The tracker graph uses the following ownership and expected review boundaries. F
 | M1 execution parent | Independent coordination root | Tracker-only dependency graph and closure evidence; no unbounded executable work |
 | Completed roadmap design gate | External completed prerequisite | Merged docs baseline and synchronized tracker contract; not an M1 child |
 | Target/observation decision | Direct M1 child | One decision-document PR defining the semantics that block contract and implementation work |
-| Coordinated v1 contract change | Direct M1 child | Ordinarily one coordinated contract PR; when independently acceptable component PRs are justified, this issue owns their final integration, conformance, and baseline record |
+| Coordinated v1 contract change | Direct M1 child | Ordinarily one coordinated contract PR updating the actually affected producer-consumer and conformance surfaces |
 | Production loading, classification, observation, policy/evidence, and result units | Direct sibling M1 children | One focused implementation PR per independently acceptable outcome, including its required tests, fixtures, and conformance |
 | #24 production host | Direct M1 child | One host-composition PR covering execution lifecycle, cancellation/failure precedence, stale-output invalidation, and atomic publication |
 | #25 CLI contract | Direct M1 child | One CLI-contract PR with executable acceptance fixtures where applicable |
-| #26 Host Validation design and harness | Completed direct M1 child | Historical validated design, matrix, evidence shapes, and executable harness; not a bundle-certification lifecycle |
+| #26 Host Validation design and harness | Completed direct M1 child | Historical design and harness evidence at its accepted revision; not current implementation authority |
 | #57 Host Validation accepted-bundle promotion | Completed direct sibling M1 child | Historical two-commit acceptance sequence that established exact `S2` and `S3`; not a reusable default for new work |
-| #75 Host Validation pre-release execution correction | Direct sibling M1 child | One correction PR deleting active bundle/review authorization and adding the exact-revision production-subject workflow path |
-| Host-validation execution | Direct sibling M1 child | One exact-revision aggregate-evidence PR against #26 |
-| #30 CLI implementation | Direct M1 child | One focused CLI implementation PR including integration tests |
-| Independent read-only smoke | Direct M1 child | One exact-revision evidence PR or bounded attestation PR |
+| #75 pre-release validation simplification | Direct sibling M1 child | One correction PR deleting active Host certification and retired M0 experiment machinery while establishing production-focused CI |
+| #41 Host-validation execution | Direct sibling M1 child | Tracker-only exact-main workflow execution and Issue-recorded run/job conclusions by default |
+| #30 CLI implementation | Direct M1 child | One focused CLI implementation PR including ordinary Host/CLI integration tests |
+| #42 independent read-only smoke | Direct M1 child | One bounded Issue attestation; a repository PR only for an independently useful code or fixture change |
 | #17 process topology | External completed architecture dependency | No new executable M1 work unless an ADR reconsideration trigger creates a separate issue |
 
 Issues #18, #27, and #29 belong to release or research tracks and are not M1 children.
@@ -251,13 +251,13 @@ The one-time tracker synchronization and Host Validation certification sequence 
 
 The remaining critical path is intentionally small:
 
-- #75 Host Validation pre-release execution correction: one focused implementation pull request after this documentation baseline merges;
-- #41: one focused exact-revision Host evidence pull request by default;
+- #75 pre-release validation simplification: one focused implementation pull request after this documentation baseline merges;
+- #41: one tracker-only exact-main Host validation run by default;
 - #30: one focused CLI implementation and cross-platform integration pull request by default;
-- #42: one focused independent smoke or bounded attestation pull request by default;
+- #42: one focused independent smoke recorded through a bounded Issue attestation by default;
 - #33: coordination and closure evidence only, with no executable pull request of its own unless a separately acceptable repository artifact is discovered.
 
-Combine or split a remaining issue only when that creates independently acceptable outcomes under [Issue workflow](../10_workflow/issue-workflow.md). File count, line count, elapsed time, or an estimate miss never substitutes for that product boundary. M0 experiment code remains evidence and implementation input; it is not promoted, renamed, or reused line-for-line without production review.
+Combine or split a remaining issue only when that creates independently acceptable outcomes under [Issue workflow](../10_workflow/issue-workflow.md). File count, line count, elapsed time, or an estimate miss never substitutes for that product boundary. Reusable M0 fixtures or regression cases may move under current production tests; the completed experiment harnesses, manifests, and compatibility entry points otherwise retire from the current tree.
 
 ## Dependency graph
 
@@ -273,16 +273,16 @@ Target/observation decision
 
 #24 host composition + focused implementation siblings + #26 validation design/harness
     --> completed #57 accepted bundle at S2/S3
-    --> #75 remove active bundle lifecycle and add exact-revision execution
-    --> #41 exact-revision validation execution
-    --> validated host baseline
+    --> #75 simplify active validation to production-focused CI
+    --> #41 exact-main validation execution and Issue record
+    --> validated host revision
 
-validated host baseline + #25 CLI contract --> #30 CLI implementation
+validated host revision + #25 CLI contract --> #30 CLI implementation
 #30 CLI implementation --> #42 independent read-only smoke
 #42 independent read-only smoke --> #33 M1 closure checklist
 ```
 
-Every executable node in this diagram is a direct child of the M1 execution parent. Arrows express native dependencies, not parentage. #30's cross-platform integration evidence binds the exact CLI and validated host revisions, and #42 exercises that final combination.
+Every currently tracked executable node in this diagram is a direct child of the existing M1 execution parent. Arrows express native dependencies, not parentage. #41 records workflow evidence without a repository PR; #30's ordinary cross-platform integration validates the CLI and Host composition, and #42 exercises that final combination.
 
 ## Current tracker disposition
 
@@ -295,8 +295,8 @@ The one-time synchronization described by earlier revisions of this plan is comp
 | #27 | Deferred process-topology research | Outside M1; refine before activation |
 | #29 | Release governance | Outside M1; no current body change required |
 | #57 | Closed accepted-bundle certification at exact `S2` and `S3` | Completed direct child |
-| #75 | Active; remove the pre-release bundle lifecycle and add exact-revision execution, blocking #41 until its one correction PR is accepted | Direct child |
-| #41 | Blocked pending #75; then exact-revision Host validation evidence | Direct child |
+| #75 | Active; simplify pre-release validation to production-focused CI, blocking #41 until its one correction PR is accepted | Direct child |
+| #41 | Blocked pending #75; then tracker-only exact-main Host validation | Direct child |
 | #30 | After #41: CLI implementation and integration evidence | Direct child |
 | #42 | After #30: independent read-only smoke | Direct child |
 | #33 | M1 coordination and closure evidence | Coordination-only parent |
@@ -308,12 +308,12 @@ New tracker writes follow the current issue and pre-release engineering rules. T
 The M1 parent closes only when it links:
 
 - the merged target/observation decision;
-- the coordinated current v1 contract baseline;
+- the coordinated current v1 contract behavior;
 - production-host implementation revisions;
-- validated Host Validation design, an exact-revision cross-platform execution path, and passing aggregate evidence;
+- production-focused Host validation on the exact accepted revision with passing required jobs;
 - CLI contract and implementation;
 - independent read-only smoke;
-- exact M1 baseline commit and toolchain;
+- exact M1 implementation revision and relevant toolchain observations;
 - every unresolved non-blocking risk and its owner;
 - every decision reconsideration triggered by failed evidence.
 
@@ -323,6 +323,6 @@ Distribution, licensing, proposal generation, patch generation, state, GitHub mu
 
 - Published fixtures are synthetic and contain no secrets, credentials, private source, private identifiers, or machine-local paths.
 - A private downstream smoke publishes only the bounded sanitized attestation defined in W6.
-- Draft contract semantics are pinned with full commit-SHA links whose commits are reachable from `main`.
+- Historical acceptance evidence uses full commit-SHA links reachable from `main`; living draft guidance may follow the current `main` path.
 - The M1 baseline is not described as a released support promise.
-- A failed required matrix cell or smoke keeps M1 open unless the milestone contract is explicitly amended and independently reviewed.
+- A failed required matrix cell or smoke keeps M1 open while the current owner investigates or corrects it. Amend the milestone contract only when the intended product boundary actually changes.

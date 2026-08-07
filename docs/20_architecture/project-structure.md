@@ -4,7 +4,7 @@
 
 ContractScribe uses project boundaries to enforce dependency and authority boundaries, not to mirror roadmap milestones or create one assembly per feature.
 
-The recommended long-lived product graph contains six production projects:
+The current candidate long-lived product graph contains six production projects:
 
 1. `ContractScribe.Core`
 2. `ContractScribe.Roslyn`
@@ -13,7 +13,7 @@ The recommended long-lived product graph contains six production projects:
 5. `ContractScribe.GitHub`
 6. `ContractScribe.Cli`
 
-This is a target shape for the completed M5 product, not an instruction to create empty projects in advance. Each project is added only when its owning milestone begins and has production code to place in it.
+The existing M1 project boundaries are current architecture. The M2-M5 entries are candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing milestone applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
 
 The normal test graph contains two long-lived projects:
 
@@ -149,7 +149,7 @@ It must not reference a model-provider or GitHub SDK. It accepts only validated 
 - provider-neutral model request and response contracts;
 - the closed read-only tool registry;
 - stable prompt-prefix construction and local prefix identity;
-- OpenAI-compatible DeepSeek and MiMo transport behavior and usage normalization;
+- the provider transport and usage normalization selected from M3 executable evidence;
 - tool, cached/uncached token, cost, attempt, and time budgets;
 - structured proposal submission and validation;
 - deterministic fake runtime;
@@ -233,13 +233,13 @@ Architecture tests enumerate project references and fail when a forbidden edge a
 | --- | --- |
 | M0 | `Core` and `Cli` remain the minimal product skeleton; Roslyn projects remain test-only experiments. |
 | M1 | Add production `ContractScribe.Roslyn`; keep `Core` and `Cli`; add integration tests when real workspace/process behavior requires them. |
-| M2 | Add `ContractScribe.Patching`. |
-| M3 | Add `ContractScribe.Agent`. |
-| M4 | Add campaign planning and state-machine behavior to `Core`; do not create a milestone-named orchestration project by default. |
-| M5 | Add `ContractScribe.GitHub`. |
-| M6 | Add the selected Action wrapper and release artifacts; no additional C# project is expected by default. |
+| M2 | Candidate: add `ContractScribe.Patching` if the source-write authority and dependency graph meet the split thresholds. |
+| M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
+| M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
+| M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |
+| M6 | Add the selected Action wrapper and release artifacts; add no C# project without an observed split need. |
 
-This sequence prevents later projects from becoming speculative dependencies of M1.
+This candidate sequence prevents later projects from becoming speculative dependencies of M1; milestone implementation evidence, not this table alone, decides the final placement.
 
 ## Test, fixture, experiment, and evaluation projects
 
@@ -283,7 +283,7 @@ After M1 establishes replacement evidence, a separate cleanup decision may retir
 
 M3 may add `tools/ContractScribe.Evaluation` when a repeatable real-provider evaluation needs an executable harness. It is not a product library and is not part of ordinary `dotnet test`.
 
-The tool must require explicit opt-in, use synthetic inputs without secrets or private repository data by default, record bounded DeepSeek/MiMo usage, cache, cost, and provenance, and never make live provider availability a merge prerequisite.
+The tool must require explicit opt-in, use synthetic inputs without secrets or private repository data by default, record only the bounded provider usage, cost, and provenance needed by the current evaluation claim, and never make live provider availability a merge prerequisite.
 
 ## Split thresholds
 

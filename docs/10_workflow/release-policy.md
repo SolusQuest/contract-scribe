@@ -21,7 +21,7 @@ The first consumable GitHub Action release requires:
 - a consumer-repository smoke;
 - maintainer approval of the release candidate.
 
-Green source CI or a successful validation bundle does not constitute release approval.
+Green source CI or successful pre-release validation does not constitute release approval.
 
 ## Contract compatibility freeze
 
@@ -29,7 +29,7 @@ Repository visibility does not by itself freeze a draft machine contract. Pre-re
 
 The first downstream-consumable release establishes the external compatibility freeze for every contract it exposes. After that point, incompatible changes require new artifact versions and explicit compatibility or migration behavior.
 
-Milestone baselines before release remain meaningful validation records. Amending one requires explicit revalidation, but does not require version churn when no supported consumer needs incompatible revisions to coexist.
+Milestone evidence before release remains meaningful for the exact revision that produced it, but is not an active compatibility or authorization state. A later draft change runs the checks affected by that change and does not create a successor baseline unless a real coexistence or external-consumer boundary requires one.
 
 ## Scheduling and provider cost
 

@@ -21,12 +21,11 @@ The product is not complete when it can only report missing documentation. Its u
 
 - Deterministic audit stays independent of a model provider, provider secret, GitHub write token, and declared network-dependent operation.
 - The Documentation Scribe is a self-developed, narrow model-assisted role with bounded read-only tools and structured output. It is not a general coding-agent dependency.
-- Project-context bootstrap, snapshot identity, and target grouping are deterministic runtime behavior; semantic context routing remains a phase of the same Scribe rather than a second agent or subagent.
-- The initial Scribe Runtime transport is OpenAI-compatible, with DeepSeek as the primary evaluation provider and MiMo as the compatibility-evaluation provider. This is an M3 validation direction, not a current support claim.
-- Before any provider compatibility or support claim, an M3 provider-validation issue freezes an executable request corpus, expected observations, normalization rules, failure taxonomy, and required evidence. The current baseline does not assume that usage accounting is the only provider divergence.
-- Stable prompt-prefix reuse, bounded uncached input, and observable token economics are architecture requirements. Provider cache retention is never correctness or resume state.
+- Project-context selection and repository confinement are deterministic product behavior. The exact snapshot, manifest, grouping, and cache identities remain M3 implementation decisions until executable evidence requires them.
+- M3 selects the smallest provider transport and evaluation set that can validate the current Scribe path. Provider names, compatibility corpora, normalization formats, and cache mechanisms are not frozen by the pre-M3 roadmap.
+- Provider caching is never correctness or resume state. Observe cost and uncached input to the degree needed for the current product decision without creating a permanent economics protocol in advance.
 - A model never emits or applies the source diff. The deterministic M2 patch engine owns every source modification.
-- Campaign state is platform-neutral. A GitHub Issue is one adapter, not the core ledger abstraction.
+- Resumable work state must not depend on GitHub-specific semantics, but the exact state, identity, ledger, cursor, and adapter shapes are refined when M4 has an executable workflow.
 - Scheduling is caller-owned. Provider-specific batch or pricing policy stays in the provider adapter and run provenance.
 - Pre-release contracts follow [Contract lifecycle](../00_project/contract-lifecycle.md). Draft revisions do not require version-number churn when no incompatible consumers need to coexist.
 - Uncertainty, stale input, invalid model output, unsafe patch, corrupted state, and ambiguous GitHub ownership fail closed.
@@ -49,19 +48,19 @@ The product is not complete when it can only report missing documentation. Its u
 
 ## Production-project evolution
 
-The long-lived M5 product graph contains six production projects, added only when their owning capability starts:
+The current candidate M5 product graph separates six production concerns. Existing projects remain authoritative; a future project is added only when its owning milestone demonstrates a real dependency or authority boundary:
 
 | Milestone | Project change |
 | --- | --- |
 | M0 | Minimal `ContractScribe.Core` and `ContractScribe.Cli`; Roslyn work remains test-only experiment evidence. |
 | M1 | Add production `ContractScribe.Roslyn`. |
-| M2 | Add `ContractScribe.Patching`. |
-| M3 | Add `ContractScribe.Agent`. |
-| M4 | Add platform-neutral campaign behavior to `ContractScribe.Core`; no new milestone-named project by default. |
-| M5 | Add `ContractScribe.GitHub`. |
-| M6 | Add the selected Action wrapper and release artifacts; no new C# project by default. |
+| M2 | Candidate: add `ContractScribe.Patching` if the source-write boundary meets the project split thresholds. |
+| M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
+| M4 | Candidate: keep platform-neutral campaign behavior in `ContractScribe.Core`; no new milestone-named project by default. |
+| M5 | Candidate: add `ContractScribe.GitHub` if platform-mutation isolation meets the split thresholds. |
+| M6 | Add the selected Action wrapper and release artifacts; no new C# project without an observed split need. |
 
-The target graph is not created up front. Fixture, experiment, integration-test, and optional evaluation projects are classified separately. See [Project structure](../20_architecture/project-structure.md).
+The candidate graph is not created up front or treated as a project-name contract. Fixture, experiment, integration-test, and optional evaluation projects are classified separately. See [Project structure](../20_architecture/project-structure.md).
 
 ## M0 — Product, contracts, and architecture validation — Done
 
@@ -86,7 +85,7 @@ M1 through M6 reuse the foundation while owning capability-specific contracts fo
 
 ### Contract interpretation
 
-M0 created a commit-pinned milestone baseline, not an external compatibility freeze. Pre-release v1 contracts may be completed through a coordinated amendment and revalidation. M0 historical evidence remains bound to the exact revision that produced it.
+M0 created historical evidence at an exact revision, not an active compatibility state or external freeze. Current pre-release v1 contracts may be completed through one coherent affected-path change. M0 evidence remains bound to the revision that produced it without requiring a successor baseline.
 
 See [Initial issue plan](initial-issue-plan.md) for the completed M0 graph.
 
@@ -174,21 +173,18 @@ Deliver the self-developed Documentation Scribe, which converts audit targets, b
 
 ### Scope
 
-- Context Pack v1, Style Profile v1, Proposal Request v1, and Documentation Proposal v1 drafts.
-- Deterministic repository-entrypoint bootstrap and nested-`AGENTS.md` applicability.
-- Repository context snapshots, scope overlays, target evidence packs, route manifests, and evidence authority.
-- Semantic multi-file context routing inside the same bounded Scribe loop.
-- Bounded Roslyn semantic and repository-read tools.
-- Project-owned tool-call loop and terminal structured proposal submission.
-- Stable reusable prompt-prefix construction and deterministic context-group identity.
-- Deterministic test runtime and an OpenAI-compatible provider transport.
-- DeepSeek primary live evaluation and MiMo compatibility validation.
-- Provider observation capture and corpus-defined normalization for total, cached, uncached, output, reasoning, cost, timeout, cancellation, retry, and failure behavior where evidenced.
+- The minimum draft contracts needed to request, validate, and apply a structured documentation proposal.
+- Deterministic repository instruction discovery and bounded repository-confined evidence access.
+- One project-owned, read-only Scribe loop with a small semantic and repository-read tool set.
+- One provider transport and evaluation set selected during M3 refinement from current executable evidence.
+- Bounded attempts, time, input, output, tool use, and cost where the selected provider exposes usable observations.
 - Prompt-injection resistance and public/private data boundaries.
-- Documentation-quality, cache-locality, and cost evaluation.
+- Documentation-quality and practical cost evaluation on a bounded corpus.
 - M2 patch-engine integration as the only source-write path.
 
-### Initial tool set
+Exact context, snapshot, route, prompt-prefix, provider-normalization, identity, and storage formats are M3 decisions rather than pre-M3 roadmap contracts.
+
+### Candidate initial tool set
 
 - `get_symbol_context`
 - `get_related_symbols`
@@ -204,29 +200,24 @@ Deliver the self-developed Documentation Scribe, which converts audit targets, b
 
 - The Scribe has no shell, arbitrary edit, GitHub mutation, web search, or subagent capability.
 - The configured entrypoint and applicable nested instruction stack are loaded deterministically before the Scribe run.
-- Semantic routes are followed by the same Scribe through bounded read tools; cycles, escapes, stale files, and exhausted context budgets fail closed.
+- Repository and semantic reads are bounded and confined; cycles, escapes, stale files, and exhausted budgets fail closed.
 - Repository instruction, project documentation, and source evidence remain distinct authority classes.
-- Independent Scribe runs reuse immutable repository and scope context without sharing conversation history.
-- Compatible runs produce the same locally computed cacheable-prefix identity across fresh processes.
-- Target-specific evidence and run metadata do not appear before the reusable-prefix boundary.
-- The default context pack handles ordinary targets; extra reads are bounded, repository-confined, deterministic, and evidence-labeled.
-- Tool, total/uncached-token, cost, attempt, and wall-clock budgets are enforced; cached input is retained as usage evidence when reported.
+- Independent runs do not share hidden reasoning, mutable conversation history, or provider-owned correctness state.
+- Tool, input/output, cost when observable, attempt, and wall-clock budgets are enforced.
 - Invalid tool calls, invalid structured output, unsupported targets, and insufficient evidence return stable fail-closed outcomes.
 - A deterministic test runtime proves orchestration and retry mechanics.
-- The M3 provider-validation issue freezes the executable request corpus, expected observations, normalization rules, failure taxonomy, and evidence required for compatibility statements.
-- DeepSeek synthetic evaluation produces useful proposals under the same contracts, and MiMo executes the compatibility corpus through the same OpenAI-compatible request and tool loop.
-- Every evidenced DeepSeek and MiMo response shape has deterministic normalization fixtures; unknown provider fields remain available for bounded diagnostics.
+- At least one selected provider/model executes the bounded evaluation corpus through the production request and tool loop.
 - Compatibility and support statements are limited to the executed provider/model corpus and observed behavior.
-- Provider, model, prompt, tool-policy, evidence, and style provenance are recorded.
+- The implementation records only the provenance needed to reproduce or interpret the current evaluation claim.
 - Accepted model output passes the structured proposal validator and M2 patch engine.
-- Evaluation records proposal validity, evidence support, patch acceptance, hallucinated-claim rate, total and uncached input, cache reuse, output, cost per accepted documentation block, latency, tool calls, and sensitive-data/publication-boundary results.
+- Evaluation records proposal validity, evidence support, patch acceptance, material quality failures, practical cost/latency observations, and sensitive-data results without defining a permanent metrics protocol in advance.
 
 ### Non-goals
 
 - A reusable general coding-agent framework.
 - A third-party coding-agent runtime as a production dependency.
 - A separate context-curator agent, parent/child agent fork protocol, or shared hidden memory.
-- A universal provider compatibility matrix or permanent DeepSeek/MiMo exclusivity promise.
+- A universal provider compatibility matrix or permanent provider exclusivity promise.
 - Long-lived conversational sessions.
 - Direct source or GitHub mutation.
 
@@ -240,54 +231,50 @@ Create deterministic work planning, multi-dimensional budgets, resume, retry, an
 
 ### Scope
 
-- Snapshot, Work Plan, Batch, and Campaign identities.
-- Context-group identity and cache-local target grouping.
-- Stable target ordering and cursor semantics.
-- Run and pull-request budget planning.
-- Retry taxonomy and bounded attempts.
-- Same-snapshot continuation and new-base reconciliation.
-- Platform-neutral Campaign State and state-adapter interface.
+- Deterministic selection and ordering of documentation work from one repository revision.
+- Independently enforced work, provider, patch, attempt, and time budgets required by the current workflow.
+- Bounded retry, resume, and reconciliation after interruption or base change.
+- Platform-neutral state sufficient to continue safely without duplicating accepted work.
 - Crash, replay, and partial-failure behavior.
+
+Exact snapshot, work-plan, batch, campaign, cursor, checkpoint, and identity formats are selected during M4 refinement from the minimum state needed by the executable workflow.
 
 ### Exit criteria
 
-- Within one snapshot, identical audit results and planning policies produce identical work-plan content and identity. Different snapshots may reuse an identical content digest but always have distinct execution identities.
-- Documentation-block, file, patch-size, provider-request, total/uncached-token, cost, attempt, and time budgets are independently enforced.
-- A crash or replay does not duplicate accepted work or lose a committed checkpoint.
-- Same-snapshot continuation binds the work-plan identity and evolving proposal head.
-- Merge lineage creates a new snapshot on the new base while preserving the campaign identity.
-- Stale base, terminal target failure, retryable provider failure, budget exhaustion, and supersession have executable state transitions.
+- The same accepted input and planning policy selects the same ordered work within one repository revision.
+- The budgets required by the implemented workflow are independently enforced.
+- A crash, retry, or replay does not duplicate accepted work or lose committed progress.
+- Continuation rejects stale or incompatible repository state rather than applying work to the wrong base.
+- Terminal target failure, retryable provider failure, budget exhaustion, and supersession have tested behavior.
 - State contains no private source, private or complete prompt content, raw provider response, or full diff.
-- Two different base commits that produce byte-identical canonical Audit Result artifacts still produce distinct snapshot-scoped work-plan and batch identities; old cursors, checkpoints, operations, and pull-request generations fail closed under the new snapshot.
 - No GitHub mutation is required to validate the core.
 
 ## M5 — GitHub proposal workflow
 
 ### Goal
 
-Implement the GitHub Issue state adapter and an idempotent branch, commit, and generation-based active proposal pull-request workflow.
+Implement an idempotent GitHub workflow that publishes bounded proposal work to a human-reviewed pull request without duplicate or conflicting mutations.
 
 ### Scope
 
-- GitHub Issue checkpoint and append-only run records.
-- Branch and commit ownership.
-- A .NET GitHub adapter that owns all publication and reconciliation rules.
-- At most one active bot-owned proposal pull request per campaign at a time; the adapter creates draft generations, and a human-promoted ready pull request remains active until terminal.
-- Same-snapshot batch append while safety conditions and pull-request budgets hold.
+- The minimum durable state needed to reconcile GitHub Issues, branches, commits, and pull requests safely.
+- Explicit branch and pull-request ownership.
+- One implementation component that owns publication and reconciliation rules.
+- At most one compatible active bot-owned proposal pull request for the current work at a time.
 - Merge, close, conflict, base drift, human modification, corruption, and retry reconciliation.
 - Caller-owned schedule and manual workflow integration.
-- Least-privilege permissions, concurrency, and operation IDs.
+- Least-privilege permissions and bounded concurrency.
 - Synthetic test-repository end-to-end validation.
+
+Exact checkpoint, append-only record, ledger, generation, operation-ID, and adapter representations are M5 decisions. Add them only when a reproduced retry, stale-state, or idempotency failure requires them.
 
 ### Exit criteria
 
 - Every mutation reads, reconciles, applies at most one idempotent transition, and verifies the result.
 - Reruns do not create duplicate issues, branches, commits, or pull requests.
-- Pull-request state records the active identity, generation, bound snapshot, terminal predecessor, and legal conditions for creating the next generation.
-- A compatible bot-owned draft may receive another bounded batch; an unsafe or over-budget draft is not modified.
-- Reaching the pull-request budget transitions to awaiting review.
-- Merge starts a new snapshot and continues campaign lineage.
-- Human changes, branch ownership mismatch, conflict, stale base, malformed ledger, and unexpected active PRs fail closed.
+- A compatible bot-owned draft may receive more bounded work; an unsafe, human-modified, stale, conflicting, or over-budget draft is not modified.
+- Branch ownership mismatch, malformed state, unexpected active pull requests, and ambiguous reconciliation fail closed.
+- Human review and merge remain explicit boundaries.
 - No automatic merge exists.
 - Scheduled and manual synthetic workflows complete with bounded sanitized evidence.
 
@@ -311,10 +298,10 @@ Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound
 - `action.yml`, wrapper code, payload version/hash, compatibility mapping, and permissions are immutable release inputs.
 - The composite-versus-TypeScript Action host decision is recorded in the payload-distribution ADR with executable evidence.
 - Any TypeScript wrapper is a thin host around the CLI and does not duplicate provider, campaign, ledger, patch, or GitHub-publication behavior.
-- Any persistent release-authorizing bundle, signed release attestation, signature, release protected-input identity, or released compatibility family is introduced here only when the selected distribution or publication boundary demonstrates a concrete external-consumer or irreversible-release need. M1 through M5 use the minimum provenance required by their owning contracts and do not maintain placeholder release bundle certification. This does not prohibit exact-revision milestone evidence, bounded public or private smoke attestations, draft contract-baseline or provenance identities, or snapshot, work-plan, batch, campaign, ledger, cursor, checkpoint, and operation identities required before M6.
+- Any persistent release-authorizing bundle, signed release attestation, signature, release protected-input identity, or released compatibility family is introduced here only when the selected distribution or publication boundary demonstrates a concrete external-consumer or irreversible-release need. M1 through M5 use the minimum provenance and state required by their implemented behavior and do not maintain placeholder release certification or predeclare future identity families.
 - Caller-owned `schedule` and `workflow_dispatch` examples are documented.
 - Provider secrets and GitHub permissions are scoped and separated.
-- Concurrency, cancellation, failure, retry, active-pull-request uniqueness, and snapshot-bound generation behavior match M5.
+- Concurrency, cancellation, failure, retry, ownership, and active-pull-request uniqueness match the accepted M5 behavior.
 - Exact-version pinning, update, rollback, retirement, and provenance behavior are documented and validated.
 - A consumer repository completes the selected installation and workflow smoke.
 - License, notice, inventory, package metadata, and release-control obligations pass on the exact release candidate.

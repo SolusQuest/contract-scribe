@@ -1,5 +1,7 @@
 # Campaign and GitHub workflow
 
+> **Status:** M4/M5 candidate architecture. Deterministic bounded progress, safe resume, idempotent GitHub mutation, human merge authority, privacy, and no duplicate active work are current roadmap constraints. Snapshot/work-plan/batch/campaign identities, cursors, checkpoints, ledgers, generations, state transitions, and adapter representations remain candidates until their implementing milestone demonstrates the minimum necessary shape.
+
 ## Goal
 
 Campaign orchestration turns audit violations into deterministic, bounded, resumable documentation work and later reconciles that work with GitHub state without duplicate or overlapping pull requests.

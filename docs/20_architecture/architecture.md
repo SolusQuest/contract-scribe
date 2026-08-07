@@ -52,7 +52,7 @@ It has no shell, arbitrary file edit, GitHub mutation, web search, subagent, or 
 
 Repository-entrypoint discovery, nested-instruction applicability, context identity, and target grouping are deterministic runtime behavior rather than separate model agents. The same Scribe may complete semantic context routing with read-only tools. Independent Scribe runs reuse immutable repository and scope context snapshots and stable request prefixes without sharing conversation history.
 
-The initial provider transport is OpenAI-compatible, with DeepSeek as the primary validation target and MiMo as the compatibility target. Prefix-cache locality, bounded uncached input, and usage observability are economic requirements; provider cache availability is not correctness state.
+M3 selects the smallest provider transport and bounded evaluation set that can validate the executable Scribe path. Provider names, compatibility corpora, normalization formats, and prompt-prefix mechanisms remain candidate implementation details; provider cache availability is never correctness state.
 
 See [Documentation Scribe](documentation-scribe.md) and [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
@@ -99,8 +99,8 @@ M0 contracts and execution experiments are complete. The repository still lacks 
 
 The M0 experiment runner and `semantic-payload.json` remain test-only. They are evidence inputs, not production APIs or migration predecessors.
 
-The M5 target graph contains six production projects: `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`. They are added milestone by milestone; M1 does not create empty projects for later work.
+The current candidate M5 graph separates `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`. Existing project boundaries are authoritative; future projects are added only when their implementing milestone demonstrates a real dependency or authority boundary. M1 does not create empty projects for later work.
 
 ## Contract lifecycle
 
-Machine contracts begin as pre-release drafts and are pinned by repository commit. Milestone closure creates a validated baseline. The first downstream-consumable release creates the external compatibility freeze. See [Contract lifecycle](../00_project/contract-lifecycle.md).
+Machine contracts begin as pre-release drafts whose exact semantics are identified by repository revision. Milestone closure records historical evidence for that revision without creating an active compatibility state. The first downstream-consumable release creates the external compatibility freeze. See [Contract lifecycle](../00_project/contract-lifecycle.md).
