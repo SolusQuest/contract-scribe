@@ -12,7 +12,7 @@ The executable annex at `tests/fixtures/m1-audit-cli/cli-contract-v1.json` and t
 
 Under [Contract lifecycle](../00_project/contract-lifecycle.md), this pre-release draft may change incompatibly in place. The current repository revision defines its exact semantics, and affected tests plus exact-head review and CI validate a coherent change. Historical milestone commits remain evidence for their own revisions; they do not create an active protected-input map, successor-baseline requirement, or separate promotion gate for later work.
 
-The checker directly uses the shared test-only Audit Result oracle `tests/ContractScribe.Tests/AuditResultConformance.cs`, the canonical byte implementation it delegates to at `tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs`, and the independent Taxonomy classification oracle `tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs`. It also exercises the current matrices `tests/fixtures/m1-contract-baseline/v1/classification-origin-skip-vectors.json` and `tests/fixtures/m1-contract-baseline/v1/repository-candidate-locator-vectors.json`. These sources and fixtures are updated only when an affected behavior changes; they are not duplicated into a hash closure. Run classification depends only on `auditOutcome` values.
+The checker directly uses the shared test-only Audit Result oracle `tests/ContractScribe.Tests/AuditResultConformance.cs`, the canonical byte implementation it delegates to at `tests/ContractScribe.ContractBaselineProbe/AuditResultCanonicalizer.cs`, and the independent Taxonomy classification oracle `tests/ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs`. It also exercises the current matrices `tests/fixtures/symbol-evidence-taxonomy/v1/classification-origin-skip-vectors.json` and `tests/fixtures/audit-result/v1/repository-candidate-locator-vectors.json`. These sources and fixtures are updated only when an affected behavior changes; they are not duplicated into a hash closure. Run classification depends only on `auditOutcome` values.
 
 ## Grammar and retained surface
 
@@ -157,8 +157,8 @@ The envelope is a draft machine-readable CLI contract: `envelopeVersion: 1` is i
 
 Two explicit variants share the common fields, in fixed order: `envelopeVersion`, `terminalLayer`, `cliContractBaseline`, `toolVersion` (assembly informational version, for example `0.1.0-dev+<sha>`), `diagnosticCodes`.
 
-- **CLI variant** (`terminalLayer`: `usage` or `preflight`): adds `usageClass` (usage only; closed set `unknown-option`, `missing-required-option`, `duplicate-option`, `missing-option-value`, `invalid-option-value`, `unexpected-operand`, `forbidden-combination`) or `executionClass: invalid-input` (preflight only). Forbidden: `terminalState`, `auditContractBaseline`, `sourceRevision`, `toolchain`, `disposition`, `counts`, `resultDigest`, `outputCommit`.
-- **Host variant** (`terminalLayer`: `execution` or `audit`): the CLI-owned serialization of the host's normalized terminal record. Adds `terminalState: committed`, `auditContractBaseline` (host-bound contract-baseline/provenance identity), `sourceRevision` (exact source revision from host/tool provenance), `executionClass` (execution only: `invalid-input`, `environment-unavailable`, `load-failure`, `audit-error`, `publication-failure`, `cancelled`, `timeout`), `disposition` (audit only), `counts` (audit only: `compliant`, `violation`, `skipped`), `toolchain` (selected normalized SDK/MSBuild identity; present exactly in the `selected` forms of the toolchain-state matrix below), and `resultDigest` plus `outputCommit` (audit only). `resultDigest` is the SHA-256 of the exact committed canonical Audit Result bytes — the bytes standing at `--output` after the atomic rename (P4b) — rendered as 64 lowercase ASCII hexadecimal characters. The digest binds the envelope to those canonical bytes, never to any re-serialization of the result; the CLI must not substitute another algorithm, input byte stream, or text encoding. The annex `resultDigestCases` section carries the conformance vector. `outputCommit` is the host contract's closed structure — commit status plus an opaque public-safe commit identity — never a path or placeholder.
+- **CLI variant** (`terminalLayer`: `usage` or `preflight`): adds `usageClass` (usage only; closed set `unknown-option`, `missing-required-option`, `duplicate-option`, `missing-option-value`, `invalid-option-value`, `unexpected-operand`, `forbidden-combination`) or `executionClass: invalid-input` (preflight only). Forbidden: `terminalState`, `sourceRevision`, `toolchain`, `disposition`, `counts`, `resultDigest`, `outputCommit`.
+- **Host variant** (`terminalLayer`: `execution` or `audit`): the CLI-owned serialization of the host's normalized terminal record. Adds `terminalState: committed`, `sourceRevision` (exact source revision from host/tool provenance), `executionClass` (execution only: `invalid-input`, `environment-unavailable`, `load-failure`, `audit-error`, `publication-failure`, `cancelled`, `timeout`), `disposition` (audit only), `counts` (audit only: `compliant`, `violation`, `skipped`), `toolchain` (selected normalized SDK/MSBuild identity; present exactly in the `selected` forms of the toolchain-state matrix below), and `resultDigest` plus `outputCommit` (audit only). `resultDigest` is the SHA-256 of the exact committed canonical Audit Result bytes — the bytes standing at `--output` after the atomic rename (P4b) — rendered as 64 lowercase ASCII hexadecimal characters. The digest binds the envelope to those canonical bytes, never to any re-serialization of the result; the CLI must not substitute another algorithm, input byte stream, or text encoding. The annex `resultDigestCases` section carries the conformance vector. `outputCommit` is the host contract's closed structure — commit status plus an opaque public-safe commit identity — never a path or placeholder.
 
 Execution stream forms are keyed by a closed `toolchainState` dimension (`selected` or `not-selected`) in the annex; a `not-selected` form omits `toolchain`. The closed matrix is:
 
@@ -176,10 +176,10 @@ The envelope encoding is compact JSON, UTF-8 without BOM, exactly one trailing L
 
 ### Substitution grammar
 
-Dynamic envelope fields use a closed substitution grammar in annex templates. The closed token set is `${CLI_CONTRACT_BASELINE}`, `${TOOL_VERSION}`, `${AUDIT_CONTRACT_BASELINE}`, `${SOURCE_REVISION}`, `${TOOLCHAIN_IDENTITY}`, `${RESULT_DIGEST}`, `${OUTPUT_COMMIT_IDENTITY}`.
+Dynamic envelope fields use a closed substitution grammar in annex templates. The closed token set is `${CLI_CONTRACT_BASELINE}`, `${TOOL_VERSION}`, `${SOURCE_REVISION}`, `${TOOLCHAIN_IDENTITY}`, `${RESULT_DIGEST}`, `${OUTPUT_COMMIT_IDENTITY}`.
 
 - CLI-variant envelopes (`usage`, `preflight`) and the `host-contract-error` envelope permit only `${CLI_CONTRACT_BASELINE}` and `${TOOL_VERSION}`.
-- The `execution` envelope additionally permits `${AUDIT_CONTRACT_BASELINE}`, `${SOURCE_REVISION}`, and `${TOOLCHAIN_IDENTITY}`.
+- The `execution` envelope additionally permits `${SOURCE_REVISION}` and `${TOOLCHAIN_IDENTITY}`.
 - The `audit` envelope permits all seven tokens.
 - Token values are JSON strings only — never raw fragments, numbers, or objects — and are escaped per the canonical string rules (quotation mark, reverse solidus, and control characters escaped; all other scalars literal).
 - Bindings are platform-independent: a token's value is identical on every supported platform for one build and one run.
@@ -191,7 +191,7 @@ The closed envelope model includes a CLI-owned adapter-failure representation fo
 
 - `terminalLayer: host-contract-error`; exit 5; exactly one diagnostic record with code `cli.host.unknown-terminal`.
 - Required fields: only the common fields `envelopeVersion`, `terminalLayer`, `cliContractBaseline`, `toolVersion`, `diagnosticCodes`.
-- Forbidden fields: all host provenance fields — `terminalState`, `auditContractBaseline`, `sourceRevision`, `toolchain`, `executionClass`, `disposition`, `counts`, `resultDigest`, `outputCommit` — and `usageClass`.
+- Forbidden fields: all host provenance fields — `terminalState`, `sourceRevision`, `toolchain`, `executionClass`, `disposition`, `counts`, `resultDigest`, `outputCommit` — and `usageClass`.
 
 ### Representative envelope templates
 
@@ -206,11 +206,11 @@ The annex pins one exact expected stdout template per controlled stream form (ev
 ```
 
 ```text
-{"envelopeVersion":1,"terminalLayer":"execution","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.cancel.requested"],"terminalState":"committed","auditContractBaseline":"${AUDIT_CONTRACT_BASELINE}","sourceRevision":"${SOURCE_REVISION}","toolchain":"${TOOLCHAIN_IDENTITY}","executionClass":"cancelled"}
+{"envelopeVersion":1,"terminalLayer":"execution","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.cancel.requested"],"terminalState":"committed","sourceRevision":"${SOURCE_REVISION}","toolchain":"${TOOLCHAIN_IDENTITY}","executionClass":"cancelled"}
 ```
 
 ```text
-{"envelopeVersion":1,"terminalLayer":"audit","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.audit.skipped-summary"],"terminalState":"committed","auditContractBaseline":"${AUDIT_CONTRACT_BASELINE}","sourceRevision":"${SOURCE_REVISION}","toolchain":"${TOOLCHAIN_IDENTITY}","disposition":"violations-with-skipped","counts":{"compliant":1,"violation":1,"skipped":1},"resultDigest":"${RESULT_DIGEST}","outputCommit":{"status":"committed","identity":"${OUTPUT_COMMIT_IDENTITY}"}}
+{"envelopeVersion":1,"terminalLayer":"audit","cliContractBaseline":"${CLI_CONTRACT_BASELINE}","toolVersion":"${TOOL_VERSION}","diagnosticCodes":["cli.audit.skipped-summary"],"terminalState":"committed","sourceRevision":"${SOURCE_REVISION}","toolchain":"${TOOLCHAIN_IDENTITY}","disposition":"violations-with-skipped","counts":{"compliant":1,"violation":1,"skipped":1},"resultDigest":"${RESULT_DIGEST}","outputCommit":{"status":"committed","identity":"${OUTPUT_COMMIT_IDENTITY}"}}
 ```
 
 ```text

@@ -7,7 +7,6 @@ internal sealed record ProductionAuditRequest(
     string InputPath,
     byte[] PolicyBytes,
     ResolvedPublicationTarget PublicationTarget,
-    HostBuildProvenance ProvenanceAssertion,
     string? AuditTemporaryRoot = null,
     string? OutputStagingRoot = null,
     IReadOnlyList<ToolGeneratedSourceInput>? ToolGeneratedSources = null);

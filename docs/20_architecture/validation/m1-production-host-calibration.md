@@ -1,6 +1,6 @@
 # M1 production Host calibration
 
-Status: Issue #24 implementation evidence; exact-revision cross-platform certification remains owned by Issue #26.
+Status: Current Issue #24 implementation calibration retained for direct production regression coverage. The separate Issue #26/#57 exact-revision certification lifecycle was retired by Issue #75.
 
 Date: 2026-08-02
 
@@ -8,7 +8,7 @@ Date: 2026-08-02
 
 This record selects the concrete cooperative timeout, diagnostic, temporary-disk, and process-observation bounds owned by Issue #24. The machine-readable authority is `src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json`. Every bound entry references the SHA-256 of `host-calibration-evidence-v1.json`, and Core rejects a manifest whose evidence reference does not match the embedded evidence bytes.
 
-This is implementation calibration, not Host Validation certification. The exact-revision Ubuntu X64 and Windows X64 execution matrix, independent observations, and evidence publication remain owned by Issue #26.
+This is implementation calibration, not release certification. Current Ubuntu and Windows confidence comes from direct production tests and ordinary exact-head CI; no separate bundle or evidence-publication lifecycle owns these bounds.
 
 ## Method
 
@@ -33,8 +33,8 @@ The representative full-composition sample completed in 4,336 ms. The controlled
 
 SDK discovery, workspace loading, the total managed audit, graceful shutdown, diagnostics, and governed temporary disk are internally bounded. The selected C1 topology cannot forcibly terminate non-cooperative in-process code. Pre-managed-entry launch/runtime/permission limits and fatal process termination remain caller- or OS-enforced and produce no fabricated Host terminal record. Descendant process count is an observation, not a termination guarantee. Atomic rename does not claim power-loss durability.
 
-The bounds are intentionally conservative for pre-release operation. A later implementation sample exceeding a limit is not silently accommodated: it requires an evidence update, a new evidence digest, the corresponding calibrated-bounds digest, ordinary review, and whatever exact-revision Host Validation work is then applicable.
+The bounds are intentionally conservative for pre-release operation. A later implementation sample exceeding a limit is not silently accommodated: update the calibration evidence and corresponding calibrated-bounds digest, then run the focused production tests, ordinary review, and exact-head CI.
 
 ## Reproduction
 
-Run the focused `ProductionHostContractTests` and `ProductionAuditHostTests` suites. The named tests in `host-calibration-evidence-v1.json` cover the representative composition, non-cooperative stage boundaries, production diagnostic caps, transient disk high-water, and stable process identity. Run the repository's full formatting, build, test, structural bundle, dry-run, and self-test checks before publishing an Issue #24 revision.
+Run the focused `ProductionHostContractTests` and `ProductionAuditHostTests` suites. The named tests in `host-calibration-evidence-v1.json` cover the representative composition, non-cooperative stage boundaries, production diagnostic caps, transient disk high-water, and stable process identity. Run the repository's full restore, build, test, format, and CLI smoke checks before publishing a Host revision.

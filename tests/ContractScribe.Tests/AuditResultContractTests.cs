@@ -17,7 +17,7 @@ public sealed class AuditResultContractTests
             FindRepositoryRoot(),
             "tests",
             "fixtures",
-            "m1-contract-baseline",
+            "symbol-evidence-taxonomy",
             "v1",
             "classification-origin-skip-vectors.json")));
         var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()
@@ -201,7 +201,7 @@ public sealed class AuditResultContractTests
     [Fact]
     public void ReplayLogicalInputs_PassFullOracleAndCanonicalizeIdentically()
     {
-        var path = Path.Join(FindRepositoryRoot(), "tests", "fixtures", "m1-contract-baseline", "v1", "process-replay-input.json");
+        var path = Path.Join(FindRepositoryRoot(), "tests", "fixtures", "audit-result", "v1", "process-replay-input.json");
         using var replay = ParseStrict(File.ReadAllBytes(path));
         var canonical = new List<byte[]>();
         foreach (var logicalInput in replay.RootElement.GetProperty("logicalInputs").EnumerateArray())
@@ -318,7 +318,7 @@ public sealed class AuditResultContractTests
         });
         var reasons = reasonEntries.Select(entry => entry.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal);
         var fixtureReasons = Directory.EnumerateFiles(Path.Join(root, "tests", "fixtures", "audit-result", "v1", "payloads"), "*.json").SelectMany(path => JsonDocument.Parse(File.ReadAllText(path)).RootElement.GetProperty("results").EnumerateArray()).Select(result => result.GetProperty("reasonCode").GetString()!).ToHashSet(StringComparer.Ordinal);
-        using var authorityFixtures = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "m1-contract-baseline", "v1", "audit-authority-cases.json")));
+        using var authorityFixtures = JsonDocument.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "audit-result", "v1", "audit-authority-cases.json")));
         fixtureReasons.UnionWith(authorityFixtures.RootElement.GetProperty("valid").EnumerateArray().Select(result => result.GetProperty("reasonCode").GetString()!));
         Assert.True(reasons.IsSubsetOf(fixtureReasons), "Every audit reason needs a checked-in valid fixture.");
     }

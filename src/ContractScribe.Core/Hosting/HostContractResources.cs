@@ -16,15 +16,11 @@ public static class HostContractResources
 
     public static ReadOnlyMemory<byte> CalibrationEvidenceBytes => Snapshot.Value.CalibrationEvidence;
 
-    public static ReadOnlyMemory<byte> ContractBaselineBytes => Snapshot.Value.ContractBaseline;
-
     public static string FailureRegistrySha256 => Snapshot.Value.FailureRegistrySha256;
 
     public static string CalibratedBoundsSha256 => Snapshot.Value.CalibratedBoundsSha256;
 
     public static string CalibrationEvidenceSha256 => Snapshot.Value.CalibrationEvidenceSha256;
-
-    public static string ContractBaselineSha256 => Snapshot.Value.ContractBaselineSha256;
 
     public static ImmutableArray<HostFailureRegistryEntry> FailureRegistry =>
         Snapshot.Value.FailureRows;
@@ -54,7 +50,6 @@ public static class HostContractResources
         var failureRegistry = Read("host-failure-registry-v1.json");
         var bounds = Read("host-calibrated-bounds-v1.json");
         var evidence = Read("host-calibration-evidence-v1.json");
-        var baseline = Read("contract-baseline-manifest-v1.json");
         using var parsed = JsonDocument.Parse(failureRegistry);
         var rows = parsed.RootElement.GetProperty("entries")
             .EnumerateArray()
@@ -86,11 +81,9 @@ public static class HostContractResources
             failureRegistry,
             bounds,
             evidence,
-            baseline,
             Sha256(failureRegistry),
             Sha256(bounds),
             evidenceSha256,
-            Sha256(baseline),
             rows);
     }
 
@@ -139,10 +132,8 @@ public static class HostContractResources
         byte[] FailureRegistry,
         byte[] CalibratedBounds,
         byte[] CalibrationEvidence,
-        byte[] ContractBaseline,
         string FailureRegistrySha256,
         string CalibratedBoundsSha256,
         string CalibrationEvidenceSha256,
-        string ContractBaselineSha256,
         ImmutableArray<HostFailureRegistryEntry> FailureRows);
 }

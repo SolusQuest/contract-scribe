@@ -39,13 +39,20 @@ public sealed class ProductionRoslynArchitectureTests
     }
 
     [Fact]
-    public void HistoricalAndProductionRoslynProjectsUseSeparateTestHosts()
+    public void CurrentProjectGraphUsesOnlyProductionRoslynAtRuntime()
     {
         var root = FindRepositoryRoot();
-        var fast = File.ReadAllText(Path.Combine(root, "tests", "ContractScribe.Tests", "ContractScribe.Tests.csproj"));
+        var fastProject = XDocument.Load(Path.Combine(
+            root,
+            "tests",
+            "ContractScribe.Tests",
+            "ContractScribe.Tests.csproj"));
+        var fastReferences = fastProject.Descendants("ProjectReference")
+            .Select(reference => reference.Attribute("Include")!.Value)
+            .ToArray();
         var integration = File.ReadAllText(Path.Combine(root, "tests", "ContractScribe.IntegrationTests", "ContractScribe.IntegrationTests.csproj"));
-        Assert.Contains(@"..\ContractScribe.Roslyn\ContractScribe.Roslyn.csproj", fast, StringComparison.Ordinal);
-        Assert.DoesNotContain(@"src\ContractScribe.Roslyn", fast, StringComparison.Ordinal);
+        Assert.DoesNotContain(fastReferences, reference =>
+            reference.Contains("ContractScribe.Roslyn", StringComparison.Ordinal));
         Assert.Contains(@"../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj", integration, StringComparison.Ordinal);
         Assert.DoesNotContain(@"tests/ContractScribe.Roslyn", integration, StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -59,6 +66,19 @@ public sealed class ProductionRoslynArchitectureTests
         Assert.Contains("Microsoft.NET.StringTools", integration, StringComparison.Ordinal);
         Assert.Equal(5, XDocument.Parse(integration).Descendants("PackageReference").Count(element =>
             element.Attribute("ExcludeAssets")?.Value == "runtime"));
+
+        foreach (var sourceProjectPath in Directory.EnumerateFiles(
+                     Path.Combine(root, "src"),
+                     "*.csproj",
+                     SearchOption.AllDirectories))
+        {
+            var sourceReferences = XDocument.Load(sourceProjectPath)
+                .Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include")!.Value);
+            Assert.DoesNotContain(sourceReferences, reference =>
+                reference.Contains("tests", StringComparison.OrdinalIgnoreCase)
+                || reference.Contains("Experiment", StringComparison.Ordinal));
+        }
     }
 
     [Fact]

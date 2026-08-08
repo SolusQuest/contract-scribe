@@ -1,7 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection;
-using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -48,7 +46,7 @@ public sealed class ProductionAuditHostTests
         Directory.CreateDirectory(Path.Join(root, "TestResults"));
         try
         {
-            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            var target = ResolvedPublicationTarget.ForTestResult(root);
             using var publisher = AtomicResultPublisher.Prepare(
                 target,
                 new ProductionAuditHostControls());
@@ -79,7 +77,7 @@ public sealed class ProductionAuditHostTests
         Directory.CreateDirectory(Path.GetDirectoryName(external)!);
         try
         {
-            var validation = ResolvedPublicationTarget.ForValidationFixture(repository);
+            var validation = ResolvedPublicationTarget.ForTestResult(repository);
             var cli = ResolvedPublicationTarget.ForExternalCli(repository, external);
 
             Assert.Equal(
@@ -122,7 +120,7 @@ public sealed class ProductionAuditHostTests
         Directory.CreateDirectory(resultDirectory);
         try
         {
-            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            var target = ResolvedPublicationTarget.ForTestResult(root);
             using (var publisher = AtomicResultPublisher.Prepare(
                        target,
                        new ProductionAuditHostControls()))
@@ -163,7 +161,7 @@ public sealed class ProductionAuditHostTests
         Directory.CreateDirectory(resultDirectory);
         try
         {
-            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            var target = ResolvedPublicationTarget.ForTestResult(root);
             File.WriteAllText(target.FinalPath, "prior\n");
             var finalAlias = Path.Join(resultDirectory, "prior-alias.json");
             CreateHardLinkForTest(target.FinalPath, finalAlias);
@@ -204,7 +202,7 @@ public sealed class ProductionAuditHostTests
         Directory.CreateDirectory(resultDirectory);
         try
         {
-            var target = ResolvedPublicationTarget.ForValidationFixture(root);
+            var target = ResolvedPublicationTarget.ForTestResult(root);
             using var publisher = AtomicResultPublisher.Prepare(
                 target,
                 new ProductionAuditHostControls());
@@ -537,33 +535,6 @@ public sealed class ProductionAuditHostTests
     }
 
     [Fact]
-    public void ValidationActivation_RejectsMixedCliAndRoslynMetadata()
-    {
-        Assert.False(HostValidationSubjectAdapter.IsEnabledFor(
-            typeof(ProductionAuditHostTests).Assembly));
-        var dynamicAssembly = AssemblyBuilder.DefineDynamicAssembly(
-            new AssemblyName("ContractScribe.MixedValidationMetadata"),
-            AssemblyBuilderAccess.Run);
-        var constructor = typeof(AssemblyMetadataAttribute).GetConstructor(
-            [typeof(string), typeof(string)])!;
-        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
-            constructor,
-            ["ContractScribeHostValidationSubject", "enabled"]));
-        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
-            constructor,
-            ["ContractScribeSourceRevision", new string('1', 40)]));
-        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
-            constructor,
-            ["ContractScribeSourceConfigurationId", "source." + new string('2', 64)]));
-        dynamicAssembly.SetCustomAttribute(new CustomAttributeBuilder(
-            constructor,
-            ["ContractScribeBuildSdkVersion", "10.0.102"]));
-
-        Assert.Throws<InvalidOperationException>(() =>
-            HostValidationSubjectAdapter.IsEnabledFor(dynamicAssembly));
-    }
-
-    [Fact]
     public async Task InvalidationFailure_PreservesPriorCommittedBytesAndCommitsOneFailure()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -841,8 +812,7 @@ public sealed class ProductionAuditHostTests
                 fixture.Root,
                 "App/App.csproj",
                 "{}\n"u8.ToArray(),
-                ResolvedPublicationTarget.ForValidationFixture(fixture.Root),
-                Provenance()),
+                ResolvedPublicationTarget.ForTestResult(fixture.Root)),
             new ProductionAuditHostControls(
                 Fault: ProductionHostFault.EnvironmentUnavailable));
 
@@ -1239,20 +1209,13 @@ public sealed class ProductionAuditHostTests
                 fixture.Root,
                 "App/App.csproj",
                 OptionalPolicy,
-                ResolvedPublicationTarget.ForValidationFixture(fixture.Root),
-                Provenance(),
+                ResolvedPublicationTarget.ForTestResult(fixture.Root),
                 Path.Join(fixture.Root, "obj", "contractscribe-audit-temp")),
             controls ?? new ProductionAuditHostControls(),
             cancellationToken);
     }
 
-    private static HostBuildProvenance Provenance() => new(
-        new string('1', 40),
-        "source." + new string('2', 64),
-        "10.0.102",
-        HostContractResources.ContractBaselineSha256,
-        HostContractResources.FailureRegistrySha256,
-        HostContractResources.CalibratedBoundsSha256);
+    private static HostBuildProvenance Provenance() => new(new string('1', 40));
 
     private static RegisteredToolchain TestToolchain(string root) => new(
         new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),
