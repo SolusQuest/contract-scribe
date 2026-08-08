@@ -19,6 +19,6 @@ Before a formal release, incompatible corrections amend these draft version `1` 
 
 ## Historical Issue #55 and #70 lineage
 
-Issue #55 and squash commit [`95933c5dc134dfe6adeb92765920a8eb5c96d7db`](https://github.com/SolusQuest/contract-scribe/commit/95933c5dc134dfe6adeb92765920a8eb5c96d7db) introduced the first coordinated M1 baseline. Issue #70 and squash commit [`67c149f`](https://github.com/SolusQuest/contract-scribe/commit/67c149f) corrected its Host Validation lineage. Those commits and their deleted manifests remain immutable Git history and can be inspected when historical provenance matters.
+Issue #55 and squash commit [`95933c5dc134dfe6adeb92765920a8eb5c96d7db`](https://github.com/SolusQuest/contract-scribe/commit/95933c5dc134dfe6adeb92765920a8eb5c96d7db) introduced the first coordinated M1 baseline. Issue #70 and squash commit [`67c149fbc105d2ccae94becd6b2158b68027cbfd`](https://github.com/SolusQuest/contract-scribe/commit/67c149fbc105d2ccae94becd6b2158b68027cbfd) corrected its Host Validation lineage. Those commits and their deleted manifests remain immutable Git history and can be inspected when historical provenance matters.
 
 Issue #75 removed their current-tree manifest, consumer handshake, bundle, and validation machinery because those mechanisms had become ordinary-change gates without a released compatibility need. Historical identities and digests must not be presented as current draft authority or recreated as a prerequisite for later implementation.

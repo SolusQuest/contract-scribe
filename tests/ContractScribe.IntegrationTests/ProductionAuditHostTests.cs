@@ -12,6 +12,15 @@ public sealed class ProductionAuditHostTests
 {
     private static readonly byte[] OptionalPolicy = Encoding.UTF8.GetBytes(
         "{\"defaultDecision\":\"optional\",\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\"}\n");
+    private static readonly HashSet<string> ProtectedRepositoryExtensions = new(
+        [".cs", ".csproj", ".fs", ".fsproj", ".vb", ".vbproj", ".props", ".targets", ".sln", ".slnx", ".slnf"],
+        StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> ProtectedRepositoryNames = new(
+        ["global.json", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "NuGet.Config", "packages.lock.json"],
+        StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> IgnoredRepositorySnapshotDirectories = new(
+        [".git", ".tmp", "TestResults"],
+        StringComparer.OrdinalIgnoreCase);
 
     [Fact]
     public async Task RealComposition_PublishesCanonicalBytesAtomicallyWithProvenance()
@@ -34,6 +43,65 @@ public sealed class ProductionAuditHostTests
             fixture.Root,
             "TestResults",
             ".audit-result.json.contractscribe-stage")));
+    }
+
+    [Fact]
+    public async Task RealComposition_DoesNotModifyProtectedRepositoryFiles()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(
+            appProject:
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup>
+              <Target Name="ContractScribeReadOnlyCustomTarget" BeforeTargets="CoreCompile">
+                <WriteLinesToFile File="$(IntermediateOutputPath)contractscribe-custom-target.txt"
+                                  Lines="custom-target-ran"
+                                  Overwrite="true" />
+              </Target>
+            </Project>
+            """,
+            withGenerator: true);
+        var customTargetOutputs = Directory.EnumerateFiles(
+                Path.Join(fixture.Root, "App", "obj"),
+                "contractscribe-custom-target.txt",
+                SearchOption.AllDirectories)
+            .ToArray();
+        Assert.NotEmpty(customTargetOutputs);
+        foreach (var output in customTargetOutputs)
+        {
+            File.Delete(output);
+        }
+        var before = CaptureProtectedRepositoryFiles(fixture.Root);
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(fixture, resultPath);
+
+        Assert.Equal(HostExecutionOutcome.Succeeded, outcome.Terminal.ExecutionOutcome);
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Join(fixture.Root, "App", "obj"),
+            "contractscribe-custom-target.txt",
+            SearchOption.AllDirectories));
+        Assert.Empty(FindProtectedRepositoryChanges(
+            before,
+            CaptureProtectedRepositoryFiles(fixture.Root)));
+    }
+
+    [Fact]
+    public async Task ProtectedRepositorySnapshot_DetectsAProtectedByteMutation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var before = CaptureProtectedRepositoryFiles(fixture.Root);
+
+        await File.AppendAllTextAsync(
+            Path.Join(fixture.Root, "App", "App.cs"),
+            "\n// deliberate snapshot self-check");
+
+        Assert.Equal(
+            ["App/App.cs"],
+            FindProtectedRepositoryChanges(
+                before,
+                CaptureProtectedRepositoryFiles(fixture.Root)));
     }
 
     [Fact]
@@ -305,6 +373,47 @@ public sealed class ProductionAuditHostTests
         {
             Directory.Delete(root, recursive: true);
             Directory.Delete(second, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(".contractscribe-hv-freeze-")]
+    [InlineData(".contractscribe-hv-release-")]
+    public async Task TemporaryDiskMeter_CountsRetiredValidationPrefixFiles(string prefix)
+    {
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contractscribe-disk-meter",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var meter = new TemporaryDiskMeter(root, null);
+            var reconciled = Path.Join(root, prefix + "reconcile.bin");
+            await File.WriteAllBytesAsync(reconciled, new byte[257]);
+            Assert.Equal(257, meter.Reconcile());
+            File.Delete(reconciled);
+            Assert.Equal(0, meter.Reconcile());
+
+            meter.ObserveHostAllocation(Path.Join(root, prefix + "direct.bin"), 0, 258);
+            Assert.Equal(258, meter.HighWater);
+
+            var eventObserved = Path.Join(root, prefix + "event.bin");
+            await using (var stream = new FileStream(
+                             eventObserved,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.Read))
+            {
+                stream.SetLength(HostContractResources.RequireBound("temporary-disk-bytes") + 1);
+            }
+            meter.ObservePath(eventObserved);
+
+            Assert.False(meter.TryCreateFactWithinThreshold(out _));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -1169,15 +1278,18 @@ public sealed class ProductionAuditHostTests
         await Task.Delay(50);
     }
 
-    [Fact]
-    public async Task TemporaryDiskBound_PreventsCanonicalResultCommit()
+    [Theory]
+    [InlineData("oversized.logical")]
+    [InlineData(".contractscribe-hv-freeze-oversized.logical")]
+    [InlineData(".contractscribe-hv-release-oversized.logical")]
+    public async Task TemporaryDiskBound_PreventsCanonicalResultCommit(string fileName)
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
         var temporaryRoot = Path.Join(fixture.Root, "obj", "contractscribe-audit-temp");
         Directory.CreateDirectory(temporaryRoot);
         await using (var oversized = new FileStream(
-                         Path.Join(temporaryRoot, "oversized.logical"),
+                         Path.Join(temporaryRoot, fileName),
                          FileMode.CreateNew,
                          FileAccess.Write,
                          FileShare.None))
@@ -1196,6 +1308,45 @@ public sealed class ProductionAuditHostTests
         Assert.False(File.Exists(resultPath));
         Assert.Null(outcome.CanonicalResult);
     }
+
+    private static IReadOnlyDictionary<string, string> CaptureProtectedRepositoryFiles(string root)
+    {
+        var snapshot = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(root, path)
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
+            var segments = relative.Split('/');
+            if (segments[..^1].Any(IgnoredRepositorySnapshotDirectories.Contains))
+            {
+                continue;
+            }
+            var fileName = segments[^1];
+            if (!ProtectedRepositoryNames.Contains(fileName)
+                && !ProtectedRepositoryExtensions.Contains(Path.GetExtension(fileName)))
+            {
+                continue;
+            }
+            snapshot.Add(
+                relative,
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant());
+        }
+        return snapshot;
+    }
+
+    private static IReadOnlyList<string> FindProtectedRepositoryChanges(
+        IReadOnlyDictionary<string, string> before,
+        IReadOnlyDictionary<string, string> after) =>
+        before.Keys
+            .Concat(after.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(path =>
+                !before.TryGetValue(path, out var beforeIdentity)
+                || !after.TryGetValue(path, out var afterIdentity)
+                || !StringComparer.Ordinal.Equals(beforeIdentity, afterIdentity))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     private static Task<ProductionAuditOutcome> RunAsync(
         LoaderFixture fixture,

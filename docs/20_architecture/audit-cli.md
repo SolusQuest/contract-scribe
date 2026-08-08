@@ -180,7 +180,7 @@ Dynamic envelope fields use a closed substitution grammar in annex templates. Th
 
 - CLI-variant envelopes (`usage`, `preflight`) and the `host-contract-error` envelope permit only `${CLI_CONTRACT_BASELINE}` and `${TOOL_VERSION}`.
 - The `execution` envelope additionally permits `${SOURCE_REVISION}` and `${TOOLCHAIN_IDENTITY}`.
-- The `audit` envelope permits all seven tokens.
+- The `audit` envelope permits all six tokens.
 - Token values are JSON strings only — never raw fragments, numbers, or objects — and are escaped per the canonical string rules (quotation mark, reverse solidus, and control characters escaped; all other scalars literal).
 - Bindings are platform-independent: a token's value is identical on every supported platform for one build and one run.
 - An unknown, missing, or duplicated substitution fails the checker.
