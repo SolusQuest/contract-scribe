@@ -7,6 +7,7 @@ internal static class DotnetSdkResolver
 {
     private const int ResolveSdk2DisallowPrerelease = 0x1;
     private const int ResolvedSdkDirectoryKey = 0;
+    private static readonly object ErrorWriterGate = new();
 
     public static string Resolve(string dotnetHost, string workingDirectory)
     {
@@ -18,56 +19,80 @@ internal static class DotnetSdkResolver
         var handle = NativeLibrary.Load(libraryPath);
         try
         {
-            var export = NativeLibrary.GetExport(handle, "hostfxr_resolve_sdk2");
-            string? resolvedSdkDirectory = null;
-            int result;
-            if (OperatingSystem.IsWindows())
+            lock (ErrorWriterGate)
             {
-                WindowsResultCallback callback = (key, value) =>
+                var setErrorWriterExport = NativeLibrary.GetExport(
+                    handle,
+                    "hostfxr_set_error_writer");
+                var setErrorWriter = Marshal.GetDelegateForFunctionPointer<SetErrorWriter>(
+                    setErrorWriterExport);
+                HostFxrErrorWriter errorWriter = _ => { };
+                var errorWriterPointer = Marshal.GetFunctionPointerForDelegate(errorWriter);
+                var previousErrorWriter = setErrorWriter(errorWriterPointer);
+                using var nativeOutput = NativeOutputSuppression.Install();
+                try
                 {
-                    if (key == ResolvedSdkDirectoryKey)
+                    var export = NativeLibrary.GetExport(handle, "hostfxr_resolve_sdk2");
+                    string? resolvedSdkDirectory = null;
+                    int result;
+                    if (OperatingSystem.IsWindows())
                     {
-                        resolvedSdkDirectory = Marshal.PtrToStringUni(value);
+                        WindowsResultCallback callback = (key, value) =>
+                        {
+                            if (key == ResolvedSdkDirectoryKey)
+                            {
+                                resolvedSdkDirectory = Marshal.PtrToStringUni(value);
+                            }
+                        };
+                        var resolver = Marshal.GetDelegateForFunctionPointer<WindowsResolveSdk2>(export);
+                        result = resolver(
+                            dotnetRoot,
+                            Path.GetFullPath(workingDirectory),
+                            ResolveSdk2DisallowPrerelease,
+                            callback);
+                        GC.KeepAlive(callback);
                     }
-                };
-                var resolver = Marshal.GetDelegateForFunctionPointer<WindowsResolveSdk2>(export);
-                result = resolver(
-                    dotnetRoot,
-                    Path.GetFullPath(workingDirectory),
-                    ResolveSdk2DisallowPrerelease,
-                    callback);
-                GC.KeepAlive(callback);
-            }
-            else
-            {
-                UnixResultCallback callback = (key, value) =>
-                {
-                    if (key == ResolvedSdkDirectoryKey)
+                    else
                     {
-                        resolvedSdkDirectory = Marshal.PtrToStringUTF8(value);
+                        UnixResultCallback callback = (key, value) =>
+                        {
+                            if (key == ResolvedSdkDirectoryKey)
+                            {
+                                resolvedSdkDirectory = Marshal.PtrToStringUTF8(value);
+                            }
+                        };
+                        var resolver = Marshal.GetDelegateForFunctionPointer<UnixResolveSdk2>(export);
+                        result = resolver(
+                            dotnetRoot,
+                            Path.GetFullPath(workingDirectory),
+                            ResolveSdk2DisallowPrerelease,
+                            callback);
+                        GC.KeepAlive(callback);
                     }
-                };
-                var resolver = Marshal.GetDelegateForFunctionPointer<UnixResolveSdk2>(export);
-                result = resolver(
-                    dotnetRoot,
-                    Path.GetFullPath(workingDirectory),
-                    ResolveSdk2DisallowPrerelease,
-                    callback);
-                GC.KeepAlive(callback);
-            }
 
-            if (result != 0
-                || string.IsNullOrEmpty(resolvedSdkDirectory)
-                || !Path.IsPathRooted(resolvedSdkDirectory))
-            {
-                throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                    if (result != 0
+                        || string.IsNullOrEmpty(resolvedSdkDirectory)
+                        || !Path.IsPathRooted(resolvedSdkDirectory))
+                    {
+                        throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                    }
+                    var version = Path.GetFileName(
+                        Path.TrimEndingDirectorySeparator(resolvedSdkDirectory));
+                    if (!Regex.IsMatch(
+                            version,
+                            @"^\d+\.\d+\.\d+$",
+                            RegexOptions.CultureInvariant))
+                    {
+                        throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                    }
+                    return version;
+                }
+                finally
+                {
+                    _ = setErrorWriter(previousErrorWriter);
+                    GC.KeepAlive(errorWriter);
+                }
             }
-            var version = Path.GetFileName(Path.TrimEndingDirectorySeparator(resolvedSdkDirectory));
-            if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+$", RegexOptions.CultureInvariant))
-            {
-                throw LoaderException.Toolchain("toolchain.sdk-unavailable");
-            }
-            return version;
         }
         catch (LoaderException)
         {
@@ -119,6 +144,122 @@ internal static class DotnetSdkResolver
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void UnixResultCallback(int key, IntPtr value);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void HostFxrErrorWriter(IntPtr message);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr SetErrorWriter(IntPtr errorWriter);
+
+    private sealed class NativeOutputSuppression : IDisposable
+    {
+        private const int StandardOutput = 1;
+        private const int WriteOnly = 1;
+        private readonly int savedOutput;
+        private bool disposed;
+
+        private NativeOutputSuppression(int savedOutput)
+        {
+            this.savedOutput = savedOutput;
+        }
+
+        public static NativeOutputSuppression Install()
+        {
+            _ = Flush(IntPtr.Zero);
+            var saved = Duplicate(StandardOutput);
+            if (saved < 0)
+            {
+                throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+            }
+            var nullOutput = OpenNull(WriteOnly);
+            if (nullOutput < 0 || DuplicateTo(nullOutput, StandardOutput) < 0)
+            {
+                if (nullOutput >= 0)
+                {
+                    _ = Close(nullOutput);
+                }
+                _ = Close(saved);
+                throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+            }
+            _ = Close(nullOutput);
+            return new NativeOutputSuppression(saved);
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+            disposed = true;
+            _ = Flush(IntPtr.Zero);
+            try
+            {
+                if (DuplicateTo(savedOutput, StandardOutput) < 0)
+                {
+                    throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                }
+            }
+            finally
+            {
+                _ = Close(savedOutput);
+            }
+        }
+
+        private static int Duplicate(int descriptor) => OperatingSystem.IsWindows()
+            ? WindowsDuplicate(descriptor)
+            : UnixDuplicate(descriptor);
+
+        private static int DuplicateTo(int source, int destination) => OperatingSystem.IsWindows()
+            ? WindowsDuplicateTo(source, destination)
+            : UnixDuplicateTo(source, destination);
+
+        private static int OpenNull(int flags) => OperatingSystem.IsWindows()
+            ? WindowsOpen("NUL", flags)
+            : UnixOpen("/dev/null", flags);
+
+        private static int Close(int descriptor) => OperatingSystem.IsWindows()
+            ? WindowsClose(descriptor)
+            : UnixClose(descriptor);
+
+        private static int Flush(IntPtr stream) => OperatingSystem.IsWindows()
+            ? WindowsFlush(stream)
+            : UnixFlush(stream);
+
+        [DllImport("ucrtbase.dll", EntryPoint = "_dup", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int WindowsDuplicate(int descriptor);
+
+        [DllImport("ucrtbase.dll", EntryPoint = "_dup2", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int WindowsDuplicateTo(int source, int destination);
+
+        [DllImport("ucrtbase.dll", EntryPoint = "_open", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int WindowsOpen(
+            [MarshalAs(UnmanagedType.LPStr)] string path,
+            int flags);
+
+        [DllImport("ucrtbase.dll", EntryPoint = "_close", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int WindowsClose(int descriptor);
+
+        [DllImport("ucrtbase.dll", EntryPoint = "fflush", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int WindowsFlush(IntPtr stream);
+
+        [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
+        private static extern int UnixDuplicate(int descriptor);
+
+        [DllImport("libc", EntryPoint = "dup2", SetLastError = true)]
+        private static extern int UnixDuplicateTo(int source, int destination);
+
+        [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+        private static extern int UnixOpen(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+            int flags);
+
+        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        private static extern int UnixClose(int descriptor);
+
+        [DllImport("libc", EntryPoint = "fflush")]
+        private static extern int UnixFlush(IntPtr stream);
+    }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     private delegate int WindowsResolveSdk2(

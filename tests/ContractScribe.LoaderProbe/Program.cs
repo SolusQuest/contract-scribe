@@ -1,9 +1,18 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
+
+if (args is ["emit-streams", var streamMarker])
+{
+    Console.Out.Write($"{streamMarker}-child-out");
+    Console.Error.WriteLine($"{streamMarker}-child-error");
+    return 0;
+}
 
 if (args.Length < 3)
 {
@@ -170,6 +179,47 @@ if (outcome?.Session is not null)
     await outcome.Session.DisposeAsync();
 }
 
+if (mode == "stdout-after-success")
+{
+    if (!OperatingSystem.IsWindows()
+        || outcome?.Status != RepositoryLoadStatus.Success)
+    {
+        return 74;
+    }
+
+    var nativeBytes = Encoding.UTF8.GetBytes("native-stdout-ok\n");
+    if (WriteFile(
+            GetStdHandle(-11),
+            nativeBytes,
+            checked((uint)nativeBytes.Length),
+            out var nativeWritten,
+            IntPtr.Zero) == 0
+        || nativeWritten != nativeBytes.Length)
+    {
+        return 75;
+    }
+
+    using var child = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+        Arguments = "--version",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+    }) ?? throw new InvalidOperationException("The post-resolution child did not start.");
+    var childOutput = await child.StandardOutput.ReadToEndAsync();
+    var childError = await child.StandardError.ReadToEndAsync();
+    await child.WaitForExitAsync();
+    if (child.ExitCode != 0 || childError.Length != 0)
+    {
+        return 76;
+    }
+
+    Console.Write($"child-stdout-ok:{childOutput.Trim()}\nmanaged-stdout-ok\n");
+    return 0;
+}
+
 Console.WriteLine($"{outcome?.Status}:{outcome?.PrimaryFailure?.Code}");
 var expected = mode switch
 {
@@ -179,6 +229,17 @@ var expected = mode switch
     _ => (RepositoryLoadStatus)(-1),
 };
 return mode == "churn" || outcome?.Status == expected ? 0 : 66;
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern IntPtr GetStdHandle(int standardHandle);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern int WriteFile(
+    IntPtr file,
+    byte[] buffer,
+    uint bytesToWrite,
+    out uint bytesWritten,
+    IntPtr overlapped);
 
 static string SerializeClassification(ClassificationSet set)
 {

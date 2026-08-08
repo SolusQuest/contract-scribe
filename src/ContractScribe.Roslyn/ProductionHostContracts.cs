@@ -57,6 +57,7 @@ internal sealed record ProductionAuditHostControls(
     Func<RepositoryLoadRequest, CancellationToken, Task<RepositoryLoadOutcome>>? RepositoryLoad = null,
     Func<LoadedRepositorySession, Task>? Shutdown = null,
     Func<HostStage, CancellationToken, Task>? StageBoundary = null,
+    Action? BeforeInvalidation = null,
     Action? BeforeAtomicRename = null,
     Action<HostTerminalRecord>? AfterCauseAccepted = null,
     Action<HostToolchainFact>? AfterToolchainSelection = null)

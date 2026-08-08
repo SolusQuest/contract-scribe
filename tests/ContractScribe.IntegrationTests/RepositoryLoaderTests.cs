@@ -1995,6 +1995,11 @@ internal sealed class LoaderFixture : IAsyncDisposable
 
     public string LegacySolutionPath { get; }
 
+    public Task PrepareEditorConfigAsync() =>
+        RunDotnetAsync(
+            Root,
+            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"]);
+
     public static async Task<LoaderFixture> CreateAsync(
         string? appProject = null,
         string? libraryProject = null,
