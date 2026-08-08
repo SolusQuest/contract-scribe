@@ -155,24 +155,12 @@ internal static class DotnetSdkResolver
     {
         private const int StandardOutput = 1;
         private const int WriteOnly = 1;
-        private const int StandardOutputHandle = -11;
-        private const uint GenericWrite = 0x40000000;
-        private const uint ShareRead = 0x00000001;
-        private const uint ShareWrite = 0x00000002;
-        private const uint OpenExisting = 3;
         private readonly int savedOutput;
-        private readonly IntPtr savedWindowsOutput;
-        private readonly IntPtr nullWindowsOutput;
         private bool disposed;
 
-        private NativeOutputSuppression(
-            int savedOutput,
-            IntPtr savedWindowsOutput,
-            IntPtr nullWindowsOutput)
+        private NativeOutputSuppression(int savedOutput)
         {
             this.savedOutput = savedOutput;
-            this.savedWindowsOutput = savedWindowsOutput;
-            this.nullWindowsOutput = nullWindowsOutput;
         }
 
         public static NativeOutputSuppression Install()
@@ -194,35 +182,7 @@ internal static class DotnetSdkResolver
                 throw LoaderException.Toolchain("toolchain.sdk-unavailable");
             }
             _ = Close(nullOutput);
-            var savedWindowsOutput = IntPtr.Zero;
-            var nullWindowsOutput = IntPtr.Zero;
-            if (OperatingSystem.IsWindows())
-            {
-                savedWindowsOutput = GetStdHandle(StandardOutputHandle);
-                nullWindowsOutput = CreateFile(
-                    "NUL",
-                    GenericWrite,
-                    ShareRead | ShareWrite,
-                    IntPtr.Zero,
-                    OpenExisting,
-                    0,
-                    IntPtr.Zero);
-                if (nullWindowsOutput == new IntPtr(-1)
-                    || !SetStdHandle(StandardOutputHandle, nullWindowsOutput))
-                {
-                    if (nullWindowsOutput != new IntPtr(-1))
-                    {
-                        _ = CloseHandle(nullWindowsOutput);
-                    }
-                    _ = DuplicateTo(saved, StandardOutput);
-                    _ = Close(saved);
-                    throw LoaderException.Toolchain("toolchain.sdk-unavailable");
-                }
-            }
-            return new NativeOutputSuppression(
-                saved,
-                savedWindowsOutput,
-                nullWindowsOutput);
+            return new NativeOutputSuppression(saved);
         }
 
         public void Dispose()
@@ -233,12 +193,16 @@ internal static class DotnetSdkResolver
             }
             disposed = true;
             _ = Flush(IntPtr.Zero);
-            _ = DuplicateTo(savedOutput, StandardOutput);
-            _ = Close(savedOutput);
-            if (OperatingSystem.IsWindows())
+            try
             {
-                _ = SetStdHandle(StandardOutputHandle, savedWindowsOutput);
-                _ = CloseHandle(nullWindowsOutput);
+                if (DuplicateTo(savedOutput, StandardOutput) < 0)
+                {
+                    throw LoaderException.Toolchain("toolchain.sdk-unavailable");
+                }
+            }
+            finally
+            {
+                _ = Close(savedOutput);
             }
         }
 
@@ -278,25 +242,6 @@ internal static class DotnetSdkResolver
 
         [DllImport("ucrtbase.dll", EntryPoint = "fflush", CallingConvention = CallingConvention.Cdecl)]
         private static extern int WindowsFlush(IntPtr stream);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GetStdHandle(int standardHandle);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetStdHandle(int standardHandle, IntPtr handle);
-
-        [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern IntPtr CreateFile(
-            string fileName,
-            uint desiredAccess,
-            uint shareMode,
-            IntPtr securityAttributes,
-            uint creationDisposition,
-            uint flagsAndAttributes,
-            IntPtr templateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr handle);
 
         [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
         private static extern int UnixDuplicate(int descriptor);

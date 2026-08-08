@@ -32,6 +32,11 @@ internal sealed class ProductionAuditHost
         var toolchain = HostToolchainFact.NotSelected;
         LoaderFact? loaderFact = null;
 
+        HostExecutionOutcome CurrentInterruptionOutcome() =>
+            cancellationToken.IsCancellationRequested
+                ? HostExecutionOutcome.Cancelled
+                : HostExecutionOutcome.Timeout;
+
         void RegisterInterruption(HostExecutionOutcome outcome)
         {
             if (coordinator.TryAcceptCause(
@@ -147,7 +152,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.Input,
-                    HostExecutionOutcome.Timeout,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -216,7 +221,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.SdkDiscovery,
-                    HostExecutionOutcome.Timeout,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -314,7 +319,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.WorkspaceLoad,
-                    HostExecutionOutcome.Timeout,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact).ConfigureAwait(false);
@@ -344,7 +349,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.WorkspaceLoad,
-                    HostExecutionOutcome.Cancelled,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -405,6 +410,7 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.Classification,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -456,6 +462,7 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.DocumentationObservation,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -511,6 +518,7 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.PolicyEvidence,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -557,6 +565,7 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.Audit,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -597,6 +606,7 @@ internal sealed class ProductionAuditHost
                     coordinator,
                     toolchain,
                     HostStage.ResultValidation,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -653,7 +663,7 @@ internal sealed class ProductionAuditHost
                     actualProvenance,
                     toolchain,
                     HostStage.Shutdown,
-                    HostExecutionOutcome.Timeout,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -752,7 +762,7 @@ internal sealed class ProductionAuditHost
                 return await CommitRegisteredInterruptionAsync(
                     coordinator,
                     actualProvenance,
-                    HostExecutionOutcome.Timeout,
+                    CurrentInterruptionOutcome(),
                     controls,
                     transitions,
                     loaderFact,
@@ -929,6 +939,7 @@ internal sealed class ProductionAuditHost
         HostTerminalCoordinator coordinator,
         HostToolchainFact toolchain,
         HostStage stage,
+        HostExecutionOutcome outcome,
         ProductionAuditHostControls controls,
         List<string> transitions,
         LoaderFact? loaderFact,
@@ -940,7 +951,7 @@ internal sealed class ProductionAuditHost
             actualProvenance,
             toolchain,
             stage,
-            HostExecutionOutcome.Timeout,
+            outcome,
             controls,
             transitions,
             loaderFact,

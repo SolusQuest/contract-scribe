@@ -32,32 +32,23 @@ internal static class AuditCommandRunner
         ProductionAuditOutcome outcome)
     {
         var terminal = outcome.Terminal;
+        if (terminal is null)
+        {
+            return CliPresentation.HostContractError(identity);
+        }
         if (terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded)
         {
-            return AdaptSuccess(identity, outcome);
+            return AdaptSuccess(identity, outcome, terminal);
         }
-        if (!IsValidNonSuccess(outcome))
+        if (!IsValidNonSuccess(identity, outcome, terminal))
         {
             return CliPresentation.HostContractError(identity);
         }
 
-        var executionClass = HostVocabulary.GetId(terminal.ExecutionOutcome);
-        var exitCode = terminal.ExecutionOutcome switch
-        {
-            HostExecutionOutcome.InvalidInput => 4,
-            HostExecutionOutcome.EnvironmentUnavailable => 4,
-            HostExecutionOutcome.LoadFailure => 5,
-            HostExecutionOutcome.AuditError => 5,
-            HostExecutionOutcome.PublicationFailure => 5,
-            HostExecutionOutcome.Cancelled => 6,
-            HostExecutionOutcome.Timeout => 7,
-            _ => -1,
-        };
-        if (exitCode < 0 || !HasPermittedToolchainState(terminal))
+        if (!TryMapExecution(terminal.ExecutionOutcome, out var executionClass, out var exitCode))
         {
             return CliPresentation.HostContractError(identity);
         }
-
         IReadOnlyList<CliDiagnostic> diagnostics =
             terminal.ExecutionOutcome == HostExecutionOutcome.Cancelled
                 ? [CliDiagnostics.Create("cli.cancel.requested")]
@@ -78,13 +69,21 @@ internal static class AuditCommandRunner
 
     private static CliExecutionResult AdaptSuccess(
         CliBuildIdentity identity,
-        ProductionAuditOutcome outcome)
+        ProductionAuditOutcome outcome,
+        HostTerminalRecord terminal)
     {
-        var terminal = outcome.Terminal;
         var bytes = outcome.CanonicalResult;
         if (terminal.TerminalState != HostTerminalState.CommittedResult
             || terminal.Failure is not null
             || terminal.AuditOutcome is null
+            || terminal.Provenance is null
+            || terminal.Toolchain is null
+            || terminal.OutputCommit is null
+            || terminal.AcceptedSequence <= 0
+            || !string.Equals(
+                terminal.Provenance.SourceRevision,
+                identity.SourceRevision,
+                StringComparison.Ordinal)
             || terminal.Toolchain.SelectionState != HostToolchainSelectionState.Selected
             || terminal.OutputCommit.State != HostArtifactState.Published
             || terminal.OutputCommit.Sha256 is null
@@ -135,33 +134,111 @@ internal static class AuditCommandRunner
             diagnostics);
     }
 
-    private static bool IsValidNonSuccess(ProductionAuditOutcome outcome)
+    private static bool IsValidNonSuccess(
+        CliBuildIdentity identity,
+        ProductionAuditOutcome outcome,
+        HostTerminalRecord terminal)
     {
-        var terminal = outcome.Terminal;
-        return terminal.TerminalState == HostTerminalState.CommittedNonSuccess
-            && terminal.ExecutionOutcome != HostExecutionOutcome.Succeeded
-            && terminal.Failure is not null
-            && terminal.AuditOutcome is null
-            && outcome.CanonicalResult is null
-            && terminal.OutputCommit.State != HostArtifactState.Published
-            && terminal.OutputCommit.Sha256 is null;
+        if (terminal.TerminalState != HostTerminalState.CommittedNonSuccess
+            || terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded
+            || terminal.Failure is null
+            || terminal.Provenance is null
+            || terminal.Toolchain is null
+            || terminal.OutputCommit is null
+            || terminal.AuditOutcome is not null
+            || outcome.CanonicalResult is not null
+            || terminal.OutputCommit.State != HostArtifactState.Invalidated
+            || terminal.OutputCommit.Sha256 is not null
+            || terminal.OutputCommit.ByteCount != 0
+            || terminal.AcceptedSequence <= 0
+            || !string.Equals(
+                terminal.Provenance.SourceRevision,
+                identity.SourceRevision,
+                StringComparison.Ordinal)
+            || !HasPermittedToolchainState(terminal))
+        {
+            return false;
+        }
+
+        var registryMatches = HostContractResources.FailureRegistry
+            .Where(row => string.Equals(
+                row.Code,
+                terminal.Failure.Code,
+                StringComparison.Ordinal))
+            .ToArray();
+        if (registryMatches.Length != 1
+            || registryMatches[0] != terminal.Failure
+            || registryMatches[0].Stage != terminal.Failure.Stage
+            || registryMatches[0].ExecutionOutcome != terminal.ExecutionOutcome
+            || terminal.Diagnostics.IsDefaultOrEmpty
+            || terminal.Diagnostics.Any(diagnostic => diagnostic is null))
+        {
+            return false;
+        }
+
+        var primary = terminal.Diagnostics[0];
+        return string.Equals(primary.Code, terminal.Failure.Code, StringComparison.Ordinal)
+            && primary.Stage == terminal.Failure.Stage
+            && primary.Severity == HostDiagnosticSeverity.Error
+            && string.Equals(primary.TemplateId, terminal.Failure.Code, StringComparison.Ordinal)
+            && primary.Arguments.IsEmpty
+            && primary.RepositoryRelativePath is null;
     }
 
     private static bool HasPermittedToolchainState(HostTerminalRecord terminal)
     {
-        var selected = terminal.Toolchain.SelectionState
-            == HostToolchainSelectionState.Selected;
-        return terminal.ExecutionOutcome switch
+        if (terminal.Failure is null || terminal.Toolchain is null)
         {
-            HostExecutionOutcome.InvalidInput => !selected,
-            HostExecutionOutcome.EnvironmentUnavailable => !selected,
-            HostExecutionOutcome.LoadFailure => selected,
-            HostExecutionOutcome.AuditError => selected,
-            HostExecutionOutcome.PublicationFailure => true,
-            HostExecutionOutcome.Cancelled => true,
-            HostExecutionOutcome.Timeout => true,
-            _ => false,
+            return false;
+        }
+        if (terminal.Failure.Code == "host.publication.invalidation-failed")
+        {
+            return terminal.Toolchain.SelectionState
+                == HostToolchainSelectionState.NotSelected;
+        }
+        if (terminal.Failure.Code is "host.publication.finalization-failed"
+            or "host.publication.cleanup-failed"
+            or "host.publication.timeout")
+        {
+            return terminal.Toolchain.SelectionState
+                == HostToolchainSelectionState.Selected;
+        }
+
+        var expected = terminal.Failure.Stage switch
+        {
+            HostStage.Input or HostStage.Environment or HostStage.SdkDiscovery =>
+                HostToolchainSelectionState.NotSelected,
+            HostStage.Publication => terminal.Toolchain.SelectionState,
+            HostStage.WorkspaceLoad
+                or HostStage.Classification
+                or HostStage.DocumentationObservation
+                or HostStage.PolicyEvidence
+                or HostStage.Audit
+                or HostStage.ResultValidation
+                or HostStage.Shutdown
+                or HostStage.Internal => HostToolchainSelectionState.Selected,
+            _ => (HostToolchainSelectionState)(-1),
         };
+        return expected == terminal.Toolchain.SelectionState;
+    }
+
+    private static bool TryMapExecution(
+        HostExecutionOutcome outcome,
+        out string executionClass,
+        out int exitCode)
+    {
+        (executionClass, exitCode) = outcome switch
+        {
+            HostExecutionOutcome.InvalidInput => ("invalid-input", 4),
+            HostExecutionOutcome.EnvironmentUnavailable => ("environment-unavailable", 4),
+            HostExecutionOutcome.LoadFailure => ("load-failure", 5),
+            HostExecutionOutcome.AuditError => ("audit-error", 5),
+            HostExecutionOutcome.PublicationFailure => ("publication-failure", 5),
+            HostExecutionOutcome.Cancelled => ("cancelled", 6),
+            HostExecutionOutcome.Timeout => ("timeout", 7),
+            _ => (string.Empty, -1),
+        };
+        return exitCode >= 0;
     }
 
     private static (AuditCounts Counts, SortedDictionary<string, int> SkippedReasons)

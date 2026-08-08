@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace ContractScribe.Cli;
@@ -20,15 +22,14 @@ internal sealed class AuditSignalRegistration : IDisposable
             {
                 if (controlType is not (0u or 1u))
                 {
-                    return 0;
+                    return false;
                 }
                 CancelOnce();
-                return 1;
+                return true;
             };
-            if (SetConsoleCtrlHandler(windowsHandler, add: 1) == 0)
+            if (!SetConsoleCtrlHandler(windowsHandler, add: true))
             {
-                throw new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error());
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
             }
         }
         else
@@ -58,7 +59,9 @@ internal sealed class AuditSignalRegistration : IDisposable
         }
         if (windowsHandler is not null)
         {
-            _ = SetConsoleCtrlHandler(windowsHandler, add: 0);
+            var removed = SetConsoleCtrlHandler(windowsHandler, add: false);
+            Debug.Assert(removed, "The Windows console control handler was not removed.");
+            GC.KeepAlive(windowsHandler);
         }
         else
         {
@@ -82,11 +85,12 @@ internal sealed class AuditSignalRegistration : IDisposable
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate int ConsoleControlHandler(uint controlType);
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private delegate bool ConsoleControlHandler(uint controlType);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern int SetConsoleCtrlHandler(
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetConsoleCtrlHandler(
         ConsoleControlHandler handler,
-        int add);
-
+        [MarshalAs(UnmanagedType.Bool)] bool add);
 }

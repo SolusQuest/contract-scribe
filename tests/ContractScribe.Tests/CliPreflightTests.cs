@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using ContractScribe.Cli;
 
 namespace ContractScribe.Tests;
@@ -127,6 +128,113 @@ public sealed class CliPreflightTests
                 fixture.Root));
 
         Assert.Equal("cli.preflight.output-reparse", exception.Code);
+    }
+
+    [Fact]
+    public void Run_RejectsAUnixSocketAsAnInputRegularFile()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = new PreflightFixture();
+        var socketPath = Path.Join(fixture.Repository, "src", "service.csproj");
+        using var socket = new Socket(
+            AddressFamily.Unix,
+            SocketType.Stream,
+            ProtocolType.Unspecified);
+        socket.Bind(new UnixDomainSocketEndPoint(socketPath));
+
+        var exception = Assert.Throws<CliPreflightException>(() =>
+            CliPreflight.Run(
+                new AuditCommandArguments(
+                    "repo",
+                    "src/service.csproj",
+                    "policy.json",
+                    "outside/result.json"),
+                fixture.Root));
+
+        Assert.Equal("cli.preflight.input", exception.Code);
+    }
+
+    [Fact]
+    public void Run_RejectsAWindowsDeviceAsAnInputRegularFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new PreflightFixture();
+        var exception = Assert.Throws<CliPreflightException>(() =>
+            CliPreflight.Run(
+                new AuditCommandArguments(
+                    "repo",
+                    "src/NUL.csproj",
+                    "policy.json",
+                    "outside/result.json"),
+                fixture.Root));
+
+        Assert.Equal("cli.preflight.input", exception.Code);
+    }
+
+    [Fact]
+    public void Run_RejectsADanglingFinalOutputLinkWithoutFollowingIt()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = new PreflightFixture();
+        File.CreateSymbolicLink(
+            Path.Join(fixture.Outside, "result.json"),
+            Path.Join(fixture.Outside, "missing.json"));
+
+        var exception = Assert.Throws<CliPreflightException>(() =>
+            CliPreflight.Run(
+                new AuditCommandArguments(
+                    "repo",
+                    "src/App.CSPROJ",
+                    "policy.json",
+                    "outside/result.json"),
+                fixture.Root));
+
+        Assert.Equal("cli.preflight.output-reparse", exception.Code);
+    }
+
+    [Fact]
+    public void Run_SelectsEscapeBeforeAnInaccessibleOutsideDescendant()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = new PreflightFixture();
+        var denied = Path.Join(fixture.Outside, "denied");
+        Directory.CreateDirectory(denied);
+        File.SetUnixFileMode(denied, UnixFileMode.None);
+        try
+        {
+            var exception = Assert.Throws<CliPreflightException>(() =>
+                CliPreflight.Run(
+                    new AuditCommandArguments(
+                        "repo",
+                        "../outside/denied/missing.csproj",
+                        "policy.json",
+                        "outside/result.json"),
+                    fixture.Root));
+
+            Assert.Equal("cli.preflight.input-escape", exception.Code);
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                denied,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     private sealed class PreflightFixture : IDisposable

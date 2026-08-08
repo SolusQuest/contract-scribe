@@ -69,18 +69,19 @@ try
     _ = CloseHandle(process.Thread);
     try
     {
-        if (!int.TryParse(args[4], out var signalDelayMilliseconds)
-            || signalDelayMilliseconds < 1)
-        {
-            return 6;
-        }
         var started = Environment.TickCount64;
-        while (Environment.TickCount64 - started < signalDelayMilliseconds)
+        while (!File.Exists(args[4]))
         {
             if (WaitForSingleObject(process.Process, 0) == 0)
             {
-                Console.Error.WriteLine("CLI exited before the signal delay elapsed.");
+                Console.Error.WriteLine("CLI exited before the synchronization marker appeared.");
                 return 7;
+            }
+            if (Environment.TickCount64 - started >= 60000)
+            {
+                _ = TerminateProcess(process.Process, 0xffffffff);
+                Console.Error.WriteLine("The synchronization marker did not appear.");
+                return 6;
             }
             Thread.Sleep(50);
         }
@@ -92,6 +93,12 @@ try
             Console.Error.WriteLine(
                 $"GenerateConsoleCtrlEvent failed: {Marshal.GetLastWin32Error()}");
             return 8;
+        }
+        if (GenerateConsoleCtrlEvent(controlEvent, processGroup) == 0)
+        {
+            Console.Error.WriteLine(
+                $"Second GenerateConsoleCtrlEvent failed: {Marshal.GetLastWin32Error()}");
+            return 11;
         }
         if (WaitForSingleObject(process.Process, 30000) != 0)
         {

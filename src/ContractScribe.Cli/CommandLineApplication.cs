@@ -71,13 +71,26 @@ public static class CommandLineApplication
         TextWriter error) =>
         ExecuteAsync(args, output, error, installSignalHandlers: true);
 
+    internal static Task<int> ExecuteProcessAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        Action<IDisposable> retainHandledSignalRegistration) =>
+        ExecuteAsync(
+            args,
+            output,
+            error,
+            installSignalHandlers: true,
+            retainHandledSignalRegistration: retainHandledSignalRegistration);
+
     internal static async Task<int> ExecuteAsync(
         string[] args,
         TextWriter output,
         TextWriter error,
         bool installSignalHandlers,
         string? currentDirectory = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<IDisposable>? retainHandledSignalRegistration = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -146,15 +159,29 @@ public static class CommandLineApplication
         }
 
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var signals = installSignalHandlers
+        var signals = installSignalHandlers
             ? AuditSignalRegistration.Install(linkedCancellation)
             : null;
-        var auditResult = await AuditCommandRunner.RunAsync(
-            identity,
-            preflight,
-            linkedCancellation.Token).ConfigureAwait(false);
-        Write(auditResult, output, error);
-        return auditResult.ExitCode;
+        try
+        {
+            var auditResult = await AuditCommandRunner.RunAsync(
+                identity,
+                preflight,
+                linkedCancellation.Token).ConfigureAwait(false);
+            Write(auditResult, output, error);
+            if (auditResult.ExitCode == 6
+                && signals is not null
+                && retainHandledSignalRegistration is not null)
+            {
+                retainHandledSignalRegistration(signals);
+                signals = null;
+            }
+            return auditResult.ExitCode;
+        }
+        finally
+        {
+            signals?.Dispose();
+        }
     }
 
     private static void Write(CliExecutionResult result, TextWriter output, TextWriter error)

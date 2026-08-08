@@ -15,8 +15,8 @@ public sealed class CommandLineApplicationTests
     [InlineData("audit -h", "help-audit.txt")]
     public void Help_IsTheExactPinnedLfFixture(string? command, string fixture)
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
         var args = command?.Split(' ') ?? [];
 
         var exitCode = CommandLineApplication.Execute(args, output, error);
@@ -37,8 +37,8 @@ public sealed class CommandLineApplicationTests
     [Fact]
     public void Doctor_UsesOnlyTheAllowlistedDiagnosticFields()
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
 
         var exitCode = CommandLineApplication.Execute(["doctor"], output, error);
 
@@ -65,8 +65,8 @@ public sealed class CommandLineApplicationTests
     [Fact]
     public void Version_UsesExactRevisionBearingAssemblyMetadata()
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
 
         var exitCode = CommandLineApplication.Execute(["--version"], output, error);
 
@@ -89,8 +89,8 @@ public sealed class CommandLineApplicationTests
         string command,
         string code)
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
 
         var exitCode = CommandLineApplication.Execute(command.Split(' '), output, error);
 
@@ -104,8 +104,8 @@ public sealed class CommandLineApplicationTests
     [Fact]
     public void RecognizedAuditUsageFailure_WritesUsageEnvelope()
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
 
         var exitCode = CommandLineApplication.Execute(["audit"], output, error);
 

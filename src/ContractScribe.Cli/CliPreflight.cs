@@ -34,7 +34,8 @@ internal static class CliPreflight
                 throw Failure("cli.preflight.repository-root");
             }
             resolvedRoot = ResolveExistingPath(lexicalRoot);
-            if (!Directory.Exists(resolvedRoot))
+            if (FileSystemEntryClassifier.Classify(resolvedRoot)
+                != FileSystemEntryKind.Directory)
             {
                 throw Failure("cli.preflight.repository-root");
             }
@@ -54,7 +55,7 @@ internal static class CliPreflight
             resolvedRoot,
             "cli.preflight.input-escape",
             "cli.preflight.input");
-        if (!IsRegularFile(input)
+        if (!IsRegularFileNoFollow(input)
             || !InputExtensions.Contains(
                 Path.GetExtension(input),
                 StringComparer.OrdinalIgnoreCase))
@@ -68,7 +69,7 @@ internal static class CliPreflight
             resolvedRoot,
             "cli.preflight.policy-escape",
             "cli.preflight.policy");
-        if (!IsRegularFile(policy))
+        if (!IsRegularFileNoFollow(policy))
         {
             throw Failure("cli.preflight.policy");
         }
@@ -103,7 +104,7 @@ internal static class CliPreflight
             var lexical = Path.IsPathFullyQualified(value)
                 ? Path.GetFullPath(value)
                 : Path.GetFullPath(value, lexicalRoot);
-            var resolved = ResolveExistingPath(lexical);
+            var resolved = ResolveExistingPath(lexical, resolvedRoot, escapeCode);
             if (!IsContainedOrEqual(resolvedRoot, resolved))
             {
                 throw Failure(escapeCode);
@@ -153,65 +154,121 @@ internal static class CliPreflight
         {
             throw Failure("cli.preflight.output-parent");
         }
-        if (IsReparsePoint(final) || Directory.Exists(final))
+        if (!IsSafeOutputFinal(final))
         {
             throw Failure("cli.preflight.output-reparse");
         }
         return final;
     }
 
-    private static string ResolveExistingPath(string path)
+    private static string ResolveExistingPath(
+        string path,
+        string? confinementRoot = null,
+        string? escapeCode = null)
     {
-        var full = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(full)
-            ?? throw new ArgumentException("The path must have a root.", nameof(path));
-        var relative = full[root.Length..];
-        var segments = relative.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var current = root;
-
-        for (var index = 0; index < segments.Length; index++)
+        var pending = Path.GetFullPath(path);
+        var followedLinks = new HashSet<string>(PathComparer);
+        for (var linkCount = 0; ; linkCount++)
         {
-            var candidate = Path.Join(current, segments[index]);
-            FileSystemInfo? info = GetExistingInfo(candidate);
-            if (info is null)
+            if (linkCount > 63)
             {
-                for (; index < segments.Length; index++)
+                throw new IOException("Too many symbolic links were encountered.");
+            }
+            var root = Path.GetPathRoot(pending)
+                ?? throw new ArgumentException("The path must have a root.", nameof(path));
+            var segments = pending[root.Length..].Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            var current = root;
+            var followedLink = false;
+
+            for (var index = 0; index < segments.Length; index++)
+            {
+                var candidate = Path.Join(current, segments[index]);
+                FileSystemEntryKind kind;
+                try
                 {
-                    current = Path.Join(current, segments[index]);
+                    kind = FileSystemEntryClassifier.Classify(candidate);
                 }
-                return Path.GetFullPath(current);
+                catch (Exception exception) when (IsPathFailure(exception))
+                {
+                    kind = FileSystemEntryKind.Absent;
+                }
+
+                if (kind == FileSystemEntryKind.Absent
+                    || (kind == FileSystemEntryKind.Other && index < segments.Length - 1))
+                {
+                    for (; index < segments.Length; index++)
+                    {
+                        current = Path.Join(current, segments[index]);
+                    }
+                    return EnsureConfined(current, confinementRoot, escapeCode);
+                }
+                if (kind != FileSystemEntryKind.Link)
+                {
+                    current = candidate;
+                    continue;
+                }
+
+                var normalizedCandidate = Path.GetFullPath(candidate);
+                if (!followedLinks.Add(normalizedCandidate))
+                {
+                    throw new IOException("A symbolic-link cycle was encountered.");
+                }
+                var target = ResolveOneLink(candidate);
+                EnsureConfined(target, confinementRoot, escapeCode);
+                pending = Path.GetFullPath(Path.Join(
+                    target,
+                    Path.Join(segments[(index + 1)..])));
+                followedLink = true;
+                break;
             }
 
-            var target = info.ResolveLinkTarget(returnFinalTarget: true);
-            current = target?.FullName ?? info.FullName;
-        }
-        return Path.GetFullPath(current);
-    }
-
-    private static FileSystemInfo? GetExistingInfo(string path)
-    {
-        try
-        {
-            var attributes = File.GetAttributes(path);
-            return attributes.HasFlag(FileAttributes.Directory)
-                ? new DirectoryInfo(path)
-                : new FileInfo(path);
-        }
-        catch (Exception exception) when (IsPathFailure(exception))
-        {
-            return null;
+            if (!followedLink)
+            {
+                return EnsureConfined(current, confinementRoot, escapeCode);
+            }
         }
     }
 
-    private static bool IsRegularFile(string path)
+    private static string ResolveOneLink(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        FileSystemInfo info = attributes.HasFlag(FileAttributes.Directory)
+            ? new DirectoryInfo(path)
+            : new FileInfo(path);
+        var target = info.ResolveLinkTarget(returnFinalTarget: false);
+        if (target is null)
+        {
+            throw new IOException("A reparse point did not expose a link target.");
+        }
+        return Path.GetFullPath(target.FullName);
+    }
+
+    private static string EnsureConfined(
+        string path,
+        string? confinementRoot,
+        string? escapeCode)
+    {
+        var full = Path.GetFullPath(path);
+        if (confinementRoot is not null && !IsContainedOrEqual(confinementRoot, full))
+        {
+            throw Failure(escapeCode
+                ?? throw new InvalidOperationException("An escape code is required."));
+        }
+        return full;
+    }
+
+    private static StringComparer PathComparer => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
+    private static bool IsRegularFileNoFollow(string path)
     {
         try
         {
-            var attributes = File.GetAttributes(path);
-            return !attributes.HasFlag(FileAttributes.Directory)
-                && !attributes.HasFlag(FileAttributes.ReparsePoint);
+            return FileSystemEntryClassifier.Classify(path)
+                == FileSystemEntryKind.RegularFile;
         }
         catch (Exception exception) when (IsPathFailure(exception))
         {
@@ -219,15 +276,16 @@ internal static class CliPreflight
         }
     }
 
-    private static bool IsReparsePoint(string path)
+    private static bool IsSafeOutputFinal(string path)
     {
         try
         {
-            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+            return FileSystemEntryClassifier.Classify(path)
+                is FileSystemEntryKind.Absent or FileSystemEntryKind.RegularFile;
         }
         catch (Exception exception) when (IsPathFailure(exception))
         {
-            return exception is not (FileNotFoundException or DirectoryNotFoundException);
+            return false;
         }
     }
 
