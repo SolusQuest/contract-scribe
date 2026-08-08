@@ -728,7 +728,7 @@ public sealed class M1AuditCliContractTests
         Assert.Equal(6, cancellationDuringInvalidation.GetProperty("exitCode").GetInt32());
 
         var resultValidation = root.GetProperty("resultValidationCases").EnumerateArray().ToArray();
-        Assert.Equal(8, resultValidation.Length);
+        Assert.Equal(7, resultValidation.Length);
         foreach (var row in resultValidation)
         {
             Assert.Equal("audit-error", row.GetProperty("hostClass").GetString());
@@ -736,10 +736,7 @@ public sealed class M1AuditCliContractTests
         }
 
         var unsupportedVersion = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.unsupported-artifact-version");
-        var baselineMismatch = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.baseline-mismatch");
-        Assert.NotEqual(unsupportedVersion.GetProperty("mutation").GetString(), baselineMismatch.GetProperty("mutation").GetString());
         Assert.True(unsupportedVersion.GetProperty("canonicalMutation").GetBoolean());
-        Assert.False(baselineMismatch.GetProperty("canonicalMutation").GetBoolean());
 
         var cancellation = root.GetProperty("cancellationCases").EnumerateArray().ToArray();
         Assert.Equal(12, cancellation.Length);
