@@ -7,6 +7,13 @@ using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
+if (args is ["emit-streams", var streamMarker])
+{
+    Console.Out.Write($"{streamMarker}-child-out");
+    Console.Error.WriteLine($"{streamMarker}-child-error");
+    return 0;
+}
+
 if (args.Length < 3)
 {
     return 64;

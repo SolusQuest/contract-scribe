@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using System.Text;
@@ -40,27 +41,90 @@ public sealed class FixtureGenerator : IIncrementalGenerator
 #pragma warning restore RS1035
         });
 
-        var blockingMarkerPaths = context.AnalyzerConfigOptionsProvider.Select(
+        var blockingMarkers = context.AnalyzerConfigOptionsProvider.Select(
             static (options, _) =>
+            {
                 options.GlobalOptions.TryGetValue(
                     "build_property.ContractScribeTestGeneratorBlockingMarker",
-                    out var markerPath)
-                    ? markerPath
-                    : null);
-        context.RegisterSourceOutput(blockingMarkerPaths, static (output, markerPath) =>
+                    out var markerPath);
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorReleaseMarker",
+                    out var releasePath);
+                return (MarkerPath: markerPath, ReleasePath: releasePath);
+            });
+        context.RegisterSourceOutput(blockingMarkers, static (output, markers) =>
         {
 #pragma warning disable RS1035 // Test-only real production workspace-load timeout seam.
-            if (string.IsNullOrWhiteSpace(markerPath))
+            if (string.IsNullOrWhiteSpace(markers.MarkerPath))
             {
                 return;
             }
 
-            File.WriteAllText(markerPath, "generator-entered");
-            Thread.Sleep(TimeSpan.FromMinutes(3));
+            File.WriteAllText(markers.MarkerPath, "generator-entered");
+            while (string.IsNullOrWhiteSpace(markers.ReleasePath)
+                   || !File.Exists(markers.ReleasePath))
+            {
+                output.CancellationToken.ThrowIfCancellationRequested();
+                _ = output.CancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(10));
+            }
             output.AddSource(
                 "Fixture.Blocking.g.cs",
                 SourceText.From(
                     "public static class FixtureBlocking { }",
+                    Encoding.UTF8));
+#pragma warning restore RS1035
+        });
+
+        var consoleOutputSettings = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+            {
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorConsoleMarker",
+                    out var marker);
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorChildProgram",
+                    out var childProgram);
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorDotnetHost",
+                    out var dotnetHost);
+                return (Marker: marker, ChildProgram: childProgram, DotnetHost: dotnetHost);
+            });
+        context.RegisterSourceOutput(consoleOutputSettings, static (output, settings) =>
+        {
+#pragma warning disable RS1035 // Test-only process-stream isolation regression.
+            if (string.IsNullOrWhiteSpace(settings.Marker))
+            {
+                return;
+            }
+
+            Console.Out.Write($"{settings.Marker}-managed-out");
+            Console.Error.WriteLine($"{settings.Marker}-managed-error");
+            if (!string.IsNullOrWhiteSpace(settings.ChildProgram))
+            {
+                if (string.IsNullOrWhiteSpace(settings.DotnetHost))
+                {
+                    throw new InvalidOperationException("The dotnet host path is unavailable.");
+                }
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = settings.DotnetHost,
+                    Arguments = $"\"{settings.ChildProgram}\" emit-streams \"{settings.Marker}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var child = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("The stream-emitting child did not start.");
+                child.WaitForExit();
+                if (child.ExitCode != 0)
+                {
+                    throw new InvalidOperationException("The stream-emitting child failed.");
+                }
+            }
+
+            output.AddSource(
+                "Fixture.ConsoleOutput.g.cs",
+                SourceText.From(
+                    "public static class FixtureConsoleOutput { }",
                     Encoding.UTF8));
 #pragma warning restore RS1035
         });

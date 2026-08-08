@@ -1,6 +1,7 @@
 using System.Text;
 using ContractScribe.Cli;
 
+using var standardStreams = StandardStreamIsolation.Install();
 using var bufferedOutput = new StringWriter();
 using var bufferedError = new StringWriter();
 IDisposable? retainedSignals = null;
@@ -13,12 +14,12 @@ var exitCode = await CommandLineApplication.ExecuteProcessAsync(
 try
 {
     var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-    using var output = new StreamWriter(Console.OpenStandardOutput(), utf8)
+    using var output = new StreamWriter(standardStreams.OpenPresentationOutput(), utf8)
     {
         AutoFlush = true,
         NewLine = "\n",
     };
-    using var error = new StreamWriter(Console.OpenStandardError(), utf8)
+    using var error = new StreamWriter(standardStreams.OpenPresentationError(), utf8)
     {
         AutoFlush = true,
         NewLine = "\n",

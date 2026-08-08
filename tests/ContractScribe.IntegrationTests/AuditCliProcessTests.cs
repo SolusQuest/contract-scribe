@@ -289,48 +289,48 @@ public sealed class AuditCliProcessTests
     [Fact]
     public async Task SelectedToolchainPublicationFailure_IsARealProcessReturn()
     {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), OptionalPolicy);
+        await using var fixture = await CreateBlockingFixtureAsync();
         var outside = CreateOutsideDirectory();
         try
         {
             var output = Path.Join(outside, "result.json");
             var staging = Path.Join(outside, ".audit-result.json.contractscribe-stage");
-            var competitorWritten = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            using var watcher = new FileSystemWatcher(outside)
-            {
-                Filter = Path.GetFileName(staging),
-                NotifyFilter = NotifyFilters.FileName,
-                EnableRaisingEvents = true,
-            };
-            watcher.Created += (_, _) =>
-            {
-                try
-                {
-                    using var competitor = new FileStream(
-                        output,
-                        FileMode.CreateNew,
-                        FileAccess.Write,
-                        FileShare.Read);
-                    competitor.Write("competing-result"u8);
-                    competitor.Flush(flushToDisk: true);
-                    competitorWritten.TrySetResult();
-                }
-                catch (Exception exception)
-                {
-                    competitorWritten.TrySetException(exception);
-                }
-            };
-
-            var running = RunAsync(AuditArgs(
+            var release = Path.Join(
+                fixture.Root,
+                "App",
+                "obj",
+                "contracts-scribe-test",
+                "blocking-generator.release");
+            var marker = ConfigureBlockingGenerator(fixture, release);
+            await fixture.PrepareEditorConfigAsync();
+            var before = RepositoryInventory.Capture(fixture.Root, CancellationToken.None);
+            using var process = Start(AuditArgs(
                 fixture.Root,
                 "App/App.csproj",
                 "policy.json",
                 output));
-            await competitorWritten.Task.WaitAsync(TimeSpan.FromMinutes(1));
-            var result = await running;
+            CliProcessResult result;
+            try
+            {
+                await WaitForMarkerAsync(marker, process.Process, TimeSpan.FromMinutes(1));
+                Assert.False(File.Exists(output));
+                await File.WriteAllTextAsync(output, "competing-result");
+                await File.WriteAllTextAsync(release, "continue");
+                await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2));
+                result = await process.CompleteAsync();
+            }
+            finally
+            {
+                if (!process.Process.HasExited)
+                {
+                    process.Process.Kill(entireProcessTree: true);
+                    await process.Process.WaitForExitAsync();
+                }
+            }
 
+            Assert.True(
+                result.Stdout.Contains("publication-failure", StringComparison.Ordinal),
+                $"stdout={result.Stdout} stderr={result.Stderr} changed={string.Join(',', RepositoryInventory.ChangedPaths(before, RepositoryInventory.Capture(fixture.Root, CancellationToken.None)))}");
             AssertEnvelope(
                 result,
                 5,
@@ -590,7 +590,40 @@ public sealed class AuditCliProcessTests
     }
 
     [Fact]
-    public async Task TerminalCommit_RemainsAuthoritativeWhenStdoutBreaksAfterHostReturn()
+    public async Task RepositoryControlledManagedAndChildOutput_IsSuppressed()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync(withGenerator: true);
+        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), OptionalPolicy);
+        var marker = ConfigureConsoleOutputGenerator(fixture);
+        await fixture.PrepareEditorConfigAsync();
+        var before = RepositoryInventory.Capture(fixture.Root, CancellationToken.None);
+        var outside = CreateOutsideDirectory();
+        try
+        {
+            var output = Path.Join(outside, "result.json");
+            var result = await RunPublishedAsync(
+                AuditArgs(fixture.Root, "App/App.csproj", "policy.json", output),
+                output);
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"stdout={result.Stdout} stderr={result.Stderr} changed={string.Join(',', RepositoryInventory.ChangedPaths(before, RepositoryInventory.Capture(fixture.Root, CancellationToken.None)))}");
+            Assert.DoesNotContain(marker, result.Stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain(marker, result.Stderr, StringComparison.Ordinal);
+            AssertEnvelope(result, 0, "audit", "disposition", "compliant-with-skipped");
+            var artifact = Assert.IsType<byte[]>(result.PublishedOutput);
+            _ = AuditParser.Parse(artifact);
+            using var document = JsonDocument.Parse(artifact);
+            Assert.Equal(artifact, AuditResultCanonicalizer.Canonicalize(document.RootElement));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TerminalCommit_RemainsAuthoritativeWhenPresentationWriteFails()
     {
         await using (var success = await LoaderFixture.CreateAsync())
         {
@@ -599,10 +632,10 @@ public sealed class AuditCliProcessTests
             try
             {
                 var output = Path.Join(outside, "result.json");
-                var result = await RunWithClosedStdoutAsync(
+                var result = await RunWithBrokenStdoutAsync(
                     AuditArgs(success.Root, "App/App.csproj", "policy.json", output));
 
-                Assert.Equal(0, result.ExitCode);
+                AssertExternalAbnormalTermination(result.Termination);
                 var artifact = await File.ReadAllBytesAsync(output);
                 _ = AuditParser.Parse(artifact);
                 using var document = JsonDocument.Parse(artifact);
@@ -622,10 +655,10 @@ public sealed class AuditCliProcessTests
             {
                 var output = Path.Join(outside, "result.json");
                 await File.WriteAllTextAsync(output, "stale");
-                var result = await RunWithClosedStdoutAsync(
+                var result = await RunWithBrokenStdoutAsync(
                     AuditArgs(failure.Root, "App/App.csproj", "policy.json", output));
 
-                Assert.Equal(4, result.ExitCode);
+                AssertExternalAbnormalTermination(result.Termination);
                 Assert.Contains("host.input.invalid-request", result.Stderr, StringComparison.Ordinal);
                 Assert.False(File.Exists(output));
             }
@@ -716,9 +749,21 @@ public sealed class AuditCliProcessTests
         return fixture;
     }
 
-    private static string ConfigureBlockingGenerator(LoaderFixture fixture)
+    private static string ConfigureBlockingGenerator(
+        LoaderFixture fixture,
+        string? releaseMarker = null)
     {
-        var marker = Path.Join(fixture.Root, "blocking-generator.marker");
+        var markerDirectory = Path.Join(
+            fixture.Root,
+            "App",
+            "obj",
+            "contracts-scribe-test");
+        Directory.CreateDirectory(markerDirectory);
+        var marker = Path.Join(markerDirectory, "blocking-generator.marker");
+        var escapedMarker = System.Security.SecurityElement.Escape(marker);
+        var escapedRelease = releaseMarker is null
+            ? null
+            : System.Security.SecurityElement.Escape(releaseMarker);
         var projectPath = Path.Join(fixture.Root, "App", "App.csproj");
         var project = File.ReadAllText(projectPath);
         File.WriteAllText(
@@ -727,10 +772,45 @@ public sealed class AuditCliProcessTests
                 "</Project>",
                 $"""
                  <PropertyGroup>
-                   <ContractScribeTestGeneratorBlockingMarker>{marker}</ContractScribeTestGeneratorBlockingMarker>
+                   <ContractScribeTestGeneratorBlockingMarker>{escapedMarker}</ContractScribeTestGeneratorBlockingMarker>
+                   {(
+                       escapedRelease is null
+                           ? string.Empty
+                           : $"<ContractScribeTestGeneratorReleaseMarker>{escapedRelease}</ContractScribeTestGeneratorReleaseMarker>")}
                  </PropertyGroup>
                  <ItemGroup>
                    <CompilerVisibleProperty Include="ContractScribeTestGeneratorBlockingMarker" />
+                   {(
+                       releaseMarker is null
+                           ? string.Empty
+                           : "<CompilerVisibleProperty Include=\"ContractScribeTestGeneratorReleaseMarker\" />")}
+                 </ItemGroup>
+                 </Project>
+                 """,
+                StringComparison.Ordinal));
+        return marker;
+    }
+
+    private static string ConfigureConsoleOutputGenerator(LoaderFixture fixture)
+    {
+        var marker = "repository-stream-marker-" + Guid.NewGuid().ToString("N");
+        var dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        var projectPath = Path.Join(fixture.Root, "App", "App.csproj");
+        var project = File.ReadAllText(projectPath);
+        File.WriteAllText(
+            projectPath,
+            project.Replace(
+                "</Project>",
+                $"""
+                 <PropertyGroup>
+                   <ContractScribeTestGeneratorConsoleMarker>{marker}</ContractScribeTestGeneratorConsoleMarker>
+                   <ContractScribeTestGeneratorChildProgram>{System.Security.SecurityElement.Escape(LoaderProbePath)}</ContractScribeTestGeneratorChildProgram>
+                   <ContractScribeTestGeneratorDotnetHost>{System.Security.SecurityElement.Escape(dotnet)}</ContractScribeTestGeneratorDotnetHost>
+                 </PropertyGroup>
+                 <ItemGroup>
+                   <CompilerVisibleProperty Include="ContractScribeTestGeneratorConsoleMarker" />
+                   <CompilerVisibleProperty Include="ContractScribeTestGeneratorChildProgram" />
+                   <CompilerVisibleProperty Include="ContractScribeTestGeneratorDotnetHost" />
                  </ItemGroup>
                  </Project>
                  """,
@@ -1049,27 +1129,43 @@ public sealed class AuditCliProcessTests
         }
     }
 
-    private static async Task<CliProcessResult> RunWithClosedStdoutAsync(
+    private static async Task<BrokenStdoutResult> RunWithBrokenStdoutAsync(
         IReadOnlyList<string> arguments)
     {
-        using var process = Process.Start(CreateStartInfo(CliPath, arguments))
-            ?? throw new InvalidOperationException("CLI process failed to start.");
-        process.StandardOutput.Dispose();
-        var stderr = ReadAllBytesAsync(process.StandardError.BaseStream);
-        try
+        var dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        var harnessArguments = new List<string>
         {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2));
-        }
-        catch
+            "broken-stdout",
+            RepositoryRoot,
+            dotnet,
+            CliPath,
+        };
+        harnessArguments.AddRange(arguments);
+        var result = await RunProgramAsync(
+            SignalSenderPath,
+            harnessArguments,
+            TimeSpan.FromMinutes(3));
+        Assert.True(
+            result.ExitCode == 0,
+            $"The broken-stdout harness failed with {result.ExitCode}: {result.Stderr}");
+        return new BrokenStdoutResult(result.Stdout.Trim(), result.Stderr);
+    }
+
+    private static void AssertExternalAbnormalTermination(string termination)
+    {
+        if (termination.StartsWith("signal:", StringComparison.Ordinal))
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
-            throw;
+            Assert.True(
+                int.TryParse(termination["signal:".Length..], out var signal) && signal > 0,
+                $"Invalid signal termination: {termination}");
+            return;
         }
-        return new CliProcessResult(process.ExitCode, [], await stderr);
+
+        Assert.StartsWith("exit:", termination, StringComparison.Ordinal);
+        Assert.True(
+            int.TryParse(termination["exit:".Length..], out var exitCode),
+            $"Invalid exit termination: {termination}");
+        Assert.DoesNotContain(exitCode, Enumerable.Range(0, 8));
     }
 
     private static RunningProcess Start(IReadOnlyList<string> arguments) =>
@@ -1162,6 +1258,8 @@ public sealed class AuditCliProcessTests
         public string Stdout => StrictUtf8.GetString(StdoutBytes);
         public string Stderr => StrictUtf8.GetString(StderrBytes);
     }
+
+    private sealed record BrokenStdoutResult(string Termination, string Stderr);
 
     private sealed class RunningProcess(Process process) : IDisposable
     {
