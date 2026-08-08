@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-if (args.Length >= 4 && args[0] == "broken-stdout")
+if (args.Length >= 7 && args[0] == "broken-stdout")
 {
     return OperatingSystem.IsWindows()
         ? RunBrokenStdoutWindows(args)
@@ -170,7 +170,14 @@ static int RunBrokenStdoutWindows(string[] arguments)
         return 20;
     }
 
-    _ = CloseHandle(brokenRead);
+    if (SetHandleInformation(brokenRead, 0x00000001, 0) == 0)
+    {
+        _ = CloseHandle(brokenRead);
+        _ = CloseHandle(brokenWrite);
+        Console.Error.WriteLine($"SetHandleInformation failed: {Marshal.GetLastWin32Error()}");
+        return 26;
+    }
+
     var input = CreateFile(
         "NUL",
         0x80000000,
@@ -181,6 +188,7 @@ static int RunBrokenStdoutWindows(string[] arguments)
         IntPtr.Zero);
     if (input == new IntPtr(-1))
     {
+        _ = CloseHandle(brokenRead);
         _ = CloseHandle(brokenWrite);
         Console.Error.WriteLine($"Opening NUL failed: {Marshal.GetLastWin32Error()}");
         return 21;
@@ -197,15 +205,16 @@ static int RunBrokenStdoutWindows(string[] arguments)
             0x00000002) == 0)
     {
         _ = CloseHandle(input);
+        _ = CloseHandle(brokenRead);
         _ = CloseHandle(brokenWrite);
         Console.Error.WriteLine($"Duplicating stderr failed: {Marshal.GetLastWin32Error()}");
         return 22;
     }
 
     var commandLine = new StringBuilder();
-    for (var index = 2; index < arguments.Length; index++)
+    for (var index = 5; index < arguments.Length; index++)
     {
-        if (index > 2)
+        if (index > 5)
         {
             commandLine.Append(' ');
         }
@@ -236,6 +245,7 @@ static int RunBrokenStdoutWindows(string[] arguments)
     _ = CloseHandle(brokenWrite);
     if (created == 0)
     {
+        _ = CloseHandle(brokenRead);
         Console.Error.WriteLine($"CreateProcess failed: {Marshal.GetLastWin32Error()}");
         return 23;
     }
@@ -243,6 +253,33 @@ static int RunBrokenStdoutWindows(string[] arguments)
     _ = CloseHandle(process.Thread);
     try
     {
+        var markerStarted = Environment.TickCount64;
+        while (!File.Exists(arguments[2]))
+        {
+            if (WaitForSingleObject(process.Process, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "The broken-stdout child exited before the synchronization marker appeared.");
+                return 27;
+            }
+            if (Environment.TickCount64 - markerStarted >= 60000)
+            {
+                _ = TerminateProcess(process.Process, 0xffffffff);
+                Console.Error.WriteLine("The broken-stdout synchronization marker did not appear.");
+                return 28;
+            }
+
+            Thread.Sleep(10);
+        }
+
+        if (arguments[4] != "-")
+        {
+            File.WriteAllText(arguments[4], "competing-result");
+        }
+        _ = CloseHandle(brokenRead);
+        brokenRead = IntPtr.Zero;
+        File.WriteAllText(arguments[3], "continue");
+
         if (WaitForSingleObject(process.Process, 120000) != 0)
         {
             _ = TerminateProcess(process.Process, 0xffffffff);
@@ -260,20 +297,27 @@ static int RunBrokenStdoutWindows(string[] arguments)
     }
     finally
     {
+        if (brokenRead != IntPtr.Zero)
+        {
+            _ = CloseHandle(brokenRead);
+        }
         _ = CloseHandle(process.Process);
     }
 }
 
 static int RunBrokenStdoutUnix(string[] arguments)
 {
-    var nativeArguments = new IntPtr[arguments.Length - 2];
+    var nativeArguments = new IntPtr[arguments.Length - 5];
     var argumentVector = IntPtr.Zero;
     var currentDirectory = IntPtr.Zero;
+    var retainedRead = -1;
+    var child = -1;
+    var childReaped = false;
     try
     {
         for (var index = 0; index < nativeArguments.Length; index++)
         {
-            nativeArguments[index] = Marshal.StringToCoTaskMemUTF8(arguments[index + 2]);
+            nativeArguments[index] = Marshal.StringToCoTaskMemUTF8(arguments[index + 5]);
         }
 
         argumentVector = Marshal.AllocHGlobal((nativeArguments.Length + 1) * IntPtr.Size);
@@ -291,7 +335,7 @@ static int RunBrokenStdoutUnix(string[] arguments)
             return 30;
         }
 
-        var child = UnixFork();
+        child = UnixFork();
         if (child == 0)
         {
             _ = UnixClose(pipe[0]);
@@ -312,14 +356,59 @@ static int RunBrokenStdoutUnix(string[] arguments)
             return 31;
         }
 
-        _ = UnixClose(pipe[0]);
+        retainedRead = pipe[0];
         _ = UnixClose(pipe[1]);
-        var started = Environment.TickCount64;
+        var markerStarted = Environment.TickCount64;
+        while (!File.Exists(arguments[2]))
+        {
+            var waited = UnixWaitPid(child, out _, 1);
+            if (waited == child)
+            {
+                childReaped = true;
+                Console.Error.WriteLine(
+                    "The broken-stdout child exited before the synchronization marker appeared.");
+                return 34;
+            }
+            if (waited < 0)
+            {
+                var waitError = Marshal.GetLastWin32Error();
+                if (waitError == 4)
+                {
+                    continue;
+                }
+                _ = UnixKill(child, 9);
+                _ = UnixWaitPid(child, out _, 0);
+                childReaped = true;
+                Console.Error.WriteLine($"waitpid failed before synchronization: {waitError}");
+                return 35;
+            }
+            if (Environment.TickCount64 - markerStarted >= 60000)
+            {
+                _ = UnixKill(child, 9);
+                _ = UnixWaitPid(child, out _, 0);
+                childReaped = true;
+                Console.Error.WriteLine("The broken-stdout synchronization marker did not appear.");
+                return 36;
+            }
+
+            Thread.Sleep(10);
+        }
+
+        if (arguments[4] != "-")
+        {
+            File.WriteAllText(arguments[4], "competing-result");
+        }
+        _ = UnixClose(retainedRead);
+        retainedRead = -1;
+        File.WriteAllText(arguments[3], "continue");
+
+        var exitStarted = Environment.TickCount64;
         while (true)
         {
             var waited = UnixWaitPid(child, out var status, 1);
             if (waited == child)
             {
+                childReaped = true;
                 var signal = status & 0x7f;
                 if (signal == 0)
                 {
@@ -340,13 +429,15 @@ static int RunBrokenStdoutUnix(string[] arguments)
                 }
                 _ = UnixKill(child, 9);
                 _ = UnixWaitPid(child, out _, 0);
+                childReaped = true;
                 Console.Error.WriteLine($"waitpid failed: {waitError}");
                 return 32;
             }
-            if (Environment.TickCount64 - started >= 120000)
+            if (Environment.TickCount64 - exitStarted >= 120000)
             {
                 _ = UnixKill(child, 9);
                 _ = UnixWaitPid(child, out _, 0);
+                childReaped = true;
                 Console.Error.WriteLine("The broken-stdout child did not exit.");
                 return 33;
             }
@@ -356,6 +447,15 @@ static int RunBrokenStdoutUnix(string[] arguments)
     }
     finally
     {
+        if (retainedRead >= 0)
+        {
+            _ = UnixClose(retainedRead);
+        }
+        if (child > 0 && !childReaped)
+        {
+            _ = UnixKill(child, 9);
+            _ = UnixWaitPid(child, out _, 0);
+        }
         foreach (var nativeArgument in nativeArguments)
         {
             Marshal.FreeCoTaskMem(nativeArgument);
@@ -408,6 +508,9 @@ static extern int CreatePipe(
     out IntPtr writePipe,
     ref SecurityAttributes attributes,
     uint size);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern int SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
 [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode)]
 static extern IntPtr CreateFile(

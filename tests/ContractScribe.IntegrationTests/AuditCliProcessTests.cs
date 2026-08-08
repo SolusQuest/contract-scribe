@@ -625,15 +625,20 @@ public sealed class AuditCliProcessTests
     [Fact]
     public async Task TerminalCommit_RemainsAuthoritativeWhenPresentationWriteFails()
     {
-        await using (var success = await LoaderFixture.CreateAsync())
+        await using (var success = await CreateBlockingFixtureAsync())
         {
-            await File.WriteAllTextAsync(Path.Join(success.Root, "policy.json"), OptionalPolicy);
+            var release = BlockingGeneratorReleasePath(success);
+            var marker = ConfigureBlockingGenerator(success, release);
+            await success.PrepareEditorConfigAsync();
             var outside = CreateOutsideDirectory();
             try
             {
                 var output = Path.Join(outside, "result.json");
                 var result = await RunWithBrokenStdoutAsync(
-                    AuditArgs(success.Root, "App/App.csproj", "policy.json", output));
+                    AuditArgs(success.Root, "App/App.csproj", "policy.json", output),
+                    marker,
+                    release,
+                    competingOutput: null);
 
                 AssertExternalAbnormalTermination(result.Termination);
                 var artifact = await File.ReadAllBytesAsync(output);
@@ -647,20 +652,27 @@ public sealed class AuditCliProcessTests
             }
         }
 
-        await using (var failure = await LoaderFixture.CreateAsync())
+        await using (var failure = await CreateBlockingFixtureAsync())
         {
-            await File.WriteAllTextAsync(Path.Join(failure.Root, "policy.json"), "{}\n");
+            var release = BlockingGeneratorReleasePath(failure);
+            var marker = ConfigureBlockingGenerator(failure, release);
+            await failure.PrepareEditorConfigAsync();
             var outside = CreateOutsideDirectory();
             try
             {
                 var output = Path.Join(outside, "result.json");
-                await File.WriteAllTextAsync(output, "stale");
                 var result = await RunWithBrokenStdoutAsync(
-                    AuditArgs(failure.Root, "App/App.csproj", "policy.json", output));
+                    AuditArgs(failure.Root, "App/App.csproj", "policy.json", output),
+                    marker,
+                    release,
+                    competingOutput: output);
 
                 AssertExternalAbnormalTermination(result.Termination);
-                Assert.Contains("host.input.invalid-request", result.Stderr, StringComparison.Ordinal);
-                Assert.False(File.Exists(output));
+                Assert.Contains(
+                    "host.publication.finalization-failed",
+                    result.Stderr,
+                    StringComparison.Ordinal);
+                Assert.Equal("competing-result", await File.ReadAllTextAsync(output));
             }
             finally
             {
@@ -748,6 +760,14 @@ public sealed class AuditCliProcessTests
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), OptionalPolicy);
         return fixture;
     }
+
+    private static string BlockingGeneratorReleasePath(LoaderFixture fixture) =>
+        Path.Join(
+            fixture.Root,
+            "App",
+            "obj",
+            "contracts-scribe-test",
+            "blocking-generator.release");
 
     private static string ConfigureBlockingGenerator(
         LoaderFixture fixture,
@@ -1130,13 +1150,19 @@ public sealed class AuditCliProcessTests
     }
 
     private static async Task<BrokenStdoutResult> RunWithBrokenStdoutAsync(
-        IReadOnlyList<string> arguments)
+        IReadOnlyList<string> arguments,
+        string marker,
+        string release,
+        string? competingOutput)
     {
         var dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
         var harnessArguments = new List<string>
         {
             "broken-stdout",
             RepositoryRoot,
+            marker,
+            release,
+            competingOutput ?? "-",
             dotnet,
             CliPath,
         };
