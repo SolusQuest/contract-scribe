@@ -40,6 +40,31 @@ public sealed class FixtureGenerator : IIncrementalGenerator
 #pragma warning restore RS1035
         });
 
+        var blockingMarkerPaths = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorBlockingMarker",
+                    out var markerPath)
+                    ? markerPath
+                    : null);
+        context.RegisterSourceOutput(blockingMarkerPaths, static (output, markerPath) =>
+        {
+#pragma warning disable RS1035 // Test-only real production workspace-load timeout seam.
+            if (string.IsNullOrWhiteSpace(markerPath))
+            {
+                return;
+            }
+
+            File.WriteAllText(markerPath, "generator-entered");
+            Thread.Sleep(TimeSpan.FromMinutes(3));
+            output.AddSource(
+                "Fixture.Blocking.g.cs",
+                SourceText.From(
+                    "public static class FixtureBlocking { }",
+                    Encoding.UTF8));
+#pragma warning restore RS1035
+        });
+
         var selfObservingEnabled = context.AnalyzerConfigOptionsProvider.Select(
             static (options, _) =>
                 options.GlobalOptions.TryGetValue(

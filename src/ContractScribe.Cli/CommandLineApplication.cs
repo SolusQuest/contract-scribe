@@ -5,10 +5,50 @@ using ContractScribe.Core;
 namespace ContractScribe.Cli;
 
 /// <summary>
-/// Implements the intentionally narrow bootstrap command surface.
+/// Implements the closed ContractScribe command surface.
 /// </summary>
 public static class CommandLineApplication
 {
+    private const string TopLevelHelp =
+        "ContractScribe CLI\n" +
+        "\n" +
+        "Usage:\n" +
+        "  contract-scribe [--help | --version | doctor]\n" +
+        "  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>\n" +
+        "\n" +
+        "Commands:\n" +
+        "  audit       Run the deterministic XML documentation audit.\n" +
+        "  doctor      Print an allowlisted local runtime diagnostic without network or credential access.\n" +
+        "\n" +
+        "Options:\n" +
+        "  -h, --help      Print this help.\n" +
+        "  -v, --version   Print the tool version.\n";
+
+    private const string AuditHelp =
+        "ContractScribe audit\n" +
+        "\n" +
+        "Usage:\n" +
+        "  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>\n" +
+        "\n" +
+        "Options:\n" +
+        "  --repository-root <path>  Repository root directory. Must exist.\n" +
+        "  --input <path>            Audit input (.sln, .slnx, or .csproj). Must resolve inside the repository root.\n" +
+        "  --policy <path>           Policy configuration file. Must resolve inside the repository root.\n" +
+        "  --output <path>           Audit result file. Must resolve outside the repository root.\n" +
+        "  -h, --help                Print this help.\n" +
+        "\n" +
+        "All four path options are required, take exactly one value, and may appear in any order. Both \"--option value\" and \"--option=value\" forms are accepted.\n" +
+        "\n" +
+        "Exit codes:\n" +
+        "  0  No violations (also help, version, and doctor).\n" +
+        "  1  Documentation violations found.\n" +
+        "  2  Invalid command-line usage.\n" +
+        "  3  No audit judgments (no results, or every result skipped).\n" +
+        "  4  Invalid input or unavailable environment.\n" +
+        "  5  Load, audit, or publication failure.\n" +
+        "  6  Cancelled.\n" +
+        "  7  Timeout.\n";
+
     /// <summary>
     /// Gets the informational version from the command-line assembly metadata.
     /// </summary>
@@ -17,65 +57,130 @@ public static class CommandLineApplication
     /// <summary>
     /// Executes a supported command and writes only its documented output.
     /// </summary>
-    public static int Execute(string[] args, TextWriter output, TextWriter error)
+    public static int Execute(string[] args, TextWriter output, TextWriter error) =>
+        ExecuteAsync(args, output, error, installSignalHandlers: false)
+            .GetAwaiter()
+            .GetResult();
+
+    /// <summary>
+    /// Executes the process command surface, including audit-only signal handling.
+    /// </summary>
+    public static Task<int> ExecuteProcessAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error) =>
+        ExecuteAsync(args, output, error, installSignalHandlers: true);
+
+    internal static async Task<int> ExecuteAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        bool installSignalHandlers,
+        string? currentDirectory = null,
+        CancellationToken cancellationToken = default)
     {
-        if (args.Length > 1)
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(error);
+
+        if (args.Length == 0)
         {
-            return ShowUnknownCommand(string.Join(' ', args), error);
+            output.Write(TopLevelHelp);
+            return 0;
         }
 
-        var command = args.SingleOrDefault();
-        return command switch
+        if (args.Length == 1)
         {
-            null or "--help" or "-h" => ShowHelp(output),
-            "--version" or "-v" => ShowVersion(output),
-            "doctor" => ShowDoctor(output),
-            _ => ShowUnknownCommand(command, error),
-        };
+            switch (args[0])
+            {
+                case "--help":
+                case "-h":
+                    output.Write(TopLevelHelp);
+                    return 0;
+                case "--version":
+                case "-v":
+                    output.Write($"{ProductInfo.Name} {ApplicationVersion}\n");
+                    return 0;
+                case "doctor":
+                    WriteDoctor(output);
+                    return 0;
+            }
+        }
+
+        if (!string.Equals(args[0], "audit", StringComparison.Ordinal))
+        {
+            var code = args[0] is "--help" or "-h" or "--version" or "-v" or "doctor"
+                ? "cli.usage.forbidden-combination"
+                : "cli.usage.unknown-command";
+            CliDiagnostics.Write(error, code);
+            return 2;
+        }
+
+        if (args.Length == 2 && args[1] is "--help" or "-h")
+        {
+            output.Write(AuditHelp);
+            return 0;
+        }
+
+        var identity = CliBuildIdentity.Current;
+        var parsed = AuditCommandParser.Parse(args.AsSpan(1));
+        if (parsed.Failure is not null)
+        {
+            var result = CliPresentation.Usage(identity, parsed.Failure);
+            Write(result, output, error);
+            return result.ExitCode;
+        }
+
+        CliPreflightResult preflight;
+        try
+        {
+            preflight = CliPreflight.Run(
+                parsed.Arguments!,
+                currentDirectory ?? Environment.CurrentDirectory);
+        }
+        catch (CliPreflightException exception)
+        {
+            var result = CliPresentation.Preflight(identity, exception.Code);
+            Write(result, output, error);
+            return result.ExitCode;
+        }
+
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var signals = installSignalHandlers
+            ? AuditSignalRegistration.Install(linkedCancellation)
+            : null;
+        var auditResult = await AuditCommandRunner.RunAsync(
+            identity,
+            preflight,
+            linkedCancellation.Token).ConfigureAwait(false);
+        Write(auditResult, output, error);
+        return auditResult.ExitCode;
     }
 
-    private static int ShowHelp(TextWriter output)
+    private static void Write(CliExecutionResult result, TextWriter output, TextWriter error)
     {
-        output.WriteLine("ContractScribe bootstrap CLI");
-        output.WriteLine();
-        output.WriteLine("Usage:");
-        output.WriteLine("  contract-scribe [--help | --version | doctor]");
-        output.WriteLine();
-        output.WriteLine("Commands:");
-        output.WriteLine("  doctor      Print an allowlisted local runtime diagnostic without network or credential access.");
-        return 0;
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            error.Write(diagnostic.ToLine());
+        }
+        output.Write(result.StandardOutput);
     }
 
-    private static int ShowVersion(TextWriter output)
+    private static void WriteDoctor(TextWriter output)
     {
-        output.WriteLine($"{ProductInfo.Name} {ApplicationVersion}");
-        return 0;
+        output.Write($"application_version: {ApplicationVersion}\n");
+        output.Write($"runtime_description: {RuntimeInformation.FrameworkDescription}\n");
+        output.Write($"process_architecture: {RuntimeInformation.ProcessArchitecture}\n");
+        output.Write($"runtime_identifier: {RuntimeInformation.RuntimeIdentifier}\n");
+        output.Write("network_access: not performed\n");
+        output.Write("credential_access: not performed\n");
     }
 
-    private static int ShowDoctor(TextWriter output)
-    {
-        output.WriteLine($"application_version: {ApplicationVersion}");
-        output.WriteLine($"runtime_description: {RuntimeInformation.FrameworkDescription}");
-        output.WriteLine($"process_architecture: {RuntimeInformation.ProcessArchitecture}");
-        output.WriteLine($"runtime_identifier: {RuntimeInformation.RuntimeIdentifier}");
-        output.WriteLine("network_access: not performed");
-        output.WriteLine("credential_access: not performed");
-        return 0;
-    }
-
-    private static int ShowUnknownCommand(string command, TextWriter error)
-    {
-        error.WriteLine($"Unknown command: {command}");
-        error.WriteLine("Run 'contract-scribe --help' for usage.");
-        return 2;
-    }
-
-    private static string GetApplicationVersion()
-    {
-        return typeof(CommandLineApplication)
+    private static string GetApplicationVersion() =>
+        typeof(CommandLineApplication)
             .Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion
-            ?? throw new InvalidOperationException("The CLI assembly must define an informational version.");
-    }
+        ?? throw new InvalidOperationException(
+            "The CLI assembly must define an informational version.");
 }

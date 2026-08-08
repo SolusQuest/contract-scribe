@@ -115,7 +115,7 @@ Deliver a production read-only audit host and CLI that load an explicit C# proje
 - ContractScribe does not modify source or project files.
 - Failure, cancellation, diagnostics, stale-output invalidation, and atomic publication behavior are executable.
 - CLI contract, implementation, and integration validation are complete.
-- The validated source/toolchain baseline succeeds on the required matrix.
+- Ordinary CI succeeds on the exact Host/CLI revision consumed by the next step, and the independent smoke records only its bounded attestation.
 - An independent real-world or private downstream repository completes a read-only smoke with only a bounded sanitized attestation published upstream.
 
 ### Non-goals

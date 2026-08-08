@@ -38,6 +38,7 @@ internal sealed class AtomicResultPublisher : IDisposable
         {
             parent = StablePublicationDirectory.Open(target.ParentPath);
             var publisher = new AtomicResultPublisher(target, parent, controls);
+            controls.BeforeInvalidation?.Invoke();
             publisher.DeleteSafeEntry(Path.GetFileName(target.FinalPath), "invalidate-existing");
             publisher.DeleteSafeEntry(StagingFileName, "cleanup-staging");
             publisher.parent.RebindPath();

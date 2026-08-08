@@ -31,6 +31,32 @@ internal sealed class ProductionAuditHost
         var coordinator = new HostTerminalCoordinator();
         var toolchain = HostToolchainFact.NotSelected;
         LoaderFact? loaderFact = null;
+
+        void RegisterInterruption(HostExecutionOutcome outcome)
+        {
+            if (coordinator.TryAcceptCause(
+                    (acceptedStage, acceptedToolchain, acceptedSequence) =>
+                    {
+                        var suffix = outcome == HostExecutionOutcome.Cancelled
+                            ? "cancelled"
+                            : "timeout";
+                        return CreateFailureRecord(
+                            coordinator,
+                            actualProvenance,
+                            acceptedToolchain,
+                            $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
+                            HostArtifactState.Invalidated,
+                            acceptedSequence: acceptedSequence);
+                    },
+                    out var accepted))
+            {
+                controls.AfterCauseAccepted?.Invoke(accepted);
+            }
+        }
+
+        coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
+        using var callerCauseRegistration = cancellationToken.Register(
+            () => RegisterInterruption(HostExecutionOutcome.Cancelled));
         AtomicResultPublisher publisher;
         try
         {
@@ -56,6 +82,20 @@ internal sealed class ProductionAuditHost
 
         using (publisher)
         {
+            if (coordinator.RegisteredCause is not null)
+            {
+                return await CommitFailureAsync(
+                    coordinator,
+                    actualProvenance,
+                    toolchain,
+                    "host.publication.cancelled",
+                    HostArtifactState.Invalidated,
+                    controls,
+                    transitions,
+                    loaderFact).ConfigureAwait(false);
+            }
+
+            coordinator.TransitionExecutionState(HostStage.Input, toolchain);
 
             using var meter = new TemporaryDiskMeter(
                 request.AuditTemporaryRoot,
@@ -69,30 +109,6 @@ internal sealed class ProductionAuditHost
                 totalDeadline.Token);
             var totalToken = totalTimeout.Token;
 
-            void RegisterInterruption(HostExecutionOutcome outcome)
-            {
-                if (coordinator.TryAcceptCause(
-                        (acceptedStage, acceptedToolchain, acceptedSequence) =>
-                        {
-                            var suffix = outcome == HostExecutionOutcome.Cancelled
-                                ? "cancelled"
-                                : "timeout";
-                            return CreateFailureRecord(
-                                coordinator,
-                                actualProvenance,
-                                acceptedToolchain,
-                                $"host.{HostVocabulary.GetId(acceptedStage)}.{suffix}",
-                                HostArtifactState.Invalidated,
-                                acceptedSequence: acceptedSequence);
-                        },
-                        out var accepted))
-                {
-                    controls.AfterCauseAccepted?.Invoke(accepted);
-                }
-            }
-
-            using var callerCauseRegistration = cancellationToken.Register(
-                () => RegisterInterruption(HostExecutionOutcome.Cancelled));
             using var totalCauseRegistration = totalDeadline.Token.Register(
                 () => RegisterInterruption(HostExecutionOutcome.Timeout));
 

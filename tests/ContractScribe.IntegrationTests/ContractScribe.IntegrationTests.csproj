@@ -25,6 +25,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Cli/ContractScribe.Cli.csproj"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ContractScribe.ConsoleSignalSender/ContractScribe.ConsoleSignalSender.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.TestGenerator/ContractScribe.TestGenerator.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
