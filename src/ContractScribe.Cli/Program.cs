@@ -30,5 +30,15 @@ try
 }
 finally
 {
-    retainedSignals?.Dispose();
+    if (exitCode == 6)
+    {
+        // A repeated control event may already be queued after the first handled
+        // signal. Keep the handler rooted until process termination so that the
+        // selected cancellation class cannot be escalated by that late delivery.
+        GC.KeepAlive(retainedSignals);
+    }
+    else
+    {
+        retainedSignals?.Dispose();
+    }
 }
