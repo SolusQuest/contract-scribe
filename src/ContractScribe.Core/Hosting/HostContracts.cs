@@ -118,53 +118,13 @@ public sealed record HostBuildProvenance
     private static readonly Regex RevisionPattern = new(
         "^[0-9a-f]{40}$",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-    private static readonly Regex SourcePattern = new(
-        "^source\\.[0-9a-f]{64}$",
-        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-
-    public HostBuildProvenance(
-        string sourceRevision,
-        string sourceConfigurationId,
-        string buildSdkVersion,
-        string contractBaselineSha256,
-        string failureRegistrySha256,
-        string calibratedBoundsSha256)
+    public HostBuildProvenance(string sourceRevision)
     {
         Require(RevisionPattern.IsMatch(sourceRevision), nameof(sourceRevision));
-        Require(SourcePattern.IsMatch(sourceConfigurationId), nameof(sourceConfigurationId));
-        Require(IsSdkVersion(buildSdkVersion), nameof(buildSdkVersion));
-        Require(IsSha256(contractBaselineSha256), nameof(contractBaselineSha256));
-        Require(IsSha256(failureRegistrySha256), nameof(failureRegistrySha256));
-        Require(IsSha256(calibratedBoundsSha256), nameof(calibratedBoundsSha256));
         SourceRevision = sourceRevision;
-        SourceConfigurationId = sourceConfigurationId;
-        BuildSdkVersion = buildSdkVersion;
-        ContractBaselineSha256 = contractBaselineSha256;
-        FailureRegistrySha256 = failureRegistrySha256;
-        CalibratedBoundsSha256 = calibratedBoundsSha256;
     }
 
     public string SourceRevision { get; }
-
-    public string SourceConfigurationId { get; }
-
-    public string BuildSdkVersion { get; }
-
-    public string ContractBaselineSha256 { get; }
-
-    public string FailureRegistrySha256 { get; }
-
-    public string CalibratedBoundsSha256 { get; }
-
-    private static bool IsSdkVersion(string value) =>
-        Version.TryParse(value, out var parsed)
-        && parsed.Revision < 0
-        && parsed.Build >= 0
-        && value.All(character => char.IsAsciiDigit(character) || character == '.');
-
-    private static bool IsSha256(string value) =>
-        value.Length == 64
-        && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static void Require(bool condition, string parameter)
     {

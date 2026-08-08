@@ -34,7 +34,7 @@ public sealed class SymbolEvidenceTaxonomyContractTests
             FindRepositoryRoot(),
             "tests",
             "fixtures",
-            "m1-contract-baseline",
+            "symbol-evidence-taxonomy",
             "v1",
             "classification-origin-skip-vectors.json")));
         var rows = matrix.RootElement.GetProperty("cases").EnumerateArray()

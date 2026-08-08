@@ -1,6 +1,6 @@
 # M1 host-validation protocol
 
-> **Status:** Historical Issue #26/#57 design and defective current-tree implementation assigned to Issue #75. Its protected inputs, locks, bundle/review identities, evidence schemas, manifests, self-test, aggregation, publication, and certification lifecycle are not current pre-release requirements and must not be repaired, refreshed, or used to authorize execution. PR #77 removes its dedicated exact-bundle tests from ordinary test authority. Issue #75 deletes or collapses the remaining machinery into the production-focused validation defined by the current M1 plan; retain only product behavior and focused tests that protect a concrete current failure.
+> **Status:** Historical Issue #26/#57 design only. PR #77 removed its ordinary-test and CI authority, and Issue #75 removed its executable current-tree harness, protected inputs, locks, bundle/review identities, evidence schemas, manifests, self-test, aggregation, publication, and certification lifecycle. The protocol below remains readable history for the pre-removal tree at [`71f324c`](https://github.com/SolusQuest/contract-scribe/tree/71f324c5542a3bc1a4ec0a6d9d8fea5603c0e5ba); it must not be repaired, refreshed, or used to authorize current execution.
 
 ## Status and ownership
 

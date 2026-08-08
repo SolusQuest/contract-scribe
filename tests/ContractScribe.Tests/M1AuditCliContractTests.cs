@@ -45,14 +45,14 @@ public sealed class M1AuditCliContractTests
     ];
 
     private static readonly string[] CommonEnvelopeFields = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes"];
-    private static readonly string[] HostProvenanceFields = ["terminalState", "auditContractBaseline", "sourceRevision", "toolchain", "executionClass", "disposition", "counts", "resultDigest", "outputCommit"];
+    private static readonly string[] HostProvenanceFields = ["terminalState", "sourceRevision", "toolchain", "executionClass", "disposition", "counts", "resultDigest", "outputCommit"];
 
     private static readonly IReadOnlyDictionary<string, string[]> EnvelopeFieldOrder = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
         ["usage"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "usageClass"],
         ["preflight"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "executionClass"],
-        ["execution"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "terminalState", "auditContractBaseline", "sourceRevision", "toolchain", "executionClass"],
-        ["audit"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "terminalState", "auditContractBaseline", "sourceRevision", "toolchain", "disposition", "counts", "resultDigest", "outputCommit"],
+        ["execution"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "terminalState", "sourceRevision", "toolchain", "executionClass"],
+        ["audit"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes", "terminalState", "sourceRevision", "toolchain", "disposition", "counts", "resultDigest", "outputCommit"],
         ["host-contract-error"] = ["envelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion", "diagnosticCodes"]
     };
 
@@ -61,8 +61,8 @@ public sealed class M1AuditCliContractTests
         ["usage"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
         ["preflight"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
         ["host-contract-error"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}"],
-        ["execution"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
-        ["audit"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+        ["execution"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
+        ["audit"] = ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     };
 
     private static readonly IReadOnlyDictionary<string, int?> ExpectedExitCodes = new Dictionary<string, int?>(StringComparer.Ordinal)
@@ -728,7 +728,7 @@ public sealed class M1AuditCliContractTests
         Assert.Equal(6, cancellationDuringInvalidation.GetProperty("exitCode").GetInt32());
 
         var resultValidation = root.GetProperty("resultValidationCases").EnumerateArray().ToArray();
-        Assert.Equal(8, resultValidation.Length);
+        Assert.Equal(7, resultValidation.Length);
         foreach (var row in resultValidation)
         {
             Assert.Equal("audit-error", row.GetProperty("hostClass").GetString());
@@ -736,10 +736,7 @@ public sealed class M1AuditCliContractTests
         }
 
         var unsupportedVersion = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.unsupported-artifact-version");
-        var baselineMismatch = resultValidation.Single(row => row.GetProperty("caseId").GetString() == "result.baseline-mismatch");
-        Assert.NotEqual(unsupportedVersion.GetProperty("mutation").GetString(), baselineMismatch.GetProperty("mutation").GetString());
         Assert.True(unsupportedVersion.GetProperty("canonicalMutation").GetBoolean());
-        Assert.False(baselineMismatch.GetProperty("canonicalMutation").GetBoolean());
 
         var cancellation = root.GetProperty("cancellationCases").EnumerateArray().ToArray();
         Assert.Equal(12, cancellation.Length);

@@ -2,18 +2,16 @@ namespace ContractScribe.Roslyn;
 
 internal sealed class ResolvedPublicationTarget
 {
-    private const string ValidationResultRelativePath = "TestResults/audit-result.json";
+    private const string TestResultRelativePath = "TestResults/audit-result.json";
 
     private ResolvedPublicationTarget(
         string repositoryRoot,
-        string finalPath,
-        PublicationTargetKind kind)
+        string finalPath)
     {
         RepositoryRoot = repositoryRoot;
         FinalPath = finalPath;
         ParentPath = Path.GetDirectoryName(finalPath)
             ?? throw new ArgumentException("The publication target must have a parent directory.", nameof(finalPath));
-        Kind = kind;
     }
 
     public string RepositoryRoot { get; }
@@ -21,8 +19,6 @@ internal sealed class ResolvedPublicationTarget
     public string FinalPath { get; }
 
     public string ParentPath { get; }
-
-    public PublicationTargetKind Kind { get; }
 
     public static ResolvedPublicationTarget ForExternalCli(
         string repositoryRoot,
@@ -37,15 +33,15 @@ internal sealed class ResolvedPublicationTarget
                 nameof(outputPath));
         }
         RequireExistingParent(final);
-        return new ResolvedPublicationTarget(root, final, PublicationTargetKind.ExternalCli);
+        return new ResolvedPublicationTarget(root, final);
     }
 
-    public static ResolvedPublicationTarget ForValidationFixture(string repositoryRoot)
+    public static ResolvedPublicationTarget ForTestResult(string repositoryRoot)
     {
         var root = NormalizeRoot(repositoryRoot);
-        var final = Path.GetFullPath(Path.Join(root, ValidationResultRelativePath));
+        var final = Path.GetFullPath(Path.Join(root, TestResultRelativePath));
         RequireExistingParent(final);
-        return new ResolvedPublicationTarget(root, final, PublicationTargetKind.ValidationFixture);
+        return new ResolvedPublicationTarget(root, final);
     }
 
     private static string NormalizeRoot(string repositoryRoot)
@@ -76,10 +72,4 @@ internal sealed class ResolvedPublicationTarget
         OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-}
-
-internal enum PublicationTargetKind
-{
-    ExternalCli,
-    ValidationFixture,
 }

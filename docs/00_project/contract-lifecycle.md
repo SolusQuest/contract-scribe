@@ -93,7 +93,7 @@ M0 did not create a downstream-consumable release or promise indefinite compatib
 
 M1 closes with links to the exact production audit revision and checks that satisfied its exit criteria. That closure does not create a new active compatibility state. M2 through M5 may change the current draft in place when implementation evidence exposes a missing requirement; those changes remain version 1 unless a coexistence or released-compatibility condition requires otherwise.
 
-The Issue #70 evidence at exact squash commit `67c149fbc105d2ccae94becd6b2158b68027cbfd` (`C2`), including the manifest identity recorded at that revision, remains immutable history. Issue #75 does not reopen #70, regenerate that identity, or create a successor solely to remove Host Validation lifecycle machinery. Current Host semantics are defined by the current production source, contracts, and tests. A dependency that exists only to enforce historical certification or experiment state is removed rather than carried into a successor record.
+The Issue #70 evidence at exact squash commit `67c149fbc105d2ccae94becd6b2158b68027cbfd` (`C2`), including the manifest identity recorded at that revision, remains immutable history. Issue #75 did not reopen #70, regenerate that identity, or create a successor solely to remove Host Validation lifecycle machinery. Current Host semantics are defined by the current production source, contracts, and tests. A dependency that existed only to enforce historical certification or experiment state was removed rather than carried into a successor record.
 
 ## Coherent draft-contract change
 

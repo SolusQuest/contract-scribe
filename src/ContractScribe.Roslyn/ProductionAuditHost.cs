@@ -10,12 +10,10 @@ internal sealed class ProductionAuditHost
 {
     private readonly HostBuildProvenance actualProvenance;
 
-    public ProductionAuditHost(HostBuildProvenance? actualProvenance = null)
+    public ProductionAuditHost(HostBuildProvenance actualProvenance)
     {
         this.actualProvenance = actualProvenance
-            ?? HostBuildMetadata.Read(typeof(ProductionAuditHost).Assembly)?.ToProvenance()
-            ?? throw new InvalidOperationException(
-                "The production validation Host is not materialized in this artifact.");
+            ?? throw new ArgumentNullException(nameof(actualProvenance));
     }
 
     [SuppressMessage(
@@ -105,18 +103,6 @@ internal sealed class ProductionAuditHost
             {
                 await controls.ReachStageAsync(HostStage.Input, totalToken).ConfigureAwait(false);
                 totalToken.ThrowIfCancellationRequested();
-                if (!Equals(request.ProvenanceAssertion, actualProvenance))
-                {
-                    return await CommitFailureAsync(
-                        coordinator,
-                        actualProvenance,
-                        toolchain,
-                        "host.input.provenance-mismatch",
-                        HostArtifactState.Invalidated,
-                        controls,
-                        transitions,
-                        loaderFact).ConfigureAwait(false);
-                }
                 resolvedPaths = new RepositoryPathResolver().Resolve(
                     request.RepositoryRoot,
                     request.InputPath);

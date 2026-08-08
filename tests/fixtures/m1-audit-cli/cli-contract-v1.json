@@ -168,7 +168,6 @@
     { "caseId": "result.duplicate-property", "mutation": "duplicate-property", "hostClass": "audit-error", "exitCode": 5 },
     { "caseId": "result.invalid-outcome-reason", "mutation": "invalid-outcome-reason-combination", "hostClass": "audit-error", "exitCode": 5 },
     { "caseId": "result.unsupported-artifact-version", "mutation": "audit-result-version-unsupported", "canonicalMutation": true, "hostClass": "audit-error", "exitCode": 5, "note": "Artifact-version rejection: the auditResultVersion integer is unsupported." },
-    { "caseId": "result.baseline-mismatch", "mutation": "baseline-identity-mismatch", "canonicalMutation": false, "hostClass": "audit-error", "exitCode": 5, "note": "The contract-baseline/provenance identity in the host terminal record is missing or mismatched; fail-closed per the draft lifecycle. Baseline identity lives outside the canonical Audit Result bytes." },
     { "caseId": "result.unreadable", "mutation": "unreadable-bytes", "hostClass": "audit-error", "exitCode": 5 }
   ],
   "classificationCases": [
@@ -215,63 +214,63 @@
       "variant": "execution",
       "controlledClasses": ["execution:invalid-input:not-selected"],
       "toolchainState": "not-selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"invalid-input\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"invalid-input\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.execution.environment-unavailable",
       "variant": "execution",
       "controlledClasses": ["execution:environment-unavailable:not-selected"],
       "toolchainState": "not-selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"environment-unavailable\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"environment-unavailable\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.execution.load-failure",
       "variant": "execution",
       "controlledClasses": ["execution:load-failure:selected"],
       "toolchainState": "selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"load-failure\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"load-failure\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
       "caseId": "stream.execution.audit-error",
       "variant": "execution",
       "controlledClasses": ["execution:audit-error:selected"],
       "toolchainState": "selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"audit-error\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"audit-error\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
       "caseId": "stream.execution.publication-failure",
       "variant": "execution",
       "controlledClasses": ["execution:publication-failure:selected"],
       "toolchainState": "selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"publication-failure\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"publication-failure\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
       "caseId": "stream.execution.publication-failure-invalidation",
       "variant": "execution",
       "controlledClasses": ["execution:publication-failure:not-selected"],
       "toolchainState": "not-selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"publication-failure\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"publication-failure\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.execution-envelope",
       "variant": "execution",
       "controlledClasses": ["execution:cancelled:selected"],
       "toolchainState": "selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"cancelled\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"cancelled\"}\n",
       "stderrTemplate": "cli.cancel.requested: a cancellation signal was received; cancelling\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"],
       "representative": true
     },
     {
@@ -279,76 +278,76 @@
       "variant": "execution",
       "controlledClasses": ["execution:cancelled:not-selected"],
       "toolchainState": "not-selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"cancelled\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.cancel.requested\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"cancelled\"}\n",
       "stderrTemplate": "cli.cancel.requested: a cancellation signal was received; cancelling\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.execution.timeout",
       "variant": "execution",
       "controlledClasses": ["execution:timeout:selected"],
       "toolchainState": "selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"timeout\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"executionClass\":\"timeout\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}"]
     },
     {
       "caseId": "stream.execution.timeout-sdk-discovery",
       "variant": "execution",
       "controlledClasses": ["execution:timeout:not-selected"],
       "toolchainState": "not-selected",
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"timeout\"}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"execution\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"<verbatim-host-code>\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"executionClass\":\"timeout\"}\n",
       "stderrTemplate": "<verbatim-host-code>: <bounded host message>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}"]
     },
     {
       "caseId": "stream.audit.violations",
       "variant": "audit",
       "controlledClasses": ["audit:violations"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations\",\"counts\":{\"compliant\":0,\"violation\":1,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations\",\"counts\":{\"compliant\":0,\"violation\":1,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.audit-envelope",
       "variant": "audit",
       "controlledClasses": ["audit:violations-with-skipped"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":1,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"violations-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":1,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
       "representative": true
     },
     {
       "caseId": "stream.audit.compliant",
       "variant": "audit",
       "controlledClasses": ["audit:compliant"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.audit.compliant-with-skipped",
       "variant": "audit",
       "controlledClasses": ["audit:compliant-with-skipped"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"compliant-with-skipped\",\"counts\":{\"compliant\":1,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.audit.skipped-only",
       "variant": "audit",
       "controlledClasses": ["audit:skipped-only"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"skipped-only\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[\"cli.audit.skipped-summary\"],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"skipped-only\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":1},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "cli.audit.skipped-summary: skipped results by reason: <skipped-reason-breakdown>\n",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.audit.no-results",
       "variant": "audit",
       "controlledClasses": ["audit:no-results"],
-      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"auditContractBaseline\":\"${AUDIT_CONTRACT_BASELINE}\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"no-results\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
+      "stdoutTemplate": "{\"envelopeVersion\":1,\"terminalLayer\":\"audit\",\"cliContractBaseline\":\"${CLI_CONTRACT_BASELINE}\",\"toolVersion\":\"${TOOL_VERSION}\",\"diagnosticCodes\":[],\"terminalState\":\"committed\",\"sourceRevision\":\"${SOURCE_REVISION}\",\"toolchain\":\"${TOOLCHAIN_IDENTITY}\",\"disposition\":\"no-results\",\"counts\":{\"compliant\":0,\"violation\":0,\"skipped\":0},\"resultDigest\":\"${RESULT_DIGEST}\",\"outputCommit\":{\"status\":\"committed\",\"identity\":\"${OUTPUT_COMMIT_IDENTITY}\"}}\n",
       "stderrTemplate": "",
-      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
+      "tokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"]
     },
     {
       "caseId": "stream.host-contract-error-envelope",
@@ -483,7 +482,7 @@
   ],
   "publicSafetyConstraints": {
     "pathTemplates": ["${REPOSITORY_ROOT}", "${OUTSIDE_ROOT}", "${INPUT}", "${POLICY}", "${OUTPUT}"],
-    "envelopeTokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${AUDIT_CONTRACT_BASELINE}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
+    "envelopeTokens": ["${CLI_CONTRACT_BASELINE}", "${TOOL_VERSION}", "${SOURCE_REVISION}", "${TOOLCHAIN_IDENTITY}", "${RESULT_DIGEST}", "${OUTPUT_COMMIT_IDENTITY}"],
     "placeholders": ["<repository-root>", "<input>", "<policy>", "<output>", "<skipped-reason-breakdown>", "<verbatim-host-code>", "<bounded host message>"],
     "forbidden": [
       "absolute machine-local paths",

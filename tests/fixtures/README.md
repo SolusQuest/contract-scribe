@@ -1,7 +1,14 @@
 # Fixtures
 
-This directory contains public, synthetic fixtures for deterministic contract, audit, experiment, and patch-safety validation.
+This directory contains public, synthetic fixtures for deterministic contract, audit, and patch-safety validation.
 
-`m1-contract-baseline/v1` is the current coordinated pre-release Policy/Taxonomy/Audit v1 baseline. Its manifest pins the amended registries, its row crosswalk maps every executable ADR 0003 row, and its generated-identity and audit-authority vectors contain only synthetic inputs and opaque output-shaped identifiers.
+Current pre-release fixtures are owned by the behavior they exercise:
 
-`m1-target-observation` remains the historical, commit-pinned decision annex. Its recorded M0 registry digests are evidence about that accepted decision input and must not be rewritten when the current pre-release v1 baseline changes.
+- `policy-configuration/v1` owns Policy parsing and selection cases.
+- `symbol-evidence-taxonomy/v1` owns Taxonomy records, origin/skip applicability, and classification conformance cases.
+- `audit-result/v1` owns Audit Result payloads, candidate-locator, authority, and fresh-process replay cases.
+- `m1-audit-cli` owns the unreleased Audit CLI v1 annex.
+
+`m1-target-observation` remains the historical, commit-pinned ADR 0003 decision annex. Its recorded M0 registry digests are evidence about that accepted decision input and must not be rewritten when current pre-release drafts change.
+
+There is no aggregate pre-release fixture manifest or compatibility alias. Add or update a fixture under its semantic owner and test that behavior directly.

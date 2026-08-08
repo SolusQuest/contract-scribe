@@ -80,10 +80,6 @@ internal sealed class TemporaryDiskMeter : IDisposable
             {
                 foreach (var path in EnumerateGovernedFiles(root))
                 {
-                    if (IsIgnoredSentinel(path))
-                    {
-                        continue;
-                    }
                     var length = new FileInfo(path).Length;
                     observed[Path.GetFullPath(path)] = length;
                     total = checked(total + length);
@@ -114,7 +110,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             var fullPath = Path.GetFullPath(path);
-            if (!IsGovernedPath(fullPath) || IsIgnoredSentinel(fullPath))
+            if (!IsGovernedPath(fullPath))
             {
                 throw new ArgumentException(
                     "The direct Host allocation must belong to a governed root.",
@@ -175,7 +171,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
 
     private void ObserveDelete(object sender, FileSystemEventArgs args)
     {
-        if (!IsGovernedPath(args.FullPath) || IsIgnoredSentinel(args.FullPath))
+        if (!IsGovernedPath(args.FullPath))
         {
             return;
         }
@@ -196,10 +192,8 @@ internal sealed class TemporaryDiskMeter : IDisposable
 
     private void ObserveRename(object sender, RenamedEventArgs args)
     {
-        var oldGoverned = IsGovernedPath(args.OldFullPath)
-            && !IsIgnoredSentinel(args.OldFullPath);
-        var newGoverned = IsGovernedPath(args.FullPath)
-            && !IsIgnoredSentinel(args.FullPath);
+        var oldGoverned = IsGovernedPath(args.OldFullPath);
+        var newGoverned = IsGovernedPath(args.FullPath);
         if (!oldGoverned && !newGoverned)
         {
             return;
@@ -239,7 +233,7 @@ internal sealed class TemporaryDiskMeter : IDisposable
 
     internal void ObservePath(string path)
     {
-        if (!IsGovernedPath(path) || IsIgnoredSentinel(path))
+        if (!IsGovernedPath(path))
         {
             return;
         }
@@ -312,13 +306,6 @@ internal sealed class TemporaryDiskMeter : IDisposable
     {
         var fullPath = Path.GetFullPath(path);
         return roots.Any(root => pathComparer.Equals(root, fullPath) || IsContained(root, fullPath));
-    }
-
-    private static bool IsIgnoredSentinel(string path)
-    {
-        var name = Path.GetFileName(path);
-        return name.StartsWith(".contractscribe-hv-freeze-", StringComparison.Ordinal)
-            || name.StartsWith(".contractscribe-hv-release-", StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> EnumerateRegularFiles(string root)

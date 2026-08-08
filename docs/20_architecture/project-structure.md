@@ -276,9 +276,9 @@ Synthetic `.csproj` and `.sln` inputs under `tests/fixtures` are analyzed subjec
 
 ### M0 experiment projects
 
-The existing test-only Roslyn, Native AOT, and independent-validation projects are historical M0 evidence, not current validation inputs. Production code must not reference the experiment assemblies.
+The removed test-only Roslyn, Native AOT, and independent-validation projects remain historical M0 evidence in Git, not current validation inputs. Production code does not reference experiment assemblies.
 
-Issue #75 removes their executable, ordinary-CI, manifest, compatibility, tombstone, provenance, aggregation, publication, and preservation-only machinery when no production consumer remains. Reusable semantic fixtures or regression cases move under the current production owner; the experiment questions, conditions, results, limitations, and exact commits remain in documentation and Git history without a separate cleanup decision.
+Issue #75 removed their executable, ordinary-CI, manifest, compatibility, tombstone, provenance, aggregation, publication, and preservation-only machinery. Reusable semantic fixtures and regression cases moved under the current production owner; the experiment questions, conditions, results, limitations, and exact commits remain in documentation and Git history without a separate cleanup decision.
 
 ### Optional evaluation tool
 

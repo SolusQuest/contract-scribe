@@ -19,13 +19,22 @@ public sealed class ProductionHostContractTests
         Assert.Equal(64, HostContractResources.FailureRegistrySha256.Length);
         Assert.Equal(64, HostContractResources.CalibratedBoundsSha256.Length);
         Assert.Equal(64, HostContractResources.CalibrationEvidenceSha256.Length);
-        Assert.Equal(64, HostContractResources.ContractBaselineSha256.Length);
         using var bounds = JsonDocument.Parse(HostContractResources.CalibratedBoundsBytes);
         Assert.All(
             bounds.RootElement.GetProperty("entries").EnumerateArray(),
             entry => Assert.Equal(
                 HostContractResources.CalibrationEvidenceSha256,
                 entry.GetProperty("calibrationEvidenceSha256").GetString()));
+    }
+
+    [Fact]
+    public void BuildProvenance_RequiresAnExactLowercaseSourceRevision()
+    {
+        var provenance = new HostBuildProvenance(new string('a', 40));
+
+        Assert.Equal(new string('a', 40), provenance.SourceRevision);
+        Assert.Throws<ArgumentException>(() => new HostBuildProvenance(new string('a', 39)));
+        Assert.Throws<ArgumentException>(() => new HostBuildProvenance(new string('A', 40)));
     }
 
     [Fact]
@@ -509,11 +518,5 @@ public sealed class ProductionHostContractTests
             acceptedSequence);
     }
 
-    private static HostBuildProvenance Provenance() => new(
-        new string('1', 40),
-        "source." + new string('2', 64),
-        "10.0.102",
-        HostContractResources.ContractBaselineSha256,
-        HostContractResources.FailureRegistrySha256,
-        HostContractResources.CalibratedBoundsSha256);
+    private static HostBuildProvenance Provenance() => new(new string('1', 40));
 }
