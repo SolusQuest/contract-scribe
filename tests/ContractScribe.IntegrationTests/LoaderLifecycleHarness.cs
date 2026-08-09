@@ -201,105 +201,162 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
     public async Task<TaskBarrierObservation> ObserveTaskBarrierAsync(
         TimeSpan? timeout = null,
-        bool injectReportedIdentityFailure = false)
+        bool injectReportedIdentityFailure = false,
+        bool deferProcessExitUntilPipeClosure = false)
     {
         var taskReady = taskCannotBecomeReady
             ? null
             : PendingTaskReady();
-        var controlFrame = control.IsConnected
+        var controlFrame = pendingControlFrame is not null || control.IsConnected
             ? PendingControlFrame()
             : null;
+        var pipeClosureObserved = deferProcessExitUntilPipeClosure
+            ? new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously)
+            : null;
         var processExit = Probe.WaitForExitAsync();
+        if (pipeClosureObserved is not null)
+        {
+            processExit = WaitForProcessExitAfterPipeClosureAsync(
+                processExit,
+                pipeClosureObserved.Task);
+        }
         var deadline = Task.Delay(timeout ?? BarrierTimeout);
-        var candidates = new List<Task> { processExit, deadline };
-        if (taskReady is not null)
+        Task? expectedPipeClosure = null;
+        while (true)
         {
-            candidates.Add(taskReady);
-        }
-        if (controlFrame is not null)
-        {
-            candidates.Add(controlFrame);
-        }
-        await Task.WhenAny(candidates);
-
-        if (taskReady?.IsCompletedSuccessfully == true)
-        {
-            var ready = await taskReady;
-            pendingTaskReady = null;
-            Assert.Equal(TaskReady, ready.Kind);
-            TaskIdentity = ValidateTaskIdentity(
-                ready,
-                injectReportedIdentityFailure);
-            RecordBuildHostIdentity(
-                FindBuildHostIdentity(ready.ProcessId, Probe.Id),
-                preferForTaskAttribution: true);
-            return RecordBarrierObservation(new TaskBarrierObservation(
-                TaskBarrierObservationKind.TaskReady,
-                null,
-                null));
-        }
-
-        if (controlFrame?.IsCompletedSuccessfully == true)
-        {
-            var frame = await TakeControlFrameAsync(BarrierTimeout);
-            if (frame.Result is not null)
+            var candidates = new List<Task> { processExit, deadline };
+            if (taskReady is not null)
             {
-                PreserveObservedBuildHosts();
-                if (frame.Kind == Result)
-                {
-                    await control.WriteAsync(new[] { ResultAcknowledged });
-                    await control.FlushAsync();
-                }
-                return RecordBarrierObservation(new TaskBarrierObservation(
-                    TaskBarrierObservationKind.ProductResult,
-                    frame.Result,
-                    null));
+                candidates.Add(taskReady);
             }
-            if (frame.Kind == PreTaskHangReached)
+            if (controlFrame is not null)
             {
+                candidates.Add(controlFrame);
+            }
+            await Task.WhenAny(candidates);
+
+            if (taskReady?.IsCompletedSuccessfully == true)
+            {
+                var ready = await taskReady;
+                pendingTaskReady = null;
+                Assert.Equal(TaskReady, ready.Kind);
+                TaskIdentity = ValidateTaskIdentity(
+                    ready,
+                    injectReportedIdentityFailure);
+                RecordBuildHostIdentity(
+                    FindBuildHostIdentity(ready.ProcessId, Probe.Id),
+                    preferForTaskAttribution: true);
                 return RecordBarrierObservation(new TaskBarrierObservation(
-                    TaskBarrierObservationKind.PreTaskStageReached,
+                    TaskBarrierObservationKind.TaskReady,
                     null,
                     null));
             }
-            throw new InvalidDataException("Unexpected lifecycle control frame before task ready.");
-        }
 
-        if (processExit.IsCompleted)
-        {
-            await processExit;
             if (controlFrame?.IsCompletedSuccessfully == true)
             {
-                return await ObserveTaskBarrierAsync(
-                    TimeSpan.Zero,
-                    injectReportedIdentityFailure);
+                var frame = await TakeControlFrameAsync(BarrierTimeout);
+                if (frame.Result is not null)
+                {
+                    PreserveObservedBuildHosts();
+                    if (frame.Kind == Result)
+                    {
+                        await control.WriteAsync(new[] { ResultAcknowledged });
+                        await control.FlushAsync();
+                    }
+                    return RecordBarrierObservation(new TaskBarrierObservation(
+                        TaskBarrierObservationKind.ProductResult,
+                        frame.Result,
+                        null));
+                }
+                if (frame.Kind == PreTaskHangReached)
+                {
+                    return RecordBarrierObservation(new TaskBarrierObservation(
+                        TaskBarrierObservationKind.PreTaskStageReached,
+                        null,
+                        null));
+                }
+                throw new InvalidDataException("Unexpected lifecycle control frame before task ready.");
             }
-            PreserveObservedBuildHosts();
-            var process = new ProcessResult(
-                Probe.ExitCode,
-                await stdout,
-                await stderr);
-            return RecordBarrierObservation(new TaskBarrierObservation(
-                TaskBarrierObservationKind.ProcessExited,
-                null,
-                Probe.ExitCode,
-                process));
-        }
 
-        if (taskReady?.IsCompleted == true)
-        {
-            await taskReady;
-        }
-        if (controlFrame?.IsCompleted == true)
-        {
-            await controlFrame;
-        }
+            var unexpectedTaskReady = taskReady is { IsFaulted: true }
+                ? FirstUnexpectedPipeClosureException(taskReady)
+                : null;
+            if (unexpectedTaskReady is not null)
+            {
+                ExceptionDispatchInfo.Capture(unexpectedTaskReady).Throw();
+            }
+            var unexpectedControlFrame = controlFrame is { IsFaulted: true }
+                ? FirstUnexpectedPipeClosureException(controlFrame)
+                : null;
+            if (unexpectedControlFrame is not null)
+            {
+                ExceptionDispatchInfo.Capture(unexpectedControlFrame).Throw();
+            }
 
-        PreserveObservedBuildHosts();
-        return RecordBarrierObservation(new TaskBarrierObservation(
-            TaskBarrierObservationKind.TimedOut,
-            null,
-            null));
+            if (processExit.IsCompleted)
+            {
+                await processExit;
+                if (controlFrame?.IsCompletedSuccessfully == true)
+                {
+                    continue;
+                }
+                PreserveObservedBuildHosts();
+                var process = new ProcessResult(
+                    Probe.ExitCode,
+                    await stdout,
+                    await stderr);
+                return RecordBarrierObservation(new TaskBarrierObservation(
+                    TaskBarrierObservationKind.ProcessExited,
+                    null,
+                    Probe.ExitCode,
+                    process));
+            }
+
+            if (taskReady?.IsCompleted == true)
+            {
+                if (IsExpectedPipeClosureTask(taskReady))
+                {
+                    expectedPipeClosure ??= taskReady;
+                    taskReady = null;
+                    pipeClosureObserved?.TrySetResult();
+                    continue;
+                }
+                await taskReady;
+            }
+            if (controlFrame?.IsCompleted == true)
+            {
+                if (IsExpectedPipeClosureTask(controlFrame))
+                {
+                    expectedPipeClosure ??= controlFrame;
+                    controlFrame = null;
+                    pipeClosureObserved?.TrySetResult();
+                    continue;
+                }
+                await controlFrame;
+            }
+
+            if (deadline.IsCompleted)
+            {
+                if (expectedPipeClosure is not null)
+                {
+                    await expectedPipeClosure;
+                }
+                PreserveObservedBuildHosts();
+                return RecordBarrierObservation(new TaskBarrierObservation(
+                    TaskBarrierObservationKind.TimedOut,
+                    null,
+                    null));
+            }
+        }
+    }
+
+    private static async Task WaitForProcessExitAfterPipeClosureAsync(
+        Task processExit,
+        Task pipeClosureObserved)
+    {
+        await processExit;
+        await pipeClosureObserved;
     }
 
     private TaskBarrierObservation RecordBarrierObservation(TaskBarrierObservation observation)
@@ -405,6 +462,12 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         {
             Probe.Kill(entireProcessTree: false);
         }
+    }
+
+    public void CloseControlPipeWithPendingReader()
+    {
+        _ = PendingControlFrame();
+        control.Dispose();
     }
 
     public bool OwnedProcessesHaveExited() =>
@@ -959,7 +1022,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         or UnauthorizedAccessException
         or System.ComponentModel.Win32Exception;
 
-    private static bool IsExpectedPipeClosureException(Exception exception) => exception is
+    internal static bool IsExpectedPipeClosureException(Exception exception) => exception is
         IOException
         or ObjectDisposedException
         or OperationCanceledException
@@ -969,6 +1032,20 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             SocketErrorCode: System.Net.Sockets.SocketError.OperationAborted
                 or System.Net.Sockets.SocketError.Interrupted,
         };
+
+    private static bool IsExpectedPipeClosureTask(Task task) =>
+        task.IsCanceled
+        || task.IsFaulted
+        && task.Exception!
+            .Flatten()
+            .InnerExceptions
+            .All(IsExpectedPipeClosureException);
+
+    private static Exception? FirstUnexpectedPipeClosureException(Task task) =>
+        task.Exception?
+            .Flatten()
+            .InnerExceptions
+            .FirstOrDefault(exception => !IsExpectedPipeClosureException(exception));
 
     internal static async Task ObserveRealPipePeerClosureAsync()
     {
@@ -1005,10 +1082,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
         if (pending.IsFaulted)
         {
-            var unexpected = pending.Exception
-                .Flatten()
-                .InnerExceptions
-                .FirstOrDefault(exception => !IsExpectedPipeClosureException(exception));
+            var unexpected = FirstUnexpectedPipeClosureException(pending);
             if (unexpected is not null)
             {
                 ExceptionDispatchInfo.Capture(unexpected).Throw();

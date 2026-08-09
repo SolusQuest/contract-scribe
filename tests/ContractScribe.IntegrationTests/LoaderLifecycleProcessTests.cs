@@ -330,6 +330,13 @@ public sealed class LoaderLifecycleProcessTests
             var timeout = await hang.ObserveTaskBarrierAsync(TimeSpan.FromMilliseconds(100));
             Assert.Equal(TaskBarrierObservationKind.TimedOut, timeout.Kind);
             Assert.False(hang.Probe.HasExited);
+
+            hang.CloseControlPipeWithPendingReader();
+            var livePipeClosure = await Record.ExceptionAsync(async () =>
+                await hang.ObserveTaskBarrierAsync(TimeSpan.FromMilliseconds(100)));
+            Assert.NotNull(livePipeClosure);
+            Assert.True(LoaderLifecycleHarness.IsExpectedPipeClosureException(livePipeClosure));
+            Assert.False(hang.Probe.HasExited);
         }
         finally
         {
@@ -345,7 +352,8 @@ public sealed class LoaderLifecycleProcessTests
             var reached = await abrupt.ObserveTaskBarrierAsync();
             Assert.Equal(TaskBarrierObservationKind.PreTaskStageReached, reached.Kind);
             abrupt.KillProbeAbruptly();
-            var exit = await abrupt.ObserveTaskBarrierAsync();
+            var exit = await abrupt.ObserveTaskBarrierAsync(
+                deferProcessExitUntilPipeClosure: true);
             Assert.Equal(TaskBarrierObservationKind.ProcessExited, exit.Kind);
             Assert.NotNull(exit.ExitCode);
             Assert.NotNull(exit.Process);
