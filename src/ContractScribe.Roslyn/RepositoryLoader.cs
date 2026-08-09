@@ -236,8 +236,11 @@ public sealed class RepositoryLoader
             : StringComparison.Ordinal;
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var normalizedPath = Path.GetFullPath(path);
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedPath.Equals(normalizedRoot, comparison)
-            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
+            || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 }
 
@@ -1179,8 +1182,11 @@ internal static class PostRegistrationLoader
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var normalizedPath = Path.GetFullPath(path);
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedPath.Equals(normalizedRoot, comparison)
-            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
+            || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 
     private static StringComparer PathComparer() =>

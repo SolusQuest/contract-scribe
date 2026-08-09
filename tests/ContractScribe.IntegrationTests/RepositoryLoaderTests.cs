@@ -615,6 +615,31 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task RepositoryLoaderLoadsProjectBelowFileSystemRoot()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var fileSystemRoot = Path.GetPathRoot(fixture.Root)
+            ?? throw new InvalidOperationException("The fixture path must have a filesystem root.");
+        var projectPath = Path.Join(fixture.Root, "App", "App.csproj");
+        var expectedIdentity = Path.GetRelativePath(fileSystemRoot, projectPath)
+            .Replace('\\', '/');
+        var loader = new RepositoryLoader(
+            observer: null,
+            inventory: static (_, _) => new Dictionary<string, InventoryEntry>());
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fileSystemRoot, projectPath));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        Assert.Contains(
+            session.Projects,
+            project => project.ProjectIdentity == expectedIdentity);
+    }
+
+    [Fact]
     public async Task RejectsDistinctGeneratedIdentityPreimagesWhenTheDigestCollides()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
