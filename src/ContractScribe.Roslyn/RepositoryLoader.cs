@@ -542,7 +542,7 @@ internal static class PostRegistrationLoader
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static IReadOnlyDictionary<string, string> CreateEvaluationProperties(
+    internal static IReadOnlyDictionary<string, string> CreateEvaluationProperties(
         ResolvedRepositoryPaths paths)
     {
         var properties = new Dictionary<string, string>(
@@ -550,9 +550,13 @@ internal static class PostRegistrationLoader
             StringComparer.Ordinal);
         if (!paths.PhysicalInput.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
         {
+            var normalizedSolutionDirectory =
+                Path.TrimEndingDirectorySeparator(
+                    Path.GetDirectoryName(paths.PhysicalInput)!);
             properties["SolutionDir"] =
-                Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(paths.PhysicalInput)!)
-                + Path.DirectorySeparatorChar;
+                Path.EndsInDirectorySeparator(normalizedSolutionDirectory)
+                    ? normalizedSolutionDirectory
+                    : normalizedSolutionDirectory + Path.DirectorySeparatorChar;
         }
 
         return properties;

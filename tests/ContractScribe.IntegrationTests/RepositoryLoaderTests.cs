@@ -179,6 +179,26 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(["Library/Library.csproj"], app.ProjectReferences);
     }
 
+    [Theory]
+    [InlineData("Fixture.sln")]
+    [InlineData("Fixture.slnx")]
+    public void KeepsOneSolutionDirSeparatorAtFileSystemRoot(string input)
+    {
+        var fileSystemRoot = Path.GetPathRoot(Path.GetTempPath())
+            ?? throw new InvalidOperationException("The temporary path must have a filesystem root.");
+        var solutionPath = Path.Combine(fileSystemRoot, input);
+        var paths = new ResolvedRepositoryPaths(
+            fileSystemRoot,
+            fileSystemRoot,
+            solutionPath,
+            solutionPath,
+            []);
+
+        var properties = PostRegistrationLoader.CreateEvaluationProperties(paths);
+
+        Assert.Equal(fileSystemRoot, properties["SolutionDir"]);
+    }
+
     [Fact]
     public async Task IncludesProjectReferencesConditionedOnPinnedNonExistentFile()
     {
