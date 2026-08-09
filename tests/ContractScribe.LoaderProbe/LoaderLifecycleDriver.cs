@@ -20,6 +20,7 @@ internal static class LoaderLifecycleDriver
     private const byte SessionReady = 7;
     private const byte ReleaseSession = 8;
     private const byte SessionReleased = 9;
+    private const byte PreTaskHangReached = 10;
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ResultAcknowledgementTimeout = TimeSpan.FromSeconds(5);
@@ -61,17 +62,38 @@ internal static class LoaderLifecycleDriver
         }
 
         using var cancellation = new CancellationTokenSource();
+        using var preTaskHangReached = new ManualResetEventSlim(false);
+        using var preTaskHangRelease = new ManualResetEventSlim(false);
         var injectUnexpected = 0;
-        var command = mode is LifecycleMode.Cancellation or LifecycleMode.Unexpected
-            ? ReadCommandAsync(
+        var command = mode switch
+        {
+            LifecycleMode.Cancellation or LifecycleMode.Unexpected => ReadCommandAsync(
                 control,
                 cancellation,
-                () => Volatile.Write(ref injectUnexpected, 1))
-            : Task.FromResult<Exception?>(null);
+                () => Volatile.Write(ref injectUnexpected, 1)),
+            LifecycleMode.PreTaskHang => ReportPreTaskHangAsync(
+                control,
+                preTaskHangReached),
+            _ => Task.FromResult<Exception?>(null),
+        };
         var trace = new LoaderExecutionTrace();
         var loader = new RepositoryLoader(
             stage =>
             {
+                if (stage == LoaderStage.GraphEvaluation
+                    && mode == LifecycleMode.PreTaskUnexpected)
+                {
+                    throw new InvalidOperationException("Injected test-only pre-task loader failure.");
+                }
+                if (stage == LoaderStage.GraphEvaluation
+                    && mode == LifecycleMode.PreTaskHang)
+                {
+                    preTaskHangReached.Set();
+                    if (!preTaskHangRelease.Wait(SessionReleaseTimeout))
+                    {
+                        throw new InvalidOperationException("The bounded pre-task hang expired.");
+                    }
+                }
                 if (stage == LoaderStage.WorkspaceLoad
                     && Volatile.Read(ref injectUnexpected) != 0)
                 {
@@ -191,6 +213,37 @@ internal static class LoaderLifecycleDriver
 
             await control.WriteAsync(
                 new[] { ProtocolVersion, CommandApplied },
+                deadline.Token).ConfigureAwait(false);
+            await control.FlushAsync(deadline.Token).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception) when (IsControlException(exception))
+        {
+            return exception;
+        }
+    }
+
+    private static async Task<Exception?> ReportPreTaskHangAsync(
+        NamedPipeClientStream? control,
+        ManualResetEventSlim reached)
+    {
+        if (control is null)
+        {
+            return new IOException("The test control pipe is unavailable.");
+        }
+
+        try
+        {
+            var reachedBeforeDeadline = await Task.Run(
+                    () => reached.Wait(CommandTimeout))
+                .ConfigureAwait(false);
+            if (!reachedBeforeDeadline)
+            {
+                return new TimeoutException("The pre-task stage was not reached before its deadline.");
+            }
+            using var deadline = new CancellationTokenSource(CommandTimeout);
+            await control.WriteAsync(
+                new[] { ProtocolVersion, PreTaskHangReached },
                 deadline.Token).ConfigureAwait(false);
             await control.FlushAsync(deadline.Token).ConfigureAwait(false);
             return null;
@@ -367,7 +420,11 @@ internal static class LoaderLifecycleDriver
     private static RepositoryLoadStatus ExpectedStatus(LifecycleMode mode) => mode switch
     {
         LifecycleMode.Success or LifecycleMode.HeldSession => RepositoryLoadStatus.Success,
-        LifecycleMode.Failure or LifecycleMode.Unexpected or LifecycleMode.ExpectFailure => RepositoryLoadStatus.Failure,
+        LifecycleMode.Failure
+            or LifecycleMode.Unexpected
+            or LifecycleMode.PreTaskUnexpected
+            or LifecycleMode.ExpectFailure => RepositoryLoadStatus.Failure,
+        LifecycleMode.PreTaskHang => RepositoryLoadStatus.Cancelled,
         LifecycleMode.Cancellation => RepositoryLoadStatus.Cancelled,
         _ => throw new ArgumentOutOfRangeException(nameof(mode)),
     };
@@ -380,6 +437,8 @@ internal static class LoaderLifecycleDriver
             "lifecycle-failure" => LifecycleMode.Failure,
             "lifecycle-cancellation" => LifecycleMode.Cancellation,
             "lifecycle-unexpected" => LifecycleMode.Unexpected,
+            "lifecycle-pre-task-unexpected" => LifecycleMode.PreTaskUnexpected,
+            "lifecycle-pre-task-hang" => LifecycleMode.PreTaskHang,
             "lifecycle-held-session" => LifecycleMode.HeldSession,
             "lifecycle-expect-failure" => LifecycleMode.ExpectFailure,
             _ => (LifecycleMode)(-1),
@@ -402,6 +461,8 @@ internal static class LoaderLifecycleDriver
         Failure,
         Cancellation,
         Unexpected,
+        PreTaskUnexpected,
+        PreTaskHang,
         HeldSession,
         ExpectFailure,
     }

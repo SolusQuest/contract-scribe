@@ -42,5 +42,7 @@
              Link="AuditResultCanonicalizer.cs" />
     <Compile Include="../ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
              Link="ClassificationConformanceOracle.cs" />
+    <Compile Include="../ContractScribe.TestSupport/StableProcessStartIdentity.cs"
+             Link="StableProcessStartIdentity.cs" />
   </ItemGroup>
 </Project>

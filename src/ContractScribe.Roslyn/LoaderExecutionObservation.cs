@@ -14,10 +14,10 @@ internal enum LoaderExecutionPhase
     GraphEvaluation,
     WorkspaceCreation,
     WorkspaceOpen,
-    RemoteEvaluateCompleted,
-    RemoteBuildCompleted,
-    RemoteResolveCompleted,
-    RemoteUnknownCompleted,
+    RemoteEvaluateReported,
+    RemoteBuildReported,
+    RemoteResolveReported,
+    RemoteUnknownReported,
     WorkspaceOpenCompleted,
     WorkspaceSemanticProtection,
     WorkspaceLoad,
@@ -127,10 +127,10 @@ internal sealed class LoaderExecutionTrace
 
     public void Observe(ProjectLoadOperation operation) => Enter(operation switch
     {
-        ProjectLoadOperation.Evaluate => LoaderExecutionPhase.RemoteEvaluateCompleted,
-        ProjectLoadOperation.Build => LoaderExecutionPhase.RemoteBuildCompleted,
-        ProjectLoadOperation.Resolve => LoaderExecutionPhase.RemoteResolveCompleted,
-        _ => LoaderExecutionPhase.RemoteUnknownCompleted,
+        ProjectLoadOperation.Evaluate => LoaderExecutionPhase.RemoteEvaluateReported,
+        ProjectLoadOperation.Build => LoaderExecutionPhase.RemoteBuildReported,
+        ProjectLoadOperation.Resolve => LoaderExecutionPhase.RemoteResolveReported,
+        _ => LoaderExecutionPhase.RemoteUnknownReported,
     });
 
     public void RecordPrimary(LoaderExceptionBoundary boundary, Exception exception) =>

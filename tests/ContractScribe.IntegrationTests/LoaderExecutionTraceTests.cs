@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using ContractScribe.TestSupport;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -104,6 +106,38 @@ public sealed class LoaderExecutionTraceTests
         Assert.Equal(LoaderExecutionTrace.MaximumExceptionRecords, snapshot.Exceptions.Count);
         Assert.All(snapshot.Exceptions, record =>
             Assert.Equal(typeof(InvalidOperationException).FullName, Assert.Single(record.TypeChain)));
+    }
+
+    [Fact]
+    public void RemoteProgressIsReportedWithoutClaimingSuccessfulCompletion()
+    {
+        var trace = new LoaderExecutionTrace();
+        trace.Enter(LoaderExecutionPhase.WorkspaceOpen);
+        trace.MarkWorkspaceOpenStarted();
+
+        trace.Observe(Microsoft.CodeAnalysis.MSBuild.ProjectLoadOperation.Build);
+        trace.RecordPrimary(
+            LoaderExceptionBoundary.PostRegistrationLoad,
+            new InvalidOperationException("not retained"));
+
+        var snapshot = trace.Snapshot();
+
+        Assert.Equal(LoaderExecutionPhase.RemoteBuildReported, snapshot.Phase);
+        var exception = Assert.Single(snapshot.Exceptions);
+        Assert.Equal(LoaderExecutionPhase.RemoteBuildReported, exception.Phase);
+        Assert.False(exception.Lifecycle.WorkspaceOpenCompleted);
+    }
+
+    [Fact]
+    public void StableProcessIdentityIsExactAcrossRepeatedLiveReads()
+    {
+        using var process = Process.GetCurrentProcess();
+        var expected = StableProcessStartIdentity.Read(process);
+
+        for (var index = 0; index < 64; index++)
+        {
+            Assert.Equal(expected, StableProcessStartIdentity.Read(process.Id));
+        }
     }
 
     private static Exception NestedException(int depth) => depth == 0

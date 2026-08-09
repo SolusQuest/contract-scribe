@@ -8,4 +8,9 @@
                       ExcludeAssets="runtime"
                       PrivateAssets="all" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../ContractScribe.TestSupport/StableProcessStartIdentity.cs"
+             Link="StableProcessStartIdentity.cs" />
+  </ItemGroup>
 </Project>

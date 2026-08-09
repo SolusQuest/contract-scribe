@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
+using ContractScribe.TestSupport;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -24,16 +25,21 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     private const byte TaskReady = 1;
     private const byte TaskRelease = 2;
     private const byte TaskCompleted = 3;
+    private const byte PreTaskHangReached = 10;
     private static readonly TimeSpan BarrierTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(45);
+    private const int MaximumCapturedStreamCharacters = 512;
 
     private readonly NamedPipeServerStream control;
     private readonly NamedPipeServerStream task;
     private readonly Task controlConnection;
     private readonly Task taskConnection;
-    private readonly Task<string> stdout;
-    private readonly Task<string> stderr;
+    private readonly Task<BoundedProcessText> stdout;
+    private readonly Task<BoundedProcessText> stderr;
     private readonly ProcessIdentity probeIdentity;
+    private readonly List<ProcessIdentity> retainedIdentities = [];
+    private Task<TaskReadyMessage>? pendingTaskReady;
+    private Task<ControlFrame>? pendingControlFrame;
     private bool taskReleased;
     private bool disposed;
 
@@ -55,9 +61,9 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         TaskToken = taskToken;
         probeIdentity = new ProcessIdentity(
             probe.Id,
-            probe.StartTime.ToUniversalTime().Ticks);
-        stdout = probe.StandardOutput.ReadToEndAsync();
-        stderr = probe.StandardError.ReadToEndAsync();
+            StableProcessStartIdentity.Read(probe));
+        stdout = ReadBoundedTextAsync(probe.StandardOutput);
+        stderr = ReadBoundedTextAsync(probe.StandardError);
     }
 
     public Process Probe { get; }
@@ -69,6 +75,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     public ProcessIdentity? TaskIdentity { get; private set; }
 
     public ProcessIdentity? BuildHostIdentity { get; private set; }
+
+    public TaskBarrierObservation? LastTaskBarrierObservation { get; private set; }
 
     public static async Task<LoaderLifecycleHarness> StartAsync(
         string repositoryRoot,
@@ -132,21 +140,156 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
     public async Task WaitForTaskReadyAsync()
     {
-        await taskConnection.WaitAsync(BarrierTimeout);
-        var ready = await Task.Run(() => ReadTaskReady(task)).WaitAsync(BarrierTimeout);
-        Assert.Equal(TaskToken, ready.Token);
-        Assert.Equal(ready.StartIdentity, ProcessStartIdentity(ready.ProcessId));
-        TaskIdentity = new ProcessIdentity(ready.ProcessId, ready.StartIdentity);
-        BuildHostIdentity = FindBuildHostIdentity(ready.ProcessId, Probe.Id);
+        var observation = await ObserveTaskBarrierAsync();
+        if (observation.Kind != TaskBarrierObservationKind.TaskReady)
+        {
+            Assert.Fail(DescribeBarrierObservation(observation));
+        }
     }
+
+    public async Task WaitForTaskReadyWithInjectedIdentityFailureAsync() =>
+        await ObserveTaskBarrierAsync(injectReportedIdentityFailure: true);
+
+    public async Task<TaskBarrierObservation> ObserveTaskBarrierAsync(
+        TimeSpan? timeout = null,
+        bool injectReportedIdentityFailure = false)
+    {
+        var taskReady = PendingTaskReady();
+        var controlFrame = control.IsConnected
+            ? PendingControlFrame()
+            : null;
+        var processExit = Probe.WaitForExitAsync();
+        var deadline = Task.Delay(timeout ?? BarrierTimeout);
+        var candidates = new List<Task> { taskReady, processExit, deadline };
+        if (controlFrame is not null)
+        {
+            candidates.Add(controlFrame);
+        }
+        await Task.WhenAny(candidates);
+
+        if (taskReady.IsCompletedSuccessfully)
+        {
+            var ready = await taskReady;
+            pendingTaskReady = null;
+            Assert.Equal(TaskToken, ready.Token);
+            var observedStart = StableProcessStartIdentity.Read(ready.ProcessId);
+            TaskIdentity = new ProcessIdentity(ready.ProcessId, observedStart);
+            RetainIdentity(TaskIdentity.Value);
+            BuildHostIdentity = FindBuildHostIdentity(ready.ProcessId, Probe.Id);
+            var reportedStart = injectReportedIdentityFailure
+                ? checked(ready.StartIdentity + 1)
+                : ready.StartIdentity;
+            Assert.Equal(reportedStart, observedStart);
+            return RecordBarrierObservation(new TaskBarrierObservation(
+                TaskBarrierObservationKind.TaskReady,
+                null,
+                null));
+        }
+
+        if (controlFrame?.IsCompletedSuccessfully == true)
+        {
+            var frame = await TakeControlFrameAsync(BarrierTimeout);
+            if (frame.Result is not null)
+            {
+                if (frame.Kind == Result)
+                {
+                    await control.WriteAsync(new[] { ResultAcknowledged });
+                    await control.FlushAsync();
+                }
+                return RecordBarrierObservation(new TaskBarrierObservation(
+                    TaskBarrierObservationKind.ProductResult,
+                    frame.Result,
+                    null));
+            }
+            if (frame.Kind == PreTaskHangReached)
+            {
+                return RecordBarrierObservation(new TaskBarrierObservation(
+                    TaskBarrierObservationKind.PreTaskStageReached,
+                    null,
+                    null));
+            }
+            throw new InvalidDataException("Unexpected lifecycle control frame before task ready.");
+        }
+
+        if (processExit.IsCompleted)
+        {
+            await processExit;
+            if (controlFrame?.IsCompletedSuccessfully == true)
+            {
+                return await ObserveTaskBarrierAsync(
+                    TimeSpan.Zero,
+                    injectReportedIdentityFailure);
+            }
+            var process = new ProcessResult(
+                Probe.ExitCode,
+                await stdout,
+                await stderr);
+            return RecordBarrierObservation(new TaskBarrierObservation(
+                TaskBarrierObservationKind.ProcessExited,
+                null,
+                Probe.ExitCode,
+                process));
+        }
+
+        if (taskReady.IsCompleted)
+        {
+            await taskReady;
+        }
+        if (controlFrame?.IsCompleted == true)
+        {
+            await controlFrame;
+        }
+
+        return RecordBarrierObservation(new TaskBarrierObservation(
+            TaskBarrierObservationKind.TimedOut,
+            null,
+            null));
+    }
+
+    private TaskBarrierObservation RecordBarrierObservation(TaskBarrierObservation observation)
+    {
+        LastTaskBarrierObservation = observation;
+        return observation;
+    }
+
+    private static string DescribeBarrierObservation(TaskBarrierObservation observation)
+    {
+        if (observation.Result is not null)
+        {
+            var code = IsClosedDiagnosticCode(observation.Result.Code)
+                ? observation.Result.Code
+                : "unrecognized";
+            return "Expected task-ready but observed a bounded product result: "
+                + $"status={observation.Result.Status}, code={code}, phase={observation.Result.Phase}.";
+        }
+
+        return observation.Kind switch
+        {
+            TaskBarrierObservationKind.ProcessExited =>
+                $"Expected task-ready but the probe exited with class {observation.ExitCode}.",
+            TaskBarrierObservationKind.PreTaskStageReached =>
+                "Expected task-ready but the configured pre-task stage was reached.",
+            TaskBarrierObservationKind.TimedOut =>
+                "Expected task-ready but the bounded parent deadline elapsed.",
+            _ => "Expected task-ready but observed another closed lifecycle state.",
+        };
+    }
+
+    private static bool IsClosedDiagnosticCode(string value) =>
+        value.Length <= 128
+        && value.All(character =>
+            character is >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '.'
+            or '-');
 
     public async Task SendCommandAsync(byte command)
     {
         await control.WriteAsync(new[] { command });
         await control.FlushAsync();
-        var acknowledgement = await ReadExactlyAsync(control, 2).WaitAsync(BarrierTimeout);
-        Assert.Equal(ProtocolVersion, acknowledgement[0]);
-        Assert.Equal(CommandApplied, acknowledgement[1]);
+        var acknowledgement = await TakeControlFrameAsync(BarrierTimeout);
+        Assert.Equal(CommandApplied, acknowledgement.Kind);
+        Assert.Null(acknowledgement.Result);
     }
 
     public async Task WriteControlByteAsync(byte value)
@@ -173,7 +316,9 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         byte expectedKind = Result,
         byte acknowledgement = ResultAcknowledged)
     {
-        var result = await Task.Run(() => ReadResult(control)).WaitAsync(BarrierTimeout);
+        var frame = await TakeControlFrameAsync(BarrierTimeout);
+        var result = Assert.IsType<LifecycleResult>(frame.Result);
+        Assert.Equal(frame.Kind, result.Kind);
         Assert.Equal(expectedKind, result.Kind);
         if (expectedKind == Result)
         {
@@ -187,9 +332,9 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     {
         await control.WriteAsync(new[] { ReleaseSession });
         await control.FlushAsync();
-        var released = await ReadExactlyAsync(control, 2).WaitAsync(BarrierTimeout);
-        Assert.Equal(ProtocolVersion, released[0]);
-        Assert.Equal(SessionReleased, released[1]);
+        var released = await TakeControlFrameAsync(BarrierTimeout);
+        Assert.Equal(SessionReleased, released.Kind);
+        Assert.Null(released.Result);
     }
 
     public async Task<ProcessResult> WaitForExitAsync()
@@ -221,6 +366,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         }
         disposed = true;
 
+        var cleanupFailed = false;
         if (task.IsConnected && !taskReleased)
         {
             try
@@ -230,6 +376,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             }
             catch (Exception exception) when (IsProcessCleanupException(exception))
             {
+                taskReleased = true;
             }
         }
 
@@ -243,21 +390,44 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             }
             catch (TimeoutException)
             {
-                Probe.Kill(entireProcessTree: true);
-                await Probe.WaitForExitAsync();
+                try
+                {
+                    Probe.Kill(entireProcessTree: true);
+                    await Probe.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (Exception exception) when (IsProcessCleanupException(exception))
+                {
+                    _ = exception.HResult;
+                }
             }
         }
 
-        var identities = new[] { TaskIdentity, BuildHostIdentity }
-            .Where(identity => identity is not null)
-            .Select(identity => identity!.Value)
+        var identities = retainedIdentities
+            .Concat(new[] { TaskIdentity, BuildHostIdentity }
+                .Where(identity => identity is not null)
+                .Select(identity => identity!.Value))
             .Distinct()
             .ToArray();
         foreach (var identity in identities)
         {
-            await TerminateIdentityAsync(identity);
+            cleanupFailed |= !await TerminateIdentityAsync(identity);
+        }
+
+        await ObservePendingPipeTaskAsync(pendingTaskReady);
+        await ObservePendingPipeTaskAsync(pendingControlFrame);
+        await ObservePendingPipeTaskAsync(controlConnection);
+        await ObservePendingPipeTaskAsync(taskConnection);
+
+        if (!ProcessIdentityHasExited(probeIdentity)
+            || identities.Any(identity => !ProcessIdentityHasExited(identity)))
+        {
+            cleanupFailed = true;
         }
         Probe.Dispose();
+        if (cleanupFailed)
+        {
+            throw new InvalidOperationException("Lifecycle harness cleanup did not reap every owned process.");
+        }
     }
 
     public static ProcessStartInfo CreateStartInfo(string repositoryRoot, string mode)
@@ -297,6 +467,29 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         </Project>
         """;
 
+    private Task<TaskReadyMessage> PendingTaskReady() =>
+        pendingTaskReady ??= WaitForTaskReadyFrameAsync();
+
+    private async Task<TaskReadyMessage> WaitForTaskReadyFrameAsync()
+    {
+        await taskConnection;
+        return await Task.Run(() => ReadTaskReady(task));
+    }
+
+    private Task<ControlFrame> PendingControlFrame() =>
+        pendingControlFrame ??= Task.Run(() => ReadControlFrame(control));
+
+    private async Task<ControlFrame> TakeControlFrameAsync(TimeSpan timeout)
+    {
+        var pending = PendingControlFrame();
+        var frame = await pending.WaitAsync(timeout);
+        if (ReferenceEquals(pendingControlFrame, pending))
+        {
+            pendingControlFrame = null;
+        }
+        return frame;
+    }
+
     private static NamedPipeServerStream CreatePipe(string pipeName) => new(
         pipeName,
         PipeDirection.InOut,
@@ -327,11 +520,16 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             reader.ReadInt64());
     }
 
-    private static LifecycleResult ReadResult(Stream stream)
+    private static ControlFrame ReadControlFrame(Stream stream)
     {
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
         Assert.Equal(ProtocolVersion, reader.ReadByte());
         var kind = reader.ReadByte();
+        if (kind is not Result and not SessionReady)
+        {
+            return new ControlFrame(kind, null);
+        }
+
         var status = (RepositoryLoadStatus)reader.ReadByte();
         Assert.Equal(1, reader.ReadByte());
         var code = ReadBoundedString(reader, 128);
@@ -364,7 +562,9 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                 native == int.MinValue ? null : native,
                 types));
         }
-        return new LifecycleResult(kind, status, code, phase, lifecycle, exceptions);
+        return new ControlFrame(
+            kind,
+            new LifecycleResult(kind, status, code, phase, lifecycle, exceptions));
     }
 
     private static string ReadBoundedString(BinaryReader reader, int maximumLength)
@@ -390,7 +590,33 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         return bytes;
     }
 
-    private static ProcessIdentity FindBuildHostIdentity(int taskProcessId, int probeProcessId)
+    private static async Task<BoundedProcessText> ReadBoundedTextAsync(StreamReader reader)
+    {
+        var buffer = new char[256];
+        var text = new StringBuilder(MaximumCapturedStreamCharacters);
+        var truncated = false;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer);
+            if (read == 0)
+            {
+                break;
+            }
+
+            var retained = Math.Min(
+                read,
+                MaximumCapturedStreamCharacters - text.Length);
+            if (retained > 0)
+            {
+                text.Append(buffer, 0, retained);
+            }
+            truncated |= retained != read;
+        }
+
+        return new BoundedProcessText(text.ToString(), truncated);
+    }
+
+    private ProcessIdentity FindBuildHostIdentity(int taskProcessId, int probeProcessId)
     {
         var expectedPath = ExpectedBuildHostPath();
         var visited = new HashSet<int>();
@@ -400,7 +626,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             using var process = Process.GetProcessById(current);
             var identity = new ProcessIdentity(
                 current,
-                process.StartTime.ToUniversalTime().Ticks);
+                StableProcessStartIdentity.Read(process));
+            RetainIdentity(identity);
             if (IsExpectedBuildHostProcess(process, expectedPath))
             {
                 Assert.True(IsDescendantOf(identity.ProcessId, probeProcessId));
@@ -410,6 +637,14 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                 ?? throw new InvalidOperationException("The task process lost its BuildHost ancestry.");
         }
         throw new InvalidOperationException("The task was not attributable to the expected BuildHost module.");
+    }
+
+    private void RetainIdentity(ProcessIdentity identity)
+    {
+        if (!retainedIdentities.Contains(identity))
+        {
+            retainedIdentities.Add(identity);
+        }
     }
 
     private static bool IsExpectedBuildHostProcess(Process process, string expectedPath)
@@ -473,41 +708,47 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             : null;
     }
 
-    private static long ProcessStartIdentity(int processId)
-    {
-        using var process = Process.GetProcessById(processId);
-        return process.StartTime.ToUniversalTime().Ticks;
-    }
-
     private static bool ProcessIdentityHasExited(ProcessIdentity identity)
     {
         try
         {
             using var process = Process.GetProcessById(identity.ProcessId);
             return process.HasExited
-                || process.StartTime.ToUniversalTime().Ticks != identity.StartIdentity;
+                || StableProcessStartIdentity.Read(process) != identity.StartIdentity;
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        catch (Exception exception) when (exception is
+            ArgumentException
+            or FileNotFoundException
+            or DirectoryNotFoundException
+            or InvalidOperationException)
         {
             return true;
         }
+        catch (Exception exception) when (exception is
+            IOException
+            or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
-    private static async Task TerminateIdentityAsync(ProcessIdentity identity)
+    private static async Task<bool> TerminateIdentityAsync(ProcessIdentity identity)
     {
         try
         {
             using var process = Process.GetProcessById(identity.ProcessId);
             if (process.HasExited
-                || process.StartTime.ToUniversalTime().Ticks != identity.StartIdentity)
+                || StableProcessStartIdentity.Read(process) != identity.StartIdentity)
             {
-                return;
+                return true;
             }
             process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            return ProcessIdentityHasExited(identity);
         }
         catch (Exception exception) when (IsProcessCleanupException(exception))
         {
+            return ProcessIdentityHasExited(identity);
         }
     }
 
@@ -517,6 +758,23 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         or InvalidOperationException
         or System.ComponentModel.Win32Exception
         or TimeoutException;
+
+    private static async Task ObservePendingPipeTaskAsync(Task? pending)
+    {
+        if (pending is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception exception)
+        {
+            _ = exception.GetType();
+        }
+    }
 
     private static string LoaderProbePath() => Path.Combine(
         FindRepositoryRoot(),
@@ -563,6 +821,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         int ProcessId,
         long StartIdentity);
 
+    private sealed record ControlFrame(byte Kind, LifecycleResult? Result);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation
     {
@@ -585,6 +845,21 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
 internal readonly record struct ProcessIdentity(int ProcessId, long StartIdentity);
 
+internal enum TaskBarrierObservationKind
+{
+    TaskReady,
+    ProductResult,
+    PreTaskStageReached,
+    ProcessExited,
+    TimedOut,
+}
+
+internal sealed record TaskBarrierObservation(
+    TaskBarrierObservationKind Kind,
+    LifecycleResult? Result,
+    int? ExitCode,
+    ProcessResult? Process = null);
+
 internal sealed record LifecycleExceptionResult(
     LoaderExceptionRole Role,
     LoaderExceptionBoundary Boundary,
@@ -601,4 +876,12 @@ internal sealed record LifecycleResult(
     ushort Lifecycle,
     IReadOnlyList<LifecycleExceptionResult> Exceptions);
 
-internal sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+internal sealed record BoundedProcessText(string Text, bool Truncated)
+{
+    public bool HasContent => Text.Length != 0 || Truncated;
+}
+
+internal sealed record ProcessResult(
+    int ExitCode,
+    BoundedProcessText StandardOutput,
+    BoundedProcessText StandardError);

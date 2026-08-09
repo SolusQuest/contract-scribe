@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Threading;
+using ContractScribe.TestSupport;
 using Microsoft.Build.Framework;
 
 namespace ContractScribe.BuildHostProbe;
@@ -47,7 +48,7 @@ public sealed class BuildHostProbeTask : ITask
             writer.Write(Ready);
             writer.Write(token.ToByteArray());
             writer.Write(process.Id);
-            writer.Write(process.StartTime.ToUniversalTime().Ticks);
+            writer.Write(StableProcessStartIdentity.Read(process));
             writer.Flush();
 
             using var releaseDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
@@ -69,8 +70,12 @@ public sealed class BuildHostProbeTask : ITask
             or TimeoutException
             or OperationCanceledException
             or UnauthorizedAccessException
-            or InvalidOperationException)
+            or InvalidOperationException
+            or ArgumentException
+            or FormatException
+            or OverflowException)
         {
+            return true;
         }
 
         return true;

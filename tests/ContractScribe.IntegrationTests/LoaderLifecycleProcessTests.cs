@@ -17,6 +17,7 @@ public sealed class LoaderLifecycleProcessTests
     public async Task HeldSessionRemainsHealthyAcrossFailureCancellationAndUnexpectedCleanup()
     {
         await using var heldFixture = await PreparedFixtureAsync();
+        await using var successFixture = await PreparedFixtureAsync();
         await using var failureFixture = await PreparedFixtureAsync();
         await using var cancellationFixture = await PreparedFixtureAsync();
         await using var unexpectedFixture = await PreparedFixtureAsync();
@@ -30,6 +31,13 @@ public sealed class LoaderLifecycleProcessTests
         Assert.True(
             SpinWait.SpinUntil(held.OwnedProcessesHaveExited, TimeSpan.FromSeconds(10)),
             "The held session retained a load-call-owned BuildHost process.");
+        Assert.False(held.Probe.HasExited);
+
+        await RunTargetAsync(
+            successFixture.Root,
+            "lifecycle-success",
+            RepositoryLoadStatus.Success,
+            string.Empty);
         Assert.False(held.Probe.HasExited);
 
         await RunTargetAsync(
@@ -72,23 +80,25 @@ public sealed class LoaderLifecycleProcessTests
     {
         await using var fixture = await PreparedFixtureAsync();
 
-        using (var rejected = Process.Start(
-                   LoaderLifecycleHarness.CreateStartInfo(
-                       fixture.Root,
-                       "lifecycle-success"))
-               ?? throw new InvalidOperationException("Rejected lifecycle probe failed to start."))
+        var rejected = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-success",
+            configureControl: false);
+        await using (rejected)
         {
-            var stdout = rejected.StandardOutput.ReadToEndAsync();
-            var stderr = rejected.StandardError.ReadToEndAsync();
-            await rejected.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var rejectedProcess = await rejected.WaitForExitAsync();
             AssertProcessExit(
-                new ProcessResult(rejected.ExitCode, await stdout, await stderr),
+                rejectedProcess,
                 LoaderLifecycleHarness.SetupRejectedExit);
+            Assert.Null(rejected.TaskIdentity);
+            Assert.Null(rejected.BuildHostIdentity);
         }
+        Assert.True(rejected.AllProcessesHaveExited());
 
-        await using (var success = await LoaderLifecycleHarness.StartAsync(
-                         fixture.Root,
-                         "lifecycle-success"))
+        var success = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-success");
+        await using (success)
         {
             await success.WaitForTaskReadyAsync();
             await success.ReleaseTaskAsync();
@@ -98,10 +108,12 @@ public sealed class LoaderLifecycleProcessTests
                 await success.WaitForExitAsync(),
                 LoaderLifecycleHarness.SuccessExit);
         }
+        Assert.True(success.AllProcessesHaveExited());
 
-        await using (var mismatch = await LoaderLifecycleHarness.StartAsync(
-                         fixture.Root,
-                         "lifecycle-expect-failure"))
+        var mismatch = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-expect-failure");
+        await using (mismatch)
         {
             await mismatch.WaitForTaskReadyAsync();
             await mismatch.ReleaseTaskAsync();
@@ -111,10 +123,12 @@ public sealed class LoaderLifecycleProcessTests
                 await mismatch.WaitForExitAsync(),
                 LoaderLifecycleHarness.OutcomeMismatchExit);
         }
+        Assert.True(mismatch.AllProcessesHaveExited());
 
-        await using (var controlFailure = await LoaderLifecycleHarness.StartAsync(
-                         fixture.Root,
-                         "lifecycle-success"))
+        var controlFailure = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-success");
+        await using (controlFailure)
         {
             await controlFailure.WaitForTaskReadyAsync();
             await controlFailure.ReleaseTaskAsync();
@@ -124,6 +138,7 @@ public sealed class LoaderLifecycleProcessTests
                 await controlFailure.WaitForExitAsync(),
                 LoaderLifecycleHarness.ControlFailureExit);
         }
+        Assert.True(controlFailure.AllProcessesHaveExited());
     }
 
     [Fact]
@@ -148,6 +163,26 @@ public sealed class LoaderLifecycleProcessTests
         });
         Assert.IsType<Xunit.Sdk.FailException>(assertion);
         Assert.True(assertionHarness.AllProcessesHaveExited());
+
+        var identityFailureHarness = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-success");
+        var identityFailure = await Record.ExceptionAsync(async () =>
+        {
+            try
+            {
+                await identityFailureHarness
+                    .WaitForTaskReadyWithInjectedIdentityFailureAsync();
+            }
+            finally
+            {
+                await identityFailureHarness.DisposeAsync();
+            }
+        });
+        Assert.IsType<Xunit.Sdk.EqualException>(identityFailure);
+        Assert.NotNull(identityFailureHarness.TaskIdentity);
+        Assert.NotNull(identityFailureHarness.BuildHostIdentity);
+        Assert.True(identityFailureHarness.AllProcessesHaveExited());
 
         var timeoutHarness = await LoaderLifecycleHarness.StartAsync(
             fixture.Root,
@@ -192,7 +227,7 @@ public sealed class LoaderLifecycleProcessTests
             await missingReceiver.ReleaseTaskAsync();
             var process = await missingReceiver.WaitForExitAsync();
             AssertProcessExit(process, LoaderLifecycleHarness.ControlFailureExit);
-            Assert.StartsWith("Success:", process.StandardOutput, StringComparison.Ordinal);
+            AssertNormalizedOutput(process, RepositoryLoadStatus.Success, string.Empty);
             Assert.True(
                 SpinWait.SpinUntil(missingReceiver.OwnedProcessesHaveExited, TimeSpan.FromSeconds(10)));
         }
@@ -205,7 +240,7 @@ public sealed class LoaderLifecycleProcessTests
             await notReading.ReleaseTaskAsync();
             var process = await notReading.WaitForExitAsync();
             AssertProcessExit(process, LoaderLifecycleHarness.ControlFailureExit);
-            Assert.StartsWith("Success:", process.StandardOutput, StringComparison.Ordinal);
+            AssertNormalizedOutput(process, RepositoryLoadStatus.Success, string.Empty);
             Assert.True(
                 SpinWait.SpinUntil(notReading.OwnedProcessesHaveExited, TimeSpan.FromSeconds(10)));
         }
@@ -219,7 +254,7 @@ public sealed class LoaderLifecycleProcessTests
             await malformed.ReleaseTaskAsync();
             var process = await malformed.WaitForExitAsync();
             AssertProcessExit(process, LoaderLifecycleHarness.ControlFailureExit);
-            Assert.StartsWith("Success:", process.StandardOutput, StringComparison.Ordinal);
+            AssertNormalizedOutput(process, RepositoryLoadStatus.Success, string.Empty);
             Assert.True(
                 SpinWait.SpinUntil(malformed.OwnedProcessesHaveExited, TimeSpan.FromSeconds(10)));
         }
@@ -233,10 +268,74 @@ public sealed class LoaderLifecycleProcessTests
             await serialization.ReleaseTaskAsync();
             var process = await serialization.WaitForExitAsync();
             AssertProcessExit(process, LoaderLifecycleHarness.ControlFailureExit);
-            Assert.StartsWith("Success:", process.StandardOutput, StringComparison.Ordinal);
+            AssertNormalizedOutput(process, RepositoryLoadStatus.Success, string.Empty);
             Assert.True(
                 SpinWait.SpinUntil(serialization.OwnedProcessesHaveExited, TimeSpan.FromSeconds(10)));
         }
+    }
+
+    [Fact]
+    public async Task PreTaskResultHangAndExitRemainDistinctBoundedObservations()
+    {
+        await using var fixture = await PreparedFixtureAsync();
+
+        await using (var failure = await LoaderLifecycleHarness.StartAsync(
+                         fixture.Root,
+                         "lifecycle-pre-task-unexpected"))
+        {
+            var observation = await failure.ObserveTaskBarrierAsync();
+            Assert.Equal(TaskBarrierObservationKind.ProductResult, observation.Kind);
+            var result = Assert.IsType<LifecycleResult>(observation.Result);
+            Assert.Equal(RepositoryLoadStatus.Failure, result.Status);
+            Assert.Equal("loader.internal-error", result.Code);
+            Assert.Contains(result.Exceptions, exception =>
+                exception.Phase == LoaderExecutionPhase.GraphEvaluation
+                && exception.TypeChain.Contains(
+                    typeof(InvalidOperationException).FullName!,
+                    StringComparer.Ordinal));
+            Assert.Null(failure.TaskIdentity);
+            Assert.Null(failure.BuildHostIdentity);
+            AssertProcessExit(
+                await failure.WaitForExitAsync(),
+                LoaderLifecycleHarness.SuccessExit);
+        }
+
+        var hang = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-pre-task-hang");
+        try
+        {
+            var reached = await hang.ObserveTaskBarrierAsync();
+            Assert.Equal(TaskBarrierObservationKind.PreTaskStageReached, reached.Kind);
+            var timeout = await hang.ObserveTaskBarrierAsync(TimeSpan.FromMilliseconds(100));
+            Assert.Equal(TaskBarrierObservationKind.TimedOut, timeout.Kind);
+            Assert.False(hang.Probe.HasExited);
+        }
+        finally
+        {
+            await hang.DisposeAsync();
+        }
+        Assert.True(hang.AllProcessesHaveExited());
+
+        var abrupt = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-pre-task-hang");
+        try
+        {
+            var reached = await abrupt.ObserveTaskBarrierAsync();
+            Assert.Equal(TaskBarrierObservationKind.PreTaskStageReached, reached.Kind);
+            abrupt.KillProbeAbruptly();
+            var exit = await abrupt.ObserveTaskBarrierAsync();
+            Assert.Equal(TaskBarrierObservationKind.ProcessExited, exit.Kind);
+            Assert.NotNull(exit.ExitCode);
+            Assert.NotNull(exit.Process);
+            Assert.False(exit.Process.StandardError.HasContent);
+        }
+        finally
+        {
+            await abrupt.DisposeAsync();
+        }
+        Assert.True(abrupt.AllProcessesHaveExited());
     }
 
     [Fact]
@@ -270,7 +369,9 @@ public sealed class LoaderLifecycleProcessTests
             }
             catch (Exception exception)
             {
-                Assert.Fail($"Windows causal topology failed at iteration {iteration}: {exception}");
+                var type = exception.GetType().FullName ?? exception.GetType().Name;
+                Assert.Fail(
+                    $"Windows causal topology failed at iteration {iteration} with {Bound(type, 160)}.");
             }
         }
     }
@@ -288,6 +389,9 @@ public sealed class LoaderLifecycleProcessTests
             "lifecycle-success");
         await Task.WhenAll(left.WaitForTaskReadyAsync(), right.WaitForTaskReadyAsync());
         Assert.NotEqual(left.Probe.Id, right.Probe.Id);
+        Assert.NotNull(left.TaskIdentity);
+        Assert.NotNull(right.TaskIdentity);
+        Assert.NotEqual(left.TaskIdentity, right.TaskIdentity);
         Assert.NotNull(left.BuildHostIdentity);
         Assert.NotNull(right.BuildHostIdentity);
         Assert.NotEqual(left.BuildHostIdentity, right.BuildHostIdentity);
@@ -338,8 +442,72 @@ public sealed class LoaderLifecycleProcessTests
     {
         Assert.True(
             result.ExitCode == expectedExit,
-            $"Lifecycle probe exited {result.ExitCode}, expected {expectedExit}:{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
+            $"Lifecycle probe exited {result.ExitCode}, expected {expectedExit}; "
+            + $"stdout={DescribeOutput(result.StandardOutput)}; "
+            + $"stderr={DescribeStream(result.StandardError)}.");
+        Assert.False(
+            result.StandardError.HasContent,
+            $"Lifecycle probe stderr was {DescribeStream(result.StandardError)}.");
     }
+
+    private static void AssertNormalizedOutput(
+        ProcessResult result,
+        RepositoryLoadStatus expectedStatus,
+        string expectedCode)
+    {
+        Assert.False(result.StandardOutput.Truncated);
+        var normalized = result.StandardOutput.Text.TrimEnd('\r', '\n');
+        var separator = normalized.IndexOf(':');
+        var status = default(RepositoryLoadStatus);
+        var recognized = separator > 0
+            && normalized.IndexOfAny(['\r', '\n']) < 0
+            && Enum.TryParse<RepositoryLoadStatus>(
+                normalized[..separator],
+                ignoreCase: false,
+                out status)
+            && IsClosedDiagnosticCode(normalized[(separator + 1)..]);
+        Assert.True(recognized, "Lifecycle probe stdout was not one normalized status/code line.");
+        Assert.Equal(expectedStatus, status);
+        Assert.Equal(expectedCode, normalized[(separator + 1)..]);
+    }
+
+    private static string DescribeOutput(BoundedProcessText output)
+    {
+        if (output.Truncated)
+        {
+            return "truncated";
+        }
+
+        var normalized = output.Text.TrimEnd('\r', '\n');
+        var separator = normalized.IndexOf(':');
+        if (separator < 0
+            || !Enum.TryParse<RepositoryLoadStatus>(
+                normalized[..separator],
+                ignoreCase: false,
+                out var status))
+        {
+            return output.HasContent ? "unrecognized" : "empty";
+        }
+
+        var code = normalized[(separator + 1)..];
+        return IsClosedDiagnosticCode(code)
+            ? $"{status}:{code}"
+            : $"{status}:unrecognized";
+    }
+
+    private static string DescribeStream(BoundedProcessText stream) =>
+        stream.Truncated ? "nonempty-truncated" : stream.HasContent ? "nonempty" : "empty";
+
+    private static string Bound(string value, int maximumLength) =>
+        value.Length <= maximumLength ? value : value[..maximumLength];
+
+    private static bool IsClosedDiagnosticCode(string value) =>
+        value.Length <= 128
+        && value.All(character =>
+            character is >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '.'
+            or '-');
 
     private static void AssertProtectedInputsUnchanged(
         string root,
