@@ -379,18 +379,18 @@ public sealed class ProductionAuditHostTests
     [Theory]
     [InlineData(".contractscribe-hv-freeze-")]
     [InlineData(".contractscribe-hv-release-")]
-    public async Task TemporaryDiskMeter_CountsRetiredValidationPrefixFiles(string prefix)
+    public async Task TemporaryDiskMeter_CountsPreexistingRetiredValidationPrefixFiles(string prefix)
     {
         var root = Path.Join(
             Path.GetTempPath(),
             "contractscribe-disk-meter",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        var reconciled = Path.Join(root, prefix + "reconcile.bin");
+        await File.WriteAllBytesAsync(reconciled, new byte[257]);
         try
         {
             using var meter = new TemporaryDiskMeter(root, null);
-            var reconciled = Path.Join(root, prefix + "reconcile.bin");
-            await File.WriteAllBytesAsync(reconciled, new byte[257]);
             Assert.Equal(257, meter.Reconcile());
             File.Delete(reconciled);
             Assert.Equal(0, meter.Reconcile());
