@@ -24,6 +24,25 @@ public sealed class CliPreflightTests
         Assert.Equal(Path.Join(fixture.Outside, "result.json"), result.PublicationTarget.FinalPath);
     }
 
+    [Fact]
+    public void Run_TreatsDescendantsOfAFileSystemRootAsContained()
+    {
+        using var fixture = new PreflightFixture();
+        var fileSystemRoot = Path.GetPathRoot(fixture.Root)
+            ?? throw new InvalidOperationException("The test path must have a filesystem root.");
+
+        var exception = Assert.Throws<CliPreflightException>(() =>
+            CliPreflight.Run(
+                new AuditCommandArguments(
+                    fileSystemRoot,
+                    Path.Join(fixture.Repository, "src", "App.CSPROJ"),
+                    Path.Join(fixture.Repository, "policy.json"),
+                    Path.Join(fixture.Outside, "result.json")),
+                fixture.Root));
+
+        Assert.Equal("cli.preflight.output-inside-root", exception.Code);
+    }
+
     [Theory]
     [InlineData("missing", "src/App.csproj", "policy.json", "outside/result.json", "cli.preflight.repository-root")]
     [InlineData("repo", "../outside/missing.csproj", "policy.json", "outside/result.json", "cli.preflight.input-escape")]

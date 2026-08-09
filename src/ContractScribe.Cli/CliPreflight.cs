@@ -296,10 +296,11 @@ internal static class CliPreflight
             : StringComparison.Ordinal;
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return string.Equals(normalizedRoot, normalizedPath, comparison)
-            || normalizedPath.StartsWith(
-                normalizedRoot + Path.DirectorySeparatorChar,
-                comparison);
+            || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 
     private static bool IsPathFailure(Exception exception) =>
