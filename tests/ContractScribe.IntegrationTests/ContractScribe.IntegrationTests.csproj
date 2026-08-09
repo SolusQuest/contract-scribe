@@ -33,6 +33,8 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
                       ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ContractScribe.BuildHostProbe/ContractScribe.BuildHostProbe.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

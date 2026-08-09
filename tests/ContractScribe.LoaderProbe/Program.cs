@@ -22,6 +22,11 @@ if (args.Length < 3)
 var repositoryRoot = args[0];
 var inputPath = args[1];
 var mode = args[2];
+if (mode.StartsWith("lifecycle-", StringComparison.Ordinal))
+{
+    return await LoaderLifecycleDriver.RunAsync(args);
+}
+
 if (mode is "classification" or "policy-evidence")
 {
     var expectedLength = mode == "classification" ? 6 : 5;
@@ -36,20 +41,6 @@ if (mode is "classification" or "policy-evidence")
     CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(args[cultureArgument]);
     Environment.SetEnvironmentVariable("TZ", args[timeZoneArgument]);
     TimeZoneInfo.ClearCachedData();
-}
-
-if (mode == "observed-success")
-{
-    if (args.Length != 5)
-    {
-        return 64;
-    }
-
-    await File.WriteAllTextAsync(args[3], "ready");
-    while (!File.Exists(args[4]))
-    {
-        await Task.Delay(10);
-    }
 }
 
 using var cancellation = new CancellationTokenSource();
@@ -77,29 +68,6 @@ IReadOnlyList<ToolGeneratedSourceInput>? generated = mode == "failure"
 var outcome = await loader.LoadAsync(
     new RepositoryLoadRequest(repositoryRoot, inputPath, generated),
     cancellation.Token);
-if (mode == "churn")
-{
-    if (args.Length != 5 || outcome.Status != RepositoryLoadStatus.Success || outcome.Session is null)
-    {
-        return 65;
-    }
-
-    await outcome.Session.DisposeAsync();
-    outcome = null!;
-    await File.WriteAllTextAsync(args[3], "ready");
-    while (!File.Exists(args[4]))
-    {
-        outcome = await loader.LoadAsync(
-            new RepositoryLoadRequest(repositoryRoot, inputPath));
-        if (outcome.Status != RepositoryLoadStatus.Success || outcome.Session is null)
-        {
-            return 67;
-        }
-
-        await outcome.Session.DisposeAsync();
-    }
-}
-
 if (mode == "classification")
 {
     if (outcome.Status != RepositoryLoadStatus.Success || outcome.Session is null)
@@ -223,12 +191,12 @@ if (mode == "stdout-after-success")
 Console.WriteLine($"{outcome?.Status}:{outcome?.PrimaryFailure?.Code}");
 var expected = mode switch
 {
-    "success" or "observed-success" or "churn" => RepositoryLoadStatus.Success,
+    "success" => RepositoryLoadStatus.Success,
     "failure" => RepositoryLoadStatus.Failure,
     "cancellation" => RepositoryLoadStatus.Cancelled,
     _ => (RepositoryLoadStatus)(-1),
 };
-return mode == "churn" || outcome?.Status == expected ? 0 : 66;
+return outcome?.Status == expected ? 0 : 66;
 
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern IntPtr GetStdHandle(int standardHandle);
