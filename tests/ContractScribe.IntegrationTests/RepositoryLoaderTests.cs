@@ -179,6 +179,26 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(["Library/Library.csproj"], app.ProjectReferences);
     }
 
+    [Theory]
+    [InlineData("Fixture.sln")]
+    [InlineData("Fixture.slnx")]
+    public void KeepsOneSolutionDirSeparatorAtFileSystemRoot(string input)
+    {
+        var fileSystemRoot = Path.GetPathRoot(Path.GetTempPath())
+            ?? throw new InvalidOperationException("The temporary path must have a filesystem root.");
+        var solutionPath = Path.Combine(fileSystemRoot, input);
+        var paths = new ResolvedRepositoryPaths(
+            fileSystemRoot,
+            fileSystemRoot,
+            solutionPath,
+            solutionPath,
+            []);
+
+        var properties = PostRegistrationLoader.CreateEvaluationProperties(paths);
+
+        Assert.Equal(fileSystemRoot, properties["SolutionDir"]);
+    }
+
     [Fact]
     public async Task IncludesProjectReferencesConditionedOnPinnedNonExistentFile()
     {
@@ -589,6 +609,54 @@ public sealed class RepositoryLoaderTests
         var decomposed = resolver.RelativeIdentity(root, Path.Combine(root, "Cafe\u0301", "Project.csproj"));
 
         Assert.NotEqual(composed, decomposed);
+    }
+
+    [Fact]
+    public void RepositoryPathResolverAcceptsInputAndProjectBelowFileSystemRoot()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var projectPath = Path.Join(
+            repositoryRoot,
+            "src",
+            "ContractScribe.Core",
+            "ContractScribe.Core.csproj");
+        var fileSystemRoot = Path.GetPathRoot(repositoryRoot)
+            ?? throw new InvalidOperationException("The repository path must have a filesystem root.");
+        var resolver = new RepositoryPathResolver();
+
+        var resolved = resolver.Resolve(fileSystemRoot, projectPath);
+        var project = resolver.ResolveProject(
+            resolved.LexicalRoot,
+            resolved.PhysicalRoot,
+            projectPath);
+
+        Assert.Equal(Path.GetFullPath(projectPath), resolved.PhysicalInput);
+        Assert.Equal(Path.GetFullPath(projectPath), project.PhysicalPath);
+    }
+
+    [Fact]
+    public async Task RepositoryLoaderLoadsProjectBelowFileSystemRoot()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var fileSystemRoot = Path.GetPathRoot(fixture.Root)
+            ?? throw new InvalidOperationException("The fixture path must have a filesystem root.");
+        var projectPath = Path.Join(fixture.Root, "App", "App.csproj");
+        var expectedIdentity = Path.GetRelativePath(fileSystemRoot, projectPath)
+            .Replace('\\', '/');
+        var loader = new RepositoryLoader(
+            observer: null,
+            inventory: static (_, _) => new Dictionary<string, InventoryEntry>());
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fileSystemRoot, projectPath));
+
+        Assert.True(
+            outcome.Status == RepositoryLoadStatus.Success,
+            $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        Assert.Contains(
+            session.Projects,
+            project => project.ProjectIdentity == expectedIdentity);
     }
 
     [Fact]
@@ -1994,6 +2062,11 @@ internal sealed class LoaderFixture : IAsyncDisposable
     public string SolutionPath { get; }
 
     public string LegacySolutionPath { get; }
+
+    public Task PrepareEditorConfigAsync() =>
+        RunDotnetAsync(
+            Root,
+            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"]);
 
     public static async Task<LoaderFixture> CreateAsync(
         string? appProject = null,

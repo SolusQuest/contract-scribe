@@ -379,18 +379,18 @@ public sealed class ProductionAuditHostTests
     [Theory]
     [InlineData(".contractscribe-hv-freeze-")]
     [InlineData(".contractscribe-hv-release-")]
-    public async Task TemporaryDiskMeter_CountsRetiredValidationPrefixFiles(string prefix)
+    public async Task TemporaryDiskMeter_CountsPreexistingRetiredValidationPrefixFiles(string prefix)
     {
         var root = Path.Join(
             Path.GetTempPath(),
             "contractscribe-disk-meter",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        var reconciled = Path.Join(root, prefix + "reconcile.bin");
+        await File.WriteAllBytesAsync(reconciled, new byte[257]);
         try
         {
             using var meter = new TemporaryDiskMeter(root, null);
-            var reconciled = Path.Join(root, prefix + "reconcile.bin");
-            await File.WriteAllBytesAsync(reconciled, new byte[257]);
             Assert.Equal(257, meter.Reconcile());
             File.Delete(reconciled);
             Assert.Equal(0, meter.Reconcile());
@@ -666,6 +666,72 @@ public sealed class ProductionAuditHostTests
             [
                 "invalidation-attempt-failed",
                 "terminal-commit-publication-failure",
+                "late-terminal-attempt-rejected",
+            ],
+            outcome.TransitionEvents);
+    }
+
+    [Fact]
+    public async Task CancellationDuringSuccessfulInvalidation_CommitsNotSelectedCancellation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        await File.WriteAllTextAsync(resultPath, "{\"prior\":true}\n");
+        using var cancellation = new CancellationTokenSource();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                BeforeInvalidation: cancellation.Cancel,
+                LateCompletion: _ => Task.CompletedTask),
+            cancellation.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.publication.cancelled", outcome.Terminal.Failure?.Code);
+        Assert.Equal(
+            HostToolchainSelectionState.NotSelected,
+            outcome.Terminal.Toolchain.SelectionState);
+        Assert.False(File.Exists(resultPath));
+        Assert.Equal(
+            [
+                "invalidation-completed",
+                "terminal-commit-cancelled",
+                "late-terminal-attempt-rejected",
+            ],
+            outcome.TransitionEvents);
+    }
+
+    [Fact]
+    public async Task CancellationDuringFailedInvalidation_PreservesEarlierCancellation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        var prior = "{\"prior\":true}\n"u8.ToArray();
+        await File.WriteAllBytesAsync(resultPath, prior);
+        using var cancellation = new CancellationTokenSource();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                Fault: ProductionHostFault.PublicationInvalidation,
+                BeforeInvalidation: cancellation.Cancel,
+                LateCompletion: _ => Task.CompletedTask),
+            cancellation.Token);
+
+        Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.publication.cancelled", outcome.Terminal.Failure?.Code);
+        Assert.Equal(
+            HostToolchainSelectionState.NotSelected,
+            outcome.Terminal.Toolchain.SelectionState);
+        Assert.Equal(prior, await File.ReadAllBytesAsync(resultPath));
+        Assert.Equal(
+            [
+                "invalidation-attempt-failed",
+                "terminal-commit-cancelled",
                 "late-terminal-attempt-rejected",
             ],
             outcome.TransitionEvents);

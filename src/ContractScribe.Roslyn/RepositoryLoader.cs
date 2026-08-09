@@ -236,8 +236,11 @@ public sealed class RepositoryLoader
             : StringComparison.Ordinal;
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var normalizedPath = Path.GetFullPath(path);
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedPath.Equals(normalizedRoot, comparison)
-            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
+            || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 }
 
@@ -539,7 +542,7 @@ internal static class PostRegistrationLoader
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static IReadOnlyDictionary<string, string> CreateEvaluationProperties(
+    internal static IReadOnlyDictionary<string, string> CreateEvaluationProperties(
         ResolvedRepositoryPaths paths)
     {
         var properties = new Dictionary<string, string>(
@@ -547,9 +550,13 @@ internal static class PostRegistrationLoader
             StringComparer.Ordinal);
         if (!paths.PhysicalInput.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
         {
+            var normalizedSolutionDirectory =
+                Path.TrimEndingDirectorySeparator(
+                    Path.GetDirectoryName(paths.PhysicalInput)!);
             properties["SolutionDir"] =
-                Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(paths.PhysicalInput)!)
-                + Path.DirectorySeparatorChar;
+                Path.EndsInDirectorySeparator(normalizedSolutionDirectory)
+                    ? normalizedSolutionDirectory
+                    : normalizedSolutionDirectory + Path.DirectorySeparatorChar;
         }
 
         return properties;
@@ -1179,8 +1186,11 @@ internal static class PostRegistrationLoader
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var normalizedPath = Path.GetFullPath(path);
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedPath.Equals(normalizedRoot, comparison)
-            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
+            || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 
     private static StringComparer PathComparer() =>

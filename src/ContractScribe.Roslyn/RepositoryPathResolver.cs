@@ -86,10 +86,11 @@ internal sealed class RepositoryPathResolver
     {
         var normalizedRoot = TrimDirectory(Path.GetFullPath(root));
         var normalizedCandidate = Path.GetFullPath(candidate);
+        var rootPrefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedCandidate.Equals(normalizedRoot, comparison)
-            || normalizedCandidate.StartsWith(
-                normalizedRoot + Path.DirectorySeparatorChar,
-                comparison);
+            || normalizedCandidate.StartsWith(rootPrefix, comparison);
     }
 
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
@@ -210,7 +211,9 @@ internal sealed class RepositoryPathResolver
             return;
         }
 
-        var prefix = normalizedRoot + Path.DirectorySeparatorChar;
+        var prefix = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
         if (!normalizedCandidate.StartsWith(prefix, comparison))
         {
             throw LoaderException.Input(code);
