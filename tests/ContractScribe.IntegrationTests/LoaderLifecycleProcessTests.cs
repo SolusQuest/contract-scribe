@@ -361,8 +361,17 @@ public sealed class LoaderLifecycleProcessTests
     [Fact]
     public async Task PendingPipeObservationSuppressesClosureButPreservesProtocolFailure()
     {
+        await LoaderLifecycleHarness.ObserveRealPipePeerClosureAsync();
         await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
             Task.FromException(new EndOfStreamException()));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new ObjectDisposedException("pipe")));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new OperationCanceledException()));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromCanceled(new CancellationToken(canceled: true)));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new TimeoutException()));
         await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
             Task.FromException(new System.Net.Sockets.SocketException(
                 (int)System.Net.Sockets.SocketError.OperationAborted)));
@@ -374,6 +383,13 @@ public sealed class LoaderLifecycleProcessTests
             LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
                 Task.Run(() => Assert.Equal(1, 2))));
         Assert.IsType<Xunit.Sdk.EqualException>(protocolFailure);
+
+        var mixedFailure = await Record.ExceptionAsync(() =>
+            LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+                Task.WhenAll(
+                    Task.FromException(new EndOfStreamException()),
+                    Task.Run(() => Assert.Equal(1, 2)))));
+        Assert.IsType<Xunit.Sdk.EqualException>(mixedFailure);
 
         var unrelatedSocketFailure = await Record.ExceptionAsync(() =>
             LoaderLifecycleHarness.ObservePendingPipeTaskAsync(

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using ContractScribe.TestSupport;
@@ -969,6 +970,24 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                 or System.Net.Sockets.SocketError.Interrupted,
         };
 
+    internal static async Task ObserveRealPipePeerClosureAsync()
+    {
+        var pipeName = $"contractscribe-pending-reader-{Guid.NewGuid():N}";
+        using var server = CreatePipe(pipeName);
+        using var client = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.Out,
+            PipeOptions.Asynchronous);
+        var connection = server.WaitForConnectionAsync();
+        await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await connection.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var pending = Task.Run(() => ReadControlFrame(server));
+        client.Dispose();
+        await ObservePendingPipeTaskAsync(pending);
+    }
+
     internal static async Task ObservePendingPipeTaskAsync(Task? pending)
     {
         if (pending is null)
@@ -976,14 +995,28 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             return;
         }
 
-        try
-        {
-            await pending.WaitAsync(TimeSpan.FromSeconds(5));
-        }
-        catch (Exception exception) when (IsExpectedPipeClosureException(exception))
+        var completed = await Task.WhenAny(
+            pending,
+            Task.Delay(TimeSpan.FromSeconds(5)));
+        if (!ReferenceEquals(completed, pending) || pending.IsCanceled)
         {
             return;
         }
+
+        if (pending.IsFaulted)
+        {
+            var unexpected = pending.Exception
+                .Flatten()
+                .InnerExceptions
+                .FirstOrDefault(exception => !IsExpectedPipeClosureException(exception));
+            if (unexpected is not null)
+            {
+                ExceptionDispatchInfo.Capture(unexpected).Throw();
+            }
+            return;
+        }
+
+        await pending;
     }
 
     private static string LoaderProbePath() => Path.Combine(
