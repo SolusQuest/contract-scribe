@@ -962,7 +962,12 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         IOException
         or ObjectDisposedException
         or OperationCanceledException
-        or TimeoutException;
+        or TimeoutException
+        || exception is System.Net.Sockets.SocketException
+        {
+            SocketErrorCode: System.Net.Sockets.SocketError.OperationAborted
+                or System.Net.Sockets.SocketError.Interrupted,
+        };
 
     internal static async Task ObservePendingPipeTaskAsync(Task? pending)
     {

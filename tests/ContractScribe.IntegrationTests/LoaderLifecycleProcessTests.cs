@@ -363,11 +363,23 @@ public sealed class LoaderLifecycleProcessTests
     {
         await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
             Task.FromException(new EndOfStreamException()));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new System.Net.Sockets.SocketException(
+                (int)System.Net.Sockets.SocketError.OperationAborted)));
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new System.Net.Sockets.SocketException(
+                (int)System.Net.Sockets.SocketError.Interrupted)));
 
         var protocolFailure = await Record.ExceptionAsync(() =>
             LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
                 Task.Run(() => Assert.Equal(1, 2))));
         Assert.IsType<Xunit.Sdk.EqualException>(protocolFailure);
+
+        var unrelatedSocketFailure = await Record.ExceptionAsync(() =>
+            LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+                Task.FromException(new System.Net.Sockets.SocketException(
+                    (int)System.Net.Sockets.SocketError.HostNotFound))));
+        Assert.IsType<System.Net.Sockets.SocketException>(unrelatedSocketFailure);
     }
 
     [Fact]
