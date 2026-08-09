@@ -592,6 +592,29 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public void RepositoryPathResolverAcceptsInputAndProjectBelowFileSystemRoot()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var projectPath = Path.Join(
+            repositoryRoot,
+            "src",
+            "ContractScribe.Core",
+            "ContractScribe.Core.csproj");
+        var fileSystemRoot = Path.GetPathRoot(repositoryRoot)
+            ?? throw new InvalidOperationException("The repository path must have a filesystem root.");
+        var resolver = new RepositoryPathResolver();
+
+        var resolved = resolver.Resolve(fileSystemRoot, projectPath);
+        var project = resolver.ResolveProject(
+            resolved.LexicalRoot,
+            resolved.PhysicalRoot,
+            projectPath);
+
+        Assert.Equal(Path.GetFullPath(projectPath), resolved.PhysicalInput);
+        Assert.Equal(Path.GetFullPath(projectPath), project.PhysicalPath);
+    }
+
+    [Fact]
     public async Task RejectsDistinctGeneratedIdentityPreimagesWhenTheDigestCollides()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
