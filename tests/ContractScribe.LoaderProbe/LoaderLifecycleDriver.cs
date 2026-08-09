@@ -423,6 +423,7 @@ internal static class LoaderLifecycleDriver
         LifecycleMode.Failure
             or LifecycleMode.Unexpected
             or LifecycleMode.PreTaskUnexpected
+            or LifecycleMode.PostBuildHostPreTaskFailure
             or LifecycleMode.ExpectFailure => RepositoryLoadStatus.Failure,
         LifecycleMode.PreTaskHang => RepositoryLoadStatus.Cancelled,
         LifecycleMode.Cancellation => RepositoryLoadStatus.Cancelled,
@@ -439,6 +440,8 @@ internal static class LoaderLifecycleDriver
             "lifecycle-unexpected" => LifecycleMode.Unexpected,
             "lifecycle-pre-task-unexpected" => LifecycleMode.PreTaskUnexpected,
             "lifecycle-pre-task-hang" => LifecycleMode.PreTaskHang,
+            "lifecycle-post-buildhost-pre-task-failure" =>
+                LifecycleMode.PostBuildHostPreTaskFailure,
             "lifecycle-held-session" => LifecycleMode.HeldSession,
             "lifecycle-expect-failure" => LifecycleMode.ExpectFailure,
             _ => (LifecycleMode)(-1),
@@ -463,6 +466,7 @@ internal static class LoaderLifecycleDriver
         Unexpected,
         PreTaskUnexpected,
         PreTaskHang,
+        PostBuildHostPreTaskFailure,
         HeldSession,
         ExpectFailure,
     }

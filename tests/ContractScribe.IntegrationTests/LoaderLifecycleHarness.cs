@@ -25,9 +25,12 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     private const byte TaskReady = 1;
     private const byte TaskRelease = 2;
     private const byte TaskCompleted = 3;
+    private const byte TaskBeforeReadyFailure = 4;
+    private const byte TaskFailBeforeReady = 5;
     private const byte PreTaskHangReached = 10;
     private static readonly TimeSpan BarrierTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan BuildHostObservationInterval = TimeSpan.FromMilliseconds(25);
     private const int MaximumCapturedStreamCharacters = 512;
 
     private readonly NamedPipeServerStream control;
@@ -37,10 +40,19 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     private readonly Task<BoundedProcessText> stdout;
     private readonly Task<BoundedProcessText> stderr;
     private readonly ProcessIdentity probeIdentity;
+    private readonly object identityGate = new();
+    private readonly object processObservationGate = new();
     private readonly List<ProcessIdentity> retainedIdentities = [];
-    private Task<TaskReadyMessage>? pendingTaskReady;
+    private readonly CancellationTokenSource buildHostObservationCancellation = new();
+    private readonly TaskCompletionSource<ProcessIdentity> firstObservedBuildHost =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Task buildHostObservation;
+    private Task<TaskMessage>? pendingTaskReady;
     private Task<ControlFrame>? pendingControlFrame;
+    private ProcessIdentity? buildHostIdentity;
+    private int buildHostObservationFailed;
     private bool taskReleased;
+    private bool taskCannotBecomeReady;
     private bool disposed;
 
     private LoaderLifecycleHarness(
@@ -64,6 +76,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             StableProcessStartIdentity.Read(probe));
         stdout = ReadBoundedTextAsync(probe.StandardOutput);
         stderr = ReadBoundedTextAsync(probe.StandardError);
+        buildHostObservation = Task.Run(
+            () => ObserveBuildHostDescendantsAsync(buildHostObservationCancellation.Token));
     }
 
     public Process Probe { get; }
@@ -74,7 +88,16 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
     public ProcessIdentity? TaskIdentity { get; private set; }
 
-    public ProcessIdentity? BuildHostIdentity { get; private set; }
+    public ProcessIdentity? BuildHostIdentity
+    {
+        get
+        {
+            lock (identityGate)
+            {
+                return buildHostIdentity;
+            }
+        }
+    }
 
     public TaskBarrierObservation? LastTaskBarrierObservation { get; private set; }
 
@@ -97,6 +120,13 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         startInfo.Environment["ContractScribeBuildHostProbeAssembly"] = BuildHostProbePath();
         startInfo.Environment["ContractScribeBuildHostProbePipe"] = taskPipeName;
         startInfo.Environment["ContractScribeBuildHostProbeToken"] = taskToken.ToString("N");
+        if (string.Equals(
+                mode,
+                "lifecycle-post-buildhost-pre-task-failure",
+                StringComparison.Ordinal))
+        {
+            startInfo.Environment["ContractScribeBuildHostProbeMode"] = "fail-before-ready";
+        }
         if (configureControl)
         {
             startInfo.Environment["ContractScribeLoaderControlPipe"] = missingControlReceiver
@@ -150,36 +180,58 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     public async Task WaitForTaskReadyWithInjectedIdentityFailureAsync() =>
         await ObserveTaskBarrierAsync(injectReportedIdentityFailure: true);
 
+    public async Task FailAfterBuildHostStartsBeforeTaskReadyAsync()
+    {
+        var pending = PendingTaskReady();
+        var beforeReady = await pending.WaitAsync(BarrierTimeout);
+        pendingTaskReady = null;
+        Assert.Equal(TaskBeforeReadyFailure, beforeReady.Kind);
+        TaskIdentity = ValidateTaskIdentity(beforeReady);
+
+        var observedBuildHost = await firstObservedBuildHost.Task.WaitAsync(BarrierTimeout);
+        Assert.False(ProcessIdentityHasExited(observedBuildHost));
+        Assert.True(IsDescendantOf(observedBuildHost.ProcessId, Probe.Id));
+
+        await task.WriteAsync(new[] { TaskFailBeforeReady });
+        await task.FlushAsync();
+        taskCannotBecomeReady = true;
+        taskReleased = true;
+    }
+
     public async Task<TaskBarrierObservation> ObserveTaskBarrierAsync(
         TimeSpan? timeout = null,
         bool injectReportedIdentityFailure = false)
     {
-        var taskReady = PendingTaskReady();
+        var taskReady = taskCannotBecomeReady
+            ? null
+            : PendingTaskReady();
         var controlFrame = control.IsConnected
             ? PendingControlFrame()
             : null;
         var processExit = Probe.WaitForExitAsync();
         var deadline = Task.Delay(timeout ?? BarrierTimeout);
-        var candidates = new List<Task> { taskReady, processExit, deadline };
+        var candidates = new List<Task> { processExit, deadline };
+        if (taskReady is not null)
+        {
+            candidates.Add(taskReady);
+        }
         if (controlFrame is not null)
         {
             candidates.Add(controlFrame);
         }
         await Task.WhenAny(candidates);
 
-        if (taskReady.IsCompletedSuccessfully)
+        if (taskReady?.IsCompletedSuccessfully == true)
         {
             var ready = await taskReady;
             pendingTaskReady = null;
-            Assert.Equal(TaskToken, ready.Token);
-            var observedStart = StableProcessStartIdentity.Read(ready.ProcessId);
-            TaskIdentity = new ProcessIdentity(ready.ProcessId, observedStart);
-            RetainIdentity(TaskIdentity.Value);
-            BuildHostIdentity = FindBuildHostIdentity(ready.ProcessId, Probe.Id);
-            var reportedStart = injectReportedIdentityFailure
-                ? checked(ready.StartIdentity + 1)
-                : ready.StartIdentity;
-            Assert.Equal(reportedStart, observedStart);
+            Assert.Equal(TaskReady, ready.Kind);
+            TaskIdentity = ValidateTaskIdentity(
+                ready,
+                injectReportedIdentityFailure);
+            RecordBuildHostIdentity(
+                FindBuildHostIdentity(ready.ProcessId, Probe.Id),
+                preferForTaskAttribution: true);
             return RecordBarrierObservation(new TaskBarrierObservation(
                 TaskBarrierObservationKind.TaskReady,
                 null,
@@ -191,6 +243,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             var frame = await TakeControlFrameAsync(BarrierTimeout);
             if (frame.Result is not null)
             {
+                PreserveObservedBuildHosts();
                 if (frame.Kind == Result)
                 {
                     await control.WriteAsync(new[] { ResultAcknowledged });
@@ -220,6 +273,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                     TimeSpan.Zero,
                     injectReportedIdentityFailure);
             }
+            PreserveObservedBuildHosts();
             var process = new ProcessResult(
                 Probe.ExitCode,
                 await stdout,
@@ -231,7 +285,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                 process));
         }
 
-        if (taskReady.IsCompleted)
+        if (taskReady?.IsCompleted == true)
         {
             await taskReady;
         }
@@ -240,6 +294,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             await controlFrame;
         }
 
+        PreserveObservedBuildHosts();
         return RecordBarrierObservation(new TaskBarrierObservation(
             TaskBarrierObservationKind.TimedOut,
             null,
@@ -352,8 +407,7 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
     }
 
     public bool OwnedProcessesHaveExited() =>
-        (TaskIdentity is null || ProcessIdentityHasExited(TaskIdentity.Value))
-        && (BuildHostIdentity is null || ProcessIdentityHasExited(BuildHostIdentity.Value));
+        SnapshotOwnedIdentities().All(ProcessIdentityHasExited);
 
     public bool AllProcessesHaveExited() =>
         ProcessIdentityHasExited(probeIdentity) && OwnedProcessesHaveExited();
@@ -402,28 +456,34 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             }
         }
 
-        var identities = retainedIdentities
-            .Concat(new[] { TaskIdentity, BuildHostIdentity }
-                .Where(identity => identity is not null)
-                .Select(identity => identity!.Value))
-            .Distinct()
-            .ToArray();
+        buildHostObservationCancellation.Cancel();
+        await buildHostObservation;
+        cleanupFailed |= Volatile.Read(ref buildHostObservationFailed) != 0;
+
+        var identities = SnapshotOwnedIdentities();
         foreach (var identity in identities)
         {
             cleanupFailed |= !await TerminateIdentityAsync(identity);
         }
 
-        await ObservePendingPipeTaskAsync(pendingTaskReady);
-        await ObservePendingPipeTaskAsync(pendingControlFrame);
-        await ObservePendingPipeTaskAsync(controlConnection);
-        await ObservePendingPipeTaskAsync(taskConnection);
-
-        if (!ProcessIdentityHasExited(probeIdentity)
-            || identities.Any(identity => !ProcessIdentityHasExited(identity)))
+        try
         {
-            cleanupFailed = true;
+            await Task.WhenAll(
+                ObservePendingPipeTaskAsync(pendingTaskReady),
+                ObservePendingPipeTaskAsync(pendingControlFrame),
+                ObservePendingPipeTaskAsync(controlConnection),
+                ObservePendingPipeTaskAsync(taskConnection));
         }
-        Probe.Dispose();
+        finally
+        {
+            if (!ProcessIdentityHasExited(probeIdentity)
+                || identities.Any(identity => !ProcessIdentityHasExited(identity)))
+            {
+                cleanupFailed = true;
+            }
+            Probe.Dispose();
+            buildHostObservationCancellation.Dispose();
+        }
         if (cleanupFailed)
         {
             throw new InvalidOperationException("Lifecycle harness cleanup did not reap every owned process.");
@@ -462,18 +522,24 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
                   Condition="'$(DesignTimeBuild)' == 'true' And '$(ContractScribeBuildHostProbeAssembly)' != '' And '$(ContractScribeBuildHostProbePipe)' != '' And '$(ContractScribeBuildHostProbeToken)' != ''">
             <BuildHostProbeTask PipeName="$(ContractScribeBuildHostProbePipe)"
                                 Token="$(ContractScribeBuildHostProbeToken)"
-                                ContinueOnError="WarnAndContinue" />
+                                Mode="$(ContractScribeBuildHostProbeMode)"
+                                ContinueOnError="WarnAndContinue"
+                                Condition="'$(ContractScribeBuildHostProbeMode)' != 'fail-before-ready'" />
+            <BuildHostProbeTask PipeName="$(ContractScribeBuildHostProbePipe)"
+                                Token="$(ContractScribeBuildHostProbeToken)"
+                                Mode="$(ContractScribeBuildHostProbeMode)"
+                                Condition="'$(ContractScribeBuildHostProbeMode)' == 'fail-before-ready'" />
           </Target>
         </Project>
         """;
 
-    private Task<TaskReadyMessage> PendingTaskReady() =>
+    private Task<TaskMessage> PendingTaskReady() =>
         pendingTaskReady ??= WaitForTaskReadyFrameAsync();
 
-    private async Task<TaskReadyMessage> WaitForTaskReadyFrameAsync()
+    private async Task<TaskMessage> WaitForTaskReadyFrameAsync()
     {
         await taskConnection;
-        return await Task.Run(() => ReadTaskReady(task));
+        return await Task.Run(() => ReadTaskMessage(task));
     }
 
     private Task<ControlFrame> PendingControlFrame() =>
@@ -507,14 +573,15 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         return new Guid(token);
     }
 
-    private static TaskReadyMessage ReadTaskReady(Stream stream)
+    private static TaskMessage ReadTaskMessage(Stream stream)
     {
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
         Assert.Equal(ProtocolVersion, reader.ReadByte());
-        Assert.Equal(TaskReady, reader.ReadByte());
+        var kind = reader.ReadByte();
         var token = reader.ReadBytes(16);
         Assert.Equal(16, token.Length);
-        return new TaskReadyMessage(
+        return new TaskMessage(
+            kind,
             new Guid(token),
             reader.ReadInt32(),
             reader.ReadInt64());
@@ -616,6 +683,22 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         return new BoundedProcessText(text.ToString(), truncated);
     }
 
+    private ProcessIdentity ValidateTaskIdentity(
+        TaskMessage message,
+        bool injectReportedIdentityFailure = false)
+    {
+        Assert.Equal(TaskToken, message.Token);
+        var observedStart = StableProcessStartIdentity.Read(message.ProcessId);
+        var identity = new ProcessIdentity(message.ProcessId, observedStart);
+        TaskIdentity = identity;
+        RetainIdentity(identity);
+        var reportedStart = injectReportedIdentityFailure
+            ? checked(message.StartIdentity + 1)
+            : message.StartIdentity;
+        Assert.Equal(reportedStart, observedStart);
+        return identity;
+    }
+
     private ProcessIdentity FindBuildHostIdentity(int taskProcessId, int probeProcessId)
     {
         var expectedPath = ExpectedBuildHostPath();
@@ -639,11 +722,118 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         throw new InvalidOperationException("The task was not attributable to the expected BuildHost module.");
     }
 
+    private void PreserveObservedBuildHosts()
+    {
+        if (!ProcessIdentityHasExited(probeIdentity))
+        {
+            ObserveBuildHostDescendantsOnce();
+        }
+    }
+
+    private async Task ObserveBuildHostDescendantsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested
+                && !ProcessIdentityHasExited(probeIdentity))
+            {
+                ObserveBuildHostDescendantsOnce();
+                await Task.Delay(BuildHostObservationInterval, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception) when (IsProcessObservationException(exception))
+        {
+            Volatile.Write(ref buildHostObservationFailed, 1);
+        }
+    }
+
+    private void ObserveBuildHostDescendantsOnce()
+    {
+        lock (processObservationGate)
+        {
+            if (ProcessIdentityHasExited(probeIdentity))
+            {
+                return;
+            }
+
+            var expectedPath = ExpectedBuildHostPath();
+            foreach (var process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (process.Id == probeIdentity.ProcessId
+                            || !IsDescendantOf(process.Id, probeIdentity.ProcessId))
+                        {
+                            continue;
+                        }
+
+                        var identity = new ProcessIdentity(
+                            process.Id,
+                            StableProcessStartIdentity.Read(process));
+                        if (identity.StartIdentity < probeIdentity.StartIdentity
+                            || !IsExpectedBuildHostProcess(process, expectedPath)
+                            || StableProcessStartIdentity.Read(process) != identity.StartIdentity
+                            || !IsDescendantOf(identity.ProcessId, probeIdentity.ProcessId))
+                        {
+                            continue;
+                        }
+
+                        RecordBuildHostIdentity(identity, preferForTaskAttribution: false);
+                    }
+                    catch (Exception exception) when (IsProcessObservationException(exception))
+                    {
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    private void RecordBuildHostIdentity(
+        ProcessIdentity identity,
+        bool preferForTaskAttribution)
+    {
+        lock (identityGate)
+        {
+            if (!retainedIdentities.Contains(identity))
+            {
+                retainedIdentities.Add(identity);
+            }
+            if (buildHostIdentity is null || preferForTaskAttribution)
+            {
+                buildHostIdentity = identity;
+            }
+        }
+        firstObservedBuildHost.TrySetResult(identity);
+    }
+
     private void RetainIdentity(ProcessIdentity identity)
     {
-        if (!retainedIdentities.Contains(identity))
+        lock (identityGate)
         {
-            retainedIdentities.Add(identity);
+            if (!retainedIdentities.Contains(identity))
+            {
+                retainedIdentities.Add(identity);
+            }
+        }
+    }
+
+    private ProcessIdentity[] SnapshotOwnedIdentities()
+    {
+        lock (identityGate)
+        {
+            return retainedIdentities
+                .Concat(new[] { TaskIdentity, buildHostIdentity }
+                    .Where(identity => identity is not null)
+                    .Select(identity => identity!.Value))
+                .Distinct()
+                .ToArray();
         }
     }
 
@@ -759,7 +949,22 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         or System.ComponentModel.Win32Exception
         or TimeoutException;
 
-    private static async Task ObservePendingPipeTaskAsync(Task? pending)
+    private static bool IsProcessObservationException(Exception exception) => exception is
+        ArgumentException
+        or IOException
+        or InvalidOperationException
+        or NotSupportedException
+        or OverflowException
+        or UnauthorizedAccessException
+        or System.ComponentModel.Win32Exception;
+
+    private static bool IsExpectedPipeClosureException(Exception exception) => exception is
+        IOException
+        or ObjectDisposedException
+        or OperationCanceledException
+        or TimeoutException;
+
+    internal static async Task ObservePendingPipeTaskAsync(Task? pending)
     {
         if (pending is null)
         {
@@ -770,9 +975,9 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
         {
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedPipeClosureException(exception))
         {
-            _ = exception.GetType();
+            return;
         }
     }
 
@@ -816,7 +1021,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
             ?? throw new InvalidOperationException("The repository root could not be located.");
     }
 
-    private readonly record struct TaskReadyMessage(
+    private readonly record struct TaskMessage(
+        byte Kind,
         Guid Token,
         int ProcessId,
         long StartIdentity);

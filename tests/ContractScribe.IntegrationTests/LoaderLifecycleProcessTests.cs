@@ -279,6 +279,26 @@ public sealed class LoaderLifecycleProcessTests
     {
         await using var fixture = await PreparedFixtureAsync();
 
+        var postBuildHostFailure = await LoaderLifecycleHarness.StartAsync(
+            fixture.Root,
+            "lifecycle-post-buildhost-pre-task-failure");
+        await using (postBuildHostFailure)
+        {
+            await postBuildHostFailure.FailAfterBuildHostStartsBeforeTaskReadyAsync();
+            Assert.NotNull(postBuildHostFailure.TaskIdentity);
+            Assert.NotNull(postBuildHostFailure.BuildHostIdentity);
+
+            var observation = await postBuildHostFailure.ObserveTaskBarrierAsync();
+            Assert.Equal(TaskBarrierObservationKind.ProductResult, observation.Kind);
+            var result = Assert.IsType<LifecycleResult>(observation.Result);
+            Assert.Equal(RepositoryLoadStatus.Failure, result.Status);
+            Assert.Equal("workspace.load-failed", result.Code);
+            AssertProcessExit(
+                await postBuildHostFailure.WaitForExitAsync(),
+                LoaderLifecycleHarness.SuccessExit);
+        }
+        Assert.True(postBuildHostFailure.AllProcessesHaveExited());
+
         await using (var failure = await LoaderLifecycleHarness.StartAsync(
                          fixture.Root,
                          "lifecycle-pre-task-unexpected"))
@@ -336,6 +356,18 @@ public sealed class LoaderLifecycleProcessTests
             await abrupt.DisposeAsync();
         }
         Assert.True(abrupt.AllProcessesHaveExited());
+    }
+
+    [Fact]
+    public async Task PendingPipeObservationSuppressesClosureButPreservesProtocolFailure()
+    {
+        await LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+            Task.FromException(new EndOfStreamException()));
+
+        var protocolFailure = await Record.ExceptionAsync(() =>
+            LoaderLifecycleHarness.ObservePendingPipeTaskAsync(
+                Task.Run(() => Assert.Equal(1, 2))));
+        Assert.IsType<Xunit.Sdk.EqualException>(protocolFailure);
     }
 
     [Fact]
