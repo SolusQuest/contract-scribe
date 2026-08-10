@@ -2984,7 +2984,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await OwnedProcessRunner.RunAsync(
             toolchain.DotnetHostPath,
             root,
-            arguments,
+            WithPersistentBuildServersDisabled(arguments),
             TimeSpan.FromMinutes(3),
             cancellationToken,
             new Dictionary<string, string?>
@@ -2992,6 +2992,28 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
                 ["DOTNET_NOLOGO"] = "true",
             }).ConfigureAwait(false);
+    }
+
+    internal static IReadOnlyList<string> WithPersistentBuildServersDisabled(
+        IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count == 0)
+        {
+            return arguments;
+        }
+
+        var option = arguments[0] switch
+        {
+            "restore" or "build" => "--disable-build-servers",
+            "msbuild" => "-nodeReuse:false",
+            _ => null,
+        };
+        if (option is null || arguments.Contains(option, StringComparer.OrdinalIgnoreCase))
+        {
+            return arguments;
+        }
+
+        return [.. arguments, option];
     }
 
     private static string FindRepositoryRoot()

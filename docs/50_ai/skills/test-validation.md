@@ -43,6 +43,8 @@ Prepared-state reuse is intentionally limited to the built-in default two-projec
 
 Custom project XML remains fresh because it can add preparation targets or absolute bindings outside the closed relocation proof. Process-sensitive, self-observing, many-output, and colliding-output generators remain fresh because their observable behavior or output topology is part of the preparation boundary. Two-dependency reference-order variants and the Loader lifecycle probe remain fresh because their graph order or process topology requires category-specific relocation proof. These are deliberate isolation dispositions, not cache misses; do not broaden the reusable classifier without adding the matching cross-platform reuse and behavior test.
 
+Fixture preparation also disables persistent build servers for `dotnet restore` and `dotnet build`, and disables MSBuild node reuse for direct `dotnet msbuild` commands. Keep that ownership boundary when adding preparation commands: a server or reusable node can outlive the command root, retain redirected output handles, and make the test runner wait on a process it no longer owns through the original root.
+
 ## Build validity
 
 Use `--no-build --no-restore` only after the current working tree completed the applicable build with the same SDK and configuration. Rebuild when production or test source, a `.csproj` or `.slnx`, `Directory.*`, `global.json`, package-version inputs, a generator/helper project, or shared fixture/process infrastructure changed. Restore again when projects, package sources, package versions, SDK selection, lock inputs, or restore properties changed.

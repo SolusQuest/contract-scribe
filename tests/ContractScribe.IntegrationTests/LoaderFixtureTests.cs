@@ -305,6 +305,24 @@ public sealed class LoaderFixtureTests
     }
 
     [Fact]
+    public void FixtureBuildCommandsDisablePersistentBuildServers()
+    {
+        Assert.Equal(
+            ["restore", "Fixture.slnx", "--disable-build-servers"],
+            LoaderFixture.WithPersistentBuildServersDisabled(["restore", "Fixture.slnx"]));
+        Assert.Equal(
+            ["build", "Fixture.slnx", "--no-restore", "--disable-build-servers"],
+            LoaderFixture.WithPersistentBuildServersDisabled(["build", "Fixture.slnx", "--no-restore"]));
+        Assert.Equal(
+            ["msbuild", "App/App.csproj", "-nodeReuse:false"],
+            LoaderFixture.WithPersistentBuildServersDisabled(["msbuild", "App/App.csproj"]));
+        Assert.Equal(
+            ["restore", "Fixture.slnx", "--disable-build-servers"],
+            LoaderFixture.WithPersistentBuildServersDisabled(
+                ["restore", "Fixture.slnx", "--disable-build-servers"]));
+    }
+
+    [Fact]
     public async Task CancellationTerminatesTheOwnedTreeAndDrainsBothStreams()
     {
         var marker = $"cancel-{Guid.NewGuid():N}";
@@ -313,7 +331,7 @@ public sealed class LoaderFixtureTests
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             RunHoldTreeAsync(marker, TimeSpan.FromSeconds(30), cancellation.Token));
 
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     [Fact]
@@ -324,7 +342,7 @@ public sealed class LoaderFixtureTests
         var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
             RunHoldTreeAsync(marker, TimeSpan.FromSeconds(3), CancellationToken.None));
 
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     [Fact]
@@ -348,7 +366,7 @@ public sealed class LoaderFixtureTests
                 hooks));
 
         Assert.Contains("observation could not be established", exception.Message, StringComparison.Ordinal);
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     [Fact]
@@ -368,7 +386,7 @@ public sealed class LoaderFixtureTests
             nameof(OwnedProcessExitState.ObservationUnavailable),
             exception.InnerException?.ToString(),
             StringComparison.Ordinal);
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     [Fact]
@@ -388,7 +406,7 @@ public sealed class LoaderFixtureTests
             RunHoldTreeAsync(marker, TimeSpan.FromSeconds(2), CancellationToken.None, hooks));
 
         Assert.Contains("test-only kill failure", exception.InnerException?.ToString(), StringComparison.Ordinal);
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     [Fact]
@@ -413,8 +431,8 @@ public sealed class LoaderFixtureTests
 
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), elapsed.Elapsed.ToString());
         Assert.Contains("test-only reader failure", exception.InnerException?.ToString(), StringComparison.Ordinal);
-        AssertProcessExited(rootProcessId);
-        AssertObservedProcessesExited(exception.Message);
+        await AssertProcessExitedAsync(rootProcessId);
+        await AssertObservedProcessesExitedAsync(exception.Message);
     }
 
     [Fact]
@@ -442,7 +460,7 @@ public sealed class LoaderFixtureTests
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             fixture.PrepareEditorConfigAsync(cancellation.Token));
 
-        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
     }
 
     private static Task<LoaderFixtureTemplate> GetTemplateAsync(
@@ -509,7 +527,7 @@ public sealed class LoaderFixtureTests
             testHooks);
     }
 
-    private static void AssertOwnedTreeExitedAndOutputDrained(
+    private static async Task AssertOwnedTreeExitedAndOutputDrainedAsync(
         string message,
         string marker)
     {
@@ -520,38 +538,52 @@ public sealed class LoaderFixtureTests
             $"{Regex.Escape(marker)}:root:(?<root>[0-9]+):child:(?<child>[0-9]+)",
             RegexOptions.CultureInvariant);
         Assert.True(match.Success, message);
-        AssertProcessExited(int.Parse(match.Groups["root"].Value));
-        AssertProcessExited(int.Parse(match.Groups["child"].Value));
+        await Task.WhenAll(
+            AssertProcessExitedAsync(int.Parse(match.Groups["root"].Value)),
+            AssertProcessExitedAsync(int.Parse(match.Groups["child"].Value)));
     }
 
-    private static void AssertProcessExited(int processId)
+    private static async Task AssertProcessExitedAsync(int processId)
     {
-        var exited = false;
-        try
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!deadline.IsCancellationRequested)
         {
-            using var process = Process.GetProcessById(processId);
-            exited = process.HasExited;
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                if (process.HasExited)
+                {
+                    return;
+                }
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                break;
+            }
         }
-        catch (ArgumentException)
-        {
-            exited = true;
-        }
-        Assert.True(exited, $"Process {processId} is still active.");
+
+        Assert.Fail($"Process {processId} is still active after the bounded cleanup wait.");
     }
 
-    private static void AssertObservedProcessesExited(string message)
+    private static async Task AssertObservedProcessesExitedAsync(string message)
     {
         var match = Regex.Match(
             message,
             "observed descendants: (?<ids>[0-9,]*)\\.",
             RegexOptions.CultureInvariant);
         Assert.True(match.Success, message);
-        foreach (var processId in match.Groups["ids"].Value.Split(
-                     ',',
-                     StringSplitOptions.RemoveEmptyEntries))
-        {
-            AssertProcessExited(int.Parse(processId));
-        }
+        await Task.WhenAll(match.Groups["ids"].Value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(processId => AssertProcessExitedAsync(int.Parse(processId))));
     }
 
     private static string LoaderProbePath()
