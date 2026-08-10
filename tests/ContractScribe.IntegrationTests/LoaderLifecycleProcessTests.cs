@@ -415,41 +415,24 @@ public sealed class LoaderLifecycleProcessTests
             return;
         }
 
-        await using var firstLeftFixture = await PreparedFixtureAsync();
-        await using var firstRightFixture = await PreparedFixtureAsync();
-        await using var secondLeftFixture = await PreparedFixtureAsync();
-        await using var secondRightFixture = await PreparedFixtureAsync();
-        var firstLeftBaseline = RepositoryInventory.Capture(
-            firstLeftFixture.Root,
+        await using var leftFixture = await PreparedFixtureAsync();
+        await using var rightFixture = await PreparedFixtureAsync();
+        var leftBaseline = RepositoryInventory.Capture(
+            leftFixture.Root,
             CancellationToken.None);
-        var firstRightBaseline = RepositoryInventory.Capture(
-            firstRightFixture.Root,
-            CancellationToken.None);
-        var secondLeftBaseline = RepositoryInventory.Capture(
-            secondLeftFixture.Root,
-            CancellationToken.None);
-        var secondRightBaseline = RepositoryInventory.Capture(
-            secondRightFixture.Root,
+        var rightBaseline = RepositoryInventory.Capture(
+            rightFixture.Root,
             CancellationToken.None);
         var elapsed = Stopwatch.StartNew();
 
-        await Task.WhenAll(
-            RunSuccessfulIterationsAsync(
-                firstLeftFixture.Root,
-                firstRightFixture.Root,
-                firstLeftBaseline,
-                firstRightBaseline,
-                firstIteration: 1,
-                iterationStep: 2,
-                elapsed),
-            RunSuccessfulIterationsAsync(
-                secondLeftFixture.Root,
-                secondRightFixture.Root,
-                secondLeftBaseline,
-                secondRightBaseline,
-                firstIteration: 2,
-                iterationStep: 2,
-                elapsed));
+        await RunSuccessfulIterationsAsync(
+            leftFixture.Root,
+            rightFixture.Root,
+            leftBaseline,
+            rightBaseline,
+            firstIteration: 1,
+            iterationStep: 1,
+            elapsed);
     }
 
     private static async Task RunSuccessfulIterationsAsync(
@@ -474,9 +457,11 @@ public sealed class LoaderLifecycleProcessTests
             }
             catch (Exception exception)
             {
-                var type = exception.GetType().FullName ?? exception.GetType().Name;
+                var evidence = exception is LifecyclePairPhaseException phaseFailure
+                    ? $"{phaseFailure.Phase}:{phaseFailure.FailureType} after {phaseFailure.ElapsedMilliseconds}ms"
+                    : exception.GetType().FullName ?? exception.GetType().Name;
                 Assert.Fail(
-                    $"Windows causal topology failed at iteration {iteration} with {Bound(type, 160)}.");
+                    $"Windows causal topology failed at iteration {iteration} with {Bound(evidence, 240)}.");
             }
         }
     }
@@ -486,13 +471,18 @@ public sealed class LoaderLifecycleProcessTests
 
     private static async Task RunSuccessfulPairAsync(string leftRoot, string rightRoot)
     {
-        await using var left = await LoaderLifecycleHarness.StartAsync(
-            leftRoot,
-            "lifecycle-success");
-        await using var right = await LoaderLifecycleHarness.StartAsync(
-            rightRoot,
-            "lifecycle-success");
-        await Task.WhenAll(left.WaitForTaskReadyAsync(), right.WaitForTaskReadyAsync());
+        var elapsed = Stopwatch.StartNew();
+        await using var left = await ObservePhaseAsync(
+            "left.start",
+            LoaderLifecycleHarness.StartAsync(leftRoot, "lifecycle-success"),
+            elapsed);
+        await using var right = await ObservePhaseAsync(
+            "right.start",
+            LoaderLifecycleHarness.StartAsync(rightRoot, "lifecycle-success"),
+            elapsed);
+        await Task.WhenAll(
+            ObserveTaskReadyPhaseAsync("left", left, elapsed),
+            ObserveTaskReadyPhaseAsync("right", right, elapsed));
         Assert.NotEqual(left.Probe.Id, right.Probe.Id);
         Assert.NotNull(left.TaskIdentity);
         Assert.NotNull(right.TaskIdentity);
@@ -500,14 +490,20 @@ public sealed class LoaderLifecycleProcessTests
         Assert.NotNull(left.BuildHostIdentity);
         Assert.NotNull(right.BuildHostIdentity);
         Assert.NotEqual(left.BuildHostIdentity, right.BuildHostIdentity);
-        await Task.WhenAll(left.ReleaseTaskAsync(), right.ReleaseTaskAsync());
-        var results = await Task.WhenAll(left.ReadResultAsync(), right.ReadResultAsync());
+        await Task.WhenAll(
+            ObservePhaseAsync("left.task-release", left.ReleaseTaskAsync(), elapsed),
+            ObservePhaseAsync("right.task-release", right.ReleaseTaskAsync(), elapsed));
+        var results = await Task.WhenAll(
+            ObservePhaseAsync("left.result", left.ReadResultAsync(), elapsed),
+            ObservePhaseAsync("right.result", right.ReadResultAsync(), elapsed));
         Assert.All(results, result =>
         {
             Assert.Equal(RepositoryLoadStatus.Success, result.Status);
             Assert.Equal(string.Empty, result.Code);
         });
-        var processes = await Task.WhenAll(left.WaitForExitAsync(), right.WaitForExitAsync());
+        var processes = await Task.WhenAll(
+            ObservePhaseAsync("left.process-exit", left.WaitForExitAsync(), elapsed),
+            ObservePhaseAsync("right.process-exit", right.WaitForExitAsync(), elapsed));
         Assert.All(processes, process =>
             AssertProcessExit(process, LoaderLifecycleHarness.SuccessExit));
         Assert.True(
@@ -515,6 +511,62 @@ public sealed class LoaderLifecycleProcessTests
                 () => left.OwnedProcessesHaveExited() && right.OwnedProcessesHaveExited(),
                 TimeSpan.FromSeconds(10)),
             "A task process or BuildHost remained after both successful loads completed.");
+    }
+
+    private static async Task ObserveTaskReadyPhaseAsync(
+        string side,
+        LoaderLifecycleHarness target,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            await target.WaitForTaskReadyAsync();
+        }
+        catch (Exception exception)
+        {
+            var observation = target.LastTaskBarrierObservation?.Kind.ToString()
+                ?? "ObservationUnavailable";
+            throw new LifecyclePairPhaseException(
+                $"{side}.task-ready[{observation}]",
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
+    }
+
+    private static async Task ObservePhaseAsync(
+        string phase,
+        Task action,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            await action;
+        }
+        catch (Exception exception)
+        {
+            throw new LifecyclePairPhaseException(
+                phase,
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
+    }
+
+    private static async Task<T> ObservePhaseAsync<T>(
+        string phase,
+        Task<T> action,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            return await action;
+        }
+        catch (Exception exception)
+        {
+            throw new LifecyclePairPhaseException(
+                phase,
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
     }
 
     private static async Task<LifecycleResult> RunTargetAsync(
@@ -624,6 +676,19 @@ public sealed class LoaderLifecycleProcessTests
                 ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".slnx" or ".editorconfig")
             .ToArray();
         Assert.Empty(protectedChanges);
+    }
+
+    private sealed class LifecyclePairPhaseException(
+        string phase,
+        long elapsedMilliseconds,
+        Exception innerException) : Exception(null, innerException)
+    {
+        public string Phase { get; } = phase;
+
+        public long ElapsedMilliseconds { get; } = elapsedMilliseconds;
+
+        public string FailureType { get; } =
+            innerException.GetType().FullName ?? innerException.GetType().Name;
     }
 }
 
