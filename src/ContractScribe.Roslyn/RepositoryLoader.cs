@@ -21,6 +21,7 @@ public sealed class RepositoryLoader
     private readonly Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>> inventory;
     private readonly Action<int>? generatedAuthorityComparisonObserver;
     private readonly RegisteredToolchain? preselectedToolchain;
+    private readonly LoaderExecutionTrace? trace;
 
     public RepositoryLoader()
         : this(null, null)
@@ -32,7 +33,8 @@ public sealed class RepositoryLoader
         Func<ReadOnlyMemory<byte>, byte[]>? digest = null,
         Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory = null,
         Action<int>? generatedAuthorityComparisonObserver = null,
-        RegisteredToolchain? preselectedToolchain = null)
+        RegisteredToolchain? preselectedToolchain = null,
+        LoaderExecutionTrace? trace = null)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
@@ -40,6 +42,7 @@ public sealed class RepositoryLoader
         this.generatedAuthorityComparisonObserver =
             generatedAuthorityComparisonObserver;
         this.preselectedToolchain = preselectedToolchain;
+        this.trace = trace;
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -54,8 +57,11 @@ public sealed class RepositoryLoader
         RepositoryLoadOutcome outcome;
         try
         {
+            trace?.Enter(LoaderExecutionPhase.RequestValidation);
             Observe(LoaderStage.RequestValidation, cancellationToken);
+            trace?.Enter(LoaderExecutionPhase.PathResolution);
             paths = pathResolver.Resolve(request.RepositoryRoot, request.InputPath);
+            trace?.MarkPathsResolved();
             state = new LoaderExecutionState();
             state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
             state.AddProtected(pathResolver.RelativeIdentity(paths.LexicalRoot, paths.LexicalInput));
@@ -63,12 +69,16 @@ public sealed class RepositoryLoader
                 ReparseEntryIdentities(paths.PhysicalRoot, paths.TraversedReparseEntries, pathResolver),
                 []);
             Observe(LoaderStage.PathResolution, cancellationToken);
+            trace?.Enter(LoaderExecutionPhase.BaselineCapture);
             before = inventory(paths.PhysicalRoot, cancellationToken);
+            trace?.MarkBaselineCaptured();
             Observe(LoaderStage.BaselineCapture, cancellationToken);
+            trace?.Enter(LoaderExecutionPhase.ToolchainRegistration);
             selectedToolchain = preselectedToolchain
                 ?? await MsBuildBootstrap.EnsureRegisteredAsync(
                     Path.GetDirectoryName(paths.PhysicalInput)!,
                     cancellationToken);
+            trace?.MarkToolchainSelected();
             Observe(LoaderStage.ToolchainRegistration, cancellationToken);
             loaded = await PostRegistrationLoader.LoadAsync(
                 paths,
@@ -79,7 +89,9 @@ public sealed class RepositoryLoader
                 observer,
                 digest,
                 generatedAuthorityComparisonObserver,
+                trace,
                 cancellationToken);
+            trace?.MarkSessionTransferred();
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
         }
         catch (OperationCanceledException)
@@ -97,8 +109,9 @@ public sealed class RepositoryLoader
                 selectedToolchain?.Identity,
                 state?.Diagnostics);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            trace?.RecordPrimary(LoaderExceptionBoundary.RepositoryLoad, exception);
             loaded?.Session.Dispose();
             outcome = RepositoryLoadOutcome.Failure(
                 new LoaderFact("internal", "loader.internal-error"),
@@ -113,6 +126,7 @@ public sealed class RepositoryLoader
 
         try
         {
+            trace?.Enter(LoaderExecutionPhase.FinalInventory);
             var after = inventory(paths.PhysicalRoot, CancellationToken.None);
             var drift = RepositoryInventory.ChangedPaths(before, after)
                 .Where(path => IsProtectedDrift(path, state))
@@ -153,8 +167,9 @@ public sealed class RepositoryLoader
                     diagnostics: outcome.Diagnostics,
                     secondaryFacts: outcome.SecondaryFacts.Concat([fact]).ToArray());
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            trace?.RecordPrimary(LoaderExceptionBoundary.FinalInventory, exception);
             var fact = new LoaderFact("repository", "repository.drift-scan-failed");
             if (cancellationToken.IsCancellationRequested)
             {
@@ -269,13 +284,15 @@ internal static class PostRegistrationLoader
         Action<LoaderStage>? observer,
         Func<ReadOnlyMemory<byte>, byte[]> digest,
         Action<int>? generatedAuthorityComparisonObserver,
+        LoaderExecutionTrace? trace,
         CancellationToken cancellationToken)
     {
         var identities = new GeneratedIdentityHasher(digest);
         VerifyExecutingMsbuild(toolchain);
         var evaluationProperties = CreateEvaluationProperties(paths);
         var roots = ResolveRoots(paths, pathResolver, state);
-        Observe(observer, LoaderStage.InputParsing, cancellationToken);
+        Observe(observer, trace, LoaderStage.InputParsing, cancellationToken);
+        trace?.Enter(LoaderExecutionPhase.GraphEvaluation);
         var graph = EvaluateGraph(
             paths,
             roots,
@@ -289,9 +306,11 @@ internal static class PostRegistrationLoader
             throw LoaderException.Generated("run.generated.missing-identity");
         }
 
-        Observe(observer, LoaderStage.GraphEvaluation, cancellationToken);
+        Observe(observer, trace, LoaderStage.GraphEvaluation, cancellationToken);
+        trace?.Enter(LoaderExecutionPhase.WorkspaceCreation);
         var workspace = MSBuildWorkspace.Create(
             new Dictionary<string, string>(evaluationProperties, StringComparer.Ordinal));
+        trace?.MarkWorkspaceCreated();
         workspace.LoadMetadataForReferencedProjects = false;
         workspace.SkipUnrecognizedProjects = false;
         workspace.WorkspaceFailed += (_, args) =>
@@ -307,17 +326,31 @@ internal static class PostRegistrationLoader
         try
         {
             Solution solution;
+            trace?.Enter(LoaderExecutionPhase.WorkspaceOpen);
+            trace?.MarkWorkspaceOpenStarted();
+            IProgress<ProjectLoadProgress>? progress = trace is null
+                ? null
+                : new LoaderProjectLoadProgress(trace);
             if (paths.PhysicalInput.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             {
-                var project = await workspace.OpenProjectAsync(paths.PhysicalInput, cancellationToken: cancellationToken);
+                var project = await workspace.OpenProjectAsync(
+                    paths.PhysicalInput,
+                    progress,
+                    cancellationToken);
                 solution = project.Solution;
             }
             else
             {
-                solution = await workspace.OpenSolutionAsync(paths.PhysicalInput, cancellationToken: cancellationToken);
+                solution = await workspace.OpenSolutionAsync(
+                    paths.PhysicalInput,
+                    progress,
+                    cancellationToken);
             }
+            trace?.MarkWorkspaceOpenCompleted();
+            trace?.Enter(LoaderExecutionPhase.WorkspaceOpenCompleted);
 
             var workspaceProjects = solution.Projects.ToArray();
+            trace?.Enter(LoaderExecutionPhase.WorkspaceSemanticProtection);
             ProtectWorkspaceSemanticInputs(
                 paths,
                 graph,
@@ -325,7 +358,7 @@ internal static class PostRegistrationLoader
                 toolchain,
                 pathResolver,
                 state);
-            Observe(observer, LoaderStage.WorkspaceLoad, cancellationToken);
+            Observe(observer, trace, LoaderStage.WorkspaceLoad, cancellationToken);
             if (workspaceProjects.Any(project => project.Language != LanguageNames.CSharp))
             {
                 throw LoaderException.Workspace("workspace.non-csharp-project");
@@ -365,6 +398,7 @@ internal static class PostRegistrationLoader
                     throw LoaderException.Workspace("workspace.target-framework-mismatch");
                 }
 
+                trace?.Enter(LoaderExecutionPhase.Compilation);
                 var compilation = await project.GetCompilationAsync(cancellationToken)
                     ?? throw LoaderException.Compilation("compilation.unavailable");
                 var workspaceSourceTrees = await ValidateWorkspaceSourcesAsync(
@@ -405,10 +439,11 @@ internal static class PostRegistrationLoader
                     throw LoaderException.Compilation("compilation.errors");
                 }
 
-                Observe(observer, LoaderStage.Compilation, cancellationToken);
+                Observe(observer, trace, LoaderStage.Compilation, cancellationToken);
                 var contextRef = ContextRef(node.Identity, node.TargetFramework, identities);
                 var generatedAuthorityIndex =
                     new GeneratedAuthorityIndex(authoritativeGenerated);
+                trace?.Enter(LoaderExecutionPhase.GeneratedFacts);
                 var sourceGeneratorBindings = RunGenerators(
                     project,
                     compilation.RemoveSyntaxTrees(authoritativeGeneratedTrees),
@@ -456,7 +491,7 @@ internal static class PostRegistrationLoader
                             binding.Fact));
                 }
 
-                Observe(observer, LoaderStage.GeneratedFacts, cancellationToken);
+                Observe(observer, trace, LoaderStage.GeneratedFacts, cancellationToken);
                 loadedProjects.Add(new LoadedProject(
                     node.Identity,
                     node.TargetFramework,
@@ -473,7 +508,8 @@ internal static class PostRegistrationLoader
                 throw LoaderException.Workspace("workspace.load-failed");
             }
 
-            Observe(observer, LoaderStage.TerminalValidation, cancellationToken);
+            Observe(observer, trace, LoaderStage.TerminalValidation, cancellationToken);
+            trace?.Enter(LoaderExecutionPhase.SessionConstruction);
             var session = new LoadedRepositorySession(
                 ".",
                 pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput),
@@ -481,13 +517,28 @@ internal static class PostRegistrationLoader
                 loadedProjects,
                 ValidateGeneratedFacts(generatedFacts),
                 workspace);
+            trace?.MarkSessionConstructed();
+            trace?.Enter(LoaderExecutionPhase.SessionTransfer);
             return new PostRegistrationResult(
                 session,
                 state.Diagnostics);
         }
-        catch
+        catch (Exception exception)
         {
-            workspace.Dispose();
+            trace?.RecordPrimary(LoaderExceptionBoundary.PostRegistrationLoad, exception);
+            trace?.MarkCleanupStarted();
+            try
+            {
+                workspace.Dispose();
+                trace?.MarkCleanupCompleted();
+            }
+            catch (Exception cleanupException)
+            {
+                trace?.RecordCleanup(
+                    LoaderExceptionBoundary.WorkspaceCleanup,
+                    cleanupException);
+                throw;
+            }
             throw;
         }
     }
@@ -534,9 +585,20 @@ internal static class PostRegistrationLoader
 
     private static void Observe(
         Action<LoaderStage>? observer,
+        LoaderExecutionTrace? trace,
         LoaderStage stage,
         CancellationToken cancellationToken)
     {
+        trace?.Enter(stage switch
+        {
+            LoaderStage.InputParsing => LoaderExecutionPhase.InputParsing,
+            LoaderStage.GraphEvaluation => LoaderExecutionPhase.GraphEvaluation,
+            LoaderStage.WorkspaceLoad => LoaderExecutionPhase.WorkspaceLoad,
+            LoaderStage.Compilation => LoaderExecutionPhase.Compilation,
+            LoaderStage.GeneratedFacts => LoaderExecutionPhase.GeneratedFacts,
+            LoaderStage.TerminalValidation => LoaderExecutionPhase.TerminalValidation,
+            _ => throw new ArgumentOutOfRangeException(nameof(stage)),
+        });
         cancellationToken.ThrowIfCancellationRequested();
         observer?.Invoke(stage);
         cancellationToken.ThrowIfCancellationRequested();

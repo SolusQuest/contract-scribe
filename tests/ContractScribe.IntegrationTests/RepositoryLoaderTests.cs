@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
 using ContractScribe.Core;
 
@@ -956,51 +955,6 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
-    public async Task BuildHostProcessEndsAfterTheSuccessfulSessionIsDisposed()
-    {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        var ready = Path.Combine(fixture.Root, "unrelated.ready");
-        var release = Path.Combine(fixture.Root, "unrelated.release");
-        using var unrelated = StartLoaderProbe(fixture.Root, "churn", ready, release);
-        try
-        {
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => File.Exists(ready),
-                    TimeSpan.FromSeconds(30)),
-                "The unrelated loader probe did not reach its held session.");
-            int[] unrelatedHosts = [];
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => (unrelatedHosts = CurrentBuildHostDescendants(unrelated.Id)).Length != 0,
-                    TimeSpan.FromSeconds(30)),
-                "The unrelated loader probe did not expose its own BuildHost descendant.");
-
-            await using var successFixture = await LoaderFixture.CreateAsync();
-            var spawned = await RunLoaderProbeAsync(
-                successFixture.Root,
-                "observed-success");
-
-            Assert.False(unrelated.HasExited);
-            Assert.Empty(spawned.Intersect(unrelatedHosts));
-        }
-        finally
-        {
-            await File.WriteAllTextAsync(release, "release");
-            await unrelated.WaitForExitAsync();
-        }
-    }
-
-    [Theory]
-    [InlineData("failure")]
-    [InlineData("cancellation")]
-    public async Task BuildHostProcessEndsAfterFailureOrCancellation(string mode)
-    {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        await RunLoaderProbeAsync(fixture.Root, mode);
-    }
-
-    [Fact]
     public async Task ClassificationProjectionIsStableAcrossFreshProcesses()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1719,80 +1673,6 @@ public sealed class RepositoryLoaderTests
         }
     }
 
-    private static async Task<int[]> RunLoaderProbeAsync(string repositoryRoot, string mode)
-    {
-        var synchronizedObservation = mode == "observed-success";
-        var ready = Path.Combine(repositoryRoot, "observed-success.ready");
-        var release = Path.Combine(repositoryRoot, "observed-success.release");
-        using var probe = synchronizedObservation
-            ? StartLoaderProbe(repositoryRoot, mode, ready, release)
-            : StartLoaderProbe(repositoryRoot, mode);
-        var observed = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
-        using var monitoring = new CancellationTokenSource();
-        var stdout = probe.StandardOutput.ReadToEndAsync();
-        var stderr = probe.StandardError.ReadToEndAsync();
-        if (synchronizedObservation)
-        {
-            var readyReached = SpinWait.SpinUntil(
-                () => File.Exists(ready) || probe.HasExited,
-                TimeSpan.FromSeconds(30));
-            if (!readyReached || !File.Exists(ready))
-            {
-                await File.WriteAllTextAsync(release, "release");
-                if (!probe.HasExited)
-                {
-                    await probe.WaitForExitAsync();
-                }
-                Assert.Fail(
-                    "The observed loader probe did not reach its pre-load synchronization point.");
-            }
-        }
-
-        var monitor = Task.Factory.StartNew(
-            () => MonitorBuildHostDescendants(
-                probe.Id,
-                observed,
-                monitoring.Token),
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
-        try
-        {
-            if (synchronizedObservation)
-            {
-                await File.WriteAllTextAsync(release, "release");
-            }
-            await probe.WaitForExitAsync();
-        }
-        finally
-        {
-            if (synchronizedObservation)
-            {
-                await File.WriteAllTextAsync(release, "release");
-            }
-            if (!probe.HasExited)
-            {
-                await probe.WaitForExitAsync();
-            }
-            monitoring.Cancel();
-            await monitor;
-        }
-        var spawned = observed.Keys.Order().ToArray();
-        var output = await stdout;
-        var error = await stderr;
-
-        Assert.True(
-            probe.ExitCode == 0,
-            $"Loader probe failed for {mode} with exit {probe.ExitCode}:{Environment.NewLine}{output}{Environment.NewLine}{error}");
-        Assert.NotEmpty(spawned);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => spawned.All(ProcessHasExited),
-                TimeSpan.FromSeconds(10)),
-            $"BuildHost descendant remained after {mode}: {string.Join(',', spawned)}");
-        return spawned;
-    }
-
     private static async Task<string> RunClassificationProbeAsync(
         string repositoryRoot,
         string profile,
@@ -1817,8 +1697,6 @@ public sealed class RepositoryLoaderTests
     private static Process StartLoaderProbe(
         string repositoryRoot,
         string mode,
-        string? readyPath = null,
-        string? releasePath = null,
         IReadOnlyList<string>? extraArguments = null)
     {
         var probePath = LoaderProbePath();
@@ -1834,12 +1712,6 @@ public sealed class RepositoryLoaderTests
         startInfo.ArgumentList.Add(repositoryRoot);
         startInfo.ArgumentList.Add("App/App.csproj");
         startInfo.ArgumentList.Add(mode);
-        if (readyPath is not null && releasePath is not null)
-        {
-            startInfo.ArgumentList.Add(readyPath);
-            startInfo.ArgumentList.Add(releasePath);
-        }
-
         foreach (var argument in extraArguments ?? [])
         {
             startInfo.ArgumentList.Add(argument);
@@ -1871,151 +1743,6 @@ public sealed class RepositoryLoaderTests
             : throw new InvalidOperationException("The loader probe was not built.");
     }
 
-    private static string ExpectedBuildHostPath() =>
-        Path.Combine(
-            Path.GetDirectoryName(LoaderProbePath())!,
-            "BuildHost-netcore",
-            "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll");
-
-    private static int[] CurrentBuildHostDescendants(int ancestorProcessId)
-    {
-        var expectedPath = ExpectedBuildHostPath();
-        return Process.GetProcessesByName("dotnet")
-            .Select(process =>
-            {
-                using (process)
-                {
-                    return process.Id != ancestorProcessId
-                        && IsDescendantOf(process.Id, ancestorProcessId)
-                        && IsExpectedBuildHostProcess(process, expectedPath)
-                            ? process.Id
-                            : (int?)null;
-                }
-            })
-            .Where(processId => processId is not null)
-            .Select(processId => processId!.Value)
-            .Order()
-            .ToArray();
-    }
-
-    private static bool IsExpectedBuildHostProcess(Process process, string expectedPath)
-    {
-        try
-        {
-            if (!OperatingSystem.IsWindows())
-            {
-                var commandLine = File.ReadAllBytes($"/proc/{process.Id}/cmdline");
-                return Encoding.UTF8.GetString(commandLine)
-                    .Split('\0', StringSplitOptions.RemoveEmptyEntries)
-                    .Any(argument => string.Equals(
-                        Path.GetFullPath(argument),
-                        Path.GetFullPath(expectedPath),
-                        StringComparison.Ordinal));
-            }
-
-            return process.Modules.Cast<ProcessModule>().Any(module =>
-                string.Equals(
-                    Path.GetFullPath(module.FileName),
-                    Path.GetFullPath(expectedPath),
-                    StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception exception) when (
-            exception is ArgumentException
-                or IOException
-                or InvalidOperationException
-                or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsDescendantOf(int processId, int ancestorProcessId)
-    {
-        var visited = new HashSet<int>();
-        var current = processId;
-        while (visited.Add(current))
-        {
-            var parent = ParentProcessId(current);
-            if (parent == ancestorProcessId)
-            {
-                return true;
-            }
-
-            if (parent is null or <= 1)
-            {
-                return false;
-            }
-
-            current = parent.Value;
-        }
-
-        return false;
-    }
-
-    private static int? ParentProcessId(int processId)
-    {
-        try
-        {
-            if (!OperatingSystem.IsWindows())
-            {
-                var stat = File.ReadAllText($"/proc/{processId}/stat");
-                var afterName = stat[(stat.LastIndexOf(')') + 2)..]
-                    .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                return int.Parse(afterName[1], System.Globalization.CultureInfo.InvariantCulture);
-            }
-
-            using var process = Process.GetProcessById(processId);
-            var information = new ProcessBasicInformation();
-            var status = NtQueryInformationProcess(
-                process.Handle,
-                0,
-                ref information,
-                Marshal.SizeOf<ProcessBasicInformation>(),
-                out _);
-            return status == 0
-                ? checked((int)information.InheritedFromUniqueProcessId)
-                : null;
-        }
-        catch (Exception exception) when (
-            exception is ArgumentException
-                or IOException
-                or InvalidOperationException
-                or OverflowException
-                or System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
-    }
-
-    private static bool ProcessHasExited(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-    }
-
-    private static void MonitorBuildHostDescendants(
-        int ancestorProcessId,
-        System.Collections.Concurrent.ConcurrentDictionary<int, byte> observed,
-        CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            foreach (var processId in CurrentBuildHostDescendants(ancestorProcessId))
-            {
-                observed.TryAdd(processId, 0);
-            }
-
-            cancellationToken.WaitHandle.WaitOne(1);
-        }
-    }
-
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -2028,24 +1755,6 @@ public sealed class RepositoryLoaderTests
             ?? throw new InvalidOperationException("Repository root not found.");
     }
 
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        ref ProcessBasicInformation processInformation,
-        int processInformationLength,
-        out int returnLength);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessBasicInformation
-    {
-        public IntPtr Reserved1;
-        public IntPtr PebBaseAddress;
-        public IntPtr Reserved2_0;
-        public IntPtr Reserved2_1;
-        public IntPtr UniqueProcessId;
-        public IntPtr InheritedFromUniqueProcessId;
-    }
 }
 
 internal sealed class LoaderFixture : IAsyncDisposable

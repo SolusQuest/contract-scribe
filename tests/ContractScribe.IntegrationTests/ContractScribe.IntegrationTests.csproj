@@ -33,6 +33,8 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.LoaderProbe/ContractScribe.LoaderProbe.csproj"
                       ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ContractScribe.BuildHostProbe/ContractScribe.BuildHostProbe.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -40,5 +42,7 @@
              Link="AuditResultCanonicalizer.cs" />
     <Compile Include="../ContractScribe.ContractBaselineProbe/ClassificationConformanceOracle.cs"
              Link="ClassificationConformanceOracle.cs" />
+    <Compile Include="../ContractScribe.TestSupport/StableProcessStartIdentity.cs"
+             Link="StableProcessStartIdentity.cs" />
   </ItemGroup>
 </Project>
