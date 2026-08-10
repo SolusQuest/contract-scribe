@@ -82,23 +82,6 @@ internal static class OwnedProcessRunner
         }
         catch (Exception observationFailure) when (IsObservationFailure(observationFailure))
         {
-            if (HasConfirmedExit(process))
-            {
-                var completedDrain = await DrainAsync(stdout, stderr, terminationTimeout)
-                    .ConfigureAwait(false);
-                ThrowIfDrainFailed(completedDrain, observationFailure);
-                if (process.ExitCode != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"Owned process exited with code {process.ExitCode}. "
-                        + completedDrain.FormatTails(),
-                        observationFailure);
-                }
-                return new OwnedProcessResult(
-                    completedDrain.StandardOutput,
-                    completedDrain.StandardError);
-            }
-
             var cleanupFailure = await TryTerminateDirectAsync(
                 process,
                 terminationTimeout,
@@ -187,7 +170,36 @@ internal static class OwnedProcessRunner
 
             var completedOutput = await DrainAsync(stdout, stderr, terminationTimeout)
                 .ConfigureAwait(false);
-            ThrowIfDrainFailed(completedOutput);
+            var cleanupFailureAfterExit = await TryTerminateObservedAsync(
+                observer,
+                process,
+                terminationTimeout).ConfigureAwait(false);
+            if (completedOutput.Failures.Count > 0)
+            {
+                var finalDrain = await DrainAsync(stdout, stderr, terminationTimeout)
+                    .ConfigureAwait(false);
+                var failures = completedOutput.Failures
+                    .Concat(finalDrain.Failures)
+                    .ToList();
+                if (cleanupFailureAfterExit is not null)
+                {
+                    failures.Add(cleanupFailureAfterExit);
+                }
+                throw new IOException(
+                    "Owned process streams did not drain after the command root exited; "
+                    + "the remaining observed tree was terminated. "
+                    + observer.FormatObservedDescendants()
+                    + finalDrain.FormatTails(),
+                    CombineFailures(failures));
+            }
+            if (cleanupFailureAfterExit is not null)
+            {
+                throw new IOException(
+                    "Owned process root exited but its observed tree did not terminate cleanly. "
+                    + observer.FormatObservedDescendants()
+                    + completedOutput.FormatTails(),
+                    cleanupFailureAfterExit);
+            }
             if (process.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -261,7 +273,17 @@ internal static class OwnedProcessRunner
         TimeSpan timeout,
         OwnedProcessTestHooks? hooks)
     {
-        Exception? killFailure = null;
+        var failures = new List<Exception>();
+        IReadOnlyCollection<OwnedProcessIdentity> descendants = [];
+        try
+        {
+            descendants = OwnedProcessTreeObserver.CaptureDescendants(process.Id);
+        }
+        catch (Exception exception) when (IsObservationFailure(exception))
+        {
+            failures.Add(exception);
+        }
+
         try
         {
             if (!process.HasExited)
@@ -278,7 +300,7 @@ internal static class OwnedProcessRunner
         }
         catch (Exception exception) when (IsObservationFailure(exception))
         {
-            killFailure = exception;
+            failures.Add(exception);
         }
 
         try
@@ -287,26 +309,20 @@ internal static class OwnedProcessRunner
         }
         catch (Exception exception) when (exception is TimeoutException or InvalidOperationException)
         {
-            return CombineFailures(killFailure, exception);
+            failures.Add(exception);
         }
 
-        return killFailure;
-    }
-
-    private static bool HasConfirmedExit(Process process)
-    {
         try
         {
-            return process.HasExited;
+            await OwnedProcessTreeObserver.WaitForExactExitAsync(descendants, timeout)
+                .ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or TimeoutException)
         {
-            return false;
+            failures.Add(exception);
         }
-        catch (Win32Exception)
-        {
-            return false;
-        }
+
+        return CombineFailures(failures);
     }
 
     private static async Task<OwnedProcessDrain> DrainAsync(
@@ -364,6 +380,11 @@ internal static class OwnedProcessRunner
             failures.Add(second);
         }
         failures.AddRange(additional);
+        return CombineFailures(failures);
+    }
+
+    private static Exception? CombineFailures(IReadOnlyList<Exception> failures)
+    {
         return failures.Count switch
         {
             0 => null,
@@ -451,7 +472,7 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
     public async Task TerminateAsync(Process rootProcess, TimeSpan timeout)
     {
         CaptureOnce();
-        Exception? killFailure = null;
+        var killFailures = new List<Exception>();
         try
         {
             if (ReadExitState(root) != OwnedProcessExitState.ExitedOrReused)
@@ -468,7 +489,12 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
         }
         catch (Exception exception) when (IsObservationException(exception))
         {
-            killFailure = exception;
+            killFailures.Add(exception);
+        }
+
+        foreach (var identity in observed.Keys)
+        {
+            TryKillObservedIdentity(identity, killFailures);
         }
 
         using var deadline = new CancellationTokenSource(timeout);
@@ -481,11 +507,11 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
                 .ToArray();
             if (states.All(item => item.State == OwnedProcessExitState.ExitedOrReused))
             {
-                if (killFailure is not null)
+                if (killFailures.Count > 0)
                 {
                     throw new IOException(
                         "Owned process kill reported a failure before exit was confirmed.",
-                        killFailure);
+                        CombineFailures(killFailures));
                 }
                 return;
             }
@@ -510,13 +536,111 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
         throw new TimeoutException(
             $"Owned process cleanup did not prove bounded exit for root {root.ProcessId}; "
             + $"remaining identities: {details}.",
-            killFailure);
+            CombineFailures(killFailures));
+    }
+
+    private void TryKillObservedIdentity(
+        OwnedProcessIdentity identity,
+        List<Exception> failures)
+    {
+        if (ReadExitState(identity) == OwnedProcessExitState.ExitedOrReused)
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited || ReadStartIdentity(process) != identity.StartIdentity)
+            {
+                return;
+            }
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException
+            or FileNotFoundException
+            or DirectoryNotFoundException)
+        {
+        }
+        catch (Exception exception) when (IsObservationException(exception))
+        {
+            failures.Add(exception);
+        }
     }
 
     public string FormatObservedDescendants() =>
         "observed descendants: "
         + string.Join(",", observed.Keys.Select(identity => identity.ProcessId).Order())
         + ". ";
+
+    internal static IReadOnlyCollection<OwnedProcessIdentity> CaptureDescendants(int rootProcessId)
+    {
+        var descendants = new List<OwnedProcessIdentity>();
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.Id == rootProcessId
+                        || !IsDescendantOf(process.Id, rootProcessId))
+                    {
+                        continue;
+                    }
+
+                    descendants.Add(new OwnedProcessIdentity(
+                        process.Id,
+                        StableProcessStartIdentity.Read(process)));
+                }
+                catch (Exception exception) when (IsObservationException(exception))
+                {
+                }
+            }
+        }
+        return descendants;
+    }
+
+    internal static async Task WaitForExactExitAsync(
+        IReadOnlyCollection<OwnedProcessIdentity> identities,
+        TimeSpan timeout)
+    {
+        if (identities.Count == 0)
+        {
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(timeout);
+        while (!deadline.IsCancellationRequested)
+        {
+            var states = identities
+                .Select(identity => (Identity: identity, State: ReadStableExitState(identity)))
+                .ToArray();
+            if (states.All(item => item.State == OwnedProcessExitState.ExitedOrReused))
+            {
+                return;
+            }
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), deadline.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        var remaining = identities
+            .Select(identity => (Identity: identity, State: ReadStableExitState(identity)))
+            .Where(item => item.State != OwnedProcessExitState.ExitedOrReused)
+            .ToArray();
+        throw new TimeoutException(
+            "Direct owned-process cleanup did not prove bounded descendant exit; remaining identities: "
+            + string.Join(", ", remaining.Select(
+                item => $"{item.Identity.ProcessId}:{item.State}"))
+            + ".");
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -610,6 +734,32 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
         }
     }
 
+    private static OwnedProcessExitState ReadStableExitState(OwnedProcessIdentity identity)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited)
+            {
+                return OwnedProcessExitState.ExitedOrReused;
+            }
+            return StableProcessStartIdentity.Read(process) != identity.StartIdentity
+                ? OwnedProcessExitState.ExitedOrReused
+                : OwnedProcessExitState.StillAlive;
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException
+            or FileNotFoundException
+            or DirectoryNotFoundException)
+        {
+            return OwnedProcessExitState.ExitedOrReused;
+        }
+        catch (Exception exception) when (IsObservationException(exception))
+        {
+            return OwnedProcessExitState.ObservationUnavailable;
+        }
+    }
+
     private static bool IsDescendantOf(int processId, int ancestorProcessId)
     {
         var visited = new HashSet<int>();
@@ -674,6 +824,14 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
         or NotSupportedException
         or FormatException
         or OverflowException;
+
+    private static Exception? CombineFailures(IReadOnlyList<Exception> failures) =>
+        failures.Count switch
+        {
+            0 => null,
+            1 => failures[0],
+            _ => new AggregateException(failures),
+        };
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation

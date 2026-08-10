@@ -4,7 +4,10 @@ internal sealed record LoaderFixtureTemplate(
     string Root,
     string PreparationId,
     string ShapeKey,
-    string Category);
+    string Category)
+{
+    public string OwnershipRoot { get; init; } = Root;
+}
 
 internal sealed class LoaderFixtureCache : IAsyncDisposable
 {
@@ -34,7 +37,7 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
 
     public async Task<TResult> GetOrPrepareAndUseAsync<TResult>(
         string shapeKey,
-        Func<CancellationToken, Task<LoaderFixtureTemplate>> prepare,
+        Func<string, CancellationToken, Task<LoaderFixtureTemplate>> prepare,
         Func<LoaderFixtureTemplate, CancellationToken, Task<TResult>> use,
         CancellationToken cancellationToken)
     {
@@ -60,7 +63,7 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                 }
                 else if (!entries.TryGetValue(shapeKey, out entry))
                 {
-                    entry = new Entry(shapeKey);
+                    entry = new Entry(shapeKey, CreateOwnedRoot());
                     entries.Add(shapeKey, entry);
                     entry.WaiterCount = 1;
                     startPreparation = true;
@@ -204,15 +207,15 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         {
             snapshot = entries.Values.ToArray();
         }
-        foreach (var entry in snapshot.Where(entry => entry.Template is not null))
+        foreach (var entry in snapshot)
         {
-            DeleteDirectoryBestEffort(entry.Template!.Root);
+            DeleteDirectoryBestEffort(entry.OwnedRoot);
         }
     }
 
     private async Task PrepareEntryAsync(
         Entry entry,
-        Func<CancellationToken, Task<LoaderFixtureTemplate>> prepare)
+        Func<string, CancellationToken, Task<LoaderFixtureTemplate>> prepare)
     {
         Interlocked.Increment(ref preparationCount);
         using var timeout = new CancellationTokenSource(preparationTimeout);
@@ -227,7 +230,13 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                 await beforePreparation(linked.Token).ConfigureAwait(false);
             }
 
-            localTemplate = await prepare(linked.Token).ConfigureAwait(false);
+            localTemplate = await prepare(entry.OwnedRoot, linked.Token).ConfigureAwait(false);
+            if (!PathEquals(localTemplate.OwnershipRoot, entry.OwnedRoot))
+            {
+                throw new InvalidOperationException(
+                    $"Prepared fixture ownership root '{localTemplate.OwnershipRoot}' "
+                    + $"did not match the cache-owned root '{entry.OwnedRoot}'.");
+            }
             linked.Token.ThrowIfCancellationRequested();
             if (beforePublication is not null)
             {
@@ -258,27 +267,22 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                     $"Fixture preparation exceeded {preparationTimeout}.",
                     exception)
                 : exception;
-            CompleteFailedPreparation(entry, localTemplate, reported);
+            CompleteFailedPreparation(entry, reported);
         }
     }
 
     private void CompleteFailedPreparation(
         Entry entry,
-        LoaderFixtureTemplate? localTemplate,
         Exception failure)
     {
-        var ownedTemplate = localTemplate ?? entry.Template;
         Exception? cleanupFailure = null;
-        if (ownedTemplate is not null)
+        try
         {
-            try
-            {
-                deleteDirectory(ownedTemplate.Root);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                cleanupFailure = exception;
-            }
+            deleteDirectory(entry.OwnedRoot);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            cleanupFailure = exception;
         }
 
         var reported = cleanupFailure is null
@@ -313,7 +317,7 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         Exception? failure = null;
         try
         {
-            deleteDirectory(entry.Template!.Root);
+            deleteDirectory(entry.OwnedRoot);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -384,6 +388,18 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         }
     }
 
+    private static string CreateOwnedRoot() => Path.Combine(
+        Path.GetTempPath(),
+        "contract-scribe-issue80",
+        $"template-owner-{Guid.NewGuid():N}");
+
+    private static bool PathEquals(string left, string right) => string.Equals(
+        Path.GetFullPath(left),
+        Path.GetFullPath(right),
+        OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal);
+
     private static void DeleteDirectoryBestEffort(string path)
     {
         try
@@ -400,9 +416,10 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
 
     private sealed class Entry
     {
-        public Entry(string shapeKey)
+        public Entry(string shapeKey, string ownedRoot)
         {
             ShapeKey = shapeKey;
+            OwnedRoot = ownedRoot;
             _ = Completion.Task.ContinueWith(
                 task => _ = task.Exception,
                 CancellationToken.None,
@@ -416,6 +433,8 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         }
 
         public string ShapeKey { get; }
+
+        public string OwnedRoot { get; }
 
         public CancellationTokenSource PreparationCancellation { get; } = new();
 

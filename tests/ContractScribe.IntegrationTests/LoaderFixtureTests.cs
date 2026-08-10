@@ -89,7 +89,7 @@ public sealed class LoaderFixtureTests
         var cancelled = GetTemplateAsync(
             cache,
             "retry-shape",
-            token => CreateFakeTemplateAsync("retry-shape", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "retry-shape", token),
             cancellation.Token);
         await started.Task;
         cancellation.Cancel();
@@ -98,7 +98,7 @@ public sealed class LoaderFixtureTests
         var retried = await GetTemplateAsync(
             cache,
             "retry-shape",
-            token => CreateFakeTemplateAsync("retry-shape", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "retry-shape", token),
             CancellationToken.None);
 
         Assert.Equal(2, cache.PreparationCount);
@@ -137,12 +137,12 @@ public sealed class LoaderFixtureTests
         var first = GetTemplateAsync(
             cache,
             "shared-shape",
-            token => CreateFakeTemplateAsync("shared-shape", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "shared-shape", token),
             cancellation.Token);
         var second = GetTemplateAsync(
             cache,
             "shared-shape",
-            token => CreateFakeTemplateAsync("shared-shape", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "shared-shape", token),
             CancellationToken.None);
         await started.Task;
         cancellation.Cancel();
@@ -177,7 +177,7 @@ public sealed class LoaderFixtureTests
         var cancelled = GetTemplateAsync(
             cache,
             "publish-race",
-            token => CreateFakeTemplateAsync("publish-race", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "publish-race", token),
             cancellation.Token);
         await publicationStarted.Task;
 
@@ -187,7 +187,7 @@ public sealed class LoaderFixtureTests
         var retried = await GetTemplateAsync(
             cache,
             "publish-race",
-            token => CreateFakeTemplateAsync("publish-race", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "publish-race", token),
             CancellationToken.None);
         Assert.NotNull(abandonedRoot);
         Assert.False(Directory.Exists(abandonedRoot));
@@ -203,7 +203,7 @@ public sealed class LoaderFixtureTests
         var cache = new LoaderFixtureCache();
         var use = cache.GetOrPrepareAndUseAsync(
             "dispose-race",
-            token => CreateFakeTemplateAsync("dispose-race", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "dispose-race", token),
             async (template, cancellationToken) =>
             {
                 useStarted.TrySetResult();
@@ -241,7 +241,7 @@ public sealed class LoaderFixtureTests
         var cancelled = GetTemplateAsync(
             cache,
             "delete-failure",
-            token => CreateFakeTemplateAsync("delete-failure", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "delete-failure", token),
             cancellation.Token);
         await publicationStarted.Task;
         cancellation.Cancel();
@@ -250,13 +250,51 @@ public sealed class LoaderFixtureTests
         var retryFailure = await Assert.ThrowsAsync<AggregateException>(() => GetTemplateAsync(
             cache,
             "delete-failure",
-            token => CreateFakeTemplateAsync("delete-failure", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "delete-failure", token),
             CancellationToken.None));
         Assert.Contains("strict cleanup", retryFailure.Message, StringComparison.Ordinal);
         Assert.Equal(1, cache.PreparationCount);
         Assert.NotNull(ownedRoot);
         Assert.True(Directory.Exists(ownedRoot));
         Directory.Delete(ownedRoot, recursive: true);
+    }
+
+    [Fact]
+    public async Task FailedPreReturnCleanupFaultsTheBarrierAndBlocksSameShapeRetry()
+    {
+        string? candidateRoot = null;
+        var cache = new LoaderFixtureCache(
+            deleteDirectory: path => throw new IOException($"locked-before-return:{path}"));
+        var first = GetTemplateAsync(
+            cache,
+            "pre-return-delete-failure",
+            (ownedRoot, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                candidateRoot = ownedRoot;
+                Directory.CreateDirectory(ownedRoot);
+                File.WriteAllText(Path.Join(ownedRoot, "partial.txt"), "partial");
+                return Task.FromException<LoaderFixtureTemplate>(
+                    new InvalidOperationException("test-only preparation failure"));
+            },
+            CancellationToken.None);
+
+        var firstFailure = await Assert.ThrowsAsync<AggregateException>(() => first);
+        var retryFailure = await Assert.ThrowsAsync<AggregateException>(() => GetTemplateAsync(
+            cache,
+            "pre-return-delete-failure",
+            (ownedRoot, token) => CreateFakeTemplateAsync(
+                ownedRoot,
+                "pre-return-delete-failure",
+                token),
+            CancellationToken.None));
+
+        Assert.Contains("strict cleanup", firstFailure.Message, StringComparison.Ordinal);
+        Assert.Contains("locked-before-return", retryFailure.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, cache.PreparationCount);
+        Assert.NotNull(candidateRoot);
+        Assert.True(Directory.Exists(candidateRoot));
+        Directory.Delete(candidateRoot, recursive: true);
     }
 
     [Fact]
@@ -274,7 +312,7 @@ public sealed class LoaderFixtureTests
         _ = await GetTemplateAsync(
             cache,
             "disable-barrier",
-            token => CreateFakeTemplateAsync("disable-barrier", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "disable-barrier", token),
             CancellationToken.None);
         var disabling = Task.Run(() => cache.DisableAsync("disable-barrier"));
         Assert.True(deletionStarted.Wait(TimeSpan.FromSeconds(5)));
@@ -282,7 +320,7 @@ public sealed class LoaderFixtureTests
         var retry = GetTemplateAsync(
             cache,
             "disable-barrier",
-            token => CreateFakeTemplateAsync("disable-barrier", token),
+            (ownedRoot, token) => CreateFakeTemplateAsync(ownedRoot, "disable-barrier", token),
             CancellationToken.None);
         await Task.Delay(100);
         Assert.False(retry.IsCompleted);
@@ -305,21 +343,32 @@ public sealed class LoaderFixtureTests
     }
 
     [Fact]
-    public void FixtureBuildCommandsDisablePersistentBuildServers()
+    public void FixtureBuildCommandsDisableCrossCommandBuildProcesses()
     {
         Assert.Equal(
-            ["restore", "Fixture.slnx", "--disable-build-servers"],
-            LoaderFixture.WithPersistentBuildServersDisabled(["restore", "Fixture.slnx"]));
+            ["restore", "Fixture.slnx", "-nodeReuse:false"],
+            LoaderFixture.WithOwnedBuildProcessPolicy(["restore", "Fixture.slnx"]));
         Assert.Equal(
-            ["build", "Fixture.slnx", "--no-restore", "--disable-build-servers"],
-            LoaderFixture.WithPersistentBuildServersDisabled(["build", "Fixture.slnx", "--no-restore"]));
+            [
+                "build",
+                "Fixture.slnx",
+                "--no-restore",
+                "-nodeReuse:false",
+                "-property:UseSharedCompilation=false",
+            ],
+            LoaderFixture.WithOwnedBuildProcessPolicy(["build", "Fixture.slnx", "--no-restore"]));
         Assert.Equal(
-            ["msbuild", "App/App.csproj", "-nodeReuse:false"],
-            LoaderFixture.WithPersistentBuildServersDisabled(["msbuild", "App/App.csproj"]));
+            [
+                "msbuild",
+                "App/App.csproj",
+                "-nodeReuse:false",
+                "-property:UseSharedCompilation=false",
+            ],
+            LoaderFixture.WithOwnedBuildProcessPolicy(["msbuild", "App/App.csproj"]));
         Assert.Equal(
-            ["restore", "Fixture.slnx", "--disable-build-servers"],
-            LoaderFixture.WithPersistentBuildServersDisabled(
-                ["restore", "Fixture.slnx", "--disable-build-servers"]));
+            ["restore", "Fixture.slnx", "-nodeReuse:false"],
+            LoaderFixture.WithOwnedBuildProcessPolicy(
+                ["restore", "Fixture.slnx", "-nodeReuse:false"]));
     }
 
     [Fact]
@@ -343,6 +392,38 @@ public sealed class LoaderFixtureTests
             RunHoldTreeAsync(marker, TimeSpan.FromSeconds(3), CancellationToken.None));
 
         await AssertOwnedTreeExitedAndOutputDrainedAsync(exception.Message, marker);
+    }
+
+    [Fact]
+    public async Task RootExitWithInheritedStreamChildTerminatesTheObservedTreeAndReportsDrainFailure()
+    {
+        var marker = $"root-exit-{Guid.NewGuid():N}";
+        var hooks = new OwnedProcessTestHooks
+        {
+            PollingInterval = TimeSpan.FromMilliseconds(25),
+            TerminationTimeout = TimeSpan.FromMilliseconds(500),
+        };
+
+        var exception = await Assert.ThrowsAsync<IOException>(() => OwnedProcessRunner.RunAsync(
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            FindRepositoryRoot(),
+            [LoaderProbePath(), "exit-root-hold-child", marker],
+            TimeSpan.FromSeconds(30),
+            CancellationToken.None,
+            new Dictionary<string, string?>
+            {
+                ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
+                ["DOTNET_NOLOGO"] = "true",
+            },
+            hooks));
+
+        Assert.Contains("after the command root exited", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(TimeoutException), exception.InnerException?.ToString(), StringComparison.Ordinal);
+        await AssertOwnedTreeExitedAndOutputDrainedAsync(
+            exception.Message,
+            marker,
+            requireChildError: false);
+        await AssertObservedProcessesExitedAsync(exception.Message);
     }
 
     [Fact]
@@ -466,7 +547,7 @@ public sealed class LoaderFixtureTests
     private static Task<LoaderFixtureTemplate> GetTemplateAsync(
         LoaderFixtureCache cache,
         string shapeKey,
-        Func<CancellationToken, Task<LoaderFixtureTemplate>> prepare,
+        Func<string, CancellationToken, Task<LoaderFixtureTemplate>> prepare,
         CancellationToken cancellationToken) =>
         cache.GetOrPrepareAndUseAsync(
             shapeKey,
@@ -490,18 +571,15 @@ public sealed class LoaderFixtureTests
         $"&quot;{System.Security.SecurityElement.Escape(value)}&quot;";
 
     private static Task<LoaderFixtureTemplate> CreateFakeTemplateAsync(
+        string ownedRoot,
         string shapeKey,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var root = Path.Join(
-            Path.GetTempPath(),
-            "contract-scribe-issue80-cache-tests",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Join(root, "ready.txt"), "ready");
+        Directory.CreateDirectory(ownedRoot);
+        File.WriteAllText(Path.Join(ownedRoot, "ready.txt"), "ready");
         return Task.FromResult(new LoaderFixtureTemplate(
-            root,
+            ownedRoot,
             Guid.NewGuid().ToString("N"),
             shapeKey,
             "test"));
@@ -529,10 +607,18 @@ public sealed class LoaderFixtureTests
 
     private static async Task AssertOwnedTreeExitedAndOutputDrainedAsync(
         string message,
-        string marker)
+        string marker,
+        bool requireChildError = true)
     {
-        Assert.Contains($"{marker}:root-error", message, StringComparison.Ordinal);
-        Assert.Contains($"{marker}:child-error", message, StringComparison.Ordinal);
+        Assert.True(
+            message.Contains($"{marker}:root-error", StringComparison.Ordinal),
+            message);
+        if (requireChildError)
+        {
+            Assert.True(
+                message.Contains($"{marker}:child-error", StringComparison.Ordinal),
+                message);
+        }
         var match = Regex.Match(
             message,
             $"{Regex.Escape(marker)}:root:(?<root>[0-9]+):child:(?<child>[0-9]+)",

@@ -23,6 +23,30 @@ if (args is ["hold-child", var childMarker])
     return 0;
 }
 
+if (args is ["exit-root-hold-child", var exitRootMarker])
+{
+    var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+        ?? Environment.ProcessPath
+        ?? "dotnet";
+    using var child = Process.Start(new ProcessStartInfo
+    {
+        FileName = host,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        ArgumentList =
+        {
+            Assembly.GetExecutingAssembly().Location,
+            "hold-child",
+            exitRootMarker,
+        },
+    }) ?? throw new InvalidOperationException("The inherited-stream child did not start.");
+    Console.Out.WriteLine(
+        $"{exitRootMarker}:root:{Environment.ProcessId}:child:{child.Id}");
+    Console.Error.WriteLine($"{exitRootMarker}:root-error");
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    return 0;
+}
+
 if (args is ["hold-tree", var treeMarker])
 {
     var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")

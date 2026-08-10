@@ -1878,9 +1878,12 @@ internal sealed class LoaderFixture : IAsyncDisposable
         {
             return await selectedCache.GetOrPrepareAndUseAsync(
                 shapeKey,
-                async cacheCancellation =>
+                async (ownedRoot, cacheCancellation) =>
                 {
-                    var prepared = await CreateFreshOwnedAsync(
+                    var templateRoot = Path.Combine(
+                        ownedRoot,
+                        $"prepared-{Guid.NewGuid():N}");
+                    var prepared = await CreateFreshAsync(
                         appProject,
                         libraryProject,
                         withGenerator,
@@ -1891,34 +1894,20 @@ internal sealed class LoaderFixture : IAsyncDisposable
                         manyOutputGenerator,
                         collidingGeneratorOutputs,
                         cacheCancellation,
+                        templateRoot,
                         $"template:{category}").ConfigureAwait(false);
-                    try
+                    await QualifyTemplateAsync(
+                        prepared.Root,
+                        processSensitiveGenerator,
+                        cacheCancellation).ConfigureAwait(false);
+                    return new LoaderFixtureTemplate(
+                        prepared.Root,
+                        prepared.PreparationId,
+                        shapeKey,
+                        category)
                     {
-                        await QualifyTemplateAsync(
-                            prepared.Root,
-                            processSensitiveGenerator,
-                            cacheCancellation).ConfigureAwait(false);
-                        return new LoaderFixtureTemplate(
-                            prepared.Root,
-                            prepared.PreparationId,
-                            shapeKey,
-                            category);
-                    }
-                    catch (Exception primary)
-                    {
-                        try
-                        {
-                            DeleteDirectoryStrict(prepared.Root);
-                        }
-                        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-                        {
-                            throw new AggregateException(
-                                "Template qualification failed and its prepared root could not be deleted.",
-                                primary,
-                                cleanup);
-                        }
-                        throw;
-                    }
+                        OwnershipRoot = ownedRoot,
+                    };
                 },
                 (template, useCancellation) => MaterializeAsync(
                     template,
@@ -2984,7 +2973,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
         await OwnedProcessRunner.RunAsync(
             toolchain.DotnetHostPath,
             root,
-            WithPersistentBuildServersDisabled(arguments),
+            WithOwnedBuildProcessPolicy(arguments),
             TimeSpan.FromMinutes(3),
             cancellationToken,
             new Dictionary<string, string?>
@@ -2994,7 +2983,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
             }).ConfigureAwait(false);
     }
 
-    internal static IReadOnlyList<string> WithPersistentBuildServersDisabled(
+    internal static IReadOnlyList<string> WithOwnedBuildProcessPolicy(
         IReadOnlyList<string> arguments)
     {
         if (arguments.Count == 0)
@@ -3002,18 +2991,22 @@ internal sealed class LoaderFixture : IAsyncDisposable
             return arguments;
         }
 
-        var option = arguments[0] switch
+        IReadOnlyList<string> required = arguments[0] switch
         {
-            "restore" or "build" => "--disable-build-servers",
-            "msbuild" => "-nodeReuse:false",
-            _ => null,
+            "restore" => ["-nodeReuse:false"],
+            "build" or "msbuild" =>
+                ["-nodeReuse:false", "-property:UseSharedCompilation=false"],
+            _ => [],
         };
-        if (option is null || arguments.Contains(option, StringComparer.OrdinalIgnoreCase))
+        var missing = required
+            .Where(option => !arguments.Contains(option, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missing.Length == 0)
         {
             return arguments;
         }
 
-        return [.. arguments, option];
+        return [.. arguments, .. missing];
     }
 
     private static string FindRepositoryRoot()
