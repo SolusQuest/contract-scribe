@@ -9,7 +9,7 @@ using ContractScribe.Core.Hosting;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
-[Collection("Audit CLI real process")]
+[Collection("Integration process lane 1")]
 public sealed class AuditCliProcessTests
 {
     private static readonly string RepositoryRoot = FindRepositoryRoot();
@@ -367,8 +367,7 @@ public sealed class AuditCliProcessTests
         }
     }
 
-    [Fact]
-    public async Task WorkspaceLoadTimeout_UsesTheRealBlockingGeneratorSeam()
+    internal static async Task AssertWorkspaceLoadTimeoutUsesTheRealBlockingGeneratorSeamAsync()
     {
         await using var fixture = await CreateBlockingFixtureAsync();
         var outside = CreateOutsideDirectory();
@@ -622,8 +621,7 @@ public sealed class AuditCliProcessTests
         }
     }
 
-    [Fact]
-    public async Task TerminalCommit_RemainsAuthoritativeWhenPresentationWriteFails()
+    internal static async Task AssertTerminalCommitRemainsAuthoritativeWhenPresentationWriteFailsAsync()
     {
         await using (var success = await CreateBlockingFixtureAsync())
         {
@@ -1304,5 +1302,5 @@ public sealed class AuditCliProcessTests
 
 }
 
-[CollectionDefinition("Audit CLI real process", DisableParallelization = true)]
-public sealed class AuditCliProcessCollection;
+[CollectionDefinition("Integration process lane 1")]
+public sealed class IntegrationProcessLaneOneCollection;

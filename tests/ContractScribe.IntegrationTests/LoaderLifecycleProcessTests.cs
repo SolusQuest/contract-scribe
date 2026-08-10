@@ -2,6 +2,7 @@ using System.Diagnostics;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
+[Collection("Integration process lane 2")]
 public sealed class LoaderLifecycleProcessTests
 {
     [Fact]
@@ -589,3 +590,6 @@ public sealed class LoaderLifecycleProcessTests
         Assert.Empty(protectedChanges);
     }
 }
+
+[CollectionDefinition("Integration process lane 2")]
+public sealed class IntegrationProcessLaneTwoCollection;
