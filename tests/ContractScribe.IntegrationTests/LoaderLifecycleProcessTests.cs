@@ -415,23 +415,59 @@ public sealed class LoaderLifecycleProcessTests
             return;
         }
 
-        await using var leftFixture = await PreparedFixtureAsync();
-        await using var rightFixture = await PreparedFixtureAsync();
-        var leftBaseline = RepositoryInventory.Capture(
-            leftFixture.Root,
+        await using var firstLeftFixture = await PreparedFixtureAsync();
+        await using var firstRightFixture = await PreparedFixtureAsync();
+        await using var secondLeftFixture = await PreparedFixtureAsync();
+        await using var secondRightFixture = await PreparedFixtureAsync();
+        var firstLeftBaseline = RepositoryInventory.Capture(
+            firstLeftFixture.Root,
             CancellationToken.None);
-        var rightBaseline = RepositoryInventory.Capture(
-            rightFixture.Root,
+        var firstRightBaseline = RepositoryInventory.Capture(
+            firstRightFixture.Root,
+            CancellationToken.None);
+        var secondLeftBaseline = RepositoryInventory.Capture(
+            secondLeftFixture.Root,
+            CancellationToken.None);
+        var secondRightBaseline = RepositoryInventory.Capture(
+            secondRightFixture.Root,
             CancellationToken.None);
         var elapsed = Stopwatch.StartNew();
 
-        for (var iteration = 1; iteration <= 30; iteration++)
+        await Task.WhenAll(
+            RunSuccessfulIterationsAsync(
+                firstLeftFixture.Root,
+                firstRightFixture.Root,
+                firstLeftBaseline,
+                firstRightBaseline,
+                firstIteration: 1,
+                iterationStep: 2,
+                elapsed),
+            RunSuccessfulIterationsAsync(
+                secondLeftFixture.Root,
+                secondRightFixture.Root,
+                secondLeftBaseline,
+                secondRightBaseline,
+                firstIteration: 2,
+                iterationStep: 2,
+                elapsed));
+    }
+
+    private static async Task RunSuccessfulIterationsAsync(
+        string leftRoot,
+        string rightRoot,
+        IReadOnlyDictionary<string, InventoryEntry> leftBaseline,
+        IReadOnlyDictionary<string, InventoryEntry> rightBaseline,
+        int firstIteration,
+        int iterationStep,
+        Stopwatch elapsed)
+    {
+        for (var iteration = firstIteration; iteration <= 30; iteration += iterationStep)
         {
             try
             {
-                await RunSuccessfulPairAsync(leftFixture.Root, rightFixture.Root);
-                AssertProtectedInputsUnchanged(leftFixture.Root, leftBaseline);
-                AssertProtectedInputsUnchanged(rightFixture.Root, rightBaseline);
+                await RunSuccessfulPairAsync(leftRoot, rightRoot);
+                AssertProtectedInputsUnchanged(leftRoot, leftBaseline);
+                AssertProtectedInputsUnchanged(rightRoot, rightBaseline);
                 Assert.True(
                     elapsed.Elapsed < TimeSpan.FromMinutes(5),
                     $"The thirty-iteration topology exceeded its total deadline at iteration {iteration}.");
