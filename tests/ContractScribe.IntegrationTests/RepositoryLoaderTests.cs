@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1815,10 +1816,11 @@ internal sealed class LoaderFixture : IAsyncDisposable
 
     internal string Category { get; }
 
-    public Task PrepareEditorConfigAsync() =>
+    public Task PrepareEditorConfigAsync(CancellationToken cancellationToken = default) =>
         RunDotnetAsync(
             Root,
-            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"]);
+            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"],
+            cancellationToken);
 
     public static async Task<LoaderFixture> CreateAsync(
         string? appProject = null,
@@ -1872,26 +1874,9 @@ internal sealed class LoaderFixture : IAsyncDisposable
             collidingGeneratorOutputs,
             cancellationToken).ConfigureAwait(false);
         var selectedCache = cache ?? SharedCache;
-        if (selectedCache.IsDisabled(shapeKey))
-        {
-            return await CreateFreshOwnedAsync(
-                appProject,
-                libraryProject,
-                withGenerator,
-                processSensitiveGenerator,
-                selfObservingGenerator,
-                withSecondDependency,
-                reverseProjectReferences,
-                manyOutputGenerator,
-                collidingGeneratorOutputs,
-                cancellationToken,
-                $"fresh-disabled:{category}").ConfigureAwait(false);
-        }
-
-        LoaderFixtureTemplate template;
         try
         {
-            template = await selectedCache.GetOrPrepareAsync(
+            return await selectedCache.GetOrPrepareAndUseAsync(
                 shapeKey,
                 async cacheCancellation =>
                 {
@@ -1919,12 +1904,26 @@ internal sealed class LoaderFixture : IAsyncDisposable
                             shapeKey,
                             category);
                     }
-                    catch
+                    catch (Exception primary)
                     {
-                        await prepared.DisposeAsync().ConfigureAwait(false);
+                        try
+                        {
+                            DeleteDirectoryStrict(prepared.Root);
+                        }
+                        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+                        {
+                            throw new AggregateException(
+                                "Template qualification failed and its prepared root could not be deleted.",
+                                primary,
+                                cleanup);
+                        }
                         throw;
                     }
                 },
+                (template, useCancellation) => MaterializeAsync(
+                    template,
+                    processSensitiveGenerator,
+                    useCancellation),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (LoaderFixtureCacheDisabledException)
@@ -1944,7 +1943,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
         }
         catch (TemplateBindingException)
         {
-            selectedCache.Disable(shapeKey);
+            await selectedCache.DisableAsync(shapeKey).ConfigureAwait(false);
             return await CreateFreshOwnedAsync(
                 appProject,
                 libraryProject,
@@ -1957,30 +1956,6 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 collidingGeneratorOutputs,
                 cancellationToken,
                 $"fresh-qualification-fallback:{category}").ConfigureAwait(false);
-        }
-
-        try
-        {
-            return await MaterializeAsync(
-                template,
-                processSensitiveGenerator,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (TemplateBindingException)
-        {
-            selectedCache.Disable(shapeKey);
-            return await CreateFreshOwnedAsync(
-                appProject,
-                libraryProject,
-                withGenerator,
-                processSensitiveGenerator,
-                selfObservingGenerator,
-                withSecondDependency,
-                reverseProjectReferences,
-                manyOutputGenerator,
-                collidingGeneratorOutputs,
-                cancellationToken,
-                $"fresh-binding-fallback:{category}").ConfigureAwait(false);
         }
     }
 
@@ -2288,9 +2263,19 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 root,
                 category).ConfigureAwait(false);
         }
-        catch
+        catch (Exception primary)
         {
-            DeleteDirectory(root);
+            try
+            {
+                DeleteDirectoryStrict(root);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fresh fixture creation failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
             throw;
         }
     }
@@ -2326,9 +2311,19 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 template.ShapeKey,
                 template.Category);
         }
-        catch
+        catch (Exception primary)
         {
-            DeleteDirectory(root);
+            try
+            {
+                DeleteDirectoryStrict(root);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fixture materialization failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
             throw;
         }
     }
@@ -2343,6 +2338,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
             $"qualification-{Guid.NewGuid():N}");
         var unavailableRoot = $"{templateRoot}.offline-{Guid.NewGuid():N}";
         var templateMoved = false;
+        Exception? primaryFailure = null;
         try
         {
             CopyDirectory(templateRoot, qualificationRoot);
@@ -2374,23 +2370,49 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 qualificationRoot,
                 Path.GetFileName(templateRoot));
         }
-        catch (TemplateBindingException)
+        catch (OperationCanceledException exception)
         {
-            throw;
+            primaryFailure = exception;
         }
-        catch (Exception exception)
+        catch (TemplateBindingException exception)
         {
-            throw new TemplateBindingException(
+            primaryFailure = exception;
+        }
+        catch (Exception exception) when (exception is
+            IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or TimeoutException
+            or ArgumentException
+            or NotSupportedException
+            or JsonException)
+        {
+            primaryFailure = new TemplateBindingException(
                 "The prepared fixture did not qualify for isolated relocation.",
                 exception);
         }
-        finally
+
+        try
         {
             if (templateMoved && Directory.Exists(unavailableRoot))
             {
                 Directory.Move(unavailableRoot, templateRoot);
             }
-            DeleteDirectory(qualificationRoot);
+            DeleteDirectoryStrict(qualificationRoot);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
+            throw primaryFailure is null
+                ? cleanup
+                : new AggregateException(
+                    "Template qualification failed and strict cleanup did not complete.",
+                    primaryFailure,
+                    cleanup);
+        }
+
+        if (primaryFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
         }
     }
 
@@ -2405,59 +2427,20 @@ internal sealed class LoaderFixture : IAsyncDisposable
         bool manyOutputGenerator,
         bool collidingGeneratorOutputs)
     {
-        // Open-ended project XML may add preparation-time targets or absolute
-        // bindings outside the closed relocation proof, so only the exact
-        // lifecycle probe and built-in shapes are eligible for reuse.
-        var generatorVariantCount = new[]
-        {
-            withGenerator,
-            processSensitiveGenerator,
-            selfObservingGenerator,
-            manyOutputGenerator,
-            collidingGeneratorOutputs,
-        }.Count(value => value);
-        if (libraryProject is not null)
-        {
-            return null;
-        }
-        if (appProject is not null)
-        {
-            return generatorVariantCount == 0
-                && !withSecondDependency
-                && string.Equals(
-                    appProject,
-                    LoaderLifecycleHarness.ProbeAppProject(),
-                    StringComparison.Ordinal)
-                    ? "loader-lifecycle-probe"
-                    : null;
-        }
-        if (withSecondDependency)
-        {
-            return generatorVariantCount == 0
-                ? reverseProjectReferences
-                    ? "default-two-dependencies-reverse"
-                    : "default-two-dependencies-forward"
-                : null;
-        }
-        if (generatorVariantCount > 1)
+        // Reuse stays deliberately narrow. Custom XML, process-observing or
+        // output-sensitive generators, dependency-order variants, and the
+        // lifecycle probe retain fresh preparation until they each have a
+        // direct relocation-and-behavior proof on both CI platforms.
+        if (appProject is not null
+            || libraryProject is not null
+            || processSensitiveGenerator
+            || selfObservingGenerator
+            || withSecondDependency
+            || reverseProjectReferences
+            || manyOutputGenerator
+            || collidingGeneratorOutputs)
         {
             return null;
-        }
-        if (processSensitiveGenerator)
-        {
-            return "default-generator-process-sensitive";
-        }
-        if (selfObservingGenerator)
-        {
-            return "default-generator-self-observing";
-        }
-        if (manyOutputGenerator)
-        {
-            return "default-generator-many-output";
-        }
-        if (collidingGeneratorOutputs)
-        {
-            return "default-generator-colliding-output";
         }
         return withGenerator
             ? "default-generator-ordinary"
@@ -2632,9 +2615,19 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 HashFile(generatorPath),
                 HashFile(typeof(LoaderFixture).Assembly.Location));
         }
-        catch
+        catch (Exception primary)
         {
-            DeleteDirectory(inputRoot);
+            try
+            {
+                DeleteDirectoryStrict(inputRoot);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fixture input snapshot failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
             throw;
         }
     }
@@ -2647,10 +2640,10 @@ internal sealed class LoaderFixture : IAsyncDisposable
             return Path.GetFullPath(configured);
         }
         var executableName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                     .Select(directory => Path.Combine(directory.Trim('"'), executableName)))
         {
-            var candidate = Path.Combine(directory.Trim('"'), executableName);
             if (File.Exists(candidate))
             {
                 return Path.GetFullPath(candidate);
@@ -2926,6 +2919,18 @@ internal sealed class LoaderFixture : IAsyncDisposable
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    private static void DeleteDirectoryStrict(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        if (Directory.Exists(path))
+        {
+            throw new IOException($"Fixture directory still exists after cleanup: {path}");
         }
     }
 

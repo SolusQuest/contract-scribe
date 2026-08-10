@@ -12,36 +12,36 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
     private readonly Dictionary<string, Entry> entries = new(StringComparer.Ordinal);
     private readonly HashSet<string> disabled = new(StringComparer.Ordinal);
     private readonly Func<CancellationToken, Task>? beforePreparation;
+    private readonly Func<LoaderFixtureTemplate, CancellationToken, Task>? beforePublication;
+    private readonly Action<string> deleteDirectory;
     private readonly TimeSpan preparationTimeout;
     private bool disposed;
     private int preparationCount;
 
     public LoaderFixtureCache(
         TimeSpan? preparationTimeout = null,
-        Func<CancellationToken, Task>? beforePreparation = null)
+        Func<CancellationToken, Task>? beforePreparation = null,
+        Func<LoaderFixtureTemplate, CancellationToken, Task>? beforePublication = null,
+        Action<string>? deleteDirectory = null)
     {
         this.preparationTimeout = preparationTimeout ?? TimeSpan.FromMinutes(5);
         this.beforePreparation = beforePreparation;
+        this.beforePublication = beforePublication;
+        this.deleteDirectory = deleteDirectory ?? DeleteDirectoryStrict;
     }
 
     public int PreparationCount => Volatile.Read(ref preparationCount);
 
-    public bool IsDisabled(string shapeKey)
-    {
-        lock (gate)
-        {
-            return disabled.Contains(shapeKey);
-        }
-    }
-
-    public async Task<LoaderFixtureTemplate> GetOrPrepareAsync(
+    public async Task<TResult> GetOrPrepareAndUseAsync<TResult>(
         string shapeKey,
         Func<CancellationToken, Task<LoaderFixtureTemplate>> prepare,
+        Func<LoaderFixtureTemplate, CancellationToken, Task<TResult>> use,
         CancellationToken cancellationToken)
     {
         while (true)
         {
             Entry? entry = null;
+            LoaderFixtureTemplate? published = null;
             Task? cleanupBarrier = null;
             var startPreparation = false;
             lock (gate)
@@ -49,10 +49,16 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                 ObjectDisposedException.ThrowIf(disposed, this);
                 if (disabled.Contains(shapeKey))
                 {
-                    throw new LoaderFixtureCacheDisabledException(shapeKey);
+                    if (entries.TryGetValue(shapeKey, out entry))
+                    {
+                        cleanupBarrier = entry.TerminalCleanup.Task;
+                    }
+                    else
+                    {
+                        throw new LoaderFixtureCacheDisabledException(shapeKey);
+                    }
                 }
-
-                if (!entries.TryGetValue(shapeKey, out entry))
+                else if (!entries.TryGetValue(shapeKey, out entry))
                 {
                     entry = new Entry(shapeKey);
                     entries.Add(shapeKey, entry);
@@ -64,9 +70,12 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                     switch (entry.State)
                     {
                         case EntryState.Published:
-                            return entry.Template!;
+                            entry.WaiterCount++;
+                            published = entry.Template!;
+                            break;
                         case EntryState.Abandoning:
-                        case EntryState.TerminalFailure:
+                        case EntryState.Disposing:
+                        case EntryState.CleanupFailed:
                             cleanupBarrier = entry.TerminalCleanup.Task;
                             break;
                         default:
@@ -89,9 +98,12 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
 
             try
             {
-                return await entry!.Completion.Task
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                var template = published
+                    ?? await entry!.Completion.Task
+                        .WaitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                return await use(template, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -100,17 +112,51 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         }
     }
 
-    public void Disable(string shapeKey)
+    public async Task DisableAsync(string shapeKey)
     {
+        Entry? cleanup = null;
+        Task? terminal = null;
         lock (gate)
         {
             disabled.Add(shapeKey);
+            if (!entries.TryGetValue(shapeKey, out var entry))
+            {
+                return;
+            }
+
+            terminal = entry.TerminalCleanup.Task;
+            switch (entry.State)
+            {
+                case EntryState.Preparing:
+                case EntryState.Publishing:
+                    entry.State = EntryState.Disposing;
+                    entry.PreparationCancellation.Cancel();
+                    break;
+                case EntryState.Published:
+                    entry.State = EntryState.Disposing;
+                    if (entry.WaiterCount == 0 && !entry.CleanupStarted)
+                    {
+                        entry.CleanupStarted = true;
+                        cleanup = entry;
+                    }
+                    break;
+            }
+        }
+
+        if (cleanup is not null)
+        {
+            _ = CleanupPublishedEntryAsync(cleanup);
+        }
+        if (terminal is not null)
+        {
+            await terminal.ConfigureAwait(false);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
         Entry[] snapshot;
+        var cleanup = new List<Entry>();
         lock (gate)
         {
             if (disposed)
@@ -121,35 +167,33 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
             snapshot = entries.Values.ToArray();
             foreach (var entry in snapshot)
             {
-                if (entry.State is EntryState.Preparing or EntryState.Publishing)
+                switch (entry.State)
                 {
-                    entry.State = EntryState.Abandoning;
-                    entry.PreparationCancellation.Cancel();
+                    case EntryState.Preparing:
+                    case EntryState.Publishing:
+                        entry.State = EntryState.Disposing;
+                        entry.PreparationCancellation.Cancel();
+                        break;
+                    case EntryState.Published:
+                        entry.State = EntryState.Disposing;
+                        if (entry.WaiterCount == 0 && !entry.CleanupStarted)
+                        {
+                            entry.CleanupStarted = true;
+                            cleanup.Add(entry);
+                        }
+                        break;
                 }
             }
         }
 
-        var unfinished = snapshot
-            .Where(entry => entry.State is not EntryState.Published)
-            .Select(entry => entry.TerminalCleanup.Task)
-            .ToArray();
-        if (unfinished.Length > 0)
+        foreach (var entry in cleanup)
         {
-            await Task.WhenAll(unfinished).ConfigureAwait(false);
+            _ = CleanupPublishedEntryAsync(entry);
         }
-
-        foreach (var entry in snapshot)
+        if (snapshot.Length > 0)
         {
-            if (entry.Template is not null)
-            {
-                DeleteDirectory(entry.Template.Root);
-            }
-            entry.PreparationCancellation.Dispose();
-            entry.TerminalCleanup.TrySetResult();
-        }
-        lock (gate)
-        {
-            entries.Clear();
+            await Task.WhenAll(snapshot.Select(entry => entry.TerminalCleanup.Task))
+                .ConfigureAwait(false);
         }
     }
 
@@ -160,12 +204,9 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         {
             snapshot = entries.Values.ToArray();
         }
-        foreach (var entry in snapshot)
+        foreach (var entry in snapshot.Where(entry => entry.Template is not null))
         {
-            if (entry.Template is not null)
-            {
-                DeleteDirectory(entry.Template.Root);
-            }
+            DeleteDirectoryBestEffort(entry.Template!.Root);
         }
     }
 
@@ -178,6 +219,7 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             entry.PreparationCancellation.Token,
             timeout.Token);
+        LoaderFixtureTemplate? localTemplate = null;
         try
         {
             if (beforePreparation is not null)
@@ -185,19 +227,28 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                 await beforePreparation(linked.Token).ConfigureAwait(false);
             }
 
-            var template = await prepare(linked.Token).ConfigureAwait(false);
+            localTemplate = await prepare(linked.Token).ConfigureAwait(false);
             linked.Token.ThrowIfCancellationRequested();
+            if (beforePublication is not null)
+            {
+                await beforePublication(localTemplate, linked.Token).ConfigureAwait(false);
+            }
+            linked.Token.ThrowIfCancellationRequested();
+
+            LoaderFixtureTemplate published;
             lock (gate)
             {
-                if (entry.State == EntryState.Abandoning)
+                if (entry.State is EntryState.Abandoning or EntryState.Disposing)
                 {
                     throw new OperationCanceledException(linked.Token);
                 }
                 entry.State = EntryState.Publishing;
-                entry.Template = template;
+                entry.Template = localTemplate;
+                localTemplate = null;
                 entry.State = EntryState.Published;
+                published = entry.Template;
             }
-            entry.Completion.TrySetResult(template);
+            entry.Completion.TrySetResult(published);
         }
         catch (Exception exception)
         {
@@ -207,45 +258,137 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
                     $"Fixture preparation exceeded {preparationTimeout}.",
                     exception)
                 : exception;
-            if (entry.Template is not null)
+            CompleteFailedPreparation(entry, localTemplate, reported);
+        }
+    }
+
+    private void CompleteFailedPreparation(
+        Entry entry,
+        LoaderFixtureTemplate? localTemplate,
+        Exception failure)
+    {
+        var ownedTemplate = localTemplate ?? entry.Template;
+        Exception? cleanupFailure = null;
+        if (ownedTemplate is not null)
+        {
+            try
             {
-                DeleteDirectory(entry.Template.Root);
+                deleteDirectory(ownedTemplate.Root);
             }
-            lock (gate)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                entry.State = EntryState.TerminalFailure;
+                cleanupFailure = exception;
+            }
+        }
+
+        var reported = cleanupFailure is null
+            ? failure
+            : new AggregateException(
+                "Fixture preparation failed and strict cleanup did not complete.",
+                failure,
+                cleanupFailure);
+        lock (gate)
+        {
+            entry.State = cleanupFailure is null
+                ? EntryState.TerminalFailure
+                : EntryState.CleanupFailed;
+            if (cleanupFailure is null)
+            {
                 entries.Remove(entry.ShapeKey);
             }
-            entry.Completion.TrySetException(reported);
+        }
+        entry.Completion.TrySetException(reported);
+        if (cleanupFailure is null)
+        {
             entry.TerminalCleanup.TrySetResult();
         }
+        else
+        {
+            entry.TerminalCleanup.TrySetException(reported);
+        }
+    }
+
+    private async Task CleanupPublishedEntryAsync(Entry entry)
+    {
+        Exception? failure = null;
+        try
+        {
+            deleteDirectory(entry.Template!.Root);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            failure = exception;
+        }
+
+        lock (gate)
+        {
+            entry.State = failure is null
+                ? EntryState.TerminalFailure
+                : EntryState.CleanupFailed;
+            if (failure is null)
+            {
+                entries.Remove(entry.ShapeKey);
+            }
+        }
+        if (failure is null)
+        {
+            entry.TerminalCleanup.TrySetResult();
+        }
+        else
+        {
+            entry.TerminalCleanup.TrySetException(failure);
+        }
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     private void DetachWaiter(Entry entry)
     {
+        Entry? cleanup = null;
         lock (gate)
         {
             if (entry.WaiterCount > 0)
             {
                 entry.WaiterCount--;
             }
-            if (entry.WaiterCount == 0
-                && entry.State is EntryState.Preparing or EntryState.Publishing)
+            if (entry.WaiterCount != 0)
+            {
+                return;
+            }
+
+            if (entry.State is EntryState.Preparing or EntryState.Publishing)
             {
                 entry.State = EntryState.Abandoning;
                 entry.PreparationCancellation.Cancel();
             }
+            else if (entry.State == EntryState.Disposing && !entry.CleanupStarted)
+            {
+                entry.CleanupStarted = true;
+                cleanup = entry;
+            }
+        }
+        if (cleanup is not null)
+        {
+            _ = CleanupPublishedEntryAsync(cleanup);
         }
     }
 
-    private static void DeleteDirectory(string path)
+    private static void DeleteDirectoryStrict(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        if (Directory.Exists(path))
+        {
+            throw new IOException($"Fixture directory still exists after cleanup: {path}");
+        }
+    }
+
+    private static void DeleteDirectoryBestEffort(string path)
     {
         try
         {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
+            DeleteDirectoryStrict(path);
         }
         catch (IOException)
         {
@@ -261,6 +404,11 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         {
             ShapeKey = shapeKey;
             _ = Completion.Task.ContinueWith(
+                task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            _ = TerminalCleanup.Task.ContinueWith(
                 task => _ = task.Exception,
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
@@ -281,6 +429,8 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
 
         public int WaiterCount { get; set; }
 
+        public bool CleanupStarted { get; set; }
+
         public LoaderFixtureTemplate? Template { get; set; }
     }
 
@@ -290,7 +440,9 @@ internal sealed class LoaderFixtureCache : IAsyncDisposable
         Publishing,
         Published,
         Abandoning,
+        Disposing,
         TerminalFailure,
+        CleanupFailed,
     }
 }
 

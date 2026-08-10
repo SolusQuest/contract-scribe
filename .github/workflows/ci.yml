@@ -67,14 +67,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: fast-trx-${{ runner.os }}
+          name: fast-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/fast/*.trx
           if-no-files-found: error
       - name: Upload integration-suite TRX
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: integration-trx-${{ runner.os }}
+          name: integration-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/integration/*.trx
           if-no-files-found: error
       - name: Aggregate suite outcomes

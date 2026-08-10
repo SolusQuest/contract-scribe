@@ -37,6 +37,12 @@ Do not remove or merge these collections merely to shorten one filtered command.
 
 Prose-only documentation may omit .NET tests only when it changes prose, links, or tracker metadata and does not change a normative contract, schema, registry, fixture meaning, generated/checkable output, CLI help or behavior, executable command, architecture dependency rule, or other test-enforced behavior. Contract documentation and generated/checkable documentation use their corresponding contract tests.
 
+## Fixture reuse boundary
+
+Prepared-state reuse is intentionally limited to the built-in default two-project fixture and the built-in ordinary-generator fixture. Both categories have direct tests that prove one preparation, distinct writable consumer roots, template-unavailable relocation, token absence, and successful repository loading on Ubuntu and Windows CI.
+
+Custom project XML remains fresh because it can add preparation targets or absolute bindings outside the closed relocation proof. Process-sensitive, self-observing, many-output, and colliding-output generators remain fresh because their observable behavior or output topology is part of the preparation boundary. Two-dependency reference-order variants and the Loader lifecycle probe remain fresh because their graph order or process topology requires category-specific relocation proof. These are deliberate isolation dispositions, not cache misses; do not broaden the reusable classifier without adding the matching cross-platform reuse and behavior test.
+
 ## Build validity
 
 Use `--no-build --no-restore` only after the current working tree completed the applicable build with the same SDK and configuration. Rebuild when production or test source, a `.csproj` or `.slnx`, `Directory.*`, `global.json`, package-version inputs, a generator/helper project, or shared fixture/process infrastructure changed. Restore again when projects, package sources, package versions, SDK selection, lock inputs, or restore properties changed.
@@ -77,4 +83,4 @@ dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configur
 dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
 ```
 
-CI is the final Ubuntu/Windows leg for platform-sensitive changes, but it does not replace local focused validation. In CI the fast and integration suites remain separately named, write separate TRX artifacts, both run after a successful build even if one fails, and an ordinary final step aggregates their original outcomes.
+CI is the final Ubuntu/Windows leg for platform-sensitive changes, but it does not replace local focused validation. In CI the fast and integration suites remain separately named, write separate TRX artifacts, both run after a successful build even if one fails, and an ordinary final step aggregates their original outcomes. Artifact names include `github.run_attempt`, so a rerun preserves its own TRX without colliding with an earlier attempt.

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -7,15 +8,26 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed class LoaderFixtureTests
 {
-    [Fact]
-    public async Task SameShapeReusesOnePreparedTemplate()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EveryReusableCategoryPublishesOnceAndLoadsFromDistinctConsumers(
+        bool withGenerator)
     {
-        await using var first = await LoaderFixture.CreateAsync();
-        await using var second = await LoaderFixture.CreateAsync();
+        await using var cache = new LoaderFixtureCache();
+        await using var first = await LoaderFixture.CreateAsync(
+            withGenerator: withGenerator,
+            cache: cache);
+        await using var second = await LoaderFixture.CreateAsync(
+            withGenerator: withGenerator,
+            cache: cache);
 
+        Assert.Equal(1, cache.PreparationCount);
         Assert.Equal(first.PreparationId, second.PreparationId);
         Assert.Equal(first.ShapeKey, second.ShapeKey);
         Assert.NotEqual(first.Root, second.Root);
+        await AssertLoadsAsync(first);
+        await AssertLoadsAsync(second);
     }
 
     [Fact]
@@ -74,7 +86,8 @@ public sealed class LoaderFixtureTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             });
         using var cancellation = new CancellationTokenSource();
-        var cancelled = cache.GetOrPrepareAsync(
+        var cancelled = GetTemplateAsync(
+            cache,
             "retry-shape",
             token => CreateFakeTemplateAsync("retry-shape", token),
             cancellation.Token);
@@ -82,7 +95,8 @@ public sealed class LoaderFixtureTests
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
-        var retried = await cache.GetOrPrepareAsync(
+        var retried = await GetTemplateAsync(
+            cache,
             "retry-shape",
             token => CreateFakeTemplateAsync("retry-shape", token),
             CancellationToken.None);
@@ -120,11 +134,13 @@ public sealed class LoaderFixtureTests
                 await release.Task.WaitAsync(cancellationToken);
             });
         using var cancellation = new CancellationTokenSource();
-        var first = cache.GetOrPrepareAsync(
+        var first = GetTemplateAsync(
+            cache,
             "shared-shape",
             token => CreateFakeTemplateAsync("shared-shape", token),
             cancellation.Token);
-        var second = cache.GetOrPrepareAsync(
+        var second = GetTemplateAsync(
+            cache,
             "shared-shape",
             token => CreateFakeTemplateAsync("shared-shape", token),
             CancellationToken.None);
@@ -137,6 +153,144 @@ public sealed class LoaderFixtureTests
 
         Assert.Equal(1, cache.PreparationCount);
         Assert.True(Directory.Exists(template.Root));
+    }
+
+    [Fact]
+    public async Task CancellationAfterPreparationOwnsAndDeletesTheUnpublishedRootBeforeRetry()
+    {
+        var publicationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        string? abandonedRoot = null;
+        var publicationCall = 0;
+        await using var cache = new LoaderFixtureCache(
+            beforePublication: async (template, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref publicationCall) != 1)
+                {
+                    return;
+                }
+                abandonedRoot = template.Root;
+                publicationStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            });
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = GetTemplateAsync(
+            cache,
+            "publish-race",
+            token => CreateFakeTemplateAsync("publish-race", token),
+            cancellation.Token);
+        await publicationStarted.Task;
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        var retried = await GetTemplateAsync(
+            cache,
+            "publish-race",
+            token => CreateFakeTemplateAsync("publish-race", token),
+            CancellationToken.None);
+        Assert.NotNull(abandonedRoot);
+        Assert.False(Directory.Exists(abandonedRoot));
+        Assert.True(Directory.Exists(retried.Root));
+        Assert.Equal(2, cache.PreparationCount);
+    }
+
+    [Fact]
+    public async Task DisposalWaitsForAnActiveMaterializationLease()
+    {
+        var useStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseUse = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = new LoaderFixtureCache();
+        var use = cache.GetOrPrepareAndUseAsync(
+            "dispose-race",
+            token => CreateFakeTemplateAsync("dispose-race", token),
+            async (template, cancellationToken) =>
+            {
+                useStarted.TrySetResult();
+                await releaseUse.Task.WaitAsync(cancellationToken);
+                Assert.True(Directory.Exists(template.Root));
+                return template.Root;
+            },
+            CancellationToken.None);
+        await useStarted.Task;
+
+        var disposal = cache.DisposeAsync().AsTask();
+        Assert.False(disposal.IsCompleted);
+        releaseUse.TrySetResult();
+
+        var root = await use;
+        await disposal;
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
+    public async Task FailedStrictDeletionFaultsTheCleanupBarrierAndBlocksRetry()
+    {
+        var publicationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        string? ownedRoot = null;
+        var cache = new LoaderFixtureCache(
+            beforePublication: async (template, cancellationToken) =>
+            {
+                ownedRoot = template.Root;
+                publicationStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            deleteDirectory: path => throw new IOException($"locked:{path}"));
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = GetTemplateAsync(
+            cache,
+            "delete-failure",
+            token => CreateFakeTemplateAsync("delete-failure", token),
+            cancellation.Token);
+        await publicationStarted.Task;
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        var retryFailure = await Assert.ThrowsAsync<AggregateException>(() => GetTemplateAsync(
+            cache,
+            "delete-failure",
+            token => CreateFakeTemplateAsync("delete-failure", token),
+            CancellationToken.None));
+        Assert.Contains("strict cleanup", retryFailure.Message, StringComparison.Ordinal);
+        Assert.Equal(1, cache.PreparationCount);
+        Assert.NotNull(ownedRoot);
+        Assert.True(Directory.Exists(ownedRoot));
+        Directory.Delete(ownedRoot, recursive: true);
+    }
+
+    [Fact]
+    public async Task DisabledShapeDoesNotReportFreshFallbackBeforeStrictCleanupCompletes()
+    {
+        using var deletionStarted = new ManualResetEventSlim();
+        using var releaseDeletion = new ManualResetEventSlim();
+        await using var cache = new LoaderFixtureCache(
+            deleteDirectory: path =>
+            {
+                deletionStarted.Set();
+                Assert.True(releaseDeletion.Wait(TimeSpan.FromSeconds(10)));
+                Directory.Delete(path, recursive: true);
+            });
+        _ = await GetTemplateAsync(
+            cache,
+            "disable-barrier",
+            token => CreateFakeTemplateAsync("disable-barrier", token),
+            CancellationToken.None);
+        var disabling = Task.Run(() => cache.DisableAsync("disable-barrier"));
+        Assert.True(deletionStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        var retry = GetTemplateAsync(
+            cache,
+            "disable-barrier",
+            token => CreateFakeTemplateAsync("disable-barrier", token),
+            CancellationToken.None);
+        await Task.Delay(100);
+        Assert.False(retry.IsCompleted);
+        releaseDeletion.Set();
+
+        await disabling;
+        await Assert.ThrowsAsync<LoaderFixtureCacheDisabledException>(() => retry);
+        Assert.Equal(1, cache.PreparationCount);
     }
 
     [Fact]
@@ -173,6 +327,150 @@ public sealed class LoaderFixtureTests
         AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
     }
 
+    [Fact]
+    public async Task ObserverEstablishmentFailureReapsTheDirectOwnedTree()
+    {
+        var marker = $"observer-start-{Guid.NewGuid():N}";
+        var hooks = new OwnedProcessTestHooks
+        {
+            ReadStartIdentity = _ =>
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(750));
+                throw new IOException("test-only identity failure");
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunHoldTreeAsync(
+                marker,
+                TimeSpan.FromSeconds(30),
+                CancellationToken.None,
+                hooks));
+
+        Assert.Contains("observation could not be established", exception.Message, StringComparison.Ordinal);
+        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+    }
+
+    [Fact]
+    public async Task UnavailableExitObservationFailsClosedAfterTheOwnedTreeIsKilled()
+    {
+        var marker = $"observer-unavailable-{Guid.NewGuid():N}";
+        var hooks = new OwnedProcessTestHooks
+        {
+            ExitStateOverride = _ => OwnedProcessExitState.ObservationUnavailable,
+            TerminationTimeout = TimeSpan.FromMilliseconds(500),
+        };
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            RunHoldTreeAsync(marker, TimeSpan.FromSeconds(2), CancellationToken.None, hooks));
+
+        Assert.Contains(
+            nameof(OwnedProcessExitState.ObservationUnavailable),
+            exception.InnerException?.ToString(),
+            StringComparison.Ordinal);
+        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+    }
+
+    [Fact]
+    public async Task KillFailureIsPreservedAfterExactExitIsConfirmed()
+    {
+        var marker = $"kill-failure-{Guid.NewGuid():N}";
+        var hooks = new OwnedProcessTestHooks
+        {
+            KillProcessTree = process =>
+            {
+                process.Kill(entireProcessTree: true);
+                throw new Win32Exception("test-only kill failure");
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            RunHoldTreeAsync(marker, TimeSpan.FromSeconds(2), CancellationToken.None, hooks));
+
+        Assert.Contains("test-only kill failure", exception.InnerException?.ToString(), StringComparison.Ordinal);
+        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+    }
+
+    [Fact]
+    public async Task ReaderFailureTerminatesTheOwnedTreeInsteadOfWaitingForCommandTimeout()
+    {
+        var marker = $"reader-failure-{Guid.NewGuid():N}";
+        var rootProcessId = 0;
+        var hooks = new OwnedProcessTestHooks
+        {
+            ProcessStarted = process => rootProcessId = process.Id,
+            PollingInterval = TimeSpan.FromMilliseconds(25),
+            ReadStandardOutput = async _ =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                throw new IOException("test-only reader failure");
+            },
+        };
+        var elapsed = Stopwatch.StartNew();
+
+        var exception = await Assert.ThrowsAsync<IOException>(() =>
+            RunHoldTreeAsync(marker, TimeSpan.FromSeconds(30), CancellationToken.None, hooks));
+
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), elapsed.Elapsed.ToString());
+        Assert.Contains("test-only reader failure", exception.InnerException?.ToString(), StringComparison.Ordinal);
+        AssertProcessExited(rootProcessId);
+        AssertObservedProcessesExited(exception.Message);
+    }
+
+    [Fact]
+    public async Task PrepareEditorConfigPropagatesCancellationToItsOwnedMsBuildTree()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var marker = $"editor-config-{Guid.NewGuid():N}";
+        var command = string.Join(
+            ' ',
+            QuoteXmlCommand(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet"),
+            QuoteXmlCommand(LoaderProbePath()),
+            "hold-tree",
+            marker);
+        await File.WriteAllTextAsync(
+            Path.Join(fixture.Root, "Directory.Build.targets"),
+            $"""
+             <Project>
+               <Target Name="ContractScribeHoldEditorConfig" BeforeTargets="GenerateMSBuildEditorConfigFile">
+                 <Exec Command="{command}" />
+               </Target>
+             </Project>
+             """);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.PrepareEditorConfigAsync(cancellation.Token));
+
+        AssertOwnedTreeExitedAndOutputDrained(exception.Message, marker);
+    }
+
+    private static Task<LoaderFixtureTemplate> GetTemplateAsync(
+        LoaderFixtureCache cache,
+        string shapeKey,
+        Func<CancellationToken, Task<LoaderFixtureTemplate>> prepare,
+        CancellationToken cancellationToken) =>
+        cache.GetOrPrepareAndUseAsync(
+            shapeKey,
+            prepare,
+            static (template, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return Task.FromResult(template);
+            },
+            cancellationToken);
+
+    private static async Task AssertLoadsAsync(LoaderFixture fixture)
+    {
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        Assert.Equal(RepositoryLoadStatus.Success, outcome.Status);
+        await Assert.IsType<LoadedRepositorySession>(outcome.Session).DisposeAsync();
+    }
+
+    private static string QuoteXmlCommand(string value) =>
+        $"&quot;{System.Security.SecurityElement.Escape(value)}&quot;";
+
     private static Task<LoaderFixtureTemplate> CreateFakeTemplateAsync(
         string shapeKey,
         CancellationToken cancellationToken)
@@ -194,7 +492,8 @@ public sealed class LoaderFixtureTests
     private static async Task RunHoldTreeAsync(
         string marker,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        OwnedProcessTestHooks? testHooks = null)
     {
         await OwnedProcessRunner.RunAsync(
             Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
@@ -206,7 +505,8 @@ public sealed class LoaderFixtureTests
             {
                 ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
                 ["DOTNET_NOLOGO"] = "true",
-            });
+            },
+            testHooks);
     }
 
     private static void AssertOwnedTreeExitedAndOutputDrained(
@@ -226,13 +526,31 @@ public sealed class LoaderFixtureTests
 
     private static void AssertProcessExited(int processId)
     {
+        var exited = false;
         try
         {
             using var process = Process.GetProcessById(processId);
-            Assert.True(process.HasExited, $"Process {processId} is still active.");
+            exited = process.HasExited;
         }
         catch (ArgumentException)
         {
+            exited = true;
+        }
+        Assert.True(exited, $"Process {processId} is still active.");
+    }
+
+    private static void AssertObservedProcessesExited(string message)
+    {
+        var match = Regex.Match(
+            message,
+            "observed descendants: (?<ids>[0-9,]*)\\.",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, message);
+        foreach (var processId in match.Groups["ids"].Value.Split(
+                     ',',
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            AssertProcessExited(int.Parse(processId));
         }
     }
 

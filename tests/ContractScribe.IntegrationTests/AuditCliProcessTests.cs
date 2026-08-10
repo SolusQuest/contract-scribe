@@ -69,7 +69,8 @@ public sealed class AuditCliProcessTests
                         ResolvedPublicationTarget.ForExternalCli(
                             fixture.Root,
                             Path.Join(outside, "result.json"))),
-                    new ProductionAuditHostControls());
+                    new ProductionAuditHostControls(
+                        ProcessMeterFactory: () => new ToolchainProcessMeter(() => [])));
             Assert.True(
                 outcome.Terminal.ExecutionOutcome == HostExecutionOutcome.Succeeded,
                 $"{outcome.LoaderFact?.Stage}:{outcome.LoaderFact?.Code}");
