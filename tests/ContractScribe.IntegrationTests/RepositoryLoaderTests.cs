@@ -2993,9 +2993,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
 
         IReadOnlyList<string> required = arguments[0] switch
         {
-            "restore" => ["-nodeReuse:false"],
-            "build" or "msbuild" =>
-                ["-nodeReuse:false", "-property:UseSharedCompilation=false"],
+            "restore" or "build" or "msbuild" => ["-nodeReuse:false"],
             _ => [],
         };
         var missing = required

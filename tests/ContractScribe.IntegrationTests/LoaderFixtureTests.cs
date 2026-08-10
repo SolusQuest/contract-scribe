@@ -343,27 +343,16 @@ public sealed class LoaderFixtureTests
     }
 
     [Fact]
-    public void FixtureBuildCommandsDisableCrossCommandBuildProcesses()
+    public void FixtureBuildCommandsDisableCrossCommandMsBuildNodeReuse()
     {
         Assert.Equal(
             ["restore", "Fixture.slnx", "-nodeReuse:false"],
             LoaderFixture.WithOwnedBuildProcessPolicy(["restore", "Fixture.slnx"]));
         Assert.Equal(
-            [
-                "build",
-                "Fixture.slnx",
-                "--no-restore",
-                "-nodeReuse:false",
-                "-property:UseSharedCompilation=false",
-            ],
+            ["build", "Fixture.slnx", "--no-restore", "-nodeReuse:false"],
             LoaderFixture.WithOwnedBuildProcessPolicy(["build", "Fixture.slnx", "--no-restore"]));
         Assert.Equal(
-            [
-                "msbuild",
-                "App/App.csproj",
-                "-nodeReuse:false",
-                "-property:UseSharedCompilation=false",
-            ],
+            ["msbuild", "App/App.csproj", "-nodeReuse:false"],
             LoaderFixture.WithOwnedBuildProcessPolicy(["msbuild", "App/App.csproj"]));
         Assert.Equal(
             ["restore", "Fixture.slnx", "-nodeReuse:false"],
