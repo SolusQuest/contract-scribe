@@ -2980,7 +2980,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
             {
                 ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
                 ["DOTNET_NOLOGO"] = "true",
-            }).ConfigureAwait(false);
+            },
+            retainDescendantAfterSuccessfulExit: IsSharedCompilerProcess).ConfigureAwait(false);
     }
 
     internal static IReadOnlyList<string> WithOwnedBuildProcessPolicy(
@@ -3005,6 +3006,27 @@ internal sealed class LoaderFixture : IAsyncDisposable
         }
 
         return [.. arguments, .. missing];
+    }
+
+    internal static bool IsSharedCompilerProcessName(string processName) => string.Equals(
+        Path.GetFileNameWithoutExtension(processName),
+        "VBCSCompiler",
+        StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSharedCompilerProcess(Process process)
+    {
+        if (IsSharedCompilerProcessName(process.ProcessName))
+        {
+            return true;
+        }
+        if (!OperatingSystem.IsLinux())
+        {
+            return false;
+        }
+
+        return Encoding.UTF8.GetString(File.ReadAllBytes($"/proc/{process.Id}/cmdline"))
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Any(IsSharedCompilerProcessName);
     }
 
     private static string FindRepositoryRoot()

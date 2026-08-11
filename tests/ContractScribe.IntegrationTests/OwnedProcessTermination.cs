@@ -40,7 +40,8 @@ internal static class OwnedProcessRunner
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string?>? environment = null,
-        OwnedProcessTestHooks? testHooks = null)
+        OwnedProcessTestHooks? testHooks = null,
+        Func<Process, bool>? retainDescendantAfterSuccessfulExit = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var startInfo = new ProcessStartInfo
@@ -102,7 +103,8 @@ internal static class OwnedProcessRunner
                 stderr,
                 timeout,
                 terminationTimeout,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                retainDescendantAfterSuccessfulExit).ConfigureAwait(false);
         }
     }
 
@@ -113,7 +115,8 @@ internal static class OwnedProcessRunner
         Task<string> stderr,
         TimeSpan timeout,
         TimeSpan terminationTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Process, bool>? retainDescendantAfterSuccessfulExit)
     {
         using var timeoutCancellation = new CancellationTokenSource(timeout);
         using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -173,7 +176,10 @@ internal static class OwnedProcessRunner
             var cleanupFailureAfterExit = await TryTerminateObservedAsync(
                 observer,
                 process,
-                terminationTimeout).ConfigureAwait(false);
+                terminationTimeout,
+                completedOutput.Failures.Count == 0 && process.ExitCode == 0
+                    ? retainDescendantAfterSuccessfulExit
+                    : null).ConfigureAwait(false);
             if (completedOutput.Failures.Count > 0)
             {
                 var finalDrain = await DrainAsync(stdout, stderr, terminationTimeout)
@@ -255,11 +261,12 @@ internal static class OwnedProcessRunner
     private static async Task<Exception?> TryTerminateObservedAsync(
         OwnedProcessTreeObserver observer,
         Process process,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        Func<Process, bool>? retainDescendant = null)
     {
         try
         {
-            await observer.TerminateAsync(process, timeout).ConfigureAwait(false);
+            await observer.TerminateAsync(process, timeout, retainDescendant).ConfigureAwait(false);
             return null;
         }
         catch (Exception exception) when (exception is IOException or TimeoutException)
@@ -455,6 +462,7 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
     private readonly OwnedProcessIdentity root;
     private readonly OwnedProcessTestHooks? hooks;
     private readonly ConcurrentDictionary<OwnedProcessIdentity, byte> observed = new();
+    private readonly ConcurrentDictionary<OwnedProcessIdentity, byte> retained = new();
     private readonly CancellationTokenSource stop = new();
     private readonly Task polling;
 
@@ -469,13 +477,19 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
 
     public IReadOnlyCollection<OwnedProcessIdentity> ObservedDescendants => observed.Keys.ToArray();
 
-    public async Task TerminateAsync(Process rootProcess, TimeSpan timeout)
+    public async Task TerminateAsync(
+        Process rootProcess,
+        TimeSpan timeout,
+        Func<Process, bool>? retainDescendant = null)
     {
         CaptureOnce();
+        await StopPollingAsync().ConfigureAwait(false);
+        CaptureOnce();
         var killFailures = new List<Exception>();
+        var rootState = ReadExitState(root);
         try
         {
-            if (ReadExitState(root) != OwnedProcessExitState.ExitedOrReused)
+            if (rootState != OwnedProcessExitState.ExitedOrReused)
             {
                 if (hooks?.KillProcessTree is { } kill)
                 {
@@ -492,15 +506,16 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
             killFailures.Add(exception);
         }
 
-        foreach (var identity in observed.Keys)
-        {
-            TryKillObservedIdentity(identity, killFailures);
-        }
+        var effectiveRetainDescendant = rootState == OwnedProcessExitState.ExitedOrReused
+            ? retainDescendant
+            : null;
+        TerminateUnretainedObservedIdentities(effectiveRetainDescendant, killFailures);
 
         using var deadline = new CancellationTokenSource(timeout);
         while (!deadline.IsCancellationRequested)
         {
             CaptureOnce();
+            TerminateUnretainedObservedIdentities(effectiveRetainDescendant, killFailures);
             var states = new[] { root }
                 .Concat(observed.Keys)
                 .Select(identity => (Identity: identity, State: ReadExitState(identity)))
@@ -525,6 +540,8 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
             }
         }
 
+        CaptureOnce();
+        TerminateUnretainedObservedIdentities(effectiveRetainDescendant, killFailures);
         var finalStates = new[] { root }
             .Concat(observed.Keys)
             .Select(identity => (Identity: identity, State: ReadExitState(identity)))
@@ -537,6 +554,54 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
             $"Owned process cleanup did not prove bounded exit for root {root.ProcessId}; "
             + $"remaining identities: {details}.",
             CombineFailures(killFailures));
+    }
+
+    private void TerminateUnretainedObservedIdentities(
+        Func<Process, bool>? retainDescendant,
+        List<Exception> failures)
+    {
+        foreach (var identity in observed.Keys)
+        {
+            if (retainDescendant is not null
+                && TryRetainObservedIdentity(identity, retainDescendant, failures))
+            {
+                continue;
+            }
+            TryKillObservedIdentity(identity, failures);
+        }
+    }
+
+    private bool TryRetainObservedIdentity(
+        OwnedProcessIdentity identity,
+        Func<Process, bool> retainDescendant,
+        List<Exception> failures)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited
+                || ReadStartIdentity(process) != identity.StartIdentity
+                || !retainDescendant(process))
+            {
+                return false;
+            }
+
+            retained.TryAdd(identity, 0);
+            observed.TryRemove(identity, out _);
+            return true;
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException
+            or FileNotFoundException
+            or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception exception) when (IsObservationException(exception))
+        {
+            failures.Add(exception);
+            return false;
+        }
     }
 
     private void TryKillObservedIdentity(
@@ -644,15 +709,20 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await StopPollingAsync().ConfigureAwait(false);
+        stop.Dispose();
+    }
+
+    private async Task StopPollingAsync()
+    {
         stop.Cancel();
         try
         {
             await polling.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
         }
-        stop.Dispose();
     }
 
     private long ReadStartIdentity(Process process) =>
@@ -691,11 +761,14 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
                         continue;
                     }
 
-                    observed.TryAdd(
-                        new OwnedProcessIdentity(
-                            process.Id,
-                            ReadStartIdentity(process)),
-                        0);
+                    var identity = new OwnedProcessIdentity(
+                        process.Id,
+                        ReadStartIdentity(process));
+                    observed.TryAdd(identity, 0);
+                    if (retained.ContainsKey(identity))
+                    {
+                        observed.TryRemove(identity, out _);
+                    }
                 }
                 catch (Exception exception) when (IsObservationException(exception))
                 {

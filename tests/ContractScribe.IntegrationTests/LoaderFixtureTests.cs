@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using ContractScribe.Core;
+using ContractScribe.TestSupport;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -358,6 +359,11 @@ public sealed class LoaderFixtureTests
             ["restore", "Fixture.slnx", "-nodeReuse:false"],
             LoaderFixture.WithOwnedBuildProcessPolicy(
                 ["restore", "Fixture.slnx", "-nodeReuse:false"]));
+        Assert.True(LoaderFixture.IsSharedCompilerProcessName("VBCSCompiler"));
+        Assert.True(LoaderFixture.IsSharedCompilerProcessName("VBCSCompiler.exe"));
+        Assert.True(LoaderFixture.IsSharedCompilerProcessName("/sdk/Roslyn/bincore/VBCSCompiler.dll"));
+        Assert.False(LoaderFixture.IsSharedCompilerProcessName("MSBuild"));
+        Assert.False(LoaderFixture.IsSharedCompilerProcessName("dotnet"));
     }
 
     [Fact]
@@ -404,7 +410,8 @@ public sealed class LoaderFixtureTests
                 ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
                 ["DOTNET_NOLOGO"] = "true",
             },
-            hooks));
+            hooks,
+            retainDescendantAfterSuccessfulExit: _ => true));
 
         Assert.Contains("after the command root exited", exception.Message, StringComparison.Ordinal);
         Assert.Contains(nameof(TimeoutException), exception.InnerException?.ToString(), StringComparison.Ordinal);
@@ -413,6 +420,60 @@ public sealed class LoaderFixtureTests
             marker,
             requireChildError: false);
         await AssertObservedProcessesExitedAsync(exception.Message);
+    }
+
+    [Fact]
+    public async Task SuccessfulRootExitPreservesExplicitlyRetainedSharedDescendant()
+    {
+        var marker = $"shared-descendant-{Guid.NewGuid():N}";
+        var retainedProcesses = new HashSet<OwnedProcessIdentity>();
+        var hooks = new OwnedProcessTestHooks
+        {
+            PollingInterval = TimeSpan.FromMilliseconds(25),
+            TerminationTimeout = TimeSpan.FromMilliseconds(500),
+            ReadStandardOutput = _ => Task.FromResult(string.Empty),
+            ReadStandardError = _ => Task.FromResult(string.Empty),
+        };
+        bool RetainDescendant(Process process)
+        {
+            retainedProcesses.Add(new OwnedProcessIdentity(
+                process.Id,
+                StableProcessStartIdentity.Read(process)));
+            return true;
+        }
+
+        try
+        {
+            var result = await OwnedProcessRunner.RunAsync(
+                Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+                FindRepositoryRoot(),
+                [LoaderProbePath(), "exit-root-hold-child", marker],
+                TimeSpan.FromSeconds(30),
+                CancellationToken.None,
+                new Dictionary<string, string?>
+                {
+                    ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
+                    ["DOTNET_NOLOGO"] = "true",
+                },
+                hooks,
+                RetainDescendant);
+            Assert.Equal(string.Empty, result.StandardOutput);
+            Assert.NotEmpty(retainedProcesses);
+
+            foreach (var identity in retainedProcesses)
+            {
+                using var process = Process.GetProcessById(identity.ProcessId);
+                Assert.Equal(identity.StartIdentity, StableProcessStartIdentity.Read(process));
+                Assert.False(process.HasExited);
+            }
+        }
+        finally
+        {
+            foreach (var retainedProcess in retainedProcesses)
+            {
+                await TerminateTestProcessAsync(retainedProcess);
+            }
+        }
     }
 
     [Fact]
@@ -647,6 +708,24 @@ public sealed class LoaderFixtureTests
         }
 
         Assert.Fail($"Process {processId} is still active after the bounded cleanup wait.");
+    }
+
+    private static async Task TerminateTestProcessAsync(OwnedProcessIdentity identity)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited
+                || StableProcessStartIdentity.Read(process) != identity.StartIdentity)
+            {
+                return;
+            }
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (ArgumentException)
+        {
+        }
     }
 
     private static async Task AssertObservedProcessesExitedAsync(string message)
