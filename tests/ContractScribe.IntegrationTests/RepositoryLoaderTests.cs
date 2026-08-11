@@ -1,9 +1,13 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
+[Collection("Integration process lane 1")]
 public sealed class RepositoryLoaderTests
 {
     [Fact]
@@ -228,23 +232,13 @@ public sealed class RepositoryLoaderTests
     public async Task LoadsLegacySlnFromAnUnrelatedWorkingDirectory()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var previous = Environment.CurrentDirectory;
-        try
-        {
-            Environment.CurrentDirectory = Path.GetTempPath();
-            var outcome = await new RepositoryLoader().LoadAsync(
-                new RepositoryLoadRequest(fixture.Root, fixture.LegacySolutionPath));
+        var output = await RunLoaderIsolationProbeAsync(
+            fixture.Root,
+            fixture.LegacySolutionPath,
+            "legacy-success",
+            Path.GetTempPath());
 
-            Assert.True(
-                outcome.Status == RepositoryLoadStatus.Success,
-                $"{outcome.PrimaryFailure?.Stage}:{outcome.PrimaryFailure?.Code}");
-            await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
-            Assert.Equal(2, session.Projects.Count);
-        }
-        finally
-        {
-            Environment.CurrentDirectory = previous;
-        }
+        Assert.Equal("legacy-success", output.Trim());
     }
 
     [Fact]
@@ -372,20 +366,17 @@ public sealed class RepositoryLoaderTests
         await File.WriteAllTextAsync(
             Path.Combine(fixture.Root, "App", "App.csproj"),
             """<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup></Project>""");
-        var previous = Environment.GetEnvironmentVariable("TargetFramework");
-        try
-        {
-            Environment.SetEnvironmentVariable("TargetFramework", "net10.0");
-            var outcome = await new RepositoryLoader().LoadAsync(
-                new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        var output = await RunLoaderIsolationProbeAsync(
+            fixture.Root,
+            "App/App.csproj",
+            "target-framework-environment",
+            fixture.Root,
+            new Dictionary<string, string?>
+            {
+                ["TargetFramework"] = "net10.0",
+            });
 
-            Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
-            Assert.Equal("graph.target-framework-not-single", outcome.PrimaryFailure?.Code);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("TargetFramework", previous);
-        }
+        Assert.Equal("target-framework-rejected", output.Trim());
     }
 
     [Fact]
@@ -1694,6 +1685,29 @@ public sealed class RepositoryLoaderTests
         return output;
     }
 
+    private static async Task<string> RunLoaderIsolationProbeAsync(
+        string repositoryRoot,
+        string inputPath,
+        string mode,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment = null)
+    {
+        var probeEnvironment = new Dictionary<string, string?>(
+            environment ?? new Dictionary<string, string?>(),
+            StringComparer.Ordinal)
+        {
+            ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
+            ["DOTNET_NOLOGO"] = "true",
+        };
+        var result = await OwnedProcessRunner.RunAsync(
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            workingDirectory,
+            [LoaderProbePath(), repositoryRoot, inputPath, mode],
+            TimeSpan.FromMinutes(2),
+            environment: probeEnvironment);
+        return result.StandardOutput;
+    }
+
     private static Process StartLoaderProbe(
         string repositoryRoot,
         string mode,
@@ -1759,11 +1773,35 @@ public sealed class RepositoryLoaderTests
 
 internal sealed class LoaderFixture : IAsyncDisposable
 {
-    private LoaderFixture(string root)
+    private static readonly LoaderFixtureCache SharedCache = new();
+    private static readonly Lazy<Task<FixtureToolchainSnapshot>> ToolchainSnapshot =
+        new(CaptureToolchainSnapshotAsync);
+
+    static LoaderFixture()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            SharedCache.DisposeTemplatesAtProcessExit();
+            if (ToolchainSnapshot.IsValueCreated
+                && ToolchainSnapshot.Value.IsCompletedSuccessfully)
+            {
+                DeleteDirectory(ToolchainSnapshot.Value.Result.InputRoot);
+            }
+        };
+    }
+
+    private LoaderFixture(
+        string root,
+        string preparationId,
+        string? shapeKey,
+        string category)
     {
         Root = root;
         SolutionPath = Path.Combine(root, "Fixture.slnx");
         LegacySolutionPath = Path.Combine(root, "Fixture.sln");
+        PreparationId = preparationId;
+        ShapeKey = shapeKey;
+        Category = category;
     }
 
     public string Root { get; }
@@ -1772,10 +1810,17 @@ internal sealed class LoaderFixture : IAsyncDisposable
 
     public string LegacySolutionPath { get; }
 
-    public Task PrepareEditorConfigAsync() =>
+    internal string PreparationId { get; }
+
+    internal string? ShapeKey { get; }
+
+    internal string Category { get; }
+
+    public Task PrepareEditorConfigAsync(CancellationToken cancellationToken = default) =>
         RunDotnetAsync(
             Root,
-            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"]);
+            ["msbuild", "App/App.csproj", "-target:GenerateMSBuildEditorConfigFile"],
+            cancellationToken);
 
     public static async Task<LoaderFixture> CreateAsync(
         string? appProject = null,
@@ -1786,7 +1831,136 @@ internal sealed class LoaderFixture : IAsyncDisposable
         bool withSecondDependency = false,
         bool reverseProjectReferences = false,
         bool manyOutputGenerator = false,
-        bool collidingGeneratorOutputs = false)
+        bool collidingGeneratorOutputs = false,
+        CancellationToken cancellationToken = default,
+        LoaderFixtureCache? cache = null)
+    {
+        var category = GetReusableCategory(
+            appProject,
+            libraryProject,
+            withGenerator,
+            processSensitiveGenerator,
+            selfObservingGenerator,
+            withSecondDependency,
+            reverseProjectReferences,
+            manyOutputGenerator,
+            collidingGeneratorOutputs);
+        if (category is null)
+        {
+            return await CreateFreshOwnedAsync(
+                appProject,
+                libraryProject,
+                withGenerator,
+                processSensitiveGenerator,
+                selfObservingGenerator,
+                withSecondDependency,
+                reverseProjectReferences,
+                manyOutputGenerator,
+                collidingGeneratorOutputs,
+                cancellationToken,
+                "fresh-custom").ConfigureAwait(false);
+        }
+
+        var shapeKey = await ComputeShapeKeyAsync(
+            category,
+            appProject,
+            libraryProject,
+            withGenerator,
+            processSensitiveGenerator,
+            selfObservingGenerator,
+            withSecondDependency,
+            reverseProjectReferences,
+            manyOutputGenerator,
+            collidingGeneratorOutputs,
+            cancellationToken).ConfigureAwait(false);
+        var selectedCache = cache ?? SharedCache;
+        try
+        {
+            return await selectedCache.GetOrPrepareAndUseAsync(
+                shapeKey,
+                async (ownedRoot, cacheCancellation) =>
+                {
+                    var templateRoot = Path.Combine(
+                        ownedRoot,
+                        $"prepared-{Guid.NewGuid():N}");
+                    var prepared = await CreateFreshAsync(
+                        appProject,
+                        libraryProject,
+                        withGenerator,
+                        processSensitiveGenerator,
+                        selfObservingGenerator,
+                        withSecondDependency,
+                        reverseProjectReferences,
+                        manyOutputGenerator,
+                        collidingGeneratorOutputs,
+                        cacheCancellation,
+                        templateRoot,
+                        $"template:{category}").ConfigureAwait(false);
+                    await QualifyTemplateAsync(
+                        prepared.Root,
+                        processSensitiveGenerator,
+                        cacheCancellation).ConfigureAwait(false);
+                    return new LoaderFixtureTemplate(
+                        prepared.Root,
+                        prepared.PreparationId,
+                        shapeKey,
+                        category)
+                    {
+                        OwnershipRoot = ownedRoot,
+                    };
+                },
+                (template, useCancellation) => MaterializeAsync(
+                    template,
+                    processSensitiveGenerator,
+                    useCancellation),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (LoaderFixtureCacheDisabledException)
+        {
+            return await CreateFreshOwnedAsync(
+                appProject,
+                libraryProject,
+                withGenerator,
+                processSensitiveGenerator,
+                selfObservingGenerator,
+                withSecondDependency,
+                reverseProjectReferences,
+                manyOutputGenerator,
+                collidingGeneratorOutputs,
+                cancellationToken,
+                $"fresh-disabled:{category}").ConfigureAwait(false);
+        }
+        catch (TemplateBindingException)
+        {
+            await selectedCache.DisableAsync(shapeKey).ConfigureAwait(false);
+            return await CreateFreshOwnedAsync(
+                appProject,
+                libraryProject,
+                withGenerator,
+                processSensitiveGenerator,
+                selfObservingGenerator,
+                withSecondDependency,
+                reverseProjectReferences,
+                manyOutputGenerator,
+                collidingGeneratorOutputs,
+                cancellationToken,
+                $"fresh-qualification-fallback:{category}").ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<LoaderFixture> CreateFreshAsync(
+        string? appProject = null,
+        string? libraryProject = null,
+        bool withGenerator = false,
+        bool processSensitiveGenerator = false,
+        bool selfObservingGenerator = false,
+        bool withSecondDependency = false,
+        bool reverseProjectReferences = false,
+        bool manyOutputGenerator = false,
+        bool collidingGeneratorOutputs = false,
+        CancellationToken cancellationToken = default,
+        string? rootOverride = null,
+        string category = "fresh")
     {
         if (reverseProjectReferences && !withSecondDependency)
         {
@@ -1795,7 +1969,11 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 nameof(reverseProjectReferences));
         }
 
-        var root = Path.Combine(Path.GetTempPath(), "contract-scribe-issue36", Guid.NewGuid().ToString("N"));
+        var root = rootOverride
+            ?? Path.Combine(
+                Path.GetTempPath(),
+                "contract-scribe-issue36",
+                Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "App"));
         Directory.CreateDirectory(Path.Combine(root, "Library"));
         if (withSecondDependency)
@@ -1931,24 +2109,10 @@ internal sealed class LoaderFixture : IAsyncDisposable
             || manyOutputGenerator
             || collidingGeneratorOutputs)
         {
-            var repositoryRoot = FindRepositoryRoot();
-            var configuration = AppContext.BaseDirectory.Contains(
-                $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
-                StringComparison.OrdinalIgnoreCase)
-                ? "Release"
-                : "Debug";
-            var generatorPath = Path.Combine(
-                repositoryRoot,
-                "tests",
-                "ContractScribe.TestGenerator",
-                "bin",
-                configuration,
-                "netstandard2.0",
-                "ContractScribe.TestGenerator.dll");
-            if (!File.Exists(generatorPath))
-            {
-                throw new InvalidOperationException("The test-owned generator helper was not built.");
-            }
+            var generatorPath = ToolchainSnapshot.Value
+                .GetAwaiter()
+                .GetResult()
+                .GeneratorPath;
 
             var analyzers = Path.Combine(root, "Analyzers");
             Directory.CreateDirectory(analyzers);
@@ -2012,13 +2176,17 @@ internal sealed class LoaderFixture : IAsyncDisposable
             await File.WriteAllTextAsync(Path.Combine(root, "App", "App.csproj"), projectText);
         }
 
-        await PrepareAsync(root);
+        await PrepareAsync(root, cancellationToken).ConfigureAwait(false);
         if (processSensitiveGenerator)
         {
             File.Delete(Path.Combine(root, "generator.marker"));
         }
 
-        return new LoaderFixture(root);
+        return new LoaderFixture(
+            root,
+            Guid.NewGuid().ToString("N"),
+            shapeKey: null,
+            category);
     }
 
     public ValueTask DisposeAsync()
@@ -2037,10 +2205,722 @@ internal sealed class LoaderFixture : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    private static async Task PrepareAsync(string root)
+    private static async Task PrepareAsync(
+        string root,
+        CancellationToken cancellationToken)
     {
-        await RunDotnetAsync(root, ["restore", "Fixture.slnx", "--configfile", "NuGet.Config"]);
-        await RunDotnetAsync(root, ["build", "Fixture.slnx", "--no-restore"]);
+        await RunDotnetAsync(
+            root,
+            ["restore", "Fixture.slnx", "--configfile", "NuGet.Config"],
+            cancellationToken).ConfigureAwait(false);
+        await RunDotnetAsync(
+            root,
+            ["build", "Fixture.slnx", "--no-restore"],
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<LoaderFixture> CreateFreshOwnedAsync(
+        string? appProject,
+        string? libraryProject,
+        bool withGenerator,
+        bool processSensitiveGenerator,
+        bool selfObservingGenerator,
+        bool withSecondDependency,
+        bool reverseProjectReferences,
+        bool manyOutputGenerator,
+        bool collidingGeneratorOutputs,
+        CancellationToken cancellationToken,
+        string category)
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "contract-scribe-issue80",
+            $"consumer-{Guid.NewGuid():N}");
+        try
+        {
+            return await CreateFreshAsync(
+                appProject,
+                libraryProject,
+                withGenerator,
+                processSensitiveGenerator,
+                selfObservingGenerator,
+                withSecondDependency,
+                reverseProjectReferences,
+                manyOutputGenerator,
+                collidingGeneratorOutputs,
+                cancellationToken,
+                root,
+                category).ConfigureAwait(false);
+        }
+        catch (Exception primary)
+        {
+            try
+            {
+                DeleteDirectoryStrict(root);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fresh fixture creation failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
+            throw;
+        }
+    }
+
+    private static async Task<LoaderFixture> MaterializeAsync(
+        LoaderFixtureTemplate template,
+        bool processSensitiveGenerator,
+        CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "contract-scribe-issue80",
+            $"consumer-{Guid.NewGuid():N}");
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CopyDirectory(template.Root, root);
+            RebaseProjectAssets(root, template.Root);
+            DeleteTemplateBoundFiles(root, Path.GetFileName(template.Root));
+            await RunDotnetAsync(
+                root,
+                ["build", "Fixture.slnx", "--no-restore"],
+                cancellationToken).ConfigureAwait(false);
+            RemoveTemplateOnlyRestoreDiagnostics(root);
+            if (processSensitiveGenerator)
+            {
+                File.Delete(Path.Combine(root, "generator.marker"));
+            }
+            EnsureTemplateTokenAbsent(root, Path.GetFileName(template.Root));
+            return new LoaderFixture(
+                root,
+                template.PreparationId,
+                template.ShapeKey,
+                template.Category);
+        }
+        catch (Exception primary)
+        {
+            try
+            {
+                DeleteDirectoryStrict(root);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fixture materialization failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
+            throw;
+        }
+    }
+
+    private static async Task QualifyTemplateAsync(
+        string templateRoot,
+        bool processSensitiveGenerator,
+        CancellationToken cancellationToken)
+    {
+        var qualificationRoot = Path.Combine(
+            Path.GetDirectoryName(templateRoot)!,
+            $"qualification-{Guid.NewGuid():N}");
+        var unavailableRoot = $"{templateRoot}.offline-{Guid.NewGuid():N}";
+        var templateMoved = false;
+        Exception? primaryFailure = null;
+        try
+        {
+            CopyDirectory(templateRoot, qualificationRoot);
+            RebaseProjectAssets(qualificationRoot, templateRoot);
+            DeleteTemplateBoundFiles(
+                qualificationRoot,
+                Path.GetFileName(templateRoot));
+            await RunDotnetAsync(
+                qualificationRoot,
+                ["build", "Fixture.slnx", "--no-restore"],
+                cancellationToken).ConfigureAwait(false);
+            RemoveTemplateOnlyRestoreDiagnostics(qualificationRoot);
+            if (processSensitiveGenerator)
+            {
+                File.Delete(Path.Combine(qualificationRoot, "generator.marker"));
+            }
+            EnsureTemplateTokenAbsent(
+                qualificationRoot,
+                Path.GetFileName(templateRoot));
+
+            Directory.Move(templateRoot, unavailableRoot);
+            templateMoved = true;
+            await RunDotnetAsync(
+                qualificationRoot,
+                ["build", "Fixture.slnx", "--no-restore"],
+                cancellationToken).ConfigureAwait(false);
+            RemoveTemplateOnlyRestoreDiagnostics(qualificationRoot);
+            EnsureTemplateTokenAbsent(
+                qualificationRoot,
+                Path.GetFileName(templateRoot));
+        }
+        catch (OperationCanceledException exception)
+        {
+            primaryFailure = exception;
+        }
+        catch (TemplateBindingException exception)
+        {
+            primaryFailure = exception;
+        }
+        catch (Exception exception) when (exception is
+            IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or TimeoutException
+            or ArgumentException
+            or NotSupportedException
+            or JsonException)
+        {
+            primaryFailure = new TemplateBindingException(
+                "The prepared fixture did not qualify for isolated relocation.",
+                exception);
+        }
+
+        try
+        {
+            if (templateMoved && Directory.Exists(unavailableRoot))
+            {
+                Directory.Move(unavailableRoot, templateRoot);
+            }
+            DeleteDirectoryStrict(qualificationRoot);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
+            throw primaryFailure is null
+                ? cleanup
+                : new AggregateException(
+                    "Template qualification failed and strict cleanup did not complete.",
+                    primaryFailure,
+                    cleanup);
+        }
+
+        if (primaryFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        }
+    }
+
+    private static string? GetReusableCategory(
+        string? appProject,
+        string? libraryProject,
+        bool withGenerator,
+        bool processSensitiveGenerator,
+        bool selfObservingGenerator,
+        bool withSecondDependency,
+        bool reverseProjectReferences,
+        bool manyOutputGenerator,
+        bool collidingGeneratorOutputs)
+    {
+        // Reuse stays deliberately narrow. Custom XML, process-observing or
+        // output-sensitive generators, dependency-order variants, and the
+        // lifecycle probe retain fresh preparation until they each have a
+        // direct relocation-and-behavior proof on both CI platforms.
+        if (appProject is not null
+            || libraryProject is not null
+            || processSensitiveGenerator
+            || selfObservingGenerator
+            || withSecondDependency
+            || reverseProjectReferences
+            || manyOutputGenerator
+            || collidingGeneratorOutputs)
+        {
+            return null;
+        }
+        return withGenerator
+            ? "default-generator-ordinary"
+            : "default-two-project";
+    }
+
+    private static async Task<string> ComputeShapeKeyAsync(
+        string category,
+        string? appProject,
+        string? libraryProject,
+        bool withGenerator,
+        bool processSensitiveGenerator,
+        bool selfObservingGenerator,
+        bool withSecondDependency,
+        bool reverseProjectReferences,
+        bool manyOutputGenerator,
+        bool collidingGeneratorOutputs,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var toolchain = await ToolchainSnapshot.Value
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var fields = new List<(string Name, byte[] Value)>
+        {
+            ("format", "issue80-fixture-input-v1"u8.ToArray()),
+            ("category", Encoding.UTF8.GetBytes(category)),
+            ("appProject", Encoding.UTF8.GetBytes(appProject ?? string.Empty)),
+            ("libraryProject", Encoding.UTF8.GetBytes(libraryProject ?? string.Empty)),
+            ("withGenerator", BitConverter.GetBytes(withGenerator)),
+            ("processSensitiveGenerator", BitConverter.GetBytes(processSensitiveGenerator)),
+            ("selfObservingGenerator", BitConverter.GetBytes(selfObservingGenerator)),
+            ("withSecondDependency", BitConverter.GetBytes(withSecondDependency)),
+            ("reverseProjectReferences", BitConverter.GetBytes(reverseProjectReferences)),
+            ("manyOutputGenerator", BitConverter.GetBytes(manyOutputGenerator)),
+            ("collidingGeneratorOutputs", BitConverter.GetBytes(collidingGeneratorOutputs)),
+            ("configuration", Encoding.UTF8.GetBytes(toolchain.Configuration)),
+            ("dotnetHostPath", Encoding.UTF8.GetBytes(toolchain.DotnetHostPath)),
+            ("dotnetHostSha256", Encoding.UTF8.GetBytes(toolchain.DotnetHostSha256)),
+            ("sdkVersion", Encoding.UTF8.GetBytes(toolchain.SdkVersion)),
+            ("msbuildPath", Encoding.UTF8.GetBytes(toolchain.MsbuildPath)),
+            ("msbuildVersion", Encoding.UTF8.GetBytes(toolchain.MsbuildVersion)),
+            ("msbuildSha256", Encoding.UTF8.GetBytes(toolchain.MsbuildSha256)),
+            ("nugetPackages", Encoding.UTF8.GetBytes(
+                Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? string.Empty)),
+            ("fixtureAssemblySha256", Encoding.UTF8.GetBytes(
+                toolchain.FixtureAssemblySha256)),
+        };
+        foreach (var package in toolchain.Packages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            fields.Add((
+                $"package:{package.LogicalName}:sha256",
+                Encoding.UTF8.GetBytes(package.Sha256)));
+        }
+        if (withGenerator
+            || processSensitiveGenerator
+            || selfObservingGenerator
+            || manyOutputGenerator
+            || collidingGeneratorOutputs)
+        {
+            fields.Add(("generator:logicalName", Encoding.UTF8.GetBytes(
+                Path.GetFileName(toolchain.GeneratorPath))));
+            fields.Add(("generator:sha256", Encoding.UTF8.GetBytes(
+                toolchain.GeneratorSha256)));
+        }
+
+        return ComputeFramedInputIdentity(fields);
+    }
+
+    internal static string ComputeFramedInputIdentity(
+        IEnumerable<(string Name, byte[] Value)> fields)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            foreach (var (name, value) in fields.OrderBy(field => field.Name, StringComparer.Ordinal))
+            {
+                var nameBytes = Encoding.UTF8.GetBytes(name);
+                writer.Write(nameBytes.Length);
+                writer.Write(nameBytes);
+                writer.Write(value.Length);
+                writer.Write(value);
+            }
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(stream.ToArray()));
+    }
+
+    private static async Task<FixtureToolchainSnapshot> CaptureToolchainSnapshotAsync()
+    {
+        var dotnetHost = ResolveDotnetHost();
+        var repositoryRoot = FindRepositoryRoot();
+        var version = await OwnedProcessRunner.RunAsync(
+            dotnetHost,
+            repositoryRoot,
+            ["--version"],
+            TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        var sdkVersion = version.StandardOutput.Trim();
+        var installedSdks = await OwnedProcessRunner.RunAsync(
+            dotnetHost,
+            repositoryRoot,
+            ["--list-sdks"],
+            TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        var sdkPrefix = $"{sdkVersion} [";
+        var selectedSdk = installedSdks.StandardOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .SingleOrDefault(line =>
+                line.StartsWith(sdkPrefix, StringComparison.Ordinal)
+                && line.EndsWith(']'))
+            ?? throw new InvalidOperationException(
+                $"The selected SDK {sdkVersion} was not present in dotnet --list-sdks output.");
+        var sdkRoot = selectedSdk[sdkPrefix.Length..^1];
+        var msbuildPath = Path.Combine(
+            sdkRoot,
+            sdkVersion,
+            "MSBuild.dll");
+        if (!File.Exists(msbuildPath))
+        {
+            throw new InvalidOperationException(
+                $"The selected SDK MSBuild assembly was not found: {msbuildPath}.");
+        }
+        var msbuildVersion = FileVersionInfo.GetVersionInfo(msbuildPath).FileVersion
+            ?? string.Empty;
+        var configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase)
+            ? "Release"
+            : "Debug";
+        var inputRoot = Path.Combine(
+            Path.GetTempPath(),
+            "contract-scribe-issue80-inputs",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var packageRoot = Path.Combine(inputRoot, "packages");
+            Directory.CreateDirectory(packageRoot);
+            var packages = GetFixturePackagePaths()
+                .Select(source =>
+                {
+                    if (!File.Exists(source))
+                    {
+                        throw new InvalidOperationException(
+                            $"Declared fixture package is unavailable: {Path.GetFileName(source)}.");
+                    }
+                    var target = Path.Combine(packageRoot, Path.GetFileName(source));
+                    File.Copy(source, target);
+                    return new FixtureInputFile(
+                        Path.GetFileName(source),
+                        target,
+                        HashFile(target));
+                })
+                .ToArray();
+            var generatorSource = FindBuiltGeneratorPath();
+            var generatorRoot = Path.Combine(inputRoot, "generator");
+            Directory.CreateDirectory(generatorRoot);
+            var generatorPath = Path.Combine(
+                generatorRoot,
+                Path.GetFileName(generatorSource));
+            File.Copy(generatorSource, generatorPath);
+            return new FixtureToolchainSnapshot(
+                dotnetHost,
+                HashFile(dotnetHost),
+                sdkVersion,
+                msbuildPath,
+                msbuildVersion,
+                HashFile(msbuildPath),
+                configuration,
+                inputRoot,
+                packages,
+                generatorPath,
+                HashFile(generatorPath),
+                HashFile(typeof(LoaderFixture).Assembly.Location));
+        }
+        catch (Exception primary)
+        {
+            try
+            {
+                DeleteDirectoryStrict(inputRoot);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new AggregateException(
+                    "Fixture input snapshot failed and strict cleanup did not complete.",
+                    primary,
+                    cleanup);
+            }
+            throw;
+        }
+    }
+
+    private static string ResolveDotnetHost()
+    {
+        var configured = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+        {
+            return Path.GetFullPath(configured);
+        }
+        var executableName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        foreach (var candidate in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                     .Select(directory => Path.Combine(directory.Trim('"'), executableName)))
+        {
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+        }
+        throw new InvalidOperationException("The resolved dotnet host was not found.");
+    }
+
+    private static IReadOnlyList<string> GetFixturePackagePaths()
+    {
+        var packageRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        if (string.IsNullOrWhiteSpace(packageRoot))
+        {
+            packageRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget",
+                "packages");
+        }
+        return new[]
+        {
+            "microsoft.aspnetcore.app.ref",
+            "microsoft.netcore.app.ref",
+            "microsoft.windowsdesktop.app.ref",
+        }.Select(packageId =>
+            Path.Combine(packageRoot, packageId, "9.0.0", $"{packageId}.9.0.0.nupkg"))
+        .ToArray();
+    }
+
+    private static string FindBuiltGeneratorPath()
+    {
+        var configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase)
+            ? "Release"
+            : "Debug";
+        var path = Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "ContractScribe.TestGenerator",
+            "bin",
+            configuration,
+            "netstandard2.0",
+            "ContractScribe.TestGenerator.dll");
+        return File.Exists(path)
+            ? Path.GetFullPath(path)
+            : throw new InvalidOperationException("The test-owned generator helper was not built.");
+    }
+
+    private static string HashFile(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        return Convert.ToHexStringLower(SHA256.HashData(stream));
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(
+                destination,
+                Path.GetRelativePath(source, directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
+    private static void EnsureTemplateTokenAbsent(string root, string templateToken)
+    {
+        var tokens = TemplateTokenBytes(templateToken);
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            if (IsImmutableSnapshotInput(root, file))
+            {
+                continue;
+            }
+            var bytes = File.ReadAllBytes(file);
+            if (tokens.Any(token => ContainsSequence(bytes, token)))
+            {
+                throw new TemplateBindingException(
+                    $"Materialized fixture retained the prepared-template token in {Path.GetRelativePath(root, file)}.");
+            }
+        }
+    }
+
+    private static byte[][] TemplateTokenBytes(string templateToken) =>
+    [
+        Encoding.UTF8.GetBytes(templateToken),
+        Encoding.Unicode.GetBytes(templateToken),
+        Encoding.BigEndianUnicode.GetBytes(templateToken),
+    ];
+
+    private static void RemoveTemplateOnlyRestoreDiagnostics(string root)
+    {
+        foreach (var path in Directory.EnumerateFiles(
+                     root,
+                     "*.nuget.dgspec.json",
+                     SearchOption.AllDirectories))
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static void DeleteTemplateBoundFiles(string root, string templateToken)
+    {
+        var tokens = TemplateTokenBytes(templateToken);
+        foreach (var file in Directory.EnumerateFiles(
+                     root,
+                     "*",
+                     SearchOption.AllDirectories)
+                     .ToArray())
+        {
+            if (IsImmutableSnapshotInput(root, file))
+            {
+                continue;
+            }
+            var bytes = File.ReadAllBytes(file);
+            if (tokens.Any(token => ContainsSequence(bytes, token)))
+            {
+                File.Delete(file);
+            }
+        }
+    }
+
+    private static bool IsImmutableSnapshotInput(string root, string file)
+    {
+        var relative = Path.GetRelativePath(root, file);
+        return relative.StartsWith(
+                $"packages{Path.DirectorySeparatorChar}",
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal)
+            || string.Equals(
+                relative,
+                Path.Combine("Analyzers", "ContractScribe.TestGenerator.dll"),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
+    }
+
+    private static void RebaseProjectAssets(string consumerRoot, string templateRoot)
+    {
+        foreach (var path in Directory.EnumerateFiles(
+                     consumerRoot,
+                     "project.assets.json",
+                     SearchOption.AllDirectories))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                WriteRebasedJson(
+                    writer,
+                    document.RootElement,
+                    templateRoot,
+                    consumerRoot);
+            }
+            File.WriteAllBytes(path, stream.ToArray());
+        }
+    }
+
+    private static void WriteRebasedJson(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        string templateRoot,
+        string consumerRoot)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    writer.WritePropertyName(RebaseRootedValue(
+                        property.Name,
+                        templateRoot,
+                        consumerRoot));
+                    WriteRebasedJson(
+                        writer,
+                        property.Value,
+                        templateRoot,
+                        consumerRoot);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteRebasedJson(writer, item, templateRoot, consumerRoot);
+                }
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(RebaseRootedValue(
+                    element.GetString() ?? string.Empty,
+                    templateRoot,
+                    consumerRoot));
+                break;
+            case JsonValueKind.Number:
+                writer.WriteRawValue(element.GetRawText());
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw new InvalidDataException(
+                    $"Unsupported project.assets.json value kind: {element.ValueKind}.");
+        }
+    }
+
+    private static string RebaseRootedValue(
+        string value,
+        string templateRoot,
+        string consumerRoot)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!value.StartsWith(templateRoot, comparison))
+        {
+            return value;
+        }
+        if (value.Length > templateRoot.Length
+            && value[templateRoot.Length] is not ('/' or '\\'))
+        {
+            return value;
+        }
+        return consumerRoot + value[templateRoot.Length..];
+    }
+
+    private static bool ContainsSequence(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> token)
+    {
+        if (token.IsEmpty || token.Length > bytes.Length)
+        {
+            return false;
+        }
+        for (var index = 0; index <= bytes.Length - token.Length; index++)
+        {
+            if (bytes.Slice(index, token.Length).SequenceEqual(token))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void DeleteDirectoryStrict(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        if (Directory.Exists(path))
+        {
+            throw new IOException($"Fixture directory still exists after cleanup: {path}");
+        }
     }
 
     private static string PinFixtureFrameworkPacks(string projectText) =>
@@ -2050,6 +2930,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
             <PropertyGroup>
               <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
               <RuntimeFrameworkVersion Condition="'$(TargetFramework)' == 'net9.0'">9.0.0</RuntimeFrameworkVersion>
+              <PathMap>$(MSBuildProjectDirectory)=/_/contract-scribe-fixture</PathMap>
             </PropertyGroup>
             <ItemGroup>
               <KnownFrameworkReference Update="Microsoft.NETCore.App"
@@ -2068,59 +2949,84 @@ internal sealed class LoaderFixture : IAsyncDisposable
 
     private static void PrepareLocalPackageSource(string root)
     {
-        var packageRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
-        if (string.IsNullOrWhiteSpace(packageRoot))
-        {
-            packageRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".nuget",
-                "packages");
-        }
-
         var destination = Path.Combine(root, "packages");
         Directory.CreateDirectory(destination);
-        foreach (var packageId in new[]
-                 {
-                     "microsoft.aspnetcore.app.ref",
-                     "microsoft.netcore.app.ref",
-                     "microsoft.windowsdesktop.app.ref",
-                 })
+        foreach (var package in ToolchainSnapshot.Value
+                     .GetAwaiter()
+                     .GetResult()
+                     .Packages)
         {
-            var package = Path.Combine(packageRoot, packageId, "9.0.0", $"{packageId}.9.0.0.nupkg");
-            if (!File.Exists(package))
-            {
-                throw new InvalidOperationException($"Declared fixture package is unavailable: {packageId}.");
-            }
-
-            File.Copy(package, Path.Combine(destination, Path.GetFileName(package)));
+            File.Copy(
+                package.Path,
+                Path.Combine(destination, package.LogicalName));
         }
     }
 
-    private static async Task RunDotnetAsync(string root, IReadOnlyList<string> arguments)
+    private static async Task RunDotnetAsync(
+        string root,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken = default)
     {
-        var startInfo = new ProcessStartInfo
+        var toolchain = await ToolchainSnapshot.Value
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await OwnedProcessRunner.RunAsync(
+            toolchain.DotnetHostPath,
+            root,
+            WithOwnedBuildProcessPolicy(arguments),
+            TimeSpan.FromMinutes(3),
+            cancellationToken,
+            new Dictionary<string, string?>
+            {
+                ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
+                ["DOTNET_NOLOGO"] = "true",
+            },
+            retainDescendantAfterSuccessfulExit: IsSharedCompilerProcess).ConfigureAwait(false);
+    }
+
+    internal static IReadOnlyList<string> WithOwnedBuildProcessPolicy(
+        IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count == 0)
         {
-            FileName = "dotnet",
-            WorkingDirectory = root,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
+            return arguments;
+        }
+
+        IReadOnlyList<string> required = arguments[0] switch
+        {
+            "restore" or "build" or "msbuild" => ["-nodeReuse:false"],
+            _ => [],
         };
-        foreach (var argument in arguments)
+        var missing = required
+            .Where(option => !arguments.Contains(option, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missing.Length == 0)
         {
-            startInfo.ArgumentList.Add(argument);
+            return arguments;
         }
-        startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        startInfo.Environment["DOTNET_NOLOGO"] = "true";
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Fixture preparation failed to start.");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        if (process.ExitCode != 0)
+
+        return [.. arguments, .. missing];
+    }
+
+    internal static bool IsSharedCompilerProcessName(string processName) => string.Equals(
+        Path.GetFileNameWithoutExtension(processName),
+        "VBCSCompiler",
+        StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSharedCompilerProcess(Process process)
+    {
+        if (IsSharedCompilerProcessName(process.ProcessName))
         {
-            throw new InvalidOperationException($"Fixture preparation failed: {await stdout}\n{await stderr}");
+            return true;
         }
+        if (!OperatingSystem.IsLinux())
+        {
+            return false;
+        }
+
+        return Encoding.UTF8.GetString(File.ReadAllBytes($"/proc/{process.Id}/cmdline"))
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Any(IsSharedCompilerProcessName);
     }
 
     private static string FindRepositoryRoot()
@@ -2132,5 +3038,37 @@ internal sealed class LoaderFixture : IAsyncDisposable
         }
 
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+    }
+
+    private sealed record FixtureToolchainSnapshot(
+        string DotnetHostPath,
+        string DotnetHostSha256,
+        string SdkVersion,
+        string MsbuildPath,
+        string MsbuildVersion,
+        string MsbuildSha256,
+        string Configuration,
+        string InputRoot,
+        IReadOnlyList<FixtureInputFile> Packages,
+        string GeneratorPath,
+        string GeneratorSha256,
+        string FixtureAssemblySha256);
+
+    private sealed record FixtureInputFile(
+        string LogicalName,
+        string Path,
+        string Sha256);
+
+    private sealed class TemplateBindingException : InvalidOperationException
+    {
+        public TemplateBindingException(string message)
+            : base(message)
+        {
+        }
+
+        public TemplateBindingException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
     }
 }

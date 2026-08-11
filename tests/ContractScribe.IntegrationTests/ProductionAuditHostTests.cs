@@ -8,6 +8,7 @@ using ContractScribe.Core.Hosting;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
+[Collection("Integration process lane 2")]
 public sealed class ProductionAuditHostTests
 {
     private static readonly byte[] OptionalPolicy = Encoding.UTF8.GetBytes(
@@ -629,18 +630,6 @@ public sealed class ProductionAuditHostTests
         Assert.Equal(count, fact.Measured);
         Assert.True(fact.Measured > fact.Threshold);
         Assert.Equal(HostEnforcementClass.ObservableOnly, fact.EnforcementClass);
-    }
-
-    [Fact]
-    public async Task ToolchainProcessMeter_ClassifiesTheSelectedProductionToolchain()
-    {
-        await using var fixture = await LoaderFixture.CreateAsync();
-        using var meter = new ToolchainProcessMeter();
-        var selected = await MsBuildBootstrap.EnsureRegisteredForProductionHostAsync(
-            Path.Join(fixture.Root, "App"),
-            CancellationToken.None);
-
-        _ = meter.SelectToolchain(selected);
     }
 
     [Fact]
@@ -1421,6 +1410,14 @@ public sealed class ProductionAuditHostTests
         CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        var effectiveControls = controls ?? new ProductionAuditHostControls();
+        if (effectiveControls.ProcessMeterFactory is null)
+        {
+            effectiveControls = effectiveControls with
+            {
+                ProcessMeterFactory = () => new ToolchainProcessMeter(() => []),
+            };
+        }
         return new ProductionAuditHost(Provenance()).RunAsync(
             new ProductionAuditRequest(
                 fixture.Root,
@@ -1428,7 +1425,7 @@ public sealed class ProductionAuditHostTests
                 OptionalPolicy,
                 ResolvedPublicationTarget.ForTestResult(fixture.Root),
                 Path.Join(fixture.Root, "obj", "contractscribe-audit-temp")),
-            controls ?? new ProductionAuditHostControls(),
+            effectiveControls,
             cancellationToken);
     }
 

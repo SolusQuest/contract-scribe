@@ -2,6 +2,7 @@ using System.Diagnostics;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
+[Collection("Integration process lane 2")]
 public sealed class LoaderLifecycleProcessTests
 {
     [Fact]
@@ -424,22 +425,43 @@ public sealed class LoaderLifecycleProcessTests
             CancellationToken.None);
         var elapsed = Stopwatch.StartNew();
 
-        for (var iteration = 1; iteration <= 30; iteration++)
+        await RunSuccessfulIterationsAsync(
+            leftFixture.Root,
+            rightFixture.Root,
+            leftBaseline,
+            rightBaseline,
+            firstIteration: 1,
+            iterationStep: 1,
+            elapsed);
+    }
+
+    private static async Task RunSuccessfulIterationsAsync(
+        string leftRoot,
+        string rightRoot,
+        IReadOnlyDictionary<string, InventoryEntry> leftBaseline,
+        IReadOnlyDictionary<string, InventoryEntry> rightBaseline,
+        int firstIteration,
+        int iterationStep,
+        Stopwatch elapsed)
+    {
+        for (var iteration = firstIteration; iteration <= 30; iteration += iterationStep)
         {
             try
             {
-                await RunSuccessfulPairAsync(leftFixture.Root, rightFixture.Root);
-                AssertProtectedInputsUnchanged(leftFixture.Root, leftBaseline);
-                AssertProtectedInputsUnchanged(rightFixture.Root, rightBaseline);
+                await RunSuccessfulPairAsync(leftRoot, rightRoot);
+                AssertProtectedInputsUnchanged(leftRoot, leftBaseline);
+                AssertProtectedInputsUnchanged(rightRoot, rightBaseline);
                 Assert.True(
                     elapsed.Elapsed < TimeSpan.FromMinutes(5),
                     $"The thirty-iteration topology exceeded its total deadline at iteration {iteration}.");
             }
             catch (Exception exception)
             {
-                var type = exception.GetType().FullName ?? exception.GetType().Name;
+                var evidence = exception is LifecyclePairPhaseException phaseFailure
+                    ? $"{phaseFailure.Phase}:{phaseFailure.FailureType} after {phaseFailure.ElapsedMilliseconds}ms"
+                    : exception.GetType().FullName ?? exception.GetType().Name;
                 Assert.Fail(
-                    $"Windows causal topology failed at iteration {iteration} with {Bound(type, 160)}.");
+                    $"Windows causal topology failed at iteration {iteration} with {Bound(evidence, 240)}.");
             }
         }
     }
@@ -449,13 +471,18 @@ public sealed class LoaderLifecycleProcessTests
 
     private static async Task RunSuccessfulPairAsync(string leftRoot, string rightRoot)
     {
-        await using var left = await LoaderLifecycleHarness.StartAsync(
-            leftRoot,
-            "lifecycle-success");
-        await using var right = await LoaderLifecycleHarness.StartAsync(
-            rightRoot,
-            "lifecycle-success");
-        await Task.WhenAll(left.WaitForTaskReadyAsync(), right.WaitForTaskReadyAsync());
+        var elapsed = Stopwatch.StartNew();
+        await using var left = await ObservePhaseAsync(
+            "left.start",
+            LoaderLifecycleHarness.StartAsync(leftRoot, "lifecycle-success"),
+            elapsed);
+        await using var right = await ObservePhaseAsync(
+            "right.start",
+            LoaderLifecycleHarness.StartAsync(rightRoot, "lifecycle-success"),
+            elapsed);
+        await Task.WhenAll(
+            ObserveTaskReadyPhaseAsync("left", left, elapsed),
+            ObserveTaskReadyPhaseAsync("right", right, elapsed));
         Assert.NotEqual(left.Probe.Id, right.Probe.Id);
         Assert.NotNull(left.TaskIdentity);
         Assert.NotNull(right.TaskIdentity);
@@ -463,14 +490,20 @@ public sealed class LoaderLifecycleProcessTests
         Assert.NotNull(left.BuildHostIdentity);
         Assert.NotNull(right.BuildHostIdentity);
         Assert.NotEqual(left.BuildHostIdentity, right.BuildHostIdentity);
-        await Task.WhenAll(left.ReleaseTaskAsync(), right.ReleaseTaskAsync());
-        var results = await Task.WhenAll(left.ReadResultAsync(), right.ReadResultAsync());
+        await Task.WhenAll(
+            ObservePhaseAsync("left.task-release", left.ReleaseTaskAsync(), elapsed),
+            ObservePhaseAsync("right.task-release", right.ReleaseTaskAsync(), elapsed));
+        var results = await Task.WhenAll(
+            ObservePhaseAsync("left.result", left.ReadResultAsync(), elapsed),
+            ObservePhaseAsync("right.result", right.ReadResultAsync(), elapsed));
         Assert.All(results, result =>
         {
             Assert.Equal(RepositoryLoadStatus.Success, result.Status);
             Assert.Equal(string.Empty, result.Code);
         });
-        var processes = await Task.WhenAll(left.WaitForExitAsync(), right.WaitForExitAsync());
+        var processes = await Task.WhenAll(
+            ObservePhaseAsync("left.process-exit", left.WaitForExitAsync(), elapsed),
+            ObservePhaseAsync("right.process-exit", right.WaitForExitAsync(), elapsed));
         Assert.All(processes, process =>
             AssertProcessExit(process, LoaderLifecycleHarness.SuccessExit));
         Assert.True(
@@ -478,6 +511,62 @@ public sealed class LoaderLifecycleProcessTests
                 () => left.OwnedProcessesHaveExited() && right.OwnedProcessesHaveExited(),
                 TimeSpan.FromSeconds(10)),
             "A task process or BuildHost remained after both successful loads completed.");
+    }
+
+    private static async Task ObserveTaskReadyPhaseAsync(
+        string side,
+        LoaderLifecycleHarness target,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            await target.WaitForTaskReadyAsync();
+        }
+        catch (Exception exception)
+        {
+            var observation = target.LastTaskBarrierObservation?.Kind.ToString()
+                ?? "ObservationUnavailable";
+            throw new LifecyclePairPhaseException(
+                $"{side}.task-ready[{observation}]",
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
+    }
+
+    private static async Task ObservePhaseAsync(
+        string phase,
+        Task action,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            await action;
+        }
+        catch (Exception exception)
+        {
+            throw new LifecyclePairPhaseException(
+                phase,
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
+    }
+
+    private static async Task<T> ObservePhaseAsync<T>(
+        string phase,
+        Task<T> action,
+        Stopwatch elapsed)
+    {
+        try
+        {
+            return await action;
+        }
+        catch (Exception exception)
+        {
+            throw new LifecyclePairPhaseException(
+                phase,
+                elapsed.ElapsedMilliseconds,
+                exception);
+        }
     }
 
     private static async Task<LifecycleResult> RunTargetAsync(
@@ -588,4 +677,20 @@ public sealed class LoaderLifecycleProcessTests
             .ToArray();
         Assert.Empty(protectedChanges);
     }
+
+    private sealed class LifecyclePairPhaseException(
+        string phase,
+        long elapsedMilliseconds,
+        Exception innerException) : Exception(null, innerException)
+    {
+        public string Phase { get; } = phase;
+
+        public long ElapsedMilliseconds { get; } = elapsedMilliseconds;
+
+        public string FailureType { get; } =
+            innerException.GetType().FullName ?? innerException.GetType().Name;
+    }
 }
+
+[CollectionDefinition("Integration process lane 2")]
+public sealed class IntegrationProcessLaneTwoCollection;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -11,6 +12,77 @@ if (args is ["emit-streams", var streamMarker])
 {
     Console.Out.Write($"{streamMarker}-child-out");
     Console.Error.WriteLine($"{streamMarker}-child-error");
+    return 0;
+}
+
+if (args is ["hold-child", var childMarker])
+{
+    Console.Out.WriteLine($"{childMarker}:child:{Environment.ProcessId}");
+    Console.Error.WriteLine($"{childMarker}:child-error");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
+
+if (args is ["exit-root-hold-child", var exitRootMarker])
+{
+    var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+        ?? Environment.ProcessPath
+        ?? "dotnet";
+    using var child = Process.Start(new ProcessStartInfo
+    {
+        FileName = host,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        ArgumentList =
+        {
+            Assembly.GetExecutingAssembly().Location,
+            "hold-child",
+            exitRootMarker,
+        },
+    }) ?? throw new InvalidOperationException("The inherited-stream child did not start.");
+    Console.Out.WriteLine(
+        $"{exitRootMarker}:root:{Environment.ProcessId}:child:{child.Id}");
+    Console.Error.WriteLine($"{exitRootMarker}:root-error");
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    return 0;
+}
+
+if (args is ["hold-tree", var treeMarker])
+{
+    var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+        ?? Environment.ProcessPath
+        ?? "dotnet";
+    using var child = Process.Start(new ProcessStartInfo
+    {
+        FileName = host,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        ArgumentList =
+        {
+            Assembly.GetExecutingAssembly().Location,
+            "hold-child",
+            treeMarker,
+        },
+    }) ?? throw new InvalidOperationException("The owned hold child did not start.");
+    _ = Task.Run(async () =>
+    {
+        while (await child.StandardOutput.ReadLineAsync() is { } line)
+        {
+            Console.Out.WriteLine(line);
+        }
+    });
+    _ = Task.Run(async () =>
+    {
+        while (await child.StandardError.ReadLineAsync() is { } line)
+        {
+            Console.Error.WriteLine(line);
+        }
+    });
+    Console.Out.WriteLine($"{treeMarker}:root:{Environment.ProcessId}:child:{child.Id}");
+    Console.Error.WriteLine($"{treeMarker}:root-error");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
     return 0;
 }
 
@@ -68,6 +140,28 @@ IReadOnlyList<ToolGeneratedSourceInput>? generated = mode == "failure"
 var outcome = await loader.LoadAsync(
     new RepositoryLoadRequest(repositoryRoot, inputPath, generated),
     cancellation.Token);
+if (mode == "legacy-success")
+{
+    var valid = outcome.Status == RepositoryLoadStatus.Success
+        && outcome.Session?.Projects.Count == 2;
+    if (outcome.Session is not null)
+    {
+        await outcome.Session.DisposeAsync();
+    }
+    Console.WriteLine(valid ? "legacy-success" : $"{outcome.Status}:{outcome.PrimaryFailure?.Code}");
+    return valid ? 0 : 77;
+}
+if (mode == "target-framework-environment")
+{
+    var valid = outcome.Status == RepositoryLoadStatus.Failure
+        && outcome.PrimaryFailure?.Code == "graph.target-framework-not-single";
+    if (outcome.Session is not null)
+    {
+        await outcome.Session.DisposeAsync();
+    }
+    Console.WriteLine(valid ? "target-framework-rejected" : $"{outcome.Status}:{outcome.PrimaryFailure?.Code}");
+    return valid ? 0 : 78;
+}
 if (mode == "classification")
 {
     if (outcome.Status != RepositoryLoadStatus.Success || outcome.Session is null)

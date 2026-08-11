@@ -34,10 +34,67 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
-      - run: dotnet restore ContractScribe.slnx
-      - run: dotnet build ContractScribe.slnx --configuration Release --no-restore
-      - run: dotnet test ContractScribe.slnx --configuration Release --no-build --no-restore
-      - run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
-      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
-      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
-      - run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Fast suite
+        id: fast_tests
+        continue-on-error: true
+        run: >-
+          dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj
+          --configuration Release --no-build --no-restore
+          --logger "trx;LogFilePrefix=fast-${{ runner.os }}"
+          --results-directory TestResults/ci/fast
+      - name: Integration suite
+        id: integration_tests
+        continue-on-error: true
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --logger "trx;LogFilePrefix=integration-${{ runner.os }}"
+          --results-directory TestResults/ci/integration
+      - name: Verify formatting
+        run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
+      - name: CLI help smoke
+        run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
+      - name: CLI version smoke
+        run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
+      - name: CLI doctor smoke
+        run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
+      - name: Upload fast-suite TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fast-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/fast/*.trx
+          if-no-files-found: error
+      - name: Upload integration-suite TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration/*.trx
+          if-no-files-found: error
+      - name: Aggregate suite outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          FAST_OUTCOME: ${{ steps.fast_tests.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration_tests.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success') {
+            throw "Build did not succeed; suite aggregation cannot pass."
+          }
+          $failures = @()
+          if ($env:FAST_OUTCOME -ne 'success') {
+            $failures += "fast=$env:FAST_OUTCOME"
+          }
+          if ($env:INTEGRATION_OUTCOME -ne 'success') {
+            $failures += "integration=$env:INTEGRATION_OUTCOME"
+          }
+          if ($failures.Count -gt 0) {
+            throw "Test suite failure: $($failures -join ', ')."
+          }

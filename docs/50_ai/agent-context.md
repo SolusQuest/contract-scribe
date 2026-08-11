@@ -4,6 +4,8 @@ Read this document after `AGENTS.md`. Then read `collaboration-layers.md`, the r
 
 Route long-lived rules to `docs/00_project`, `docs/10_workflow`, `docs/20_architecture`, or `docs/90_roadmap`. Route tool-neutral agent procedures to `docs/50_ai/skills`. Keep platform entrypoints thin.
 
+Before choosing or running validation, read [`skills/test-validation.md`](skills/test-validation.md). It defines the narrowest sufficient test commands, build-validity rules, duration budgets, TRX reporting, and the no-overlapping-retry rule.
+
 Before planning, refining, implementing, reviewing, publishing, validating, or closing pre-release architecture, issues, contracts, validation infrastructure, artifact identities, or pull requests, read `docs/00_project/pre-release-engineering.md`. Use its default one-change budget and record a concise exception only for an actual extra PR, merge, review, mutation, compatibility path, or maintained validation mechanism. Do not turn a missing process template into a blocker or treat historical experiment machinery as a current requirement.
 
 For immutable historical evidence in an issue or PR, use a full-commit-SHA repository-file link only after verifying that the commit is reachable from `main`. Living planning guidance may link the current `main` path. Treat live issue, pull-request, and milestone URLs as mutable tracker references. Do not use private downstream material as repository implementation context.
