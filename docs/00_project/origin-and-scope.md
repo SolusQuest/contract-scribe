@@ -24,6 +24,8 @@ The initial bootstrap intentionally delivered only governance and a minimal .NET
 - Campaign planning and state are platform-neutral and deterministic by default.
 - GitHub mutations are optional adapter behavior with least-privilege permissions.
 - Scheduling is caller-owned workflow configuration; ContractScribe does not promise provider-specific off-peak pricing.
+- GitHub-hosted Ubuntu x64 is the sole required M1-M5 pre-release source-validation runner and the planned initial M6 target. Native Windows and other unvalidated runners carry no CI, maintenance, compatibility, or support obligation.
+- Initial target repositories must have caller-prepared prerequisites and design-time MSBuild/Roslyn loading that succeed on the selected Ubuntu runner; native-Windows-only host assumptions are outside the boundary.
 - M3 selects the smallest proposal-provider transport and bounded evaluation set supported by current executable evidence; no provider name, compatibility corpus, or support claim is frozen before that refinement.
 - Bounded provider input and observable usage, cost, and latency are evaluation concerns where the selected transport exposes them; provider cache retention and any prompt-prefix mechanism are never correctness state.
 - Automatic merge is not part of the initial product.
@@ -31,9 +33,9 @@ The initial bootstrap intentionally delivered only governance and a minimal .NET
 ## Open decisions
 
 - The first released payload channel used by the GitHub Action.
-- The composite-versus-TypeScript Action host selected after payload and cross-platform invocation evidence exists.
+- The composite-versus-TypeScript Action host selected after payload acquisition, supported-runner invocation, and clear unsupported-runner rejection evidence exists.
 - The provider transport, model corpus, context limits, and practical economic thresholds selected by M3 executable evaluation.
 - The minimum platform-neutral state and GitHub reconciliation shapes selected by M4 and M5 failure evidence.
 - Whether and when a Native AOT or child-process topology becomes eligible for reconsideration.
 
-The loader and semantic-analysis process boundary is decided by [ADR 0002](../20_architecture/decisions/0002-process-topology.md): the M1 deterministic audit uses an in-process production loader, with child-process topologies deferred pending their eligibility experiment. [ADR 0003](../20_architecture/decisions/0003-target-profiles-and-documentation-observation.md) accepted the M1 target-profile and direct XML-documentation observation semantics. Remaining open decisions belong to their implementing roadmap or release track.
+The loader and semantic-analysis process boundary is decided by [ADR 0002](../20_architecture/decisions/0002-process-topology.md): the M1 deterministic audit uses an in-process production loader, with child-process topologies deferred pending their eligibility experiment. [ADR 0003](../20_architecture/decisions/0003-target-profiles-and-documentation-observation.md) accepted the M1 target-profile and direct XML-documentation observation semantics. [ADR 0004](../20_architecture/decisions/0004-initial-runner-platform-support.md) selects the initial pre-release runner and planned M6 target without making a released support claim. Remaining open decisions belong to their implementing roadmap or release track.

@@ -8,7 +8,7 @@ Date: 2026-08-02
 
 This record selects the concrete cooperative timeout, diagnostic, temporary-disk, and process-observation bounds owned by Issue #24. The machine-readable authority is `src/ContractScribe.Core/Hosting/host-calibrated-bounds-v1.json`. Every bound entry references the SHA-256 of `host-calibration-evidence-v1.json`, and Core rejects a manifest whose evidence reference does not match the embedded evidence bytes.
 
-This is implementation calibration, not release certification. Current Ubuntu and Windows confidence comes from direct production tests and ordinary exact-head CI; no separate bundle or evidence-publication lifecycle owns these bounds.
+This is current implementation calibration, not release certification. The calibrated bounds, their machine-readable authority, and direct production regression coverage remain current. The recorded Windows measurements are revision-bound historical observations; current required platform confidence comes from direct production tests and ordinary exact-revision CI on GitHub-hosted Ubuntu x64. No separate bundle or evidence-publication lifecycle owns these bounds.
 
 ## Method
 

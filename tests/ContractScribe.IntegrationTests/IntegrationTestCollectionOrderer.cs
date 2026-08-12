@@ -4,8 +4,9 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed class IntegrationTestCollectionOrderer : ITestCollectionOrderer
 {
-    // Start the bounded process lanes and the low-CPU timeout wait before short
-    // collections so worker ordering does not create a long process-test tail.
+    // Start the named process lanes and low-CPU timeout wait before short
+    // collections to reduce the process-test tail. This priority order is not a
+    // global bound on subprocess work performed by other collections.
     public IEnumerable<ITestCollection> OrderTestCollections(
         IEnumerable<ITestCollection> testCollections) =>
         testCollections

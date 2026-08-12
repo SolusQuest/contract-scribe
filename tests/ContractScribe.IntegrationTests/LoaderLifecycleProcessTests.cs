@@ -407,65 +407,6 @@ public sealed class LoaderLifecycleProcessTests
         Assert.IsType<System.Net.Sockets.SocketException>(unrelatedSocketFailure);
     }
 
-    [Fact]
-    public async Task WindowsCausalTopologyPassesThirtyIndependentIterations()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        await using var leftFixture = await PreparedFixtureAsync();
-        await using var rightFixture = await PreparedFixtureAsync();
-        var leftBaseline = RepositoryInventory.Capture(
-            leftFixture.Root,
-            CancellationToken.None);
-        var rightBaseline = RepositoryInventory.Capture(
-            rightFixture.Root,
-            CancellationToken.None);
-        var elapsed = Stopwatch.StartNew();
-
-        await RunSuccessfulIterationsAsync(
-            leftFixture.Root,
-            rightFixture.Root,
-            leftBaseline,
-            rightBaseline,
-            firstIteration: 1,
-            iterationStep: 1,
-            elapsed);
-    }
-
-    private static async Task RunSuccessfulIterationsAsync(
-        string leftRoot,
-        string rightRoot,
-        IReadOnlyDictionary<string, InventoryEntry> leftBaseline,
-        IReadOnlyDictionary<string, InventoryEntry> rightBaseline,
-        int firstIteration,
-        int iterationStep,
-        Stopwatch elapsed)
-    {
-        for (var iteration = firstIteration; iteration <= 30; iteration += iterationStep)
-        {
-            try
-            {
-                await RunSuccessfulPairAsync(leftRoot, rightRoot);
-                AssertProtectedInputsUnchanged(leftRoot, leftBaseline);
-                AssertProtectedInputsUnchanged(rightRoot, rightBaseline);
-                Assert.True(
-                    elapsed.Elapsed < TimeSpan.FromMinutes(5),
-                    $"The thirty-iteration topology exceeded its total deadline at iteration {iteration}.");
-            }
-            catch (Exception exception)
-            {
-                var evidence = exception is LifecyclePairPhaseException phaseFailure
-                    ? $"{phaseFailure.Phase}:{phaseFailure.FailureType} after {phaseFailure.ElapsedMilliseconds}ms"
-                    : exception.GetType().FullName ?? exception.GetType().Name;
-                Assert.Fail(
-                    $"Windows causal topology failed at iteration {iteration} with {Bound(evidence, 240)}.");
-            }
-        }
-    }
-
     private static async Task<LoaderFixture> PreparedFixtureAsync() =>
         await LoaderFixture.CreateAsync(appProject: LoaderLifecycleHarness.ProbeAppProject());
 

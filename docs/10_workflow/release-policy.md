@@ -4,6 +4,8 @@ The repository has not published a downstream-consumable package, binary, GitHub
 
 ADR 0001 selected a framework-dependent semantic execution baseline for the tested profile, and ADR 0002 selected an in-process M1 topology. Native AOT, self-contained publication, and child-process topologies are deferred alternatives, not preferred release targets. The payload channel and artifact layout remain separate distribution decisions.
 
+ADR 0004 selects GitHub-hosted Ubuntu x64 as the sole required M1-M5 pre-release source-validation runner and the planned initial M6 target. It is not a released support claim. Native Windows and other unvalidated environments remain unsupported and non-gating; the future M6 wrapper must reject unsupported runners clearly and quickly.
+
 Before the first downstream-consumable release, NuGet package or GitHub Action publication, or merge of external code contributions, the project must make and record a license and contribution-policy decision. Until then, do not solicit contributions or encourage third-party adoption.
 
 ## Release gates
@@ -13,7 +15,7 @@ The first consumable GitHub Action release requires:
 - a recorded license and contribution-policy disposition;
 - authority and third-party inventory evidence sufficient for that disposition;
 - a selected payload distribution channel with semantic-fidelity evidence;
-- a selected composite or TypeScript/JavaScript Action host with executable acquisition and cross-platform invocation evidence;
+- a selected composite or TypeScript/JavaScript Action host with executable acquisition, supported-runner invocation, and unsupported-runner rejection evidence;
 - a validated thin GitHub Action wrapper bound to the exact payload identity and free of duplicated campaign, ledger, patch, or GitHub-publication logic;
 - least-privilege permissions and an explicit secret model;
 - source, workflow, toolchain, artifact, and release provenance;
@@ -21,7 +23,7 @@ The first consumable GitHub Action release requires:
 - a consumer-repository smoke;
 - maintainer approval of the release candidate.
 
-Green source CI or successful pre-release validation does not constitute release approval.
+The exact release candidate must pass these gates on GitHub-hosted Ubuntu x64 against a target repository whose caller-prepared prerequisites and design-time load satisfy ADR 0004. Green source CI or successful pre-release validation does not constitute release approval.
 
 ## Contract compatibility freeze
 
