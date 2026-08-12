@@ -107,7 +107,9 @@ jobs:
       CONTRACT_SCRIBE_MAIN_CI_RUN: "31568102633"
       TARGET_REVISION: 1a54c7c75ef51e7a3d3d01435c6c76c40b336b3d
       TARGET_INPUT: runtime/src/AgenticPrReview.Runtime/AgenticPrReview.Runtime.csproj
-      DOTNET_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0.109
+      DOTNET_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0-noble
+      DOTNET_INSTALL_REVISION: 03c981b3ae8261cb0a48b07ac884ce0031af384c
+      REQUIRED_SDK_VERSION: 10.0.109
     steps:
       - name: Acquire exact public revisions without credentials
         shell: bash
@@ -127,6 +129,9 @@ jobs:
           target_home="$root/target-home"
           audit_home="$root/audit-home"
           validator_home="$root/validator-home"
+          installer_home="$root/installer-home"
+          installer_assets="$root/installer-assets"
+          exact_dotnet_dir="$root/exact-dotnet"
 
           mkdir -p \
             "$clean_home" \
@@ -136,7 +141,10 @@ jobs:
             "$tool_home" \
             "$target_home" \
             "$audit_home" \
-            "$validator_home"
+            "$validator_home" \
+            "$installer_home" \
+            "$installer_assets" \
+            "$exact_dotnet_dir"
 
           clean_git() {
             env -i \
@@ -211,9 +219,12 @@ jobs:
             echo "TARGET_HOME=$target_home"
             echo "AUDIT_HOME=$audit_home"
             echo "VALIDATOR_HOME=$validator_home"
+            echo "INSTALLER_HOME=$installer_home"
+            echo "INSTALLER_ASSETS=$installer_assets"
+            echo "EXACT_DOTNET_DIR=$exact_dotnet_dir"
           } >> "$GITHUB_ENV"
 
-      - name: Resolve the isolated SDK image
+      - name: Resolve the isolated base image and exact SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -227,6 +238,43 @@ jobs:
               ;;
           esac
           echo "DOTNET_IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
+          echo "RESOLVED_DOTNET_IMAGE=$image_digest" >> "$GITHUB_ENV"
+
+          installer_url="https://raw.githubusercontent.com/dotnet/install-scripts/$DOTNET_INSTALL_REVISION/src/dotnet-install.sh"
+          env -i \
+            PATH="$PATH" \
+            HOME="$SMOKE_ROOT/clean-home" \
+              LANG=C.UTF-8 \
+              curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+              "$installer_url" \
+              --output "$INSTALLER_ASSETS/dotnet-install.sh"
+          installer_digest="$(sha256sum "$INSTALLER_ASSETS/dotnet-install.sh" | cut -d' ' -f1)"
+          echo "DOTNET_INSTALL_SCRIPT_DIGEST=$installer_digest" >> "$GITHUB_ENV"
+
+          docker run \
+            --rm \
+            --init \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/installer-home \
+            --mount "type=bind,source=$INSTALLER_ASSETS,target=/install,readonly" \
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet" \
+            --mount "type=bind,source=$INSTALLER_HOME,target=/installer-home" \
+            "$image_digest" \
+            bash /install/dotnet-install.sh \
+              --version "$REQUIRED_SDK_VERSION" \
+              --install-dir /exact-dotnet \
+              --no-path
+
+          installed_version="$(docker run \
+            --rm \
+            --network none \
+            --user "$(id -u):$(id -g)" \
+            --env DOTNET_ROOT=/exact-dotnet \
+            --env PATH=/exact-dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly" \
+            "$image_digest" \
+            dotnet --version)"
+          test "$installed_version" = "$REQUIRED_SDK_VERSION"
 
       - name: Prepare ContractScribe and target prerequisites in a credential-free container
         shell: bash
@@ -240,6 +288,8 @@ jobs:
             --workdir /tool
             --env HOME=/tool-home
             --env DOTNET_CLI_HOME=/tool-home
+            --env DOTNET_ROOT=/exact-dotnet
+            --env PATH=/exact-dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             --env DOTNET_CLI_TELEMETRY_OPTOUT=1
             --env DOTNET_NOLOGO=1
             --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
@@ -249,6 +299,7 @@ jobs:
             --mount "type=bind,source=$TOOL_WORK,target=/tool"
             --mount "type=bind,source=$TOOL_NUGET_DIR,target=/tool-nuget"
             --mount "type=bind,source=$TOOL_HOME,target=/tool-home"
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
           )
 
           target_container=(
@@ -258,6 +309,8 @@ jobs:
             --workdir /target
             --env HOME=/target-home
             --env DOTNET_CLI_HOME=/target-home
+            --env DOTNET_ROOT=/exact-dotnet
+            --env PATH=/exact-dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             --env DOTNET_CLI_TELEMETRY_OPTOUT=1
             --env DOTNET_NOLOGO=1
             --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
@@ -267,19 +320,20 @@ jobs:
             --mount "type=bind,source=$TARGET_WORK,target=/target"
             --mount "type=bind,source=$TARGET_NUGET_DIR,target=/target-nuget"
             --mount "type=bind,source=$TARGET_HOME,target=/target-home"
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
           )
 
-          docker run "${tool_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet restore ContractScribe.slnx
-          docker run "${tool_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet build ContractScribe.slnx --configuration Release --no-restore
 
-          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet restore "$TARGET_INPUT"
-          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet build "$TARGET_INPUT" --configuration Release --no-restore
 
-          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet --version > "$RUN_DIR/sdk-version.txt"
 
           expected_status='?? .contract-scribe-m1-smoke-policy.json'
@@ -313,6 +367,8 @@ jobs:
             --workdir /target
             --env HOME=/audit-home
             --env DOTNET_CLI_HOME=/audit-home
+            --env DOTNET_ROOT=/exact-dotnet
+            --env PATH=/exact-dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             --env DOTNET_CLI_TELEMETRY_OPTOUT=1
             --env DOTNET_NOLOGO=1
             --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
@@ -324,10 +380,11 @@ jobs:
             --mount "type=bind,source=$RUN_DIR,target=/run"
             --mount "type=bind,source=$TARGET_NUGET_DIR,target=/target-nuget,readonly"
             --mount "type=bind,source=$AUDIT_HOME,target=/audit-home"
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
           )
 
           set +e
-          docker run "${audit_container[@]}" "$DOTNET_IMAGE" \
+          docker run "${audit_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet /tool/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll \
               audit \
               --repository-root /target \
@@ -386,6 +443,8 @@ jobs:
             --workdir /tool
             --env HOME=/validator-home
             --env DOTNET_CLI_HOME=/validator-home
+            --env DOTNET_ROOT=/exact-dotnet
+            --env PATH=/exact-dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             --env DOTNET_CLI_TELEMETRY_OPTOUT=1
             --env DOTNET_NOLOGO=1
             --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
@@ -394,9 +453,10 @@ jobs:
             --mount "type=bind,source=$RUN_DIR,target=/run"
             --mount "type=bind,source=$TOOL_NUGET_DIR,target=/tool-nuget,readonly"
             --mount "type=bind,source=$VALIDATOR_HOME,target=/validator-home"
+            --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
           )
 
-          canonical_digest="$(docker run "${validator_container[@]}" "$DOTNET_IMAGE" \
+          canonical_digest="$(docker run "${validator_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet /tool/tests/ContractScribe.ContractBaselineProbe/bin/Release/net10.0/ContractScribe.ContractBaselineProbe.dll \
               /run/replay.json)"
           actual_digest="$(sha256sum "$RUN_DIR/audit-result.json" | cut -d' ' -f1)"
@@ -458,6 +518,8 @@ jobs:
             targetRevision: process.env.TARGET_REVISION,
             targetInput: process.env.TARGET_INPUT,
             sdkVersion: fs.readFileSync(path.join(runDir, 'sdk-version.txt'), 'utf8').trim(),
+            dotnetInstallRevision: process.env.DOTNET_INSTALL_REVISION,
+            dotnetInstallScriptDigest: process.env.DOTNET_INSTALL_SCRIPT_DIGEST,
             toolchain: envelope.toolchain,
             auditExit,
             disposition: envelope.disposition,
@@ -493,6 +555,7 @@ jobs:
             `- Target input: \`${summary.targetInput}\``,
             `- Runner: ${process.env.RUNNER_LABEL}`,
             `- SDK image: \`${process.env.DOTNET_IMAGE_DIGEST}\``,
+            `- Exact SDK installer: \`${summary.dotnetInstallRevision}\` / \`${summary.dotnetInstallScriptDigest}\``,
             `- Selected toolchain: \`${summary.toolchain}\``,
             `- Audit exit/disposition: ${summary.auditExit} / ${summary.disposition}`,
             `- Counts: compliant=${summary.counts.compliant}, violation=${summary.counts.violation}, skipped=${summary.counts.skipped}, total=${summary.counts.total}`,
