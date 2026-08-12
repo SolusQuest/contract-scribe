@@ -444,6 +444,19 @@ jobs:
           test "$(sha256sum "$POLICY_FILE" | cut -d' ' -f1)" = "$POLICY_DIGEST"
           test -z "$(find "$AUDIT_OUTPUT_DIR" -mindepth 1 -print -quit)"
 
+          policy_mountpoint="$TARGET_WORK/.contract-scribe-m1-smoke-policy.json"
+          test ! -e "$policy_mountpoint"
+          test ! -L "$policy_mountpoint"
+          cp -- "$POLICY_FILE" "$policy_mountpoint"
+          test -f "$policy_mountpoint"
+          test ! -L "$policy_mountpoint"
+          test "$(sha256sum "$policy_mountpoint" | cut -d' ' -f1)" = "$POLICY_DIGEST"
+
+          cleanup_policy_mountpoint() {
+            rm -f -- "$policy_mountpoint"
+          }
+          trap cleanup_policy_mountpoint EXIT
+
           audit_container=(
             --rm
             --init
@@ -481,6 +494,14 @@ jobs:
               2> "$RUN_DIR/diagnostics.txt"
           audit_exit=$?
           set -e
+
+          test -f "$policy_mountpoint"
+          test ! -L "$policy_mountpoint"
+          test "$(sha256sum "$policy_mountpoint" | cut -d' ' -f1)" = "$POLICY_DIGEST"
+          rm -f -- "$policy_mountpoint"
+          test ! -e "$policy_mountpoint"
+          test ! -L "$policy_mountpoint"
+          trap - EXIT
 
           echo "AUDIT_EXIT_CODE=$audit_exit" >> "$GITHUB_ENV"
           if test "$audit_exit" -ne 0 && test "$audit_exit" -ne 1; then
