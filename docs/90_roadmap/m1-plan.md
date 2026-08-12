@@ -170,7 +170,7 @@ Use issue #25 for the CLI contract. It defines:
 - retained `--help`, `--version`, and `doctor` behavior;
 - explicit absence of provider, GitHub, auto-discovery, and auto-restore options.
 
-Use issue #30 for the thin CLI implementation and integration tests only. Its ordinary Ubuntu and Windows X64 CI invokes the real Host and records command mapping, composition, artifact, diagnostic, cancellation, and exit-code behavior. The pull request proves its exact head; the ordinary main-push run proves the merged revision. A later Host or CLI change leaves earlier runs historically true and requires fresh current CI only before a downstream claim consumes the changed behavior. Do not add a separate Host applicability ledger, protected-input manifest, evidence report, or post-merge repository mutation. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
+Completed issue #30 delivered the thin CLI implementation and integration tests. Its recorded Ubuntu and Windows observations remain revision-bound historical evidence for the real Host command mapping, composition, artifact, diagnostic, cancellation, and exit-code behavior. Current required pre-release validation uses GitHub-hosted Ubuntu x64: the pull request proves its exact head and the ordinary main-push run proves the merged revision. A later Host or CLI change leaves earlier runs historically true and requires fresh current CI only before a downstream claim consumes the changed behavior. Do not add a separate Host applicability ledger, protected-input manifest, evidence report, or post-merge repository mutation. Durable release artifacts, packaging layout, storage classification, channel evidence, and release provenance belong to the payload-distribution track.
 
 ### W5 — Executable validation
 
@@ -178,7 +178,7 @@ Issue #26 recorded an extensive M1 validation design and harness, and Issue #57 
 
 A repository audit found that `.github/workflows/ci.yml` validated the historical Host bundle structurally, performed platform dry-runs, self-tested the harness, and reproduced the completed M0.7 evidence-publication pipeline around the pinned M0.4 experiment. The Host path did not execute the production subject needed by #41, while M0.4/M0.5/M0.7 manifests, scripts, and tests bound development to historical experiment protocols. Both layers added development coupling without proving the current production audit path.
 
-PR #77 removed the obsolete Host bundle validation/dry-run/self-test and historical M0.7 external-checkout, evidence-publication, aggregation, preservation tests, and historical solution authority without refreshing their locks or identities. Issue #75 completed the current-tree cleanup in one pull request: it deleted the Host protected-input manifest, artifact lock, bundle/review identities, review-only transition, certification commands, evidence schemas, manifests, validators, mutation corpus, self-test, aggregation, publication, and public-preparation machinery whose only consumer was the validation product. It also deleted the remaining M0.4/M0.5/M0.7 manifests, compatibility modes, tombstones, and provenance/aggregate scripts. Reusable semantic fixtures moved under the current Taxonomy and Audit Result owners. Ubuntu and Windows retain ordinary exact-head restore, build, product and contract tests, format, and CLI smoke checks, with no post-merge repository mutation or closed-issue reopen.
+PR #77 removed the obsolete Host bundle validation/dry-run/self-test and historical M0.7 external-checkout, evidence-publication, aggregation, preservation tests, and historical solution authority without refreshing their locks or identities. Issue #75 completed the current-tree cleanup in one pull request: it deleted the Host protected-input manifest, artifact lock, bundle/review identities, review-only transition, certification commands, evidence schemas, manifests, validators, mutation corpus, self-test, aggregation, publication, and public-preparation machinery whose only consumer was the validation product. It also deleted the remaining M0.4/M0.5/M0.7 manifests, compatibility modes, tombstones, and provenance/aggregate scripts. Reusable semantic fixtures moved under the current Taxonomy and Audit Result owners. GitHub-hosted Ubuntu x64 retains ordinary exact-head restore, build, product and contract tests, format, and CLI smoke checks, with no post-merge repository mutation or closed-issue reopen.
 
 The Issue #70 contract evidence at exact squash commit `67c149fbc105d2ccae94becd6b2158b68027cbfd` (`C2`) remains immutable history. Issue #75 did not reopen #70, regenerate its manifest identity, or create a successor solely to remove Host lifecycle machinery. It deleted the current-tree #70 manifest and dependencies that existed only to enforce historical certification. Current Host behavior is defined by the production source, contracts, fixtures, and tests at the current revision.
 
@@ -186,13 +186,13 @@ Lower-level Host protocol and M0 experiment documents describe immutable histori
 
 Completed Issue #41 ran the required production validation on its exact `main` revision and recorded its run/job links and conclusions in the Issue. GitHub's source, workflow, run, attempt, and required-job facts identify that historical run. Add one small run-local result envelope or artifact digest only if one job actually transfers a result to another and the transfer cannot be checked safely without it; do not build a separate common/per-cell identity protocol. A later Host or CLI change leaves older evidence historically true but requires ordinary exact-revision CI before a downstream task consumes the changed behavior.
 
-The retained production validation covers:
+Completed #41's revision-bound production validation covered:
 
 - production project-reference and forbidden-dependency checks;
 - proof that no `src` project references an M0 experiment assembly;
 - canonical contract conformance;
 - fresh-process determinism;
-- Ubuntu and Windows X64;
+- Ubuntu and Windows X64 at that recorded revision;
 - target-profile fixtures;
 - cancellation and failure precedence;
 - stale artifact invalidation and atomic publication;
@@ -232,12 +232,12 @@ The tracker graph uses the following ownership and expected review boundaries. F
 | Pre-release v1 contract work | Completed direct M1 children | Historical #35/#55/#70 lineage; current corrections update only affected paths |
 | Production loading, classification, observation, policy/evidence, and result units | Completed direct sibling M1 children | Current production implementation and accepted tests exercised by completed #41 |
 | #24 production host | Completed direct M1 child | Current `ProductionAuditHost` execution lifecycle, cancellation/failure precedence, stale-output invalidation, and atomic publication |
-| #25 CLI contract | Completed direct M1 child | Accepted CLI contract consumed by remaining #30 implementation |
+| #25 CLI contract | Completed direct M1 child | Accepted CLI contract consumed by completed #30 implementation |
 | #26 Host Validation design and harness | Completed direct M1 child | Historical design and harness evidence at its accepted revision; not current implementation authority |
 | #57 Host Validation accepted-bundle promotion | Completed direct sibling M1 child | Historical two-commit acceptance sequence that established exact `S2` and `S3`; not a reusable default for new work |
 | #75 pre-release validation simplification | Completed direct sibling M1 child | Removed active Host certification and retired M0 experiment machinery while retaining production-focused CI |
 | #41 Host-validation execution | Completed direct sibling M1 child | Exact-main workflow execution and Issue-recorded run/job conclusions |
-| #30 CLI implementation | Direct M1 child | One focused CLI implementation PR including the current Host invalidation-window producer-consumer correction and ordinary Host/CLI integration tests |
+| #30 CLI implementation | Completed direct M1 child | Accepted CLI implementation, Host correction, and revision-bound integration evidence |
 | #42 independent read-only smoke | Direct M1 child | One bounded Issue attestation; a repository PR only for an independently useful code or fixture change |
 | #17 process topology | External completed architecture dependency | No new executable M1 work unless an ADR reconsideration trigger creates a separate issue |
 
@@ -247,9 +247,8 @@ Issues #18, #27, and #29 belong to release or research tracks and are not M1 chi
 
 The one-time tracker synchronization and Host Validation certification sequence are complete. Historical issue counts, changed-line forecasts, and the two-commit #57 acceptance sequence are not requirements for remaining M1 work.
 
-Issue #41 is complete. The remaining critical path is intentionally small:
+Issues #41 and #30 are complete. The remaining critical path is intentionally small:
 
-- #30: one focused CLI implementation and cross-platform integration pull request by default;
 - #42: one focused independent smoke recorded through a bounded Issue attestation by default;
 - #33: coordination and closure evidence only, with no executable pull request of its own unless a separately acceptable repository artifact is discovered.
 
@@ -273,18 +272,18 @@ completed #24 host composition + production implementation siblings + #26 valida
     --> completed #41 exact-main validation execution and Issue record
     --> ordinary exact-revision Host CI
 
-ordinary exact-revision Host CI + #25 CLI contract --> #30 CLI implementation
-#30 CLI implementation --> #42 independent read-only smoke
+ordinary exact-revision Host CI + #25 CLI contract --> completed #30 CLI implementation
+completed #30 CLI implementation + current exact-revision Ubuntu CI --> #42 independent read-only smoke
 #42 independent read-only smoke --> #33 M1 closure checklist
 ```
 
-Every currently tracked executable node in this diagram is a direct child of the existing M1 execution parent. Arrows express native dependencies, not parentage. Completed #41 recorded workflow evidence without a repository PR; #30's ordinary cross-platform integration validates the CLI and Host composition, and #42 exercises that final combination.
+Every tracked executable node in this diagram is a direct child of the existing M1 execution parent. Arrows express native dependencies, not parentage. Completed #41 and #30 retain revision-bound workflow and integration evidence; #42 is the only remaining executable child and exercises the final Host/CLI combination on the required Ubuntu runner.
 
 ## Tracker authority and remaining sequence
 
 The one-time synchronization described by earlier revisions of this plan is complete and remains available in Git history. It is not an active mutation procedure, and this document does not duplicate volatile issue status. Live GitHub tracker state is authoritative.
 
-Issue #41 is complete. The remaining dependency sequence is `#30 -> #42 -> #33`: the focused CLI implementation and real-process integration PR, the independent read-only smoke with a bounded Issue attestation, and coordination/closure evidence. New tracker writes follow the current issue and pre-release engineering rules. They do not reproduce the historical full-manifest synchronization, automatically reopen completed certification work, or create metadata-only revalidation chains.
+Issues #41 and #30 are complete. The remaining dependency sequence is `#42 -> #33`: the independent read-only smoke on GitHub-hosted Ubuntu x64 with a bounded Issue attestation, followed by coordination and closure evidence. New tracker writes follow the current issue and pre-release engineering rules. They do not reproduce the historical full-manifest synchronization, automatically reopen completed certification work, or create metadata-only revalidation chains.
 
 ## Milestone exit evidence
 

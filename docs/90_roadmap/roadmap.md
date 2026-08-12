@@ -102,7 +102,7 @@ Deliver a production read-only audit host and CLI that load an explicit C# proje
 - Implement the framework-dependent, in-process Roslyn/MSBuild production host selected by ADR 0002.
 - Implement deterministic classification, policy evaluation, evidence binding, audit-result aggregation, diagnostics, cancellation, and atomic output.
 - Define and implement the M1 CLI.
-- Validate on Ubuntu and Windows X64 plus an independent real-world or downstream read-only smoke.
+- Use GitHub-hosted Ubuntu x64 as the sole required pre-release validation runner, then run an independent real-world or downstream read-only smoke on a target satisfying the accepted repository boundary.
 
 ### Exit criteria
 
@@ -154,7 +154,7 @@ Given a validated structured documentation proposal, render and validate an XML-
 - Reapplying an accepted patch produces no diff.
 - Formatting allowance is bounded and documented.
 - Stale, ambiguous, malformed, unsupported, or unsafe input fails closed.
-- Ubuntu and Windows fixtures cover encoding, BOM, newline, and replacement behavior.
+- Deterministic byte/text fixtures on GitHub-hosted Ubuntu x64 cover LF, CRLF, encoding, BOM, newline preservation, and documentation-block replacement without claiming native-Windows filesystem evidence.
 
 ### Non-goals
 

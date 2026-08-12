@@ -76,7 +76,9 @@ See [Campaign and GitHub workflow](campaign-and-github-workflow.md).
 
 The Action exposes caller-owned scheduling and manual invocation, configures the selected payload and provider adapter, applies concurrency controls, and binds wrapper provenance to the exact payload identity. It does not weaken any core boundary.
 
-The wrapper is not a second product runtime. It is a thin, non-authoritative host that invokes the production .NET CLI. A composite action is sufficient when payload acquisition and cross-platform invocation remain simple. A small TypeScript-to-JavaScript wrapper is permitted only when host concerns justify it; it may normalize Action inputs and outputs, acquire the payload, propagate cancellation, and report results, but it does not implement campaign, ledger, proposal, patch, or GitHub publication rules. When selected, the host may receive and forward explicitly allowlisted credentials to the CLI, so it is inside the credential-handling boundary; it cannot interpret, persist, log, or independently use them.
+The wrapper is not a second product runtime. It is a thin, non-authoritative host that invokes the production .NET CLI. A composite action is sufficient when payload acquisition and supported-runner invocation remain simple. A small TypeScript-to-JavaScript wrapper is permitted only when host concerns justify it; it may normalize Action inputs and outputs, acquire the payload, reject unsupported runners, propagate cancellation, and report results, but it does not implement campaign, ledger, proposal, patch, or GitHub publication rules. When selected, the host may receive and forward explicitly allowlisted credentials to the CLI, so it is inside the credential-handling boundary; it cannot interpret, persist, log, or independently use them.
+
+[ADR 0004](decisions/0004-initial-runner-platform-support.md) selects GitHub-hosted Ubuntu x64 as the sole required M1-M5 pre-release runner and the planned initial M6 target, not as a released support claim. The initial repository boundary requires caller-prepared prerequisites and design-time MSBuild/Roslyn loading to succeed on that runner. Native-Windows-only workloads, targets, tooling, filesystem behavior, process behavior, and host assumptions are outside the boundary.
 
 ## Capability and authority matrix
 
@@ -95,7 +97,7 @@ The Documentation Scribe must not receive source-write, state-persistence, or pu
 
 ## Current implementation status
 
-M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, and atomic `ProductionAuditHost` path, and #75 removed the retired validation and experiment machinery. The remaining M1 path is #41 exact-main validation, #30 production CLI audit command, and #42 read-only smoke. The patch engine, Documentation Scribe, campaign state, GitHub adapter, and consumable Action remain later-milestone work.
+M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, atomic `ProductionAuditHost`, and production CLI path, and #75 removed the retired validation and experiment machinery. Completed #41 and #30 remain revision-bound implementation and validation evidence; #42 is the only remaining executable M1 step before #33 closure. The patch engine, Documentation Scribe, campaign state, GitHub adapter, and consumable Action remain later-milestone work.
 
 M0 experiment questions, conditions, results, limitations, and exact revisions remain historical evidence. PR #77 removed their preservation tests and historical Roslyn experiment project from ordinary test and solution authority. Issue #75 removed the remaining current-tree runners, manifests, and compatibility paths; concrete production regressions and reusable semantic fixtures live under their current production owners.
 

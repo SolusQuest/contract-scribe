@@ -6,6 +6,8 @@ ADR 0001 selected a framework-dependent semantic execution baseline using observ
 
 The first intended consumer experience is a GitHub Action that invokes the exact selected payload. The Action wrapper is not itself the payload-channel decision: wrapper provenance and payload provenance remain separate and are bound explicitly.
 
+[ADR 0004](decisions/0004-initial-runner-platform-support.md) selects GitHub-hosted Ubuntu x64 as the planned initial Action target and the sole required M1-M5 pre-release source-validation runner. This does not select a payload or establish released support. Native Windows and other unvalidated runners are unsupported and non-gating.
+
 The production GitHub adapter and its Issue, branch, commit, and pull-request reconciliation remain in C#. Action-host language does not own or alter those rules.
 
 ## Payload decision
@@ -29,11 +31,11 @@ TypeScript is not required for M1 through M5 and is not required to create GitHu
 The payload-distribution gate compares two initial host candidates:
 
 1. a composite action that acquires or configures the selected framework-dependent payload and invokes the CLI;
-2. a JavaScript action built from a small TypeScript source package when payload download, verification, caching, cancellation, or cross-platform invocation cannot remain maintainable in a composite action.
+2. a JavaScript action built from a small TypeScript source package when payload download, verification, caching, cancellation, supported-runner invocation, or unsupported-runner rejection cannot remain maintainable in a composite action.
 
 The comparison must freeze:
 
-- supported runner operating systems;
+- the GitHub-hosted Ubuntu x64 supported-runner target and clear failure on unsupported runners;
 - payload acquisition and integrity verification;
 - required preinstalled runtimes and setup steps;
 - input, environment, output, annotation, summary, cancellation, and exit-code mapping;
@@ -59,3 +61,5 @@ Action wrapper identity
 ```
 
 The release is blocked until the governance and payload-distribution gates pass. Requirements are defined in [Release policy](../10_workflow/release-policy.md).
+
+Released Ubuntu support is established only for an exact candidate that passes payload acquisition and integrity checks, wrapper/payload composition, a supported target-repository consumer smoke, release controls, and maintainer approval. Source CI and packed-candidate evidence alone are insufficient.

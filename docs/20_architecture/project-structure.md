@@ -309,7 +309,7 @@ TypeScript is not required for branch, commit, Issue, or pull-request operations
 The initial Action-host candidates are:
 
 1. a composite action that acquires/configures the selected .NET payload and invokes the CLI;
-2. a JavaScript action produced from a small TypeScript source package when payload acquisition or cross-platform host behavior is too complex for a maintainable composite action.
+2. a JavaScript action produced from a small TypeScript source package when payload acquisition or supported-runner host behavior is too complex for a maintainable composite action.
 
 The payload-distribution decision selects between those candidates with executable evidence. Source development through M5 does not require TypeScript.
 
