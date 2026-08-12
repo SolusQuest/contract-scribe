@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   validate:
+    if: github.ref != 'refs/heads/codex/issue-42-smoke'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -95,3 +96,415 @@ jobs:
           if ($failures.Count -gt 0) {
             throw "Test suite failure: $($failures -join ', ')."
           }
+
+  m1-independent-smoke:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/issue-42-smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions: {}
+    env:
+      CONTRACT_SCRIBE_REVISION: ee62d37d245f385b56e31d75a4323f3859880818
+      CONTRACT_SCRIBE_MAIN_CI_RUN: "31568102633"
+      TARGET_REVISION: 1a54c7c75ef51e7a3d3d01435c6c76c40b336b3d
+      TARGET_INPUT: runtime/src/AgenticPrReview.Runtime/AgenticPrReview.Runtime.csproj
+      DOTNET_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0.109
+    steps:
+      - name: Acquire exact public revisions without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root="$RUNNER_TEMP/m1-smoke"
+          clean_home="$root/clean-home"
+          tool_source="$root/contract-scribe-source"
+          tool_work="$root/contract-scribe-work"
+          target_source="$root/target-source"
+          target_work="$root/target-work"
+          run_dir="$root/run"
+          tool_nuget_dir="$root/tool-nuget"
+          target_nuget_dir="$root/target-nuget"
+          tool_home="$root/tool-home"
+          target_home="$root/target-home"
+          audit_home="$root/audit-home"
+          validator_home="$root/validator-home"
+
+          mkdir -p \
+            "$clean_home" \
+            "$run_dir" \
+            "$tool_nuget_dir" \
+            "$target_nuget_dir" \
+            "$tool_home" \
+            "$target_home" \
+            "$audit_home" \
+            "$validator_home"
+
+          clean_git() {
+            env -i \
+              PATH="$PATH" \
+              HOME="$clean_home" \
+              LANG=C.UTF-8 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              git -c credential.helper= "$@"
+          }
+
+          clean_git clone --filter=blob:none --no-checkout \
+            https://github.com/SolusQuest/contract-scribe.git "$tool_source"
+          clean_git -C "$tool_source" fetch --depth=1 origin "$CONTRACT_SCRIBE_REVISION"
+          clean_git -C "$tool_source" checkout --detach "$CONTRACT_SCRIBE_REVISION"
+
+          clean_git clone --filter=blob:none --no-checkout \
+            https://github.com/SolusQuest/agentic-pr-review.git "$target_source"
+          clean_git -C "$target_source" fetch --depth=1 origin "$TARGET_REVISION"
+          clean_git -C "$target_source" checkout --detach "$TARGET_REVISION"
+
+          test "$(git -C "$tool_source" rev-parse HEAD)" = "$CONTRACT_SCRIBE_REVISION"
+          test "$(git -C "$target_source" rev-parse HEAD)" = "$TARGET_REVISION"
+
+          if git -C "$tool_source" config --local --get-regexp 'credential|extraheader'; then
+            echo "::error::ContractScribe checkout retained a credential configuration."
+            exit 1
+          fi
+          if git -C "$target_source" config --local --get-regexp 'credential|extraheader'; then
+            echo "::error::Target checkout retained a credential configuration."
+            exit 1
+          fi
+
+          mkdir -p "$tool_work" "$target_work"
+          cp -a "$tool_source/." "$tool_work/"
+          cp -a "$target_source/." "$target_work/"
+
+          cat > "$target_work/.contract-scribe-m1-smoke-policy.json" <<'JSON'
+          {
+            "schemaVersion": 1,
+            "targetProfile": "profile.external-api",
+            "defaultDecision": "optional",
+            "rules": [
+              {
+                "id": "m1-smoke-public-api-required",
+                "priority": 0,
+                "decision": "required"
+              }
+            ]
+          }
+          JSON
+
+          expected_status='?? .contract-scribe-m1-smoke-policy.json'
+          actual_status="$(git -C "$target_work" status --short --untracked-files=all)"
+          test "$actual_status" = "$expected_status"
+
+          (
+            cd "$target_work"
+            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "$run_dir/protected-before.sha256"
+          test "$(wc -l < "$run_dir/protected-before.sha256")" -gt 0
+
+          {
+            echo "SMOKE_ROOT=$root"
+            echo "TOOL_WORK=$tool_work"
+            echo "TARGET_WORK=$target_work"
+            echo "RUN_DIR=$run_dir"
+            echo "TOOL_NUGET_DIR=$tool_nuget_dir"
+            echo "TARGET_NUGET_DIR=$target_nuget_dir"
+            echo "TOOL_HOME=$tool_home"
+            echo "TARGET_HOME=$target_home"
+            echo "AUDIT_HOME=$audit_home"
+            echo "VALIDATOR_HOME=$validator_home"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve the isolated SDK image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --quiet "$DOTNET_IMAGE"
+          image_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$DOTNET_IMAGE")"
+          case "$image_digest" in
+            *@sha256:*) ;;
+            *)
+              echo "::error::The SDK image did not resolve to a repository digest."
+              exit 1
+              ;;
+          esac
+          echo "DOTNET_IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
+
+      - name: Prepare ContractScribe and target prerequisites in a credential-free container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tool_container=(
+            --rm
+            --init
+            --user "$(id -u):$(id -g)"
+            --workdir /tool
+            --env HOME=/tool-home
+            --env DOTNET_CLI_HOME=/tool-home
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+            --env DOTNET_NOLOGO=1
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+            --env DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1
+            --env MSBUILDDISABLENODEREUSE=1
+            --env NUGET_PACKAGES=/tool-nuget
+            --mount "type=bind,source=$TOOL_WORK,target=/tool"
+            --mount "type=bind,source=$TOOL_NUGET_DIR,target=/tool-nuget"
+            --mount "type=bind,source=$TOOL_HOME,target=/tool-home"
+          )
+
+          target_container=(
+            --rm
+            --init
+            --user "$(id -u):$(id -g)"
+            --workdir /target
+            --env HOME=/target-home
+            --env DOTNET_CLI_HOME=/target-home
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+            --env DOTNET_NOLOGO=1
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+            --env DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1
+            --env MSBUILDDISABLENODEREUSE=1
+            --env NUGET_PACKAGES=/target-nuget
+            --mount "type=bind,source=$TARGET_WORK,target=/target"
+            --mount "type=bind,source=$TARGET_NUGET_DIR,target=/target-nuget"
+            --mount "type=bind,source=$TARGET_HOME,target=/target-home"
+          )
+
+          docker run "${tool_container[@]}" "$DOTNET_IMAGE" \
+            dotnet restore ContractScribe.slnx
+          docker run "${tool_container[@]}" "$DOTNET_IMAGE" \
+            dotnet build ContractScribe.slnx --configuration Release --no-restore
+
+          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+            dotnet restore "$TARGET_INPUT"
+          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+            dotnet build "$TARGET_INPUT" --configuration Release --no-restore
+
+          docker run "${target_container[@]}" "$DOTNET_IMAGE" \
+            dotnet --version > "$RUN_DIR/sdk-version.txt"
+
+          expected_status='?? .contract-scribe-m1-smoke-policy.json'
+          actual_status="$(git -C "$TARGET_WORK" status --short --untracked-files=all)"
+          test "$actual_status" = "$expected_status"
+
+          (
+            cd "$TARGET_WORK"
+            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "$RUN_DIR/protected-pre-audit.sha256"
+          cmp "$RUN_DIR/protected-before.sha256" "$RUN_DIR/protected-pre-audit.sha256"
+
+          prep_output_count="$({
+            find "$TARGET_WORK" -type f -path '*/bin/*' -print
+            find "$TARGET_WORK" -type f -path '*/obj/*' -print
+          } | sort -u | wc -l)"
+          echo "PREP_OUTPUT_COUNT=$prep_output_count" >> "$GITHUB_ENV"
+
+      - name: Run the read-only audit without network or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          audit_container=(
+            --rm
+            --init
+            --network none
+            --user "$(id -u):$(id -g)"
+            --workdir /target
+            --env HOME=/audit-home
+            --env DOTNET_CLI_HOME=/audit-home
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+            --env DOTNET_NOLOGO=1
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+            --env DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1
+            --env MSBUILDDISABLENODEREUSE=1
+            --env NUGET_PACKAGES=/target-nuget
+            --mount "type=bind,source=$TOOL_WORK,target=/tool,readonly"
+            --mount "type=bind,source=$TARGET_WORK,target=/target"
+            --mount "type=bind,source=$RUN_DIR,target=/run"
+            --mount "type=bind,source=$TARGET_NUGET_DIR,target=/target-nuget,readonly"
+            --mount "type=bind,source=$AUDIT_HOME,target=/audit-home"
+          )
+
+          set +e
+          docker run "${audit_container[@]}" "$DOTNET_IMAGE" \
+            dotnet /tool/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll \
+              audit \
+              --repository-root /target \
+              --input "$TARGET_INPUT" \
+              --policy .contract-scribe-m1-smoke-policy.json \
+              --output /run/audit-result.json \
+              > "$RUN_DIR/envelope.json" \
+              2> "$RUN_DIR/diagnostics.txt"
+          audit_exit=$?
+          set -e
+
+          echo "AUDIT_EXIT_CODE=$audit_exit" >> "$GITHUB_ENV"
+          if test "$audit_exit" -ne 0 && test "$audit_exit" -ne 1; then
+            diagnostic_codes="$(sed -n 's/:.*//p' "$RUN_DIR/diagnostics.txt" | sort -u | paste -sd, -)"
+            echo "::error::The controlled audit returned exit $audit_exit; diagnostic codes: ${diagnostic_codes:-none}."
+            exit 1
+          fi
+
+      - name: Validate canonical result, counts, and protected inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_status='?? .contract-scribe-m1-smoke-policy.json'
+          actual_status="$(git -C "$TARGET_WORK" status --short --untracked-files=all)"
+          test "$actual_status" = "$expected_status"
+
+          (
+            cd "$TARGET_WORK"
+            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "$RUN_DIR/protected-after.sha256"
+          cmp "$RUN_DIR/protected-pre-audit.sha256" "$RUN_DIR/protected-after.sha256"
+
+          post_output_count="$({
+            find "$TARGET_WORK" -type f -path '*/bin/*' -print
+            find "$TARGET_WORK" -type f -path '*/obj/*' -print
+          } | sort -u | wc -l)"
+          echo "POST_OUTPUT_COUNT=$post_output_count" >> "$GITHUB_ENV"
+          export POST_OUTPUT_COUNT="$post_output_count"
+
+          {
+            printf '{"logicalInputs":['
+            cat "$RUN_DIR/audit-result.json"
+            printf ','
+            cat "$RUN_DIR/audit-result.json"
+            printf ']}'
+          } > "$RUN_DIR/replay.json"
+
+          validator_container=(
+            --rm
+            --init
+            --network none
+            --user "$(id -u):$(id -g)"
+            --workdir /tool
+            --env HOME=/validator-home
+            --env DOTNET_CLI_HOME=/validator-home
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1
+            --env DOTNET_NOLOGO=1
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+            --env NUGET_PACKAGES=/tool-nuget
+            --mount "type=bind,source=$TOOL_WORK,target=/tool,readonly"
+            --mount "type=bind,source=$RUN_DIR,target=/run"
+            --mount "type=bind,source=$TOOL_NUGET_DIR,target=/tool-nuget,readonly"
+            --mount "type=bind,source=$VALIDATOR_HOME,target=/validator-home"
+          )
+
+          canonical_digest="$(docker run "${validator_container[@]}" "$DOTNET_IMAGE" \
+            dotnet /tool/tests/ContractScribe.ContractBaselineProbe/bin/Release/net10.0/ContractScribe.ContractBaselineProbe.dll \
+              /run/replay.json)"
+          actual_digest="$(sha256sum "$RUN_DIR/audit-result.json" | cut -d' ' -f1)"
+          test "$canonical_digest" = "$actual_digest"
+
+          export CANONICAL_DIGEST="$canonical_digest"
+          export ACTUAL_DIGEST="$actual_digest"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const runDir = process.env.RUN_DIR;
+          const envelope = JSON.parse(fs.readFileSync(path.join(runDir, 'envelope.json'), 'utf8'));
+          const result = JSON.parse(fs.readFileSync(path.join(runDir, 'audit-result.json'), 'utf8'));
+          const outcomes = {
+            'audit.outcome.compliant': 'compliant',
+            'audit.outcome.violation': 'violation',
+            'audit.outcome.skipped': 'skipped',
+          };
+          const counts = { compliant: 0, violation: 0, skipped: 0 };
+          for (const row of result.results) {
+            const key = outcomes[row.auditOutcome];
+            if (!key) throw new Error(`Unexpected audit outcome: ${row.auditOutcome}`);
+            counts[key] += 1;
+          }
+          const total = counts.compliant + counts.violation + counts.skipped;
+          if (total !== result.results.length) throw new Error('Outcome counts do not reconcile.');
+          if (total === 0 || counts.compliant + counts.violation === 0) {
+            throw new Error('The target produced no audit judgments.');
+          }
+          if (envelope.terminalLayer !== 'audit' || envelope.terminalState !== 'committed') {
+            throw new Error('The CLI did not commit an audit terminal.');
+          }
+          if (envelope.sourceRevision !== process.env.CONTRACT_SCRIBE_REVISION) {
+            throw new Error('The CLI source revision does not match the fixed ContractScribe revision.');
+          }
+          for (const key of Object.keys(counts)) {
+            if (envelope.counts[key] !== counts[key]) {
+              throw new Error(`Envelope count mismatch for ${key}.`);
+            }
+          }
+          if (envelope.resultDigest !== process.env.ACTUAL_DIGEST) {
+            throw new Error('Envelope digest does not match the committed canonical bytes.');
+          }
+          if (process.env.CANONICAL_DIGEST !== process.env.ACTUAL_DIGEST) {
+            throw new Error('Independent canonicalization digest mismatch.');
+          }
+          const auditExit = Number(process.env.AUDIT_EXIT_CODE);
+          if (auditExit === 0 && counts.violation !== 0) {
+            throw new Error('Exit 0 is inconsistent with violation results.');
+          }
+          if (auditExit === 1 && counts.violation === 0) {
+            throw new Error('Exit 1 is inconsistent with a zero-violation result.');
+          }
+          const summary = {
+            outcome: 'successful-committed-audit',
+            contractScribeRevision: process.env.CONTRACT_SCRIBE_REVISION,
+            contractScribeMainCiRun: process.env.CONTRACT_SCRIBE_MAIN_CI_RUN,
+            targetRevision: process.env.TARGET_REVISION,
+            targetInput: process.env.TARGET_INPUT,
+            sdkVersion: fs.readFileSync(path.join(runDir, 'sdk-version.txt'), 'utf8').trim(),
+            toolchain: envelope.toolchain,
+            auditExit,
+            disposition: envelope.disposition,
+            counts: { ...counts, total },
+            resultDigest: process.env.ACTUAL_DIGEST,
+            protectedSourceProjectSet: 'unchanged',
+            prerequisiteOutputCount: Number(process.env.PREP_OUTPUT_COUNT),
+            postAuditOutputCount: Number(process.env.POST_OUTPUT_COUNT),
+            networkDuringAudit: 'disabled-by-container',
+            credentialExposureToTarget: 'none',
+          };
+          fs.writeFileSync(path.join(runDir, 'bounded-summary.json'), JSON.stringify(summary));
+          NODE
+
+      - name: Publish bounded smoke summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RUNNER_LABEL="${{ runner.os }}-${{ runner.arch }}"
+          export RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const summary = JSON.parse(fs.readFileSync(path.join(process.env.RUN_DIR, 'bounded-summary.json'), 'utf8'));
+          const lines = [
+            '# M1 independent read-only smoke',
+            '',
+            `- Outcome: ${summary.outcome}`,
+            `- ContractScribe revision: \`${summary.contractScribeRevision}\``,
+            `- Ordinary main CI run: ${summary.contractScribeMainCiRun}`,
+            `- Target revision: \`${summary.targetRevision}\``,
+            `- Target shape: public reduced-trust .NET 10 SDK-style executable project`,
+            `- Target input: \`${summary.targetInput}\``,
+            `- Runner: ${process.env.RUNNER_LABEL}`,
+            `- SDK image: \`${process.env.DOTNET_IMAGE_DIGEST}\``,
+            `- Selected toolchain: \`${summary.toolchain}\``,
+            `- Audit exit/disposition: ${summary.auditExit} / ${summary.disposition}`,
+            `- Counts: compliant=${summary.counts.compliant}, violation=${summary.counts.violation}, skipped=${summary.counts.skipped}, total=${summary.counts.total}`,
+            `- Canonical result digest: \`${summary.resultDigest}\``,
+            `- Protected source/project set: ${summary.protectedSourceProjectSet}`,
+            `- Build/design-time outputs: before audit=${summary.prerequisiteOutputCount}, after audit=${summary.postAuditOutputCount}`,
+            `- Audit network: ${summary.networkDuringAudit}`,
+            `- Target credential exposure: ${summary.credentialExposureToTarget}`,
+            `- Run: ${process.env.RUN_URL}`,
+            '',
+            'No raw Audit Result, raw log, machine-local path, credential, or repository write artifact was published.',
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          process.stdout.write(`M1_SMOKE_BOUNDED_SUMMARY=${JSON.stringify(summary)}\n`);
+          NODE
