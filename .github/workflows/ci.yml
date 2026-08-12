@@ -155,15 +155,15 @@ jobs:
               git -c credential.helper= "$@"
           }
 
-          clean_git clone --filter=blob:none --no-checkout \
+          clean_git clone --quiet --filter=blob:none --no-checkout \
             https://github.com/SolusQuest/contract-scribe.git "$tool_source"
-          clean_git -C "$tool_source" fetch --depth=1 origin "$CONTRACT_SCRIBE_REVISION"
-          clean_git -C "$tool_source" checkout --detach "$CONTRACT_SCRIBE_REVISION"
+          clean_git -C "$tool_source" fetch --quiet --depth=1 origin "$CONTRACT_SCRIBE_REVISION"
+          clean_git -C "$tool_source" checkout --quiet --detach "$CONTRACT_SCRIBE_REVISION"
 
-          clean_git clone --filter=blob:none --no-checkout \
+          clean_git clone --quiet --filter=blob:none --no-checkout \
             https://github.com/SolusQuest/agentic-pr-review.git "$target_source"
-          clean_git -C "$target_source" fetch --depth=1 origin "$TARGET_REVISION"
-          clean_git -C "$target_source" checkout --detach "$TARGET_REVISION"
+          clean_git -C "$target_source" fetch --quiet --depth=1 origin "$TARGET_REVISION"
+          clean_git -C "$target_source" checkout --quiet --detach "$TARGET_REVISION"
 
           test "$(git -C "$tool_source" rev-parse HEAD)" = "$CONTRACT_SCRIBE_REVISION"
           test "$(git -C "$target_source" rev-parse HEAD)" = "$TARGET_REVISION"
@@ -251,7 +251,7 @@ jobs:
           installer_digest="$(sha256sum "$INSTALLER_ASSETS/dotnet-install.sh" | cut -d' ' -f1)"
           echo "DOTNET_INSTALL_SCRIPT_DIGEST=$installer_digest" >> "$GITHUB_ENV"
 
-          docker run \
+          if ! docker run \
             --rm \
             --init \
             --user "$(id -u):$(id -g)" \
@@ -263,7 +263,12 @@ jobs:
             bash /install/dotnet-install.sh \
               --version "$REQUIRED_SDK_VERSION" \
               --install-dir /exact-dotnet \
-              --no-path
+              --no-path \
+              > "$RUN_DIR/sdk-install.log" \
+              2>&1; then
+            echo "::error::The credential-free exact SDK installation failed."
+            exit 1
+          fi
 
           installed_version="$(docker run \
             --rm \
@@ -323,15 +328,41 @@ jobs:
             --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
           )
 
-          docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
-            dotnet restore ContractScribe.slnx
-          docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
-            dotnet build ContractScribe.slnx --configuration Release --no-restore
+          run_quiet() {
+            local label="$1"
+            local log="$2"
+            shift 2
+            set +e
+            "$@" > "$log" 2>&1
+            local status=$?
+            set -e
+            if test "$status" -ne 0; then
+              echo "::error::$label failed with exit $status; raw preparation output remains unpublished."
+              exit "$status"
+            fi
+          }
 
-          docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
-            dotnet restore "$TARGET_INPUT"
-          docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
-            dotnet build "$TARGET_INPUT" --configuration Release --no-restore
+          run_quiet \
+            contract-scribe-restore \
+            "$RUN_DIR/contract-scribe-restore.log" \
+            docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
+              dotnet restore ContractScribe.slnx --verbosity quiet
+          run_quiet \
+            contract-scribe-build \
+            "$RUN_DIR/contract-scribe-build.log" \
+            docker run "${tool_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
+              dotnet build ContractScribe.slnx --configuration Release --no-restore --verbosity quiet
+
+          run_quiet \
+            target-restore \
+            "$RUN_DIR/target-restore.log" \
+            docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
+              dotnet restore "$TARGET_INPUT" --verbosity quiet
+          run_quiet \
+            target-build \
+            "$RUN_DIR/target-build.log" \
+            docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
+              dotnet build "$TARGET_INPUT" --configuration Release --no-restore --verbosity quiet
 
           docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet --version > "$RUN_DIR/sdk-version.txt"
