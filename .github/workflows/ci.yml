@@ -110,6 +110,7 @@ jobs:
       DOTNET_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0-noble
       DOTNET_INSTALL_REVISION: 03c981b3ae8261cb0a48b07ac884ce0031af384c
       REQUIRED_SDK_VERSION: 10.0.109
+      EXECUTION_WORKFLOW_REVISION: ${{ github.sha }}
     steps:
       - name: Acquire exact public revisions without credentials
         shell: bash
@@ -123,6 +124,7 @@ jobs:
           target_source="$root/target-source"
           target_work="$root/target-work"
           run_dir="$root/run"
+          verification_dir="$root/verification"
           tool_nuget_dir="$root/tool-nuget"
           target_nuget_dir="$root/target-nuget"
           tool_home="$root/tool-home"
@@ -136,6 +138,7 @@ jobs:
           mkdir -p \
             "$clean_home" \
             "$run_dir" \
+            "$verification_dir" \
             "$tool_nuget_dir" \
             "$target_nuget_dir" \
             "$tool_home" \
@@ -155,6 +158,8 @@ jobs:
               git -c credential.helper= "$@"
           }
 
+          test "$(uname -m)" = x86_64
+
           clean_git clone --quiet --filter=blob:none --no-checkout \
             https://github.com/SolusQuest/contract-scribe.git "$tool_source"
           clean_git -C "$tool_source" fetch --quiet --depth=1 origin "$CONTRACT_SCRIBE_REVISION"
@@ -168,11 +173,11 @@ jobs:
           test "$(git -C "$tool_source" rev-parse HEAD)" = "$CONTRACT_SCRIBE_REVISION"
           test "$(git -C "$target_source" rev-parse HEAD)" = "$TARGET_REVISION"
 
-          if git -C "$tool_source" config --local --get-regexp 'credential|extraheader'; then
+          if git -C "$tool_source" config --local --get-regexp 'credential|extraheader' > /dev/null 2>&1; then
             echo "::error::ContractScribe checkout retained a credential configuration."
             exit 1
           fi
-          if git -C "$target_source" config --local --get-regexp 'credential|extraheader'; then
+          if git -C "$target_source" config --local --get-regexp 'credential|extraheader' > /dev/null 2>&1; then
             echo "::error::Target checkout retained a credential configuration."
             exit 1
           fi
@@ -180,6 +185,7 @@ jobs:
           mkdir -p "$tool_work" "$target_work"
           cp -a "$tool_source/." "$tool_work/"
           cp -a "$target_source/." "$target_work/"
+          rm -rf "$target_work/.git"
 
           cat > "$target_work/.contract-scribe-m1-smoke-policy.json" <<'JSON'
           {
@@ -196,23 +202,34 @@ jobs:
           }
           JSON
 
+          target_status() {
+            git \
+              --git-dir="$target_source/.git" \
+              --work-tree="$target_work" \
+              status --short --untracked-files=all
+          }
+
           expected_status='?? .contract-scribe-m1-smoke-policy.json'
-          actual_status="$(git -C "$target_work" status --short --untracked-files=all)"
+          actual_status="$(target_status)"
           test "$actual_status" = "$expected_status"
 
+          git -C "$target_source" \
+            ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
+            | sort -z \
+            > "$verification_dir/protected-paths.zlist"
           (
             cd "$target_work"
-            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
-              | sort -z \
-              | xargs -0 sha256sum
-          ) > "$run_dir/protected-before.sha256"
-          test "$(wc -l < "$run_dir/protected-before.sha256")" -gt 0
+            xargs -0 sha256sum -- < "$verification_dir/protected-paths.zlist"
+          ) > "$verification_dir/protected-before.sha256"
+          test "$(wc -l < "$verification_dir/protected-before.sha256")" -gt 0
 
           {
             echo "SMOKE_ROOT=$root"
             echo "TOOL_WORK=$tool_work"
             echo "TARGET_WORK=$target_work"
             echo "RUN_DIR=$run_dir"
+            echo "VERIFICATION_DIR=$verification_dir"
+            echo "TARGET_SOURCE=$target_source"
             echo "TOOL_NUGET_DIR=$tool_nuget_dir"
             echo "TARGET_NUGET_DIR=$target_nuget_dir"
             echo "TOOL_HOME=$tool_home"
@@ -368,16 +385,14 @@ jobs:
             dotnet --version > "$RUN_DIR/sdk-version.txt"
 
           expected_status='?? .contract-scribe-m1-smoke-policy.json'
-          actual_status="$(git -C "$TARGET_WORK" status --short --untracked-files=all)"
+          actual_status="$(git --git-dir="$TARGET_SOURCE/.git" --work-tree="$TARGET_WORK" status --short --untracked-files=all)"
           test "$actual_status" = "$expected_status"
 
           (
             cd "$TARGET_WORK"
-            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
-              | sort -z \
-              | xargs -0 sha256sum
-          ) > "$RUN_DIR/protected-pre-audit.sha256"
-          cmp "$RUN_DIR/protected-before.sha256" "$RUN_DIR/protected-pre-audit.sha256"
+            xargs -0 sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
+          ) > "$VERIFICATION_DIR/protected-pre-audit.sha256"
+          cmp "$VERIFICATION_DIR/protected-before.sha256" "$VERIFICATION_DIR/protected-pre-audit.sha256"
 
           prep_output_count="$({
             find "$TARGET_WORK" -type f -path '*/bin/*' -print
@@ -440,16 +455,14 @@ jobs:
           set -euo pipefail
 
           expected_status='?? .contract-scribe-m1-smoke-policy.json'
-          actual_status="$(git -C "$TARGET_WORK" status --short --untracked-files=all)"
+          actual_status="$(git --git-dir="$TARGET_SOURCE/.git" --work-tree="$TARGET_WORK" status --short --untracked-files=all)"
           test "$actual_status" = "$expected_status"
 
           (
             cd "$TARGET_WORK"
-            git ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
-              | sort -z \
-              | xargs -0 sha256sum
-          ) > "$RUN_DIR/protected-after.sha256"
-          cmp "$RUN_DIR/protected-pre-audit.sha256" "$RUN_DIR/protected-after.sha256"
+            xargs -0 sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
+          ) > "$VERIFICATION_DIR/protected-after.sha256"
+          cmp "$VERIFICATION_DIR/protected-pre-audit.sha256" "$VERIFICATION_DIR/protected-after.sha256"
 
           post_output_count="$({
             find "$TARGET_WORK" -type f -path '*/bin/*' -print
@@ -544,6 +557,7 @@ jobs:
           }
           const summary = {
             outcome: 'successful-committed-audit',
+            executionWorkflowRevision: process.env.EXECUTION_WORKFLOW_REVISION,
             contractScribeRevision: process.env.CONTRACT_SCRIBE_REVISION,
             contractScribeMainCiRun: process.env.CONTRACT_SCRIBE_MAIN_CI_RUN,
             targetRevision: process.env.TARGET_REVISION,
@@ -579,6 +593,7 @@ jobs:
             '# M1 independent read-only smoke',
             '',
             `- Outcome: ${summary.outcome}`,
+            `- One-time workflow revision: \`${summary.executionWorkflowRevision}\``,
             `- ContractScribe revision: \`${summary.contractScribeRevision}\``,
             `- Ordinary main CI run: ${summary.contractScribeMainCiRun}`,
             `- Target revision: \`${summary.targetRevision}\``,
