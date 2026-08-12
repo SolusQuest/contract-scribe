@@ -13,6 +13,14 @@ Use this procedure to select validation from the failure surface changed by the 
 
 The ranges below are evidence-based guidance for the current local Windows development host. They are developer feedback estimates, not platform-support evidence or performance gates. The outer budget is an observation budget for the original process, not a deadline that authorizes killing and retrying it.
 
+### Default local execution path
+
+Use the existing native-Windows workspace by default for the applicable build, the complete fast suite when its failure surface is affected, and the narrowest sufficient filtered integration slice. Do not run the complete integration suite locally merely as routine pull-request validation; exact-head GitHub-hosted Ubuntu x64 CI owns the complete integration run and the final platform conclusion.
+
+Run the complete integration suite locally only when diagnosing a failure whose surface cannot be bounded by focused tests, changing suite-wide discovery or execution behavior, collecting an explicitly requested local performance baseline, or otherwise needing evidence that exact-head CI cannot supply. A native-Windows result remains developer feedback, not support evidence.
+
+Use WSL only to exercise Linux-specific behavior or reproduce an Ubuntu CI failure before another push. Keep a WSL validation checkout or worktree on the WSL-native filesystem rather than `/mnt/<drive>` so host-mounted filesystem overhead and semantics do not distort the result. WSL does not replace exact-head GitHub-hosted Ubuntu CI and is not independently qualified support evidence.
+
 | Changed failure surface | Narrowest initial validation | Expected duration | Outer observation budget |
 | --- | --- | ---: | ---: |
 | Core behavior, schemas, registries, normative contract documents, or contract fixtures | `dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj -c Release --no-build --no-restore` | 5–15 seconds | 1 minute |
@@ -27,7 +35,7 @@ The ranges below are evidence-based guidance for the current local Windows devel
 | Full test suite after a valid Release build | Complete fast project, then complete integration project | 9–12 minutes | 25 minutes |
 | Cold full validation | Restore, Release build, both projects, format, and all CLI smokes | 10–15 minutes plus first-use SDK/package variance | 30 minutes |
 
-After local focused tests pass, cross-cutting changes to solution/build configuration, fixture lifecycle, shared process infrastructure, parallelization boundaries, or CI orchestration still require the complete affected projects and final exact-head GitHub-hosted Ubuntu x64 CI.
+After local focused tests pass, cross-cutting changes to solution/build configuration, fixture lifecycle, shared process infrastructure, parallelization boundaries, or CI orchestration still require complete affected-project coverage and final exact-head GitHub-hosted Ubuntu x64 CI. The CI integration step may supply the complete integration-project coverage instead of duplicating it locally unless one of the local full-suite conditions above applies.
 
 ## Parallel execution boundary
 
