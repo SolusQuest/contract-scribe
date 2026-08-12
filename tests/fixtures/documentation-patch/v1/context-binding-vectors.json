@@ -1,0 +1,54 @@
+{
+  "fixtureVersion": 1,
+  "requestFile": "valid/repository-request.json",
+  "vectors": [
+    {
+      "caseId": "matching-session",
+      "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+      "inputIdentity": "src/Synthetic/Synthetic.csproj",
+      "targetProfile": "profile.external-api",
+      "compilationContextRefs": ["ctx.synthetic.net10"],
+      "expectedCode": null
+    },
+    {
+      "caseId": "repository-session-substitution",
+      "repositoryContextRef": "repoctx-ffeeddccbbaa99887766554433221100",
+      "inputIdentity": "src/Synthetic/Synthetic.csproj",
+      "targetProfile": "profile.external-api",
+      "compilationContextRefs": ["ctx.synthetic.net10"],
+      "expectedCode": "patch.stale.repository-context"
+    },
+    {
+      "caseId": "input-substitution-within-repository",
+      "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+      "inputIdentity": "src/Other/Other.csproj",
+      "targetProfile": "profile.external-api",
+      "compilationContextRefs": ["ctx.synthetic.net10"],
+      "expectedCode": "patch.stale.input-identity"
+    },
+    {
+      "caseId": "target-profile-substitution",
+      "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+      "inputIdentity": "src/Synthetic/Synthetic.csproj",
+      "targetProfile": "profile.assembly-visible",
+      "compilationContextRefs": ["ctx.synthetic.net10"],
+      "expectedCode": "patch.stale.target-profile"
+    },
+    {
+      "caseId": "matching-symbols-and-bytes-under-wrong-session",
+      "repositoryContextRef": "repoctx-ffeeddccbbaa99887766554433221100",
+      "inputIdentity": "src/Synthetic/Synthetic.csproj",
+      "targetProfile": "profile.external-api",
+      "compilationContextRefs": ["ctx.synthetic.net10"],
+      "expectedCode": "patch.stale.repository-context"
+    },
+    {
+      "caseId": "classification-session-mismatch",
+      "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+      "inputIdentity": "src/Synthetic/Synthetic.csproj",
+      "targetProfile": "profile.external-api",
+      "compilationContextRefs": ["ctx.other.net10"],
+      "expectedCode": "patch.stale.compilation-context"
+    }
+  ]
+}

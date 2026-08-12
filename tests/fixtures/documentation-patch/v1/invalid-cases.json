@@ -1,0 +1,30 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "caseId": "unknown-field",
+      "payloadFile": "invalid/unknown-field.json",
+      "expectedCode": "patch.request.invalid-shape"
+    },
+    {
+      "caseId": "duplicate-property",
+      "payloadFile": "invalid/duplicate-property.json",
+      "expectedCode": "patch.request.duplicate-property"
+    },
+    {
+      "caseId": "malformed-context",
+      "payloadFile": "invalid/malformed-context.json",
+      "expectedCode": "patch.request.invalid-vocabulary"
+    },
+    {
+      "caseId": "dangling-provenance",
+      "payloadFile": "invalid/dangling-provenance.json",
+      "expectedCode": "patch.request.invalid-reference"
+    },
+    {
+      "caseId": "invalid-xml-control",
+      "payloadFile": "invalid/invalid-xml-control.json",
+      "expectedCode": "patch.request.invalid-content"
+    }
+  ]
+}

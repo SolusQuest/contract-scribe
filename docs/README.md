@@ -31,6 +31,7 @@ The contract lifecycle is especially important before the first release: version
 - [Documentation Scribe](20_architecture/documentation-scribe.md)
 - [Scribe context and prompt economics](20_architecture/scribe-context-and-prompt-economics.md)
 - [Documentation patch boundary](20_architecture/documentation-patch-boundary.md)
+- [Documentation Patch v1](20_architecture/contracts/documentation-patch-v1.md)
 - [Audit CLI v1 (M1)](20_architecture/audit-cli.md)
 - [Campaign and GitHub workflow](20_architecture/campaign-and-github-workflow.md)
 - [Architecture decisions](20_architecture/decisions/)
@@ -51,8 +52,9 @@ The long-lived product graph uses production projects only when their milestone 
 - [Policy/Configuration v1](20_architecture/contracts/policy-configuration-v1.md)
 - [Symbol and Evidence Taxonomy v1](20_architecture/contracts/symbol-evidence-taxonomy-v1.md)
 - [Audit Result v1](20_architecture/contracts/audit-result-v1.md)
+- [Documentation Patch v1](20_architecture/contracts/documentation-patch-v1.md)
 
-These are pre-release v1 drafts backed by schemas, registries, fixtures, and conformance tests. M0 evidence remains pinned to the M0 revision. M1 may coordinate an in-place v1 amendment and revalidation to complete target-profile and documentation-observation semantics.
+These are pre-release v1 drafts backed by schemas, registries, fixtures, and conformance tests. M0 evidence remains pinned to the M0 revision. Before the first release, same-version semantics may still change in place under the contract lifecycle, with repository revisions identifying the exact draft semantics.
 
 ## Roadmap
 

@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.solusquest.dev/contract-scribe/documentation-patch/v1.validation-result.schema.json",
+  "title": "ContractScribe Patch Validation Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "patchValidationResultVersion",
+    "context",
+    "outcome",
+    "targets",
+    "changedFiles",
+    "changedDocumentationBlockCount",
+    "invariants",
+    "diagnostics"
+  ],
+  "properties": {
+    "patchValidationResultVersion": { "const": 1 },
+    "context": { "$ref": "#/$defs/context" },
+    "outcome": { "enum": ["accepted", "rejected", "stale"] },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/target" }
+    },
+    "changedFiles": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/changedFile" }
+    },
+    "changedDocumentationBlockCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "invariants": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": { "$ref": "#/$defs/invariant" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\\\\\u0000]+$"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositoryContextRef", "inputIdentity", "targetProfile"],
+      "properties": {
+        "repositoryContextRef": { "type": "string", "pattern": "^repoctx-[0-9a-f]{32}$" },
+        "inputIdentity": { "$ref": "#/$defs/repositoryPath" },
+        "targetProfile": { "enum": ["profile.external-api", "profile.assembly-visible"] }
+      }
+    },
+    "symbolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compilationContextRef", "documentationCommentId"],
+      "properties": {
+        "compilationContextRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "end": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+      }
+    },
+    "repositoryLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "originalFileSha256", "encoding", "declarationSpan"],
+      "properties": {
+        "kind": { "const": "repository" },
+        "path": { "$ref": "#/$defs/repositoryPath" },
+        "originalFileSha256": { "$ref": "#/$defs/sha256" },
+        "encoding": { "enum": ["utf-8", "utf-8-bom", "utf-16le-bom", "utf-16be-bom"] },
+        "declarationSpan": { "$ref": "#/$defs/span" }
+      }
+    },
+    "sourceGeneratorLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "producerId", "outputId", "sourceSha256", "declarationSpan"],
+      "properties": {
+        "kind": { "const": "sourceGenerator" },
+        "producerId": { "type": "string", "pattern": "^sgp\\.[0-9a-f]{64}$" },
+        "outputId": { "type": "string", "pattern": "^sgo\\.[0-9a-f]{64}$" },
+        "sourceSha256": { "$ref": "#/$defs/sha256" },
+        "declarationSpan": { "$ref": "#/$defs/span" }
+      }
+    },
+    "toolGeneratedLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "producerId", "outputId", "sourceSha256", "declarationSpan"],
+      "properties": {
+        "kind": { "const": "toolGenerated" },
+        "producerId": { "type": "string", "pattern": "^tgp\\.[0-9a-f]{64}$" },
+        "outputId": { "type": "string", "pattern": "^tgo\\.[0-9a-f]{64}$" },
+        "sourceSha256": { "$ref": "#/$defs/sha256" },
+        "declarationSpan": { "$ref": "#/$defs/span" }
+      }
+    },
+    "locator": {
+      "oneOf": [
+        { "$ref": "#/$defs/repositoryLocator" },
+        { "$ref": "#/$defs/sourceGeneratorLocator" },
+        { "$ref": "#/$defs/toolGeneratedLocator" }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blockId", "symbolRef", "locator", "provenanceRefs", "status"],
+      "properties": {
+        "blockId": { "$ref": "#/$defs/opaqueId" },
+        "symbolRef": { "$ref": "#/$defs/symbolRef" },
+        "locator": { "$ref": "#/$defs/locator" },
+        "provenanceRefs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/opaqueId" }
+        },
+        "status": { "enum": ["valid", "invalid", "stale", "not-evaluated"] }
+      }
+    },
+    "changedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "originalFileSha256",
+        "candidateFileSha256",
+        "changedDocumentationBlockCount",
+        "originalDocumentationByteCount",
+        "candidateDocumentationByteCount",
+        "originalDocumentationLineCount",
+        "candidateDocumentationLineCount"
+      ],
+      "properties": {
+        "path": { "$ref": "#/$defs/repositoryPath" },
+        "originalFileSha256": { "$ref": "#/$defs/sha256" },
+        "candidateFileSha256": { "$ref": "#/$defs/sha256" },
+        "changedDocumentationBlockCount": { "$ref": "#/$defs/count" },
+        "originalDocumentationByteCount": { "$ref": "#/$defs/count" },
+        "candidateDocumentationByteCount": { "$ref": "#/$defs/count" },
+        "originalDocumentationLineCount": { "$ref": "#/$defs/count" },
+        "candidateDocumentationLineCount": { "$ref": "#/$defs/count" }
+      }
+    },
+    "count": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+    "invariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": {
+          "enum": [
+            "patch.invariant.non-documentation-tokens-unchanged",
+            "patch.invariant.selected-documentation-only",
+            "patch.invariant.no-new-parse-diagnostics",
+            "patch.invariant.symbol-semantics-unchanged",
+            "patch.invariant.repository-scope",
+            "patch.invariant.file-representation-preserved",
+            "patch.invariant.idempotent",
+            "patch.invariant.traceable",
+            "patch.invariant.fail-closed"
+          ]
+        },
+        "status": { "enum": ["passed", "failed", "not-run"] }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "blockId", "path", "pointer"],
+      "properties": {
+        "severity": { "enum": ["info", "warning", "error"] },
+        "code": {
+          "enum": [
+            "patch.stale.repository-context",
+            "patch.stale.input-identity",
+            "patch.stale.target-profile",
+            "patch.stale.compilation-context",
+            "patch.stale.source-bytes",
+            "patch.stale.source-encoding",
+            "patch.stale.source-span",
+            "patch.rejected.unsupported-target",
+            "patch.rejected.ambiguous-target",
+            "patch.rejected.non-writable-target",
+            "patch.rejected.edit-state",
+            "patch.rejected.unsafe-change",
+            "patch.rejected.no-effective-change"
+          ]
+        },
+        "blockId": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/opaqueId" }]
+        },
+        "path": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/repositoryPath" }]
+        },
+        "pointer": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 512, "pattern": "^(?:/(?:[^~/]|~[01])*)*$" }
+          ]
+        }
+      }
+    }
+  }
+}

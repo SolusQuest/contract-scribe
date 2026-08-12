@@ -1,0 +1,47 @@
+{
+  "fixtureVersion": 1,
+  "vectors": [
+    {
+      "caseId": "utf8-lf",
+      "encoding": "utf-8",
+      "expectedLength": 44,
+      "expectedSha256": "91d19144488bb88906a805a24b4b6041638719a2b5d5a623eabff9dcc85b67d3",
+      "base64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsKcHVibGljIGNsYXNzIFdpZGdldCB7fQo="
+    },
+    {
+      "caseId": "utf8-crlf",
+      "encoding": "utf-8",
+      "expectedLength": 46,
+      "expectedSha256": "836980967105c4606006056e2ab5fd9db5e3e69653330861784e14c292b1d61c",
+      "base64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsNCnB1YmxpYyBjbGFzcyBXaWRnZXQge30NCg=="
+    },
+    {
+      "caseId": "utf8-bom-crlf",
+      "encoding": "utf-8-bom",
+      "expectedLength": 49,
+      "expectedSha256": "65102966154bd6bbd59b2b9cfa84d7f7c0a235ef6cde105cda3aa9e967c5800e",
+      "base64": "77u/bmFtZXNwYWNlIFN5bnRoZXRpYzsNCnB1YmxpYyBjbGFzcyBXaWRnZXQge30NCg=="
+    },
+    {
+      "caseId": "utf16le-bom-crlf",
+      "encoding": "utf-16le-bom",
+      "expectedLength": 94,
+      "expectedSha256": "7446b98ec4d412a30efe87242716f4015dee6f7f4c181cd676efc837d4b71b0d",
+      "base64": "//5uAGEAbQBlAHMAcABhAGMAZQAgAFMAeQBuAHQAaABlAHQAaQBjADsADQAKAHAAdQBiAGwAaQBjACAAYwBsAGEAcwBzACAAVwBpAGQAZwBlAHQAIAB7AH0ADQAKAA=="
+    },
+    {
+      "caseId": "utf16be-bom-crlf",
+      "encoding": "utf-16be-bom",
+      "expectedLength": 94,
+      "expectedSha256": "22f682258c76817f7201707608ce56b8fc796ad11500fd263c13342c06b37193",
+      "base64": "/v8AbgBhAG0AZQBzAHAAYQBjAGUAIABTAHkAbgB0AGgAZQB0AGkAYwA7AA0ACgBwAHUAYgBsAGkAYwAgAGMAbABhAHMAcwAgAFcAaQBkAGcAZQB0ACAAewB9AA0ACg=="
+    },
+    {
+      "caseId": "malformed-utf8",
+      "encoding": "utf-8",
+      "expectedLength": 2,
+      "expectedSha256": "eddf68639913a3cb8331cdfe7f87559e0beccf2c289c0d90ac4d89b3204004f8",
+      "base64": "wyg="
+    }
+  ]
+}

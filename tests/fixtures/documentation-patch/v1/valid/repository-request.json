@@ -1,0 +1,101 @@
+{
+  "patchRequestVersion": 1,
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.external-api"
+  },
+  "provenanceCatalog": [
+    "prov.audit",
+    "prov.proposal"
+  ],
+  "blocks": [
+    {
+      "blockId": "block.widget",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Widget"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Widget.cs",
+        "originalFileSha256": "91d19144488bb88906a805a24b4b6041638719a2b5d5a623eabff9dcc85b67d3",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 21,
+          "end": 42
+        }
+      },
+      "editKind": "insert",
+      "applicableComponents": [
+        {
+          "kind": "typeParameter",
+          "identity": "component.type-parameter.0",
+          "name": "T"
+        },
+        {
+          "kind": "parameter",
+          "identity": "component.parameter.0",
+          "name": "value"
+        },
+        {
+          "kind": "return",
+          "identity": "component.return"
+        }
+      ],
+      "content": {
+        "kind": "structured",
+        "summaryLines": [
+          "Represents a synthetic widget.",
+          ""
+        ],
+        "typeParameters": [
+          {
+            "componentIdentity": "component.type-parameter.0",
+            "name": "T",
+            "lines": [
+              "The stored value type."
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "componentIdentity": "component.parameter.0",
+            "name": "value",
+            "lines": [
+              "The value to store."
+            ]
+          }
+        ],
+        "return": {
+          "componentIdentity": "component.return",
+          "lines": [
+            "The stored value."
+          ]
+        },
+        "value": null,
+        "exceptions": [
+          {
+            "typeDocumentationId": "T:System.ArgumentNullException",
+            "lines": [
+              "The value is null."
+            ]
+          },
+          {
+            "typeDocumentationId": "T:System.InvalidOperationException",
+            "lines": [
+              "The widget is closed."
+            ]
+          }
+        ],
+        "remarksLines": [
+          "This payload is public synthetic contract data."
+        ]
+      },
+      "provenanceRefs": [
+        "prov.audit",
+        "prov.proposal"
+      ]
+    }
+  ]
+}

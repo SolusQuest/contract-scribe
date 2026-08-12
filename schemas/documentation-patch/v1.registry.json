@@ -1,0 +1,129 @@
+{
+  "registryVersion": 1,
+  "limits": {
+    "artifactUtf8Bytes": 1048576,
+    "blocks": 512,
+    "provenanceCatalogEntries": 4096,
+    "provenanceRefsPerBlock": 64,
+    "applicableComponentsPerBlock": 512,
+    "exceptionEntriesPerBlock": 256,
+    "logicalLinesPerField": 256,
+    "logicalLineScalars": 2048,
+    "logicalTextScalarsPerBlock": 32768,
+    "identifierScalars": 128,
+    "inputIdentityScalars": 512,
+    "pathScalars": 512,
+    "compilationContextRefScalars": 256,
+    "documentationCommentIdScalars": 1024,
+    "changedFiles": 512,
+    "diagnostics": 128,
+    "diagnosticPointerScalars": 512,
+    "observationCount": 2147483647
+  },
+  "sourceEncodings": [
+    "utf-8",
+    "utf-8-bom",
+    "utf-16le-bom",
+    "utf-16be-bom"
+  ],
+  "locatorKinds": [
+    "repository",
+    "sourceGenerator",
+    "toolGenerated"
+  ],
+  "editKinds": [
+    "insert",
+    "replace"
+  ],
+  "componentKinds": [
+    "typeParameter",
+    "parameter",
+    "return",
+    "value"
+  ],
+  "contentKinds": [
+    "structured",
+    "inheritDoc"
+  ],
+  "targetProfiles": [
+    "profile.external-api",
+    "profile.assembly-visible"
+  ],
+  "requestValidationCodes": [
+    "patch.request.document-too-large",
+    "patch.request.bom-not-allowed",
+    "patch.request.invalid-utf8",
+    "patch.request.invalid-json",
+    "patch.request.duplicate-property",
+    "patch.request.unsupported-version",
+    "patch.request.invalid-shape",
+    "patch.request.invalid-vocabulary",
+    "patch.request.invalid-content",
+    "patch.request.invalid-order",
+    "patch.request.invalid-reference"
+  ],
+  "resultValidationCodes": [
+    "patch.result.document-too-large",
+    "patch.result.bom-not-allowed",
+    "patch.result.invalid-utf8",
+    "patch.result.invalid-json",
+    "patch.result.duplicate-property",
+    "patch.result.unsupported-version",
+    "patch.result.invalid-shape",
+    "patch.result.invalid-vocabulary",
+    "patch.result.invalid-order",
+    "patch.result.invalid-correlation",
+    "patch.result.invalid-outcome"
+  ],
+  "outcomes": [
+    "accepted",
+    "rejected",
+    "stale"
+  ],
+  "targetStatuses": [
+    "valid",
+    "invalid",
+    "stale",
+    "not-evaluated"
+  ],
+  "invariantStatuses": [
+    "passed",
+    "failed",
+    "not-run"
+  ],
+  "diagnosticSeverities": [
+    "info",
+    "warning",
+    "error"
+  ],
+  "invariants": [
+    "patch.invariant.non-documentation-tokens-unchanged",
+    "patch.invariant.selected-documentation-only",
+    "patch.invariant.no-new-parse-diagnostics",
+    "patch.invariant.symbol-semantics-unchanged",
+    "patch.invariant.repository-scope",
+    "patch.invariant.file-representation-preserved",
+    "patch.invariant.idempotent",
+    "patch.invariant.traceable",
+    "patch.invariant.fail-closed"
+  ],
+  "resultDiagnosticCodes": [
+    "patch.stale.repository-context",
+    "patch.stale.input-identity",
+    "patch.stale.target-profile",
+    "patch.stale.compilation-context",
+    "patch.stale.source-bytes",
+    "patch.stale.source-encoding",
+    "patch.stale.source-span",
+    "patch.rejected.unsupported-target",
+    "patch.rejected.ambiguous-target",
+    "patch.rejected.non-writable-target",
+    "patch.rejected.edit-state",
+    "patch.rejected.unsafe-change",
+    "patch.rejected.no-effective-change"
+  ],
+  "diagnosticSelection": {
+    "maximum": 128,
+    "rule": "Retain the primary diagnostic, then retain secondary diagnostics in ordinal order by code, blockId, path, and pointer until the maximum is reached."
+  }
+}
