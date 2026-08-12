@@ -132,6 +132,7 @@
         "kind": { "enum": ["typeParameter", "parameter"] },
         "identity": {
           "type": "string",
+          "maxLength": 128,
           "pattern": "^(?:type-parameter|parameter)/(?:0|[1-9][0-9]*)$"
         },
         "name": {
@@ -182,7 +183,7 @@
       "maxItems": 256,
       "items": {
         "type": "string",
-        "maxLength": 4096,
+        "maxLength": 2048,
         "pattern": "^[^\\r\\n\\u0085\\u2028\\u2029]*$"
       }
     },
@@ -193,6 +194,7 @@
       "properties": {
         "componentIdentity": {
           "type": "string",
+          "maxLength": 128,
           "pattern": "^(?:type-parameter|parameter)/(?:0|[1-9][0-9]*)$"
         },
         "name": { "type": "string", "minLength": 1, "maxLength": 128 },

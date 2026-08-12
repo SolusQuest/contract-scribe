@@ -98,7 +98,7 @@ Blocks use the total ordinal order:
 5. `symbolRef.documentationCommentId`;
 6. `blockId`.
 
-Duplicate symbol refs and duplicate locator/span bindings fail. Multiple repository targets in one file therefore order by path and numeric declaration start. Ordering, uniqueness, and reference validation are linear after bounded input materialization.
+Duplicate symbol refs and duplicate locator/span bindings fail. Multiple repository targets in one file therefore order by path and numeric declaration start. Public conformance data includes same-file starts `21` and `100` so numeric ordering, reversed order, duplicate binding, and partial accepted-result accounting are executable rather than inferred. Ordering, uniqueness, and reference validation are linear after bounded input materialization.
 
 ## Intrinsic request validation versus execution
 
@@ -132,7 +132,7 @@ The result top-level property order is `patchValidationResultVersion`, `context`
 
 Counts are non-negative signed 32-bit integers. The root block count equals the sum of file block counts without overflow.
 
-Byte/line observations use exact complete documentation-trivia regions authorized by the request, never LCS, Myers, or a general diff. The original byte count sums exact encoded slices replaced by requested blocks; insertion contributes zero. The candidate byte count sums exact encoded inserted or substituted documentation slices. A line count is the number of physical `///` records in those slices. One final record counts even when it has no terminating newline. Indentation, `///`, content, and in-region CRLF/LF bytes contribute to byte counts; surrounding trivia and the following declaration do not. Multiple regions aggregate by addition after overlapping/shared-owner regions are rejected.
+Byte/line observations use exact complete documentation-trivia regions authorized by the request, never LCS, Myers, or a general diff. The original byte count sums exact encoded slices replaced by requested blocks; insertion contributes zero. The candidate byte count sums exact encoded inserted or substituted documentation slices. A line count is the number of physical `///` records in those slices. One final record counts even when it has no terminating newline. Indentation, `///`, content, and in-region CRLF/LF bytes contribute to byte counts; surrounding trivia and the following declaration do not. Multiple regions aggregate by addition after overlapping/shared-owner regions are rejected. Public accepted-result vectors pin original and complete candidate file bytes in base64, documentation-region offsets and lengths, physical-line counts, and full-file SHA-256 values; conformance tests recompute the result observations and remove the pinned regions to recover the exact original bytes.
 
 `invariants` contains exactly once and in registry order every closed M2 safety invariant. Status is `passed`, `failed`, or `not-run`.
 

@@ -15,21 +15,33 @@ public sealed class DocumentationPatchContractTests
     [Fact]
     public void PublishedFixtures_AreSchemaValidAndSemanticallyValid()
     {
-        foreach (var name in new[] { "repository-request.json", "mixed-locators-request.json" })
+        foreach (var name in new[]
+        {
+            "repository-request.json",
+            "inherit-doc-request.json",
+            "same-file-request.json",
+            "mixed-locators-request.json",
+        })
         {
             var bytes = ReadFixture("valid", name);
             AssertSchemaValid(RequestSchema.Value, bytes, name);
             Assert.True(DocumentationPatchValidator.ParseRequest(bytes).IsValid, name);
         }
 
-        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
-        foreach (var name in new[] { "accepted-result.json", "stale-result.json", "rejected-no-op-result.json" })
+        foreach (var (requestName, resultName) in new[]
         {
-            var bytes = ReadFixture("valid", name);
-            AssertSchemaValid(ResultSchema.Value, bytes, name);
+            ("inherit-doc-request.json", "accepted-result.json"),
+            ("same-file-request.json", "same-file-accepted-result.json"),
+            ("repository-request.json", "stale-result.json"),
+            ("repository-request.json", "rejected-no-op-result.json"),
+        })
+        {
+            var request = ParseRequest(ReadFixture("valid", requestName));
+            var bytes = ReadFixture("valid", resultName);
+            AssertSchemaValid(ResultSchema.Value, bytes, resultName);
             var parsed = DocumentationPatchValidator.ParseValidationResult(bytes);
-            Assert.True(parsed.IsValid, name);
-            Assert.True(DocumentationPatchValidator.ValidateResult(request, parsed.Result!).IsValid, name);
+            Assert.True(parsed.IsValid, resultName);
+            Assert.True(DocumentationPatchValidator.ValidateResult(request, parsed.Result!).IsValid, resultName);
         }
     }
 
@@ -181,6 +193,66 @@ public sealed class DocumentationPatchContractTests
     }
 
     [Fact]
+    public void AcceptedResults_AreRecomputedFromPinnedCandidateBytes()
+    {
+        using var vectors = JsonDocument.Parse(ReadFixture("candidate-byte-vectors.json"));
+        foreach (var vector in vectors.RootElement.GetProperty("vectors").EnumerateArray())
+        {
+            var caseId = vector.GetProperty("caseId").GetString()!;
+            Assert.Equal("utf-8", vector.GetProperty("encoding").GetString());
+            var original = Convert.FromBase64String(vector.GetProperty("originalBase64").GetString()!);
+            var candidate = Convert.FromBase64String(vector.GetProperty("candidateBase64").GetString()!);
+            Assert.Equal(vector.GetProperty("expectedOriginalLength").GetInt32(), original.Length);
+            Assert.Equal(vector.GetProperty("expectedCandidateLength").GetInt32(), candidate.Length);
+            Assert.Equal(vector.GetProperty("expectedOriginalSha256").GetString(),
+                Convert.ToHexString(SHA256.HashData(original)).ToLowerInvariant());
+            Assert.Equal(vector.GetProperty("expectedCandidateSha256").GetString(),
+                Convert.ToHexString(SHA256.HashData(candidate)).ToLowerInvariant());
+
+            var reconstructed = candidate.ToList();
+            var candidateDocumentationBytes = 0;
+            var candidateDocumentationLines = 0;
+            var regions = vector.GetProperty("documentationRegions").EnumerateArray().ToArray();
+            foreach (var region in regions)
+            {
+                var offset = region.GetProperty("offset").GetInt32();
+                var byteLength = region.GetProperty("byteLength").GetInt32();
+                var regionBytes = Convert.FromBase64String(region.GetProperty("base64").GetString()!);
+                Assert.Equal(byteLength, regionBytes.Length);
+                Assert.Equal(regionBytes, candidate.AsSpan(offset, byteLength).ToArray());
+                Assert.Equal(region.GetProperty("physicalLineCount").GetInt32(),
+                    regionBytes.Count(value => value == (byte)'\n'));
+                candidateDocumentationBytes += byteLength;
+                candidateDocumentationLines += region.GetProperty("physicalLineCount").GetInt32();
+            }
+
+            foreach (var region in regions.OrderByDescending(
+                         item => item.GetProperty("offset").GetInt32()))
+            {
+                reconstructed.RemoveRange(
+                    region.GetProperty("offset").GetInt32(),
+                    region.GetProperty("byteLength").GetInt32());
+            }
+
+            Assert.Equal<byte>(original, reconstructed);
+            var request = ParseRequest(ReadFixture(
+                vector.GetProperty("requestFile").GetString()!.Split('/')));
+            var result = ParseResult(ReadFixture(
+                vector.GetProperty("resultFile").GetString()!.Split('/')));
+            Assert.True(DocumentationPatchValidator.ValidateResult(request, result).IsValid, caseId);
+            var changedFile = Assert.Single(result.ChangedFiles);
+            Assert.Equal(vector.GetProperty("expectedOriginalSha256").GetString(),
+                changedFile.OriginalFileSha256);
+            Assert.Equal(vector.GetProperty("expectedCandidateSha256").GetString(),
+                changedFile.CandidateFileSha256);
+            Assert.Equal(candidateDocumentationBytes, changedFile.CandidateDocumentationByteCount);
+            Assert.Equal(candidateDocumentationLines, changedFile.CandidateDocumentationLineCount);
+            Assert.Equal(regions.Length, changedFile.ChangedDocumentationBlockCount);
+            Assert.Equal(regions.Length, result.ChangedDocumentationBlockCount);
+        }
+    }
+
+    [Fact]
     public void GeneratedSourceLocator_UsesStrictUtf8HashAndUtf16Span()
     {
         var request = ParseRequest(ReadFixture("valid", "mixed-locators-request.json"));
@@ -255,6 +327,26 @@ public sealed class DocumentationPatchContractTests
                 "T:Synthetic.\uFFFEException")).Failure!.Code);
         Assert.Equal("patch.request.invalid-vocabulary", DocumentationPatchValidator.ParseRequest(Mutate(valid, root =>
             root["blocks"]![0]!["applicableComponents"]![0]!["name"] = "T\uFFFF")).Failure!.Code);
+    }
+
+    [Fact]
+    public void SchemaAndCoreRejectTheSameLogicalLineAndComponentIdentityOverflows()
+    {
+        var valid = ReadFixture("valid", "repository-request.json");
+        var longLine = Mutate(valid, root =>
+            root["blocks"]![0]!["content"]!["summaryLines"]![0] = new string('a', 2_049));
+        Assert.False(Evaluate(RequestSchema.Value, longLine));
+        Assert.False(DocumentationPatchValidator.ParseRequest(longLine).IsValid);
+
+        var longIdentity = "parameter/" + new string('9', 119);
+        Assert.Equal(129, longIdentity.Length);
+        var longComponent = Mutate(valid, root =>
+        {
+            root["blocks"]![0]!["applicableComponents"]![1]!["identity"] = longIdentity;
+            root["blocks"]![0]!["content"]!["parameters"]![0]!["componentIdentity"] = longIdentity;
+        });
+        Assert.False(Evaluate(RequestSchema.Value, longComponent));
+        Assert.False(DocumentationPatchValidator.ParseRequest(longComponent).IsValid);
     }
 
     [Fact]
@@ -350,7 +442,7 @@ public sealed class DocumentationPatchContractTests
     [Fact]
     public void AcceptedResultObservations_MustAccountForEveryRequestedBlock()
     {
-        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var request = ParseRequest(ReadFixture("valid", "inherit-doc-request.json"));
         var accepted = ReadFixture("valid", "accepted-result.json");
 
         foreach (var mutation in new Action<JsonObject>[]
@@ -378,10 +470,76 @@ public sealed class DocumentationPatchContractTests
         }
 
         var replacementRequest = ParseRequest(Mutate(
-            ReadFixture("valid", "repository-request.json"),
+            ReadFixture("valid", "inherit-doc-request.json"),
             root => root["blocks"]![0]!["editKind"] = "replace"));
         Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
             replacementRequest, ParseResult(accepted)).Code);
+    }
+
+    [Fact]
+    public void SameFileTargets_UseNumericSpanOrderAndAtomicResultAccounting()
+    {
+        var requestBytes = ReadFixture("valid", "same-file-request.json");
+        AssertSchemaValid(RequestSchema.Value, requestBytes, "same-file-request");
+        var request = ParseRequest(requestBytes);
+        Assert.Equal(2, request.Blocks.Length);
+        var firstLocator = Assert.IsType<DocumentationPatchRepositoryLocator>(request.Blocks[0].Locator);
+        var secondLocator = Assert.IsType<DocumentationPatchRepositoryLocator>(request.Blocks[1].Locator);
+        Assert.Equal(21, firstLocator.DeclarationSpan.Start);
+        Assert.Equal(100, secondLocator.DeclarationSpan.Start);
+
+        using var vectors = JsonDocument.Parse(ReadFixture("candidate-byte-vectors.json"));
+        var vector = vectors.RootElement.GetProperty("vectors").EnumerateArray().Single(
+            item => item.GetProperty("caseId").GetString() == "same-file-two-targets-lf");
+        var original = Convert.FromBase64String(vector.GetProperty("originalBase64").GetString()!);
+        Assert.True(DocumentationPatchValidator.ValidateRepositorySource(firstLocator, original).IsValid);
+        Assert.True(DocumentationPatchValidator.ValidateRepositorySource(secondLocator, original).IsValid);
+
+        var reversed = Mutate(requestBytes, root =>
+        {
+            var blocks = root["blocks"]!.AsArray();
+            var first = blocks[0]!.DeepClone();
+            blocks[0] = blocks[1]!.DeepClone();
+            blocks[1] = first;
+        });
+        Assert.Equal("patch.request.invalid-order",
+            DocumentationPatchValidator.ParseRequest(reversed).Failure!.Code);
+
+        var duplicateSymbol = Mutate(requestBytes, root =>
+            root["blocks"]![1]!["symbolRef"]!["documentationCommentId"] = "T:Synthetic.First`1");
+        Assert.Equal("patch.request.invalid-order",
+            DocumentationPatchValidator.ParseRequest(duplicateSymbol).Failure!.Code);
+
+        var duplicateLocator = Mutate(requestBytes, root =>
+        {
+            root["blocks"]![1]!["locator"]!["declarationSpan"]!["start"] = 21;
+            root["blocks"]![1]!["locator"]!["declarationSpan"]!["end"] = 57;
+        });
+        Assert.Equal("patch.request.invalid-order",
+            DocumentationPatchValidator.ParseRequest(duplicateLocator).Failure!.Code);
+
+        var acceptedBytes = ReadFixture("valid", "same-file-accepted-result.json");
+        var accepted = ParseResult(acceptedBytes);
+        Assert.True(DocumentationPatchValidator.ValidateResult(request, accepted).IsValid);
+        foreach (var mutation in new Action<JsonObject>[]
+        {
+            root =>
+            {
+                root["changedFiles"]![0]!["changedDocumentationBlockCount"] = 1;
+                root["changedDocumentationBlockCount"] = 1;
+            },
+            root => root["targets"]![1]!["status"] = "invalid",
+            root => root["changedFiles"] = new JsonArray(),
+            root =>
+            {
+                root["changedFiles"]![0]!["candidateDocumentationByteCount"] = 0;
+                root["changedFiles"]![0]!["candidateDocumentationLineCount"] = 0;
+            },
+        })
+        {
+            var partial = ParseResult(Mutate(acceptedBytes, mutation));
+            Assert.False(DocumentationPatchValidator.ValidateResult(request, partial).IsValid);
+        }
     }
 
     [Fact]
@@ -449,6 +607,16 @@ public sealed class DocumentationPatchContractTests
             registry["limits"]!["logicalTextScalarsPerBlock"]!.GetValue<int>());
         Assert.Equal(DocumentationPatchValidator.InvariantIds,
             registry["invariants"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray());
+
+        var requestSchema = JsonNode.Parse(ReadContractFile("v1.request.schema.json"))!;
+        var logicalLineLimit = registry["limits"]!["logicalLineScalars"]!.GetValue<int>();
+        var identifierLimit = registry["limits"]!["identifierScalars"]!.GetValue<int>();
+        Assert.Equal(logicalLineLimit,
+            requestSchema["$defs"]!["logicalLines"]!["items"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(identifierLimit,
+            requestSchema["$defs"]!["namedComponent"]!["properties"]!["identity"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(identifierLimit,
+            requestSchema["$defs"]!["namedContentEntry"]!["properties"]!["componentIdentity"]!["maxLength"]!.GetValue<int>());
 
         foreach (var name in new[] { "v1.request.schema.json", "v1.validation-result.schema.json" })
         {

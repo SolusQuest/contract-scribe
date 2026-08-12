@@ -8,41 +8,61 @@
   "outcome": "accepted",
   "targets": [
     {
-      "blockId": "block.widget",
+      "blockId": "block.first",
       "symbolRef": {
         "compilationContextRef": "ctx.synthetic.net10",
-        "documentationCommentId": "T:Synthetic.Widget`1"
+        "documentationCommentId": "T:Synthetic.First`1"
       },
       "locator": {
         "kind": "repository",
-        "path": "src/Synthetic/Widget.cs",
-        "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
         "encoding": "utf-8",
         "declarationSpan": {
           "start": 21,
-          "end": 58
+          "end": 57
         }
       },
       "provenanceRefs": [
-        "prov.audit",
-        "prov.proposal"
+        "prov.synthetic"
+      ],
+      "status": "valid"
+    },
+    {
+      "blockId": "block.second",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Second`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 100,
+          "end": 137
+        }
+      },
+      "provenanceRefs": [
+        "prov.synthetic"
       ],
       "status": "valid"
     }
   ],
   "changedFiles": [
     {
-      "path": "src/Synthetic/Widget.cs",
-      "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
-      "candidateFileSha256": "1c144c3684c910057a311fdb32e36744ba6c0429a8dabf501a6521d51c881634",
-      "changedDocumentationBlockCount": 1,
+      "path": "src/Synthetic/Delegates.cs",
+      "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+      "candidateFileSha256": "30835dcbba48473c2cbfcd87b34c426c6f8908a8c8dcd299e45e326f8fc7f1f9",
+      "changedDocumentationBlockCount": 2,
       "originalDocumentationByteCount": 0,
-      "candidateDocumentationByteCount": 18,
+      "candidateDocumentationByteCount": 36,
       "originalDocumentationLineCount": 0,
-      "candidateDocumentationLineCount": 1
+      "candidateDocumentationLineCount": 2
     }
   ],
-  "changedDocumentationBlockCount": 1,
+  "changedDocumentationBlockCount": 2,
   "invariants": [
     {
       "id": "patch.invariant.non-documentation-tokens-unchanged",
