@@ -395,7 +395,7 @@ jobs:
             target-build \
             "$RUN_DIR/target-build.log" \
             docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
-              dotnet build "$TARGET_INPUT" --configuration Release --no-restore --verbosity quiet
+              dotnet build "$TARGET_INPUT" --no-restore --verbosity quiet
 
           docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet --version > "$RUN_DIR/sdk-version.txt"
