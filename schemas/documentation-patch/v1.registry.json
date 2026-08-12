@@ -13,7 +13,7 @@
     "identifierScalars": 128,
     "inputIdentityScalars": 512,
     "pathScalars": 512,
-    "compilationContextRefScalars": 256,
+    "compilationContextRefScalars": 128,
     "documentationCommentIdScalars": 1024,
     "changedFiles": 512,
     "diagnostics": 128,
@@ -92,8 +92,6 @@
     "not-run"
   ],
   "diagnosticSeverities": [
-    "info",
-    "warning",
     "error"
   ],
   "invariants": [
@@ -124,6 +122,24 @@
   ],
   "diagnosticSelection": {
     "maximum": 128,
-    "rule": "Retain the primary diagnostic, then retain secondary diagnostics in ordinal order by code, blockId, path, and pointer until the maximum is reached."
+    "rootContextPrecedence": [
+      "patch.stale.repository-context",
+      "patch.stale.input-identity",
+      "patch.stale.target-profile"
+    ],
+    "perBlockStalePrecedence": [
+      "patch.stale.compilation-context",
+      "patch.stale.source-encoding",
+      "patch.stale.source-bytes",
+      "patch.stale.source-span"
+    ],
+    "perBlockRejectedPrecedence": [
+      "patch.rejected.unsupported-target",
+      "patch.rejected.ambiguous-target",
+      "patch.rejected.non-writable-target",
+      "patch.rejected.edit-state",
+      "patch.rejected.unsafe-change"
+    ],
+    "rule": "Choose root stale failures in repository-context, input-identity, target-profile order; otherwise choose stale then rejected failures in request block order and the closed code precedence. Retain that primary diagnostic, then unique secondary diagnostics in ordinal order by code, blockId, path, and pointer until the maximum is reached."
   }
 }

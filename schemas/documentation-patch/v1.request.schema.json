@@ -60,8 +60,8 @@
         "compilationContextRef": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256,
-          "pattern": "^[A-Za-z0-9._:-]+$"
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
         },
         "documentationCommentId": {
           "type": "string",
@@ -130,13 +130,26 @@
       "required": ["kind", "identity", "name"],
       "properties": {
         "kind": { "enum": ["typeParameter", "parameter"] },
-        "identity": { "$ref": "#/$defs/opaqueId" },
+        "identity": {
+          "type": "string",
+          "pattern": "^(?:type-parameter|parameter)/(?:0|[1-9][0-9]*)$"
+        },
         "name": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "typeParameter" } } },
+          "then": { "properties": { "identity": { "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "parameter" } } },
+          "then": { "properties": { "identity": { "pattern": "^parameter/(?:0|[1-9][0-9]*)$" } } }
+        }
+      ]
     },
     "unnamedComponent": {
       "type": "object",
@@ -144,8 +157,18 @@
       "required": ["kind", "identity"],
       "properties": {
         "kind": { "enum": ["return", "value"] },
-        "identity": { "$ref": "#/$defs/opaqueId" }
-      }
+        "identity": { "enum": ["return", "value"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "return" } } },
+          "then": { "properties": { "identity": { "const": "return" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "value" } } },
+          "then": { "properties": { "identity": { "const": "value" } } }
+        }
+      ]
     },
     "component": {
       "oneOf": [
@@ -168,7 +191,10 @@
       "additionalProperties": false,
       "required": ["componentIdentity", "name", "lines"],
       "properties": {
-        "componentIdentity": { "$ref": "#/$defs/opaqueId" },
+        "componentIdentity": {
+          "type": "string",
+          "pattern": "^(?:type-parameter|parameter)/(?:0|[1-9][0-9]*)$"
+        },
         "name": { "type": "string", "minLength": 1, "maxLength": 128 },
         "lines": { "$ref": "#/$defs/logicalLines" }
       }
@@ -178,7 +204,7 @@
       "additionalProperties": false,
       "required": ["componentIdentity", "lines"],
       "properties": {
-        "componentIdentity": { "$ref": "#/$defs/opaqueId" },
+        "componentIdentity": { "enum": ["return", "value"] },
         "lines": { "$ref": "#/$defs/logicalLines" }
       }
     },
@@ -206,23 +232,43 @@
         "typeParameters": {
           "type": "array",
           "maxItems": 512,
-          "items": { "$ref": "#/$defs/namedContentEntry" }
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/namedContentEntry" },
+              { "properties": { "componentIdentity": { "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$" } } }
+            ]
+          }
         },
         "parameters": {
           "type": "array",
           "maxItems": 512,
-          "items": { "$ref": "#/$defs/namedContentEntry" }
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/namedContentEntry" },
+              { "properties": { "componentIdentity": { "pattern": "^parameter/(?:0|[1-9][0-9]*)$" } } }
+            ]
+          }
         },
         "return": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "#/$defs/unnamedContentEntry" }
+            {
+              "allOf": [
+                { "$ref": "#/$defs/unnamedContentEntry" },
+                { "properties": { "componentIdentity": { "const": "return" } } }
+              ]
+            }
           ]
         },
         "value": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "#/$defs/unnamedContentEntry" }
+            {
+              "allOf": [
+                { "$ref": "#/$defs/unnamedContentEntry" },
+                { "properties": { "componentIdentity": { "const": "value" } } }
+              ]
+            }
           ]
         },
         "exceptions": {

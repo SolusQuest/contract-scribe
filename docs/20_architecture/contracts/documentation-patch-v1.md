@@ -25,7 +25,7 @@ For every successful production load, the trusted load boundary obtains an indep
 `blocks` contains one to 512 complete documentation-block requests in the total order defined below. Each block has exactly:
 
 1. `blockId`, unique within the request;
-2. `symbolRef`, retaining the existing `compilationContextRef` and `documentationCommentId`;
+2. `symbolRef`, retaining the existing lowercase `compilationContextRef` (`^[a-z0-9][a-z0-9._-]{0,127}$`) and exact `documentationCommentId`;
 3. one closed `locator` variant;
 4. `editKind`, exactly `insert` or `replace`;
 5. `applicableComponents`;
@@ -63,7 +63,7 @@ Intrinsic validation rejects an unsupported encoding ID as an invalid request. O
 
 ## Components and content
 
-`applicableComponents` contains zero to 512 entries in the following kind order: `typeParameter`, `parameter`, `return`, `value`. Type-parameter and parameter entries require exact non-empty `identity` and source `name`; return and value require their closed identity and omit `name`. Values compare ordinally. Entries are unique, each kind group is ordered by identity, and return/value are mutually exclusive.
+`applicableComponents` contains zero to 512 entries in the following kind order: `typeParameter`, `parameter`, `return`, `value`. It reuses the current M1 component identity domain without aliases: type parameters are `type-parameter/N`, parameters are `parameter/N`, and the two unnamed identities are exactly `return` and `value`, where `N` is a canonical zero-based decimal ordinal without leading zeroes. Type-parameter and parameter entries also require the exact non-empty source `name`; return and value omit `name`. Names are XML 1.0-valid scalars. Values compare ordinally. Entries are unique, each kind group is ordered by identity, duplicate names within one named kind fail, and return/value are mutually exclusive.
 
 Content is one of:
 
@@ -83,7 +83,7 @@ The structured type-parameter, parameter, return, and value entries match the ap
 
 A logical-line array has one to 256 strings. A line may be empty and is limited to 2,048 Unicode scalar values; one block is limited to 32,768 logical-text scalar values in total. A logical line contains no CR, LF, U+0085, U+2028, or U+2029. After JSON decoding, every scalar must be a valid XML 1.0 character: TAB, U+0020 through U+D7FF, U+E000 through U+FFFD, or U+10000 through U+10FFFF. Unpaired surrogates and controls such as U+0001 fail closed. Limits count Unicode scalar values, not UTF-16 code units.
 
-An exception `typeDocumentationId` is an exact type documentation-comment ID: it starts with `T:`, has a non-empty body, and contains no whitespace, control character, line separator, `<`, `>`, `&`, quotation mark, or apostrophe. It is not C# type syntax, a qualified-name alias, or an arbitrary XML `cref`.
+An exception `typeDocumentationId` is an exact type documentation-comment ID: it starts with `T:`, has a non-empty body, is XML 1.0-valid, and contains no whitespace, control character, line separator, `<`, `>`, `&`, quotation mark, or apostrophe. It is not C# type syntax, a qualified-name alias, or an arbitrary XML `cref`.
 
 The request never contains raw XML nodes, pre-rendered `///` trivia, source replacement text, a diff, formatting instructions, provider/prompt identity, Style Profile, or proposal-run identity. The later renderer escapes text exactly once, chooses the source newline, and preserves line-array order.
 
@@ -136,7 +136,7 @@ Byte/line observations use exact complete documentation-trivia regions authorize
 
 `invariants` contains exactly once and in registry order every closed M2 safety invariant. Status is `passed`, `failed`, or `not-run`.
 
-`diagnostics` contains at most 128 bounded entries. Each has closed severity and code plus optional block, path, and JSON Pointer attribution. When more than 128 diagnostics exist, retain the primary diagnostic followed by secondary diagnostics ordered ordinally by code, block ID, path, and pointer until the limit is reached. Raw exceptions and unbounded logs are never serialized.
+`diagnostics` contains at most 128 bounded error entries. Every currently defined stale/rejected code has severity `error`; unused informational and warning severities are not part of v1. Non-null block and path attribution must resolve to the correlated request. Root repository-context, input-identity, then target-profile failures have first precedence. Otherwise stale failures precede rejected failures, request block order chooses the first affected block, and the registry's closed within-block code order chooses the primary. Root context codes require every target to be `not-evaluated`; per-block stale codes require that target to be `stale`; target rejection codes require it to be `invalid`; `patch.rejected.no-effective-change` alone may retain all-valid targets. After the primary, unique secondary diagnostics are ordered ordinally by code, block ID, path, and pointer. When more than 128 diagnostics exist, retain the primary then the earliest secondaries under that order. Raw exceptions and unbounded logs are never serialized.
 
 ## Outcome semantics and precedence
 
@@ -145,7 +145,9 @@ Byte/line observations use exact complete documentation-trivia regions authorize
 - every target status is `valid`;
 - every required invariant is `passed`;
 - no error diagnostic exists;
-- at least one selected repository documentation block and repository file changed;
+- every selected block is a repository block and has an effective documentation-byte change;
+- every changed-file block count equals the selected block count for that path and the root count equals the request block count;
+- every candidate documentation region has positive byte and physical-line observations; insertion has zero original region bytes/lines, while replacement has positive original region bytes/lines;
 - every changed path belongs to a repository locator in the request;
 - every changed-file original/candidate full-file hash is unequal;
 - no generated target is treated as writable;
@@ -153,10 +155,10 @@ Byte/line observations use exact complete documentation-trivia regions authorize
 
 `stale` means at least one live context or source commitment no longer matches. It requires a `patch.stale.*` primary code and empty/zero changed observations. Root repository-context/input/profile mismatch makes every target `not-evaluated`. Per-block compilation-context or authoritative source mismatch marks that target stale. If stale and current invalid conditions coexist, root stale wins while traces retain individual stale, invalid, or not-evaluated detail.
 
-`rejected` means the valid request is current but a target is unsupported, ambiguous, non-writable, in the wrong edit state, unsafe, or the complete transformation has no effective byte change. No target is stale, a `patch.rejected.*` code is required, and changed observations are empty/zero. A wholly no-op transformation uses `patch.rejected.no-effective-change`.
+`rejected` means the valid request is current but a target is unsupported, ambiguous, non-writable, in the wrong edit state, unsafe, or one or more requested blocks have no effective byte change. No target is stale, a `patch.rejected.*` code is required, and changed observations are empty/zero. Any complete transformation that cannot account for an effective change for every requested block uses `patch.rejected.no-effective-change`.
 
 No malformed, rejected, stale, unsafe, wholly no-op, or partially processed request has an accepted result or handoff. Public replay of an original accepted request against its candidate is stale because the committed original file digest changed. Idempotency is a separate internal transformation rebound to candidate bytes; it produces no second byte change and no second public accepted result.
 
 ## Ownership and non-goals
 
-M2-C2 owns trusted production generation/comparison of repository context refs, authoritative source acquisition, target resolution, writability/edit-state classification, and use of the Core byte/text seams. M2-D1 owns rendering. M2-E1 owns full safety execution, candidate production, and result construction. This contract does not implement Roslyn/MSBuild loading, filesystem access, source rendering, mutation, candidate workspace management, Git/GitHub operations, release identity, publication authority, M3 provider/proposal contracts, M4 snapshots/campaigns, or M5 workflow state.
+M2-C2 / #91 owns trusted production generation/comparison of repository context refs, authoritative source acquisition, target resolution, writability/edit-state classification, and use of the Core byte/text seams. M2-E1 / #92 owns rendering and candidate-workspace application. M2-E2 / #93 owns full safety validation, engine composition, candidate acceptance, and Patch Validation Result construction. This contract does not implement Roslyn/MSBuild loading, filesystem access, source rendering, mutation, candidate workspace management, Git/GitHub operations, release identity, publication authority, M3 provider/proposal contracts, M4 snapshots/campaigns, or M5 workflow state.

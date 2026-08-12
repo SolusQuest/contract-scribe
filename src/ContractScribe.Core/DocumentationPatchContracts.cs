@@ -81,8 +81,6 @@ public enum DocumentationPatchInvariantStatus
 
 public enum DocumentationPatchDiagnosticSeverity
 {
-    Info,
-    Warning,
     Error,
 }
 

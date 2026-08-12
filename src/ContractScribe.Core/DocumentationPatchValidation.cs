@@ -346,30 +346,51 @@ public static class DocumentationPatchValidator
             }
         }
 
-        var repositoryLocators = request.Blocks
-            .Select(block => block.Locator)
-            .OfType<DocumentationPatchRepositoryLocator>()
-            .GroupBy(locator => locator.Path, StringComparer.Ordinal)
+        var repositoryBlocks = request.Blocks
+            .Where(block => block.Locator is DocumentationPatchRepositoryLocator)
+            .GroupBy(
+                block => ((DocumentationPatchRepositoryLocator)block.Locator).Path,
+                StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
-                group => group.Select(locator => locator.OriginalFileSha256)
-                    .ToImmutableHashSet(StringComparer.Ordinal),
+                group => group.ToImmutableArray(),
                 StringComparer.Ordinal);
         long blockSum = 0;
+        var acceptedObservationsAreValid = true;
         foreach (var file in result.ChangedFiles)
         {
-            if (!repositoryLocators.TryGetValue(file.Path, out var originalDigests)
-                || !originalDigests.Contains(file.OriginalFileSha256))
+            if (!repositoryBlocks.TryGetValue(file.Path, out var pathBlocks)
+                || !pathBlocks
+                    .Select(block => ((DocumentationPatchRepositoryLocator)block.Locator)
+                        .OriginalFileSha256)
+                    .Contains(file.OriginalFileSha256, StringComparer.Ordinal))
             {
                 return Invalid("patch.result.invalid-correlation");
             }
 
             blockSum += file.ChangedDocumentationBlockCount;
+            var hasReplacement = pathBlocks.Any(
+                block => block.EditKind == DocumentationPatchEditKind.Replace);
+            acceptedObservationsAreValid &=
+                file.ChangedDocumentationBlockCount == pathBlocks.Length
+                && file.CandidateDocumentationByteCount > 0
+                && file.CandidateDocumentationLineCount > 0
+                && (hasReplacement
+                    ? file.OriginalDocumentationByteCount > 0
+                        && file.OriginalDocumentationLineCount > 0
+                    : file.OriginalDocumentationByteCount == 0
+                        && file.OriginalDocumentationLineCount == 0);
         }
 
         if (blockSum != result.ChangedDocumentationBlockCount)
         {
             return Invalid("patch.result.invalid-correlation");
+        }
+
+        var diagnosticCheck = ValidateDiagnostics(request, result);
+        if (!diagnosticCheck.IsValid)
+        {
+            return diagnosticCheck;
         }
 
         var hasError = result.Diagnostics.Any(
@@ -394,6 +415,9 @@ public static class DocumentationPatchValidator
                     || hasRejectedDiagnostic
                     || result.ChangedFiles.IsEmpty
                     || result.ChangedDocumentationBlockCount <= 0
+                    || result.ChangedDocumentationBlockCount != request.Blocks.Length
+                    || result.ChangedFiles.Length != repositoryBlocks.Count
+                    || !acceptedObservationsAreValid
                     || result.ChangedFiles.Any(
                         file => string.Equals(
                             file.OriginalFileSha256,
@@ -444,6 +468,185 @@ public static class DocumentationPatchValidator
 
         return Valid();
     }
+
+    private static DocumentationPatchValidationCheck ValidateDiagnostics(
+        DocumentationPatchRequest request,
+        DocumentationPatchValidationResult result)
+    {
+        if (result.Diagnostics.IsEmpty)
+        {
+            return Valid();
+        }
+
+        var blockIndexes = request.Blocks
+            .Select((block, index) => (block.BlockId, Index: index))
+            .ToDictionary(item => item.BlockId, item => item.Index, StringComparer.Ordinal);
+        var diagnosticKeys = new HashSet<string>(StringComparer.Ordinal);
+        DocumentationPatchDiagnostic? previousSecondary = null;
+        var primaryIndex = 0;
+        for (var index = 0; index < result.Diagnostics.Length; index++)
+        {
+            var diagnostic = result.Diagnostics[index];
+            var key = diagnostic.Code
+                + "\u0000"
+                + diagnostic.BlockId
+                + "\u0000"
+                + diagnostic.Path
+                + "\u0000"
+                + diagnostic.Pointer;
+            if (!diagnosticKeys.Add(key)
+                || index > 1 && CompareSecondaryDiagnostics(previousSecondary!, diagnostic) >= 0)
+            {
+                return Invalid("patch.result.invalid-outcome");
+            }
+
+            if (index > 0)
+            {
+                previousSecondary = diagnostic;
+            }
+
+            if (ComparePrimaryDiagnostics(
+                    diagnostic,
+                    result.Diagnostics[primaryIndex],
+                    blockIndexes) < 0)
+            {
+                primaryIndex = index;
+            }
+
+            var rootContextFailure = IsRootContextDiagnostic(diagnostic.Code);
+            var noEffectiveChange = diagnostic.Code == "patch.rejected.no-effective-change";
+            if (rootContextFailure || noEffectiveChange)
+            {
+                if (diagnostic.BlockId is not null || diagnostic.Path is not null)
+                {
+                    return Invalid("patch.result.invalid-correlation");
+                }
+
+                if (rootContextFailure && result.Targets.Any(
+                        target => target.Status != DocumentationPatchTargetStatus.NotEvaluated)
+                    || noEffectiveChange && result.Targets.Any(
+                        target => target.Status != DocumentationPatchTargetStatus.Valid))
+                {
+                    return Invalid("patch.result.invalid-outcome");
+                }
+
+                continue;
+            }
+
+            if (diagnostic.BlockId is null
+                || !blockIndexes.TryGetValue(diagnostic.BlockId, out var blockIndex))
+            {
+                return Invalid("patch.result.invalid-correlation");
+            }
+
+            var block = request.Blocks[blockIndex];
+            var target = result.Targets[blockIndex];
+            var expectedStatus = diagnostic.Code.StartsWith("patch.stale.", StringComparison.Ordinal)
+                ? DocumentationPatchTargetStatus.Stale
+                : DocumentationPatchTargetStatus.Invalid;
+            if (target.Status != expectedStatus)
+            {
+                return Invalid("patch.result.invalid-outcome", block.BlockId);
+            }
+
+            if (diagnostic.Path is not null
+                && (block.Locator is not DocumentationPatchRepositoryLocator repository
+                    || !string.Equals(repository.Path, diagnostic.Path, StringComparison.Ordinal)))
+            {
+                return Invalid("patch.result.invalid-correlation", block.BlockId);
+            }
+        }
+
+        return primaryIndex == 0
+            ? Valid()
+            : Invalid("patch.result.invalid-outcome");
+    }
+
+    private static int ComparePrimaryDiagnostics(
+        DocumentationPatchDiagnostic left,
+        DocumentationPatchDiagnostic right,
+        IReadOnlyDictionary<string, int> blockIndexes)
+    {
+        var comparison = GetDiagnosticCategory(left.Code).CompareTo(GetDiagnosticCategory(right.Code));
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = GetDiagnosticBlockIndex(left, blockIndexes)
+            .CompareTo(GetDiagnosticBlockIndex(right, blockIndexes));
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = GetDiagnosticCodePrecedence(left.Code)
+            .CompareTo(GetDiagnosticCodePrecedence(right.Code));
+        return comparison != 0 ? comparison : CompareSecondaryDiagnostics(left, right);
+    }
+
+    private static int CompareSecondaryDiagnostics(
+        DocumentationPatchDiagnostic left,
+        DocumentationPatchDiagnostic right)
+    {
+        var comparison = string.CompareOrdinal(left.Code, right.Code);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = string.CompareOrdinal(left.BlockId, right.BlockId);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = string.CompareOrdinal(left.Path, right.Path);
+        return comparison != 0
+            ? comparison
+            : string.CompareOrdinal(left.Pointer, right.Pointer);
+    }
+
+    private static int GetDiagnosticCategory(string code) => code switch
+    {
+        "patch.stale.repository-context"
+            or "patch.stale.input-identity"
+            or "patch.stale.target-profile" => 0,
+        _ when code.StartsWith("patch.stale.", StringComparison.Ordinal) => 1,
+        "patch.rejected.no-effective-change" => 3,
+        _ => 2,
+    };
+
+    private static int GetDiagnosticBlockIndex(
+        DocumentationPatchDiagnostic diagnostic,
+        IReadOnlyDictionary<string, int> blockIndexes) =>
+        diagnostic.BlockId is not null
+            && blockIndexes.TryGetValue(diagnostic.BlockId, out var index)
+                ? index
+                : -1;
+
+    private static int GetDiagnosticCodePrecedence(string code) => code switch
+    {
+        "patch.stale.repository-context" => 0,
+        "patch.stale.input-identity" => 1,
+        "patch.stale.target-profile" => 2,
+        "patch.stale.compilation-context" => 0,
+        "patch.stale.source-encoding" => 1,
+        "patch.stale.source-bytes" => 2,
+        "patch.stale.source-span" => 3,
+        "patch.rejected.unsupported-target" => 0,
+        "patch.rejected.ambiguous-target" => 1,
+        "patch.rejected.non-writable-target" => 2,
+        "patch.rejected.edit-state" => 3,
+        "patch.rejected.unsafe-change" => 4,
+        "patch.rejected.no-effective-change" => 5,
+        _ => int.MaxValue,
+    };
+
+    private static bool IsRootContextDiagnostic(string code) => code is
+        "patch.stale.repository-context"
+        or "patch.stale.input-identity"
+        or "patch.stale.target-profile";
 
     private static DocumentationPatchBlockRequest ParseBlock(
         JsonElement element,
@@ -530,9 +733,9 @@ public static class DocumentationPatchValidator
     private static SymbolRef ParseSymbolRef(JsonElement element, string pointer)
     {
         ExpectProperties(element, pointer, "compilationContextRef", "documentationCommentId");
-        var contextRef = ReadString(element, "compilationContextRef", pointer, 256);
+        var contextRef = ReadString(element, "compilationContextRef", pointer, 128);
         var documentationId = ReadString(element, "documentationCommentId", pointer, 1_024);
-        if (!IsOpaqueId(contextRef, 256)
+        if (!IsCompilationContextRef(contextRef)
             || documentationId.Length < 3
             || !"TMPFEN".Contains(documentationId[0], StringComparison.Ordinal)
             || documentationId[1] != ':'
@@ -675,9 +878,11 @@ public static class DocumentationPatchValidator
                 ExpectProperties(item, itemPointer, "kind", "identity");
             }
 
-            var identity = ReadOpaqueId(item, "identity", itemPointer);
+            var identity = ReadString(item, "identity", itemPointer, 128);
             var name = named ? ReadString(item, "name", itemPointer, 128) : null;
-            if (named && (string.IsNullOrEmpty(name) || ContainsControlOrInvalidScalar(name)))
+            if (!IsComponentIdentity(kind, identity)
+                || named && (string.IsNullOrEmpty(name)
+                    || !TryCountXmlScalars(name, out _)))
             {
                 throw Fail("invalid-vocabulary", itemPointer + "/name");
             }
@@ -811,9 +1016,9 @@ public static class DocumentationPatchValidator
         {
             var itemPointer = $"{pointer}/{index}";
             ExpectProperties(item, itemPointer, "componentIdentity", "name", "lines");
-            var identity = ReadOpaqueId(item, "componentIdentity", itemPointer);
+            var identity = ReadString(item, "componentIdentity", itemPointer, 128);
             var name = ReadString(item, "name", itemPointer, 128);
-            if (string.IsNullOrEmpty(name) || ContainsControlOrInvalidScalar(name))
+            if (string.IsNullOrEmpty(name) || !TryCountXmlScalars(name, out _))
             {
                 throw Fail("invalid-content", itemPointer + "/name");
             }
@@ -847,7 +1052,7 @@ public static class DocumentationPatchValidator
 
         ExpectProperties(element, pointer, "componentIdentity", "lines");
         return new DocumentationPatchComponentContent(
-            ReadOpaqueId(element, "componentIdentity", pointer),
+            ReadString(element, "componentIdentity", pointer, 128),
             ParseLines(element.GetProperty("lines"), pointer + "/lines", ref scalarTotal));
     }
 
@@ -1113,8 +1318,6 @@ public static class DocumentationPatchValidator
             ExpectProperties(item, itemPointer, "severity", "code", "blockId", "path", "pointer");
             var severity = ReadString(item, "severity", itemPointer, 16) switch
             {
-                "info" => DocumentationPatchDiagnosticSeverity.Info,
-                "warning" => DocumentationPatchDiagnosticSeverity.Warning,
                 "error" => DocumentationPatchDiagnosticSeverity.Error,
                 _ => throw Fail("invalid-vocabulary", itemPointer + "/severity"),
             };
@@ -1551,6 +1754,46 @@ public static class DocumentationPatchValidator
         return true;
     }
 
+    private static bool IsCompilationContextRef(string value)
+    {
+        if (value.Length is 0 or > 128 || !IsLowerAlphaNumeric(value[0]))
+        {
+            return false;
+        }
+
+        return value.All(character =>
+            IsLowerAlphaNumeric(character) || character is '.' or '_' or '-');
+    }
+
+    private static bool IsComponentIdentity(
+        DocumentationPatchComponentKind kind,
+        string identity) => kind switch
+        {
+            DocumentationPatchComponentKind.TypeParameter =>
+                IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
+            DocumentationPatchComponentKind.Parameter =>
+                IsCanonicalOrdinalIdentity(identity, "parameter/"),
+            DocumentationPatchComponentKind.Return => identity == "return",
+            DocumentationPatchComponentKind.Value => identity == "value",
+            _ => false,
+        };
+
+    private static bool IsCanonicalOrdinalIdentity(string value, string prefix)
+    {
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ordinal = value.AsSpan(prefix.Length);
+        return ordinal.Length > 0
+            && ordinal.IndexOfAnyExceptInRange('0', '9') < 0
+            && (ordinal.Length == 1 || ordinal[0] != '0');
+    }
+
+    private static bool IsLowerAlphaNumeric(char value) =>
+        value is >= 'a' and <= 'z' or >= '0' and <= '9';
+
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(IsLowerHex);
 
@@ -1564,7 +1807,9 @@ public static class DocumentationPatchValidator
 
     private static bool IsExceptionDocumentationId(string value)
     {
-        if (value.Length < 3 || !value.StartsWith("T:", StringComparison.Ordinal))
+        if (value.Length < 3
+            || !value.StartsWith("T:", StringComparison.Ordinal)
+            || !TryCountXmlScalars(value, out _))
         {
             return false;
         }

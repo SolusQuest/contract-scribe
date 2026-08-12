@@ -149,7 +149,7 @@ public sealed class DocumentationPatchContractTests
                 vector.GetProperty("encoding").GetString()!,
                 vector.GetProperty("expectedSha256").GetString()!,
                 caseId == "utf8-lf" ? 21 : 22,
-                caseId == "utf8-lf" ? 42 : 43);
+                caseId == "utf8-lf" ? 58 : 59);
             var check = DocumentationPatchValidator.ValidateRepositorySource(locator, bytes);
             if (caseId == "malformed-utf8")
             {
@@ -158,25 +158,25 @@ public sealed class DocumentationPatchContractTests
             else
             {
                 Assert.True(check.IsValid, caseId);
-                Assert.Contains("public class Widget", check.DecodedText, StringComparison.Ordinal);
+                Assert.Contains("public delegate T Widget<T>(T value);", check.DecodedText, StringComparison.Ordinal);
             }
         }
 
-        var lfBytes = Convert.FromBase64String("bmFtZXNwYWNlIFN5bnRoZXRpYzsKcHVibGljIGNsYXNzIFdpZGdldCB7fQo=");
+        var lfBytes = Convert.FromBase64String("bmFtZXNwYWNlIFN5bnRoZXRpYzsKcHVibGljIGRlbGVnYXRlIFQgV2lkZ2V0PFQ+KFQgdmFsdWUpOwo=");
         var valid = BuildRepositoryLocator(
-            "utf-8", "91d19144488bb88906a805a24b4b6041638719a2b5d5a623eabff9dcc85b67d3", 21, 42);
+            "utf-8", "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8", 21, 58);
         var drifted = lfBytes.ToArray();
         drifted[^1] = (byte)' ';
         Assert.Equal("patch.stale.source-bytes", DocumentationPatchValidator.ValidateRepositorySource(valid, drifted).Code);
 
         var wrongEncoding = BuildRepositoryLocator(
-            "utf-8", "65102966154bd6bbd59b2b9cfa84d7f7c0a235ef6cde105cda3aa9e967c5800e", 22, 43);
+            "utf-8", "7c240ee5102683d7836f2270896e24a1ebdd0f4caa1e467ec8ff03c0f8b141a5", 22, 59);
         var bomBytes = Convert.FromBase64String(
-            "77u/bmFtZXNwYWNlIFN5bnRoZXRpYzsNCnB1YmxpYyBjbGFzcyBXaWRnZXQge30NCg==");
+            "77u/bmFtZXNwYWNlIFN5bnRoZXRpYzsNCnB1YmxpYyBkZWxlZ2F0ZSBUIFdpZGdldDxUPihUIHZhbHVlKTsNCg==");
         Assert.Equal("patch.stale.source-encoding", DocumentationPatchValidator.ValidateRepositorySource(wrongEncoding, bomBytes).Code);
 
         var wrongSpan = BuildRepositoryLocator(
-            "utf-8", "91d19144488bb88906a805a24b4b6041638719a2b5d5a623eabff9dcc85b67d3", 21, 200);
+            "utf-8", "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8", 21, 200);
         Assert.Equal("patch.stale.source-span", DocumentationPatchValidator.ValidateRepositorySource(wrongSpan, lfBytes).Code);
     }
 
@@ -185,7 +185,7 @@ public sealed class DocumentationPatchContractTests
     {
         var request = ParseRequest(ReadFixture("valid", "mixed-locators-request.json"));
         var locator = Assert.IsAssignableFrom<DocumentationPatchGeneratedLocator>(request.Blocks[1].Locator);
-        const string source = "namespace Synthetic;\npublic class Widget {}\n";
+        const string source = "namespace Synthetic;\npublic delegate T Widget<T>(T value);\n";
 
         Assert.True(DocumentationPatchValidator.ValidateGeneratedSource(locator, source).IsValid);
         Assert.Equal("patch.stale.source-bytes", DocumentationPatchValidator.ValidateGeneratedSource(
@@ -223,7 +223,7 @@ public sealed class DocumentationPatchContractTests
             components.Insert(2, new JsonObject
             {
                 ["kind"] = "parameter",
-                ["identity"] = "component.parameter.1",
+                ["identity"] = "parameter/1",
                 ["name"] = "value",
             });
         })).Failure!.Code);
@@ -235,6 +235,71 @@ public sealed class DocumentationPatchContractTests
             exceptions[0] = second;
             exceptions[1] = first;
         })).Failure!.Code);
+
+        foreach (var (mutation, expectedCode) in new (Action<JsonObject>, string)[]
+        {
+            (root => root["blocks"]![0]!["applicableComponents"]![0]!["identity"] = "component.type-parameter.0",
+                "patch.request.invalid-vocabulary"),
+            (root => root["blocks"]![0]!["content"]!["parameters"]![0]!["componentIdentity"] = "component.parameter.0",
+                "patch.request.invalid-content"),
+        })
+        {
+            var dottedAlias = Mutate(valid, mutation);
+            Assert.False(Evaluate(RequestSchema.Value, dottedAlias));
+            Assert.Equal(expectedCode,
+                DocumentationPatchValidator.ParseRequest(dottedAlias).Failure!.Code);
+        }
+
+        Assert.Equal("patch.request.invalid-content", DocumentationPatchValidator.ParseRequest(Mutate(valid, root =>
+            root["blocks"]![0]!["content"]!["exceptions"]![0]!["typeDocumentationId"] =
+                "T:Synthetic.\uFFFEException")).Failure!.Code);
+        Assert.Equal("patch.request.invalid-vocabulary", DocumentationPatchValidator.ParseRequest(Mutate(valid, root =>
+            root["blocks"]![0]!["applicableComponents"]![0]!["name"] = "T\uFFFF")).Failure!.Code);
+    }
+
+    [Fact]
+    public void RepositoryFixture_ReusesM1IdentitiesAndCommitsTheCompleteDeclaration()
+    {
+        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var block = Assert.Single(request.Blocks);
+        Assert.Equal("T:Synthetic.Widget`1", block.SymbolRef.DocumentationCommentId);
+        Assert.Equal(
+            new[] { "type-parameter/0", "parameter/0", "return" },
+            block.ApplicableComponents.Select(component => component.Identity));
+
+        using var vectors = JsonDocument.Parse(ReadFixture("source-byte-vectors.json"));
+        var lf = vectors.RootElement.GetProperty("vectors")[0];
+        var bytes = Convert.FromBase64String(lf.GetProperty("base64").GetString()!);
+        var locator = Assert.IsType<DocumentationPatchRepositoryLocator>(block.Locator);
+        var check = DocumentationPatchValidator.ValidateRepositorySource(locator, bytes);
+        Assert.True(check.IsValid);
+        Assert.Equal(
+            "public delegate T Widget<T>(T value);",
+            check.DecodedText![locator.DeclarationSpan.Start..locator.DeclarationSpan.End]);
+    }
+
+    [Theory]
+    [InlineData("CTX.synthetic")]
+    [InlineData("ctx:synthetic")]
+    [InlineData(".ctx")]
+    [InlineData("ctx_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    public void CompilationContextRef_MustRemainInTheM1IdentityDomain(string value)
+    {
+        var bytes = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+            root["blocks"]![0]!["symbolRef"]!["compilationContextRef"] = value);
+        Assert.False(Evaluate(RequestSchema.Value, bytes));
+        Assert.Equal("patch.request.invalid-vocabulary",
+            DocumentationPatchValidator.ParseRequest(bytes).Failure!.Code);
+    }
+
+    [Fact]
+    public void CompilationContextRef_RejectsTheM1LengthOverflow()
+    {
+        var bytes = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+            root["blocks"]![0]!["symbolRef"]!["compilationContextRef"] = new string('a', 129));
+        Assert.False(Evaluate(RequestSchema.Value, bytes));
+        Assert.Equal("patch.request.invalid-vocabulary",
+            DocumentationPatchValidator.ParseRequest(bytes).Failure!.Code);
     }
 
     [Fact]
@@ -265,15 +330,111 @@ public sealed class DocumentationPatchContractTests
 
         var stale = ReadFixture("valid", "stale-result.json");
         var rootStaleWithEvaluatedTarget = ParseResult(Mutate(stale, root =>
-            root["diagnostics"]![0]!["code"] = "patch.stale.repository-context"));
+        {
+            root["diagnostics"]![0]!["code"] = "patch.stale.repository-context";
+            root["diagnostics"]![0]!["blockId"] = null;
+            root["diagnostics"]![0]!["path"] = null;
+        }));
         Assert.Equal("patch.result.invalid-outcome",
             DocumentationPatchValidator.ValidateResult(request, rootStaleWithEvaluatedTarget).Code);
         var rootStale = ParseResult(Mutate(stale, root =>
         {
             root["diagnostics"]![0]!["code"] = "patch.stale.repository-context";
+            root["diagnostics"]![0]!["blockId"] = null;
+            root["diagnostics"]![0]!["path"] = null;
             root["targets"]![0]!["status"] = "not-evaluated";
         }));
         Assert.True(DocumentationPatchValidator.ValidateResult(request, rootStale).IsValid);
+    }
+
+    [Fact]
+    public void AcceptedResultObservations_MustAccountForEveryRequestedBlock()
+    {
+        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var accepted = ReadFixture("valid", "accepted-result.json");
+
+        foreach (var mutation in new Action<JsonObject>[]
+        {
+            root =>
+            {
+                root["changedFiles"]![0]!["changedDocumentationBlockCount"] = 2;
+                root["changedDocumentationBlockCount"] = 2;
+            },
+            root =>
+            {
+                root["changedFiles"]![0]!["candidateDocumentationByteCount"] = 0;
+                root["changedFiles"]![0]!["candidateDocumentationLineCount"] = 0;
+            },
+            root =>
+            {
+                root["changedFiles"]![0]!["originalDocumentationByteCount"] = 1;
+                root["changedFiles"]![0]!["originalDocumentationLineCount"] = 1;
+            },
+        })
+        {
+            var result = ParseResult(Mutate(accepted, mutation));
+            Assert.Equal("patch.result.invalid-outcome",
+                DocumentationPatchValidator.ValidateResult(request, result).Code);
+        }
+
+        var replacementRequest = ParseRequest(Mutate(
+            ReadFixture("valid", "repository-request.json"),
+            root => root["blocks"]![0]!["editKind"] = "replace"));
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
+            replacementRequest, ParseResult(accepted)).Code);
+    }
+
+    [Fact]
+    public void ResultDiagnostics_AreDeterministicAndRequestCorrelated()
+    {
+        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var stale = ReadFixture("valid", "stale-result.json");
+
+        var warning = DocumentationPatchValidator.ParseValidationResult(Mutate(stale, root =>
+            root["diagnostics"]![0]!["severity"] = "warning"));
+        Assert.Equal("patch.result.invalid-vocabulary", warning.Failure!.Code);
+
+        var duplicate = ParseResult(Mutate(stale, root =>
+            root["diagnostics"]!.AsArray().Add(root["diagnostics"]![0]!.DeepClone())));
+        Assert.Equal("patch.result.invalid-outcome",
+            DocumentationPatchValidator.ValidateResult(request, duplicate).Code);
+
+        var danglingBlock = ParseResult(Mutate(stale, root =>
+            root["diagnostics"]![0]!["blockId"] = "block.other"));
+        Assert.Equal("patch.result.invalid-correlation",
+            DocumentationPatchValidator.ValidateResult(request, danglingBlock).Code);
+
+        var wrongPath = ParseResult(Mutate(stale, root =>
+            root["diagnostics"]![0]!["path"] = "src/Synthetic/Other.cs"));
+        Assert.Equal("patch.result.invalid-correlation",
+            DocumentationPatchValidator.ValidateResult(request, wrongPath).Code);
+
+        var wrongStatus = ParseResult(Mutate(stale, root =>
+            root["targets"]![0]!["status"] = "not-evaluated"));
+        Assert.Equal("patch.result.invalid-outcome",
+            DocumentationPatchValidator.ValidateResult(request, wrongStatus).Code);
+
+        var wrongPrimary = ParseResult(Mutate(stale, root =>
+        {
+            var sourceEncoding = root["diagnostics"]![0]!.DeepClone();
+            sourceEncoding["code"] = "patch.stale.source-encoding";
+            root["diagnostics"]!.AsArray().Add(sourceEncoding);
+        }));
+        Assert.Equal("patch.result.invalid-outcome",
+            DocumentationPatchValidator.ValidateResult(request, wrongPrimary).Code);
+
+        var unsortedSecondaries = ParseResult(Mutate(stale, root =>
+        {
+            root["diagnostics"]![0]!["code"] = "patch.stale.compilation-context";
+            var sourceSpan = root["diagnostics"]![0]!.DeepClone();
+            sourceSpan["code"] = "patch.stale.source-span";
+            var sourceBytes = root["diagnostics"]![0]!.DeepClone();
+            sourceBytes["code"] = "patch.stale.source-bytes";
+            root["diagnostics"]!.AsArray().Add(sourceSpan);
+            root["diagnostics"]!.AsArray().Add(sourceBytes);
+        }));
+        Assert.Equal("patch.result.invalid-outcome",
+            DocumentationPatchValidator.ValidateResult(request, unsortedSecondaries).Code);
     }
 
     [Fact]

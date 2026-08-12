@@ -11,14 +11,14 @@
       "blockId": "block.widget",
       "symbolRef": {
         "compilationContextRef": "ctx.synthetic.net10",
-        "documentationCommentId": "T:Synthetic.Widget"
+        "documentationCommentId": "T:Synthetic.Widget`1"
       },
       "locator": {
         "kind": "repository",
         "path": "src/Synthetic/Widget.cs",
-        "originalFileSha256": "91d19144488bb88906a805a24b4b6041638719a2b5d5a623eabff9dcc85b67d3",
+        "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
         "encoding": "utf-8",
-        "declarationSpan": { "start": 21, "end": 42 }
+        "declarationSpan": { "start": 21, "end": 58 }
       },
       "provenanceRefs": ["prov.audit", "prov.proposal"],
       "status": "valid"
