@@ -111,6 +111,10 @@ jobs:
       DOTNET_INSTALL_REVISION: 03c981b3ae8261cb0a48b07ac884ce0031af384c
       REQUIRED_SDK_VERSION: 10.0.109
       EXECUTION_WORKFLOW_REVISION: ${{ github.sha }}
+      EXECUTION_RUN_ID: ${{ github.run_id }}
+      EXECUTION_RUN_ATTEMPT: ${{ github.run_attempt }}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - name: Acquire exact public revisions without credentials
         shell: bash
@@ -125,6 +129,9 @@ jobs:
           target_work="$root/target-work"
           run_dir="$root/run"
           verification_dir="$root/verification"
+          policy_dir="$root/policy"
+          audit_output_dir="$root/audit-output"
+          validator_input_dir="$root/validator-input"
           tool_nuget_dir="$root/tool-nuget"
           target_nuget_dir="$root/target-nuget"
           tool_home="$root/tool-home"
@@ -139,6 +146,9 @@ jobs:
             "$clean_home" \
             "$run_dir" \
             "$verification_dir" \
+            "$policy_dir" \
+            "$audit_output_dir" \
+            "$validator_input_dir" \
             "$tool_nuget_dir" \
             "$target_nuget_dir" \
             "$tool_home" \
@@ -187,20 +197,14 @@ jobs:
           cp -a "$target_source/." "$target_work/"
           rm -rf "$target_work/.git"
 
-          cat > "$target_work/.contract-scribe-m1-smoke-policy.json" <<'JSON'
+          cat > "$policy_dir/m1-smoke-policy.json" <<'JSON'
           {
             "schemaVersion": 1,
             "targetProfile": "profile.external-api",
-            "defaultDecision": "optional",
-            "rules": [
-              {
-                "id": "m1-smoke-public-api-required",
-                "priority": 0,
-                "decision": "required"
-              }
-            ]
+            "defaultDecision": "required"
           }
           JSON
+          policy_digest="$(sha256sum "$policy_dir/m1-smoke-policy.json" | cut -d' ' -f1)"
 
           target_status() {
             git \
@@ -209,9 +213,17 @@ jobs:
               status --short --untracked-files=all
           }
 
-          expected_status='?? .contract-scribe-m1-smoke-policy.json'
-          actual_status="$(target_status)"
-          test "$actual_status" = "$expected_status"
+          test -z "$(target_status)"
+
+          (
+            cd "$target_source"
+            find . -mindepth 1 -path './.git' -prune -o -printf '%P\0' | sort -z
+          ) > "$verification_dir/original-entries.zlist"
+          (
+            cd "$target_work"
+            find . -mindepth 1 -printf '%P\0' | sort -z
+          ) > "$verification_dir/initial-entries.zlist"
+          cmp "$verification_dir/original-entries.zlist" "$verification_dir/initial-entries.zlist"
 
           git -C "$target_source" \
             ls-files -z -- '*.cs' '*.csproj' '*.sln' '*.slnx' '*.props' '*.targets' global.json \
@@ -219,7 +231,7 @@ jobs:
             > "$verification_dir/protected-paths.zlist"
           (
             cd "$target_work"
-            xargs -0 sha256sum -- < "$verification_dir/protected-paths.zlist"
+            xargs -0 -r sha256sum -- < "$verification_dir/protected-paths.zlist"
           ) > "$verification_dir/protected-before.sha256"
           test "$(wc -l < "$verification_dir/protected-before.sha256")" -gt 0
 
@@ -230,6 +242,10 @@ jobs:
             echo "RUN_DIR=$run_dir"
             echo "VERIFICATION_DIR=$verification_dir"
             echo "TARGET_SOURCE=$target_source"
+            echo "POLICY_FILE=$policy_dir/m1-smoke-policy.json"
+            echo "POLICY_DIGEST=$policy_digest"
+            echo "AUDIT_OUTPUT_DIR=$audit_output_dir"
+            echo "VALIDATOR_INPUT_DIR=$validator_input_dir"
             echo "TOOL_NUGET_DIR=$tool_nuget_dir"
             echo "TARGET_NUGET_DIR=$target_nuget_dir"
             echo "TOOL_HOME=$tool_home"
@@ -384,26 +400,49 @@ jobs:
           docker run "${target_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet --version > "$RUN_DIR/sdk-version.txt"
 
-          expected_status='?? .contract-scribe-m1-smoke-policy.json'
           actual_status="$(git --git-dir="$TARGET_SOURCE/.git" --work-tree="$TARGET_WORK" status --short --untracked-files=all)"
-          test "$actual_status" = "$expected_status"
+          test -z "$actual_status"
 
           (
             cd "$TARGET_WORK"
-            xargs -0 sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
+            xargs -0 -r sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
           ) > "$VERIFICATION_DIR/protected-pre-audit.sha256"
           cmp "$VERIFICATION_DIR/protected-before.sha256" "$VERIFICATION_DIR/protected-pre-audit.sha256"
 
-          prep_output_count="$({
-            find "$TARGET_WORK" -type f -path '*/bin/*' -print
-            find "$TARGET_WORK" -type f -path '*/obj/*' -print
-          } | sort -u | wc -l)"
+          (
+            cd "$TARGET_WORK"
+            find . -mindepth 1 -printf '%P\0' | sort -z
+          ) > "$VERIFICATION_DIR/pre-audit-entries.zlist"
+          comm -z -13 \
+            "$VERIFICATION_DIR/original-entries.zlist" \
+            "$VERIFICATION_DIR/pre-audit-entries.zlist" \
+            > "$VERIFICATION_DIR/pre-audit-new-entries.zlist"
+
+          prep_output_count=0
+          invalid_entry_count=0
+          while IFS= read -r -d '' entry; do
+            case "$entry" in
+              runtime/*/bin|runtime/*/bin/*|runtime/*/obj|runtime/*/obj/*)
+                prep_output_count=$((prep_output_count + 1))
+                ;;
+              *)
+                invalid_entry_count=$((invalid_entry_count + 1))
+                ;;
+            esac
+          done < "$VERIFICATION_DIR/pre-audit-new-entries.zlist"
+          if test "$invalid_entry_count" -ne 0; then
+            echo "::error::Target preparation created $invalid_entry_count entries outside the allowed runtime bin/obj classes; paths remain unpublished."
+            exit 1
+          fi
           echo "PREP_OUTPUT_COUNT=$prep_output_count" >> "$GITHUB_ENV"
 
       - name: Run the read-only audit without network or credentials
         shell: bash
         run: |
           set -euo pipefail
+
+          test "$(sha256sum "$POLICY_FILE" | cut -d' ' -f1)" = "$POLICY_DIGEST"
+          test -z "$(find "$AUDIT_OUTPUT_DIR" -mindepth 1 -print -quit)"
 
           audit_container=(
             --rm
@@ -423,7 +462,8 @@ jobs:
             --env NUGET_PACKAGES=/target-nuget
             --mount "type=bind,source=$TOOL_WORK,target=/tool,readonly"
             --mount "type=bind,source=$TARGET_WORK,target=/target"
-            --mount "type=bind,source=$RUN_DIR,target=/run"
+            --mount "type=bind,source=$POLICY_FILE,target=/target/.contract-scribe-m1-smoke-policy.json,readonly"
+            --mount "type=bind,source=$AUDIT_OUTPUT_DIR,target=/audit-output"
             --mount "type=bind,source=$TARGET_NUGET_DIR,target=/target-nuget,readonly"
             --mount "type=bind,source=$AUDIT_HOME,target=/audit-home"
             --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
@@ -436,7 +476,7 @@ jobs:
               --repository-root /target \
               --input "$TARGET_INPUT" \
               --policy .contract-scribe-m1-smoke-policy.json \
-              --output /run/audit-result.json \
+              --output /audit-output/audit-result.json \
               > "$RUN_DIR/envelope.json" \
               2> "$RUN_DIR/diagnostics.txt"
           audit_exit=$?
@@ -444,7 +484,7 @@ jobs:
 
           echo "AUDIT_EXIT_CODE=$audit_exit" >> "$GITHUB_ENV"
           if test "$audit_exit" -ne 0 && test "$audit_exit" -ne 1; then
-            diagnostic_codes="$(sed -n 's/:.*//p' "$RUN_DIR/diagnostics.txt" | sort -u | paste -sd, -)"
+            diagnostic_codes="$(sed -nE 's/^([a-z][a-z0-9.-]{0,127}):.*/\1/p' "$RUN_DIR/diagnostics.txt" | sort -u | paste -sd, -)"
             echo "::error::The controlled audit returned exit $audit_exit; diagnostic codes: ${diagnostic_codes:-none}."
             exit 1
           fi
@@ -454,30 +494,64 @@ jobs:
         run: |
           set -euo pipefail
 
-          expected_status='?? .contract-scribe-m1-smoke-policy.json'
           actual_status="$(git --git-dir="$TARGET_SOURCE/.git" --work-tree="$TARGET_WORK" status --short --untracked-files=all)"
-          test "$actual_status" = "$expected_status"
+          test -z "$actual_status"
+          test "$(sha256sum "$POLICY_FILE" | cut -d' ' -f1)" = "$POLICY_DIGEST"
 
           (
             cd "$TARGET_WORK"
-            xargs -0 sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
+            xargs -0 -r sha256sum -- < "$VERIFICATION_DIR/protected-paths.zlist"
           ) > "$VERIFICATION_DIR/protected-after.sha256"
           cmp "$VERIFICATION_DIR/protected-pre-audit.sha256" "$VERIFICATION_DIR/protected-after.sha256"
 
-          post_output_count="$({
-            find "$TARGET_WORK" -type f -path '*/bin/*' -print
-            find "$TARGET_WORK" -type f -path '*/obj/*' -print
-          } | sort -u | wc -l)"
+          (
+            cd "$TARGET_WORK"
+            find . -mindepth 1 -printf '%P\0' | sort -z
+          ) > "$VERIFICATION_DIR/post-audit-entries.zlist"
+          comm -z -13 \
+            "$VERIFICATION_DIR/original-entries.zlist" \
+            "$VERIFICATION_DIR/post-audit-entries.zlist" \
+            > "$VERIFICATION_DIR/post-audit-new-entries.zlist"
+
+          post_output_count=0
+          invalid_entry_count=0
+          while IFS= read -r -d '' entry; do
+            case "$entry" in
+              runtime/*/bin|runtime/*/bin/*|runtime/*/obj|runtime/*/obj/*)
+                post_output_count=$((post_output_count + 1))
+                ;;
+              *)
+                invalid_entry_count=$((invalid_entry_count + 1))
+                ;;
+            esac
+          done < "$VERIFICATION_DIR/post-audit-new-entries.zlist"
+          if test "$invalid_entry_count" -ne 0; then
+            echo "::error::The audit created $invalid_entry_count target entries outside the allowed runtime bin/obj classes; paths remain unpublished."
+            exit 1
+          fi
           echo "POST_OUTPUT_COUNT=$post_output_count" >> "$GITHUB_ENV"
           export POST_OUTPUT_COUNT="$post_output_count"
 
+          mapfile -d '' audit_output_entries < <(
+            cd "$AUDIT_OUTPUT_DIR"
+            find . -mindepth 1 -printf '%P\0' | sort -z
+          )
+          if test "${#audit_output_entries[@]}" -ne 1 \
+            || test "${audit_output_entries[0]}" != 'audit-result.json' \
+            || ! test -f "$AUDIT_OUTPUT_DIR/audit-result.json" \
+            || test -L "$AUDIT_OUTPUT_DIR/audit-result.json"; then
+            echo "::error::The audit output directory did not contain exactly one regular audit-result.json file."
+            exit 1
+          fi
+          cp -- "$AUDIT_OUTPUT_DIR/audit-result.json" "$VALIDATOR_INPUT_DIR/audit-result.json"
+
           {
             printf '{"logicalInputs":['
-            cat "$RUN_DIR/audit-result.json"
+            cat "$VALIDATOR_INPUT_DIR/audit-result.json"
             printf ','
-            cat "$RUN_DIR/audit-result.json"
+            cat "$VALIDATOR_INPUT_DIR/audit-result.json"
             printf ']}'
-          } > "$RUN_DIR/replay.json"
+          } > "$VALIDATOR_INPUT_DIR/replay.json"
 
           validator_container=(
             --rm
@@ -494,7 +568,7 @@ jobs:
             --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
             --env NUGET_PACKAGES=/tool-nuget
             --mount "type=bind,source=$TOOL_WORK,target=/tool,readonly"
-            --mount "type=bind,source=$RUN_DIR,target=/run"
+            --mount "type=bind,source=$VALIDATOR_INPUT_DIR,target=/validator-input,readonly"
             --mount "type=bind,source=$TOOL_NUGET_DIR,target=/tool-nuget,readonly"
             --mount "type=bind,source=$VALIDATOR_HOME,target=/validator-home"
             --mount "type=bind,source=$EXACT_DOTNET_DIR,target=/exact-dotnet,readonly"
@@ -502,8 +576,8 @@ jobs:
 
           canonical_digest="$(docker run "${validator_container[@]}" "$RESOLVED_DOTNET_IMAGE" \
             dotnet /tool/tests/ContractScribe.ContractBaselineProbe/bin/Release/net10.0/ContractScribe.ContractBaselineProbe.dll \
-              /run/replay.json)"
-          actual_digest="$(sha256sum "$RUN_DIR/audit-result.json" | cut -d' ' -f1)"
+              /validator-input/replay.json)"
+          actual_digest="$(sha256sum "$VALIDATOR_INPUT_DIR/audit-result.json" | cut -d' ' -f1)"
           test "$canonical_digest" = "$actual_digest"
 
           export CANONICAL_DIGEST="$canonical_digest"
@@ -514,7 +588,7 @@ jobs:
 
           const runDir = process.env.RUN_DIR;
           const envelope = JSON.parse(fs.readFileSync(path.join(runDir, 'envelope.json'), 'utf8'));
-          const result = JSON.parse(fs.readFileSync(path.join(runDir, 'audit-result.json'), 'utf8'));
+          const result = JSON.parse(fs.readFileSync(path.join(process.env.VALIDATOR_INPUT_DIR, 'audit-result.json'), 'utf8'));
           const outcomes = {
             'audit.outcome.compliant': 'compliant',
             'audit.outcome.violation': 'violation',
@@ -537,6 +611,10 @@ jobs:
           if (envelope.sourceRevision !== process.env.CONTRACT_SCRIBE_REVISION) {
             throw new Error('The CLI source revision does not match the fixed ContractScribe revision.');
           }
+          const sdkVersion = fs.readFileSync(path.join(runDir, 'sdk-version.txt'), 'utf8').trim();
+          if (typeof envelope.toolchain !== 'string' || !envelope.toolchain.startsWith(`sdk=${sdkVersion};`)) {
+            throw new Error('The selected CLI toolchain does not match the separately observed exact SDK.');
+          }
           for (const key of Object.keys(counts)) {
             if (envelope.counts[key] !== counts[key]) {
               throw new Error(`Envelope count mismatch for ${key}.`);
@@ -558,11 +636,15 @@ jobs:
           const summary = {
             outcome: 'successful-committed-audit',
             executionWorkflowRevision: process.env.EXECUTION_WORKFLOW_REVISION,
+            executionRunId: process.env.EXECUTION_RUN_ID,
+            executionRunAttempt: Number(process.env.EXECUTION_RUN_ATTEMPT),
             contractScribeRevision: process.env.CONTRACT_SCRIBE_REVISION,
             contractScribeMainCiRun: process.env.CONTRACT_SCRIBE_MAIN_CI_RUN,
             targetRevision: process.env.TARGET_REVISION,
             targetInput: process.env.TARGET_INPUT,
-            sdkVersion: fs.readFileSync(path.join(runDir, 'sdk-version.txt'), 'utf8').trim(),
+            policyDescription: 'profile.external-api with defaultDecision required',
+            policyDigest: process.env.POLICY_DIGEST,
+            sdkVersion,
             dotnetInstallRevision: process.env.DOTNET_INSTALL_REVISION,
             dotnetInstallScriptDigest: process.env.DOTNET_INSTALL_SCRIPT_DIGEST,
             toolchain: envelope.toolchain,
@@ -571,8 +653,8 @@ jobs:
             counts: { ...counts, total },
             resultDigest: process.env.ACTUAL_DIGEST,
             protectedSourceProjectSet: 'unchanged',
-            prerequisiteOutputCount: Number(process.env.PREP_OUTPUT_COUNT),
-            postAuditOutputCount: Number(process.env.POST_OUTPUT_COUNT),
+            prerequisiteOutputEntryCount: Number(process.env.PREP_OUTPUT_COUNT),
+            postAuditOutputEntryCount: Number(process.env.POST_OUTPUT_COUNT),
             networkDuringAudit: 'disabled-by-container',
             credentialExposureToTarget: 'none',
           };
@@ -594,11 +676,13 @@ jobs:
             '',
             `- Outcome: ${summary.outcome}`,
             `- One-time workflow revision: \`${summary.executionWorkflowRevision}\``,
+            `- Run ID / attempt: ${summary.executionRunId} / ${summary.executionRunAttempt}`,
             `- ContractScribe revision: \`${summary.contractScribeRevision}\``,
             `- Ordinary main CI run: ${summary.contractScribeMainCiRun}`,
             `- Target revision: \`${summary.targetRevision}\``,
             `- Target shape: public reduced-trust .NET 10 SDK-style executable project`,
             `- Target input: \`${summary.targetInput}\``,
+            `- Fixed policy: ${summary.policyDescription} / \`${summary.policyDigest}\``,
             `- Runner: ${process.env.RUNNER_LABEL}`,
             `- SDK image: \`${process.env.DOTNET_IMAGE_DIGEST}\``,
             `- Exact SDK installer: \`${summary.dotnetInstallRevision}\` / \`${summary.dotnetInstallScriptDigest}\``,
@@ -607,7 +691,7 @@ jobs:
             `- Counts: compliant=${summary.counts.compliant}, violation=${summary.counts.violation}, skipped=${summary.counts.skipped}, total=${summary.counts.total}`,
             `- Canonical result digest: \`${summary.resultDigest}\``,
             `- Protected source/project set: ${summary.protectedSourceProjectSet}`,
-            `- Build/design-time outputs: before audit=${summary.prerequisiteOutputCount}, after audit=${summary.postAuditOutputCount}`,
+            `- Allowed runtime bin/obj entries: before audit=${summary.prerequisiteOutputEntryCount}, after audit=${summary.postAuditOutputEntryCount}`,
             `- Audit network: ${summary.networkDuringAudit}`,
             `- Target credential exposure: ${summary.credentialExposureToTarget}`,
             `- Run: ${process.env.RUN_URL}`,
