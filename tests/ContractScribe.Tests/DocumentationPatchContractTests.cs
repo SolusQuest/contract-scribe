@@ -697,6 +697,66 @@ public sealed class DocumentationPatchContractTests
         }
     }
 
+    [Theory]
+    [InlineData("typeParameters", "T")]
+    [InlineData("parameters", "value")]
+    public void RequestValidation_PreservesSemanticEvidenceFromDuplicateBindings(
+        string contentProperty,
+        string expectedName)
+    {
+        var valid = ReadFixture("valid", "repository-request.json");
+        var identicalDuplicate = Mutate(valid, root =>
+        {
+            var content = root["blocks"]![0]!["content"]![contentProperty]!.AsArray();
+            content.Add(content[0]!.DeepClone());
+        });
+        AssertFailure(
+            identicalDuplicate,
+            "patch.request.invalid-order",
+            $"/blocks/0/content/{contentProperty}/1");
+
+        var conflictingDuplicate = Mutate(valid, root =>
+        {
+            var content = root["blocks"]![0]!["content"]![contentProperty]!.AsArray();
+            var duplicate = content[0]!.DeepClone();
+            duplicate!["name"] = "other";
+            content.Add(duplicate);
+        });
+        AssertFailure(
+            conflictingDuplicate,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var reversedConflict = Mutate(conflictingDuplicate, root =>
+        {
+            var content = root["blocks"]![0]!["content"]![contentProperty]!.AsArray();
+            var first = content[0]!.DeepClone();
+            content[0] = content[1]!.DeepClone();
+            content[1] = first;
+        });
+        AssertFailure(
+            reversedConflict,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        using var document = JsonDocument.Parse(valid);
+        Assert.Equal(
+            expectedName,
+            document.RootElement
+                .GetProperty("blocks")[0]
+                .GetProperty("content")
+                .GetProperty(contentProperty)[0]
+                .GetProperty("name")
+                .GetString());
+
+        static void AssertFailure(byte[] bytes, string code, string pointer)
+        {
+            var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+            Assert.Equal(code, failure!.Code);
+            Assert.Equal(pointer, failure.Pointer);
+        }
+    }
+
     [Fact]
     public void SchemaAndCoreRejectTheSameLogicalLineAndComponentIdentityOverflows()
     {

@@ -1331,6 +1331,7 @@ public static class DocumentationPatchValidator
             typeParameters = ParseNamedContent(
                 element.GetProperty("typeParameters"),
                 pointer + "/typeParameters",
+                pointer,
                 ref scalarTotal,
                 out var typeParameterFailure,
                 out typeParametersAreMaterializable);
@@ -1351,6 +1352,7 @@ public static class DocumentationPatchValidator
             parameters = ParseNamedContent(
                 element.GetProperty("parameters"),
                 pointer + "/parameters",
+                pointer,
                 ref scalarTotal,
                 out var parameterFailure,
                 out parametersAreMaterializable);
@@ -1449,6 +1451,7 @@ public static class DocumentationPatchValidator
     private static ImmutableArray<DocumentationPatchNamedContent> ParseNamedContent(
         JsonElement element,
         string pointer,
+        string contentPointer,
         ref int scalarTotal,
         out ContractFailure? selectedFailure,
         out bool namedContentIsMaterializable)
@@ -1456,7 +1459,7 @@ public static class DocumentationPatchValidator
         ExpectArray(element, pointer, 0, 512);
         var accumulatedScalarTotal = scalarTotal;
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchNamedContent>();
-        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var identities = new Dictionary<string, string>(StringComparer.Ordinal);
         selectedFailure = null;
         namedContentIsMaterializable = true;
         string? previous = null;
@@ -1516,9 +1519,18 @@ public static class DocumentationPatchValidator
             }
             else
             {
-                if (identities.Add(identity!))
+                if (identities.TryAdd(identity!, name!))
                 {
                     builder.Add(new DocumentationPatchNamedContent(identity!, name!, lines));
+                }
+                else if (!string.Equals(
+                    identities[identity!],
+                    name,
+                    StringComparison.Ordinal))
+                {
+                    selectedFailure = SelectRequestFailure(
+                        selectedFailure,
+                        Fail("invalid-content", contentPointer));
                 }
             }
 
