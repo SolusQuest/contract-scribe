@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "patchValidationResultVersion",
+    "patchRequestSha256",
     "context",
     "outcome",
     "targets",
@@ -16,6 +17,7 @@
   ],
   "properties": {
     "patchValidationResultVersion": { "const": 1 },
+    "patchRequestSha256": { "$ref": "#/$defs/sha256" },
     "context": { "$ref": "#/$defs/context" },
     "outcome": { "enum": ["accepted", "rejected", "stale"] },
     "targets": {

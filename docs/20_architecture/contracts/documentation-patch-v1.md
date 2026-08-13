@@ -119,7 +119,9 @@ Environment failure and cancellation are host outcomes outside this artifact con
 
 ## Patch Validation Result
 
-The result top-level property order is `patchValidationResultVersion`, `context`, `outcome`, `targets`, `changedFiles`, `changedDocumentationBlockCount`, `invariants`, then `diagnostics`. It is parsed under the same UTF-8-without-BOM, size, duplicate-property, version, unknown-field, and bounded-diagnostic rules as the request.
+The result top-level property order is `patchValidationResultVersion`, `patchRequestSha256`, `context`, `outcome`, `targets`, `changedFiles`, `changedDocumentationBlockCount`, `invariants`, then `diagnostics`. It is parsed under the same UTF-8-without-BOM, size, duplicate-property, version, unknown-field, and bounded-diagnostic rules as the request.
+
+`patchRequestSha256` is lowercase SHA-256 over the exact accepted UTF-8 Patch Request artifact bytes, including their JSON representation. `ParseRequest` retains this digest on the validated in-memory request; a result producer copies it unchanged, and `ValidateResult` compares it ordinally before target correlation. It binds the result to the complete request payload, including edit authorization, applicable components, content, and provenance catalog. It is not canonical JSON, a persistent identity, release identity, or cross-revision compatibility promise.
 
 `targets` contains exactly one trace for every request block in request order. A trace copies `blockId`, `symbolRef`, `locator`, and `provenanceRefs`, and adds status `valid`, `invalid`, `stale`, or `not-evaluated`. Result validation is an explicit correlation operation against the already validated request; a result cannot validate these copied commitments in isolation.
 

@@ -119,7 +119,11 @@ public static class DocumentationPatchValidator
                 }
 
                 return new DocumentationPatchRequestParseResult(
-                    new DocumentationPatchRequest(context, catalog, blocks.ToImmutable()),
+                    new DocumentationPatchRequest(
+                        Convert.ToHexString(SHA256.HashData(utf8Json.Span)).ToLowerInvariant(),
+                        context,
+                        catalog,
+                        blocks.ToImmutable()),
                     null);
             }
             catch (ContractFailure failure)
@@ -154,6 +158,7 @@ public static class DocumentationPatchValidator
                     root,
                     string.Empty,
                     "patchValidationResultVersion",
+                    "patchRequestSha256",
                     "context",
                     "outcome",
                     "targets",
@@ -161,6 +166,16 @@ public static class DocumentationPatchValidator
                     "changedDocumentationBlockCount",
                     "invariants",
                     "diagnostics");
+
+                var patchRequestSha256 = ReadString(
+                    root,
+                    "patchRequestSha256",
+                    string.Empty,
+                    64);
+                if (!IsSha256(patchRequestSha256))
+                {
+                    throw Fail("invalid-vocabulary", "/patchRequestSha256");
+                }
 
                 var context = ParseContext(root.GetProperty("context"), "/context");
                 var outcome = ParseOutcome(ReadString(root, "outcome", string.Empty, 16));
@@ -181,6 +196,7 @@ public static class DocumentationPatchValidator
 
                 return new DocumentationPatchResultParseResult(
                     new DocumentationPatchValidationResult(
+                        patchRequestSha256,
                         context,
                         outcome,
                         targets,
@@ -328,7 +344,12 @@ public static class DocumentationPatchValidator
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
 
-        if (request.Context != result.Context || request.Blocks.Length != result.Targets.Length)
+        if (!string.Equals(
+                request.ArtifactSha256,
+                result.PatchRequestSha256,
+                StringComparison.Ordinal)
+            || request.Context != result.Context
+            || request.Blocks.Length != result.Targets.Length)
         {
             return Invalid("patch.result.invalid-correlation");
         }

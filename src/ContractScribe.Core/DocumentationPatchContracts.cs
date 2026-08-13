@@ -350,16 +350,20 @@ public sealed record DocumentationPatchBlockRequest
 public sealed record DocumentationPatchRequest
 {
     internal DocumentationPatchRequest(
+        string artifactSha256,
         DocumentationPatchContext context,
         ImmutableArray<string> provenanceCatalog,
         ImmutableArray<DocumentationPatchBlockRequest> blocks)
     {
+        ArtifactSha256 = artifactSha256;
         Context = context;
         ProvenanceCatalog = provenanceCatalog;
         Blocks = blocks;
     }
 
     public int PatchRequestVersion => 1;
+
+    public string ArtifactSha256 { get; }
 
     public DocumentationPatchContext Context { get; }
 
@@ -504,6 +508,7 @@ public sealed record DocumentationPatchDiagnostic(
 public sealed record DocumentationPatchValidationResult
 {
     internal DocumentationPatchValidationResult(
+        string patchRequestSha256,
         DocumentationPatchContext context,
         DocumentationPatchOutcome outcome,
         ImmutableArray<DocumentationPatchTargetTrace> targets,
@@ -512,6 +517,7 @@ public sealed record DocumentationPatchValidationResult
         ImmutableArray<DocumentationPatchInvariantResult> invariants,
         ImmutableArray<DocumentationPatchDiagnostic> diagnostics)
     {
+        PatchRequestSha256 = patchRequestSha256;
         Context = context;
         Outcome = outcome;
         Targets = targets;
@@ -522,6 +528,8 @@ public sealed record DocumentationPatchValidationResult
     }
 
     public int PatchValidationResultVersion => 1;
+
+    public string PatchRequestSha256 { get; }
 
     public DocumentationPatchContext Context { get; }
 

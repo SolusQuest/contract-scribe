@@ -1,5 +1,6 @@
 {
   "patchValidationResultVersion": 1,
+  "patchRequestSha256": "282abdf90adce45cca4eb0fed5a9e6ba9e5cdba1ffce32f35fba4078844b1464",
   "context": {
     "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
     "inputIdentity": "src/Synthetic/Synthetic.csproj",

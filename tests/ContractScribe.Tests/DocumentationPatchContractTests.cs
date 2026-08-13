@@ -25,7 +25,11 @@ public sealed class DocumentationPatchContractTests
         {
             var bytes = ReadFixture("valid", name);
             AssertSchemaValid(RequestSchema.Value, bytes, name);
-            Assert.True(DocumentationPatchValidator.ParseRequest(bytes).IsValid, name);
+            var parsed = DocumentationPatchValidator.ParseRequest(bytes);
+            Assert.True(parsed.IsValid, name);
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                parsed.Request!.ArtifactSha256);
         }
 
         foreach (var (requestName, resultName) in new[]
@@ -88,6 +92,15 @@ public sealed class DocumentationPatchContractTests
             StringComparison.Ordinal));
         Assert.Equal("patch.result.duplicate-property",
             DocumentationPatchValidator.ParseValidationResult(duplicateResult).Failure!.Code);
+        var missingRequestDigest = Mutate(result, root => root.Remove("patchRequestSha256"));
+        Assert.False(Evaluate(ResultSchema.Value, missingRequestDigest));
+        Assert.Equal("patch.result.invalid-shape",
+            DocumentationPatchValidator.ParseValidationResult(missingRequestDigest).Failure!.Code);
+        var malformedRequestDigest = Mutate(result, root =>
+            root["patchRequestSha256"] = new string('A', 64));
+        Assert.False(Evaluate(ResultSchema.Value, malformedRequestDigest));
+        Assert.Equal("patch.result.invalid-vocabulary",
+            DocumentationPatchValidator.ParseValidationResult(malformedRequestDigest).Failure!.Code);
 
         Assert.Null(DocumentationPatchValidator.ParseRequest(new byte[] { 0xc3, 0x28 }).Request);
         Assert.Null(DocumentationPatchValidator.ParseValidationResult(new byte[] { 0xc3, 0x28 }).Result);
@@ -239,6 +252,7 @@ public sealed class DocumentationPatchContractTests
                 vector.GetProperty("requestFile").GetString()!.Split('/')));
             var result = ParseResult(ReadFixture(
                 vector.GetProperty("resultFile").GetString()!.Split('/')));
+            Assert.Equal(request.ArtifactSha256, result.PatchRequestSha256);
             Assert.True(DocumentationPatchValidator.ValidateResult(request, result).IsValid, caseId);
             var changedFile = Assert.Single(result.ChangedFiles);
             Assert.Equal(vector.GetProperty("expectedOriginalSha256").GetString(),
@@ -397,28 +411,33 @@ public sealed class DocumentationPatchContractTests
     [Fact]
     public void ResultCorrelationAndOutcomeSemantics_FailClosed()
     {
-        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var structuredRequest = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var acceptedRequest = ParseRequest(ReadFixture("valid", "inherit-doc-request.json"));
         var accepted = ReadFixture("valid", "accepted-result.json");
+        var acceptedResult = ParseResult(accepted);
+        Assert.True(DocumentationPatchValidator.ValidateResult(acceptedRequest, acceptedResult).IsValid);
+        Assert.Equal("patch.result.invalid-correlation",
+            DocumentationPatchValidator.ValidateResult(structuredRequest, acceptedResult).Code);
 
         var zeroChange = ParseResult(Mutate(accepted, root =>
         {
             root["changedFiles"] = new JsonArray();
             root["changedDocumentationBlockCount"] = 0;
         }));
-        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(request, zeroChange).Code);
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(acceptedRequest, zeroChange).Code);
 
         var substitutedContext = ParseResult(Mutate(accepted, root =>
             root["context"]!["repositoryContextRef"] = "repoctx-ffeeddccbbaa99887766554433221100"));
-        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(request, substitutedContext).Code);
+        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(acceptedRequest, substitutedContext).Code);
 
         var substitutedTarget = ParseResult(Mutate(accepted, root =>
             root["targets"]![0]!["symbolRef"]!["documentationCommentId"] = "T:Synthetic.Other"));
-        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(request, substitutedTarget).Code);
+        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(acceptedRequest, substitutedTarget).Code);
 
         var identicalHash = ParseResult(Mutate(accepted, root =>
             root["changedFiles"]![0]!["candidateFileSha256"] =
                 root["changedFiles"]![0]!["originalFileSha256"]!.GetValue<string>()));
-        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(request, identicalHash).Code);
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(acceptedRequest, identicalHash).Code);
 
         var stale = ReadFixture("valid", "stale-result.json");
         var rootStaleWithEvaluatedTarget = ParseResult(Mutate(stale, root =>
@@ -428,7 +447,7 @@ public sealed class DocumentationPatchContractTests
             root["diagnostics"]![0]!["path"] = null;
         }));
         Assert.Equal("patch.result.invalid-outcome",
-            DocumentationPatchValidator.ValidateResult(request, rootStaleWithEvaluatedTarget).Code);
+            DocumentationPatchValidator.ValidateResult(structuredRequest, rootStaleWithEvaluatedTarget).Code);
         var rootStale = ParseResult(Mutate(stale, root =>
         {
             root["diagnostics"]![0]!["code"] = "patch.stale.repository-context";
@@ -436,7 +455,7 @@ public sealed class DocumentationPatchContractTests
             root["diagnostics"]![0]!["path"] = null;
             root["targets"]![0]!["status"] = "not-evaluated";
         }));
-        Assert.True(DocumentationPatchValidator.ValidateResult(request, rootStale).IsValid);
+        Assert.True(DocumentationPatchValidator.ValidateResult(structuredRequest, rootStale).IsValid);
     }
 
     [Fact]
@@ -472,8 +491,10 @@ public sealed class DocumentationPatchContractTests
         var replacementRequest = ParseRequest(Mutate(
             ReadFixture("valid", "inherit-doc-request.json"),
             root => root["blocks"]![0]!["editKind"] = "replace"));
+        var replacementResult = ParseResult(Mutate(accepted, root =>
+            root["patchRequestSha256"] = replacementRequest.ArtifactSha256));
         Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
-            replacementRequest, ParseResult(accepted)).Code);
+            replacementRequest, replacementResult).Code);
     }
 
     [Fact]
