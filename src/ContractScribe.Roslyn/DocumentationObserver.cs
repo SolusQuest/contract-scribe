@@ -370,7 +370,7 @@ public sealed class DocumentationObserver
         switch (loadedSource.Kind)
         {
             case LoadedSourceKind.Repository
-                when loadedSource.RepositoryIdentity is { } path:
+                when loadedSource.RepositoryPath is { } path:
                 return SourceFactory.Repository(
                     project.ProjectIdentity,
                     path.Replace('\\', '/'),

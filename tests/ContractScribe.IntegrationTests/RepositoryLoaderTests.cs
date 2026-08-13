@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -1769,6 +1770,127 @@ public sealed class RepositoryLoaderTests
             ?? throw new InvalidOperationException("Repository root not found.");
     }
 
+    [Fact]
+    public async Task RepositoryContextIsSampledOnceForEachSuccessfulReload()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var samples = new Queue<byte[]>(
+        [
+            Enumerable.Repeat((byte)0x11, 16).ToArray(),
+            Enumerable.Repeat((byte)0x22, 16).ToArray(),
+        ]);
+        var calls = 0;
+        var loader = CreateContextLoader(count =>
+        {
+            Assert.Equal(16, count);
+            calls++;
+            return samples.Dequeue();
+        });
+
+        var first = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        var second = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        await using var firstSession = Assert.IsType<LoadedRepositorySession>(first.Session);
+        await using var secondSession = Assert.IsType<LoadedRepositorySession>(second.Session);
+        Assert.Equal(2, calls);
+        Assert.Equal(
+            "repoctx-11111111111111111111111111111111",
+            firstSession.RepositoryContextRef.Value);
+        Assert.Equal(
+            "repoctx-22222222222222222222222222222222",
+            secondSession.RepositoryContextRef.Value);
+        Assert.Equal(firstSession.InputIdentity, secondSession.InputIdentity);
+        var classified = new SymbolClassifier().ClassifySession(
+            firstSession,
+            TargetProfile.ExternalApi);
+        Assert.Same(firstSession, classified.RepositorySession);
+        Assert.Equal(
+            firstSession.RepositoryContextRef,
+            classified.RepositorySession.RepositoryContextRef);
+    }
+
+    [Fact]
+    public async Task RepositoryContextCollisionIsAcceptedWithoutRetryOrRegistry()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var calls = 0;
+        var loader = CreateContextLoader(count =>
+        {
+            Assert.Equal(16, count);
+            calls++;
+            if (calls > 2)
+            {
+                throw new InvalidOperationException("The loader retried a context sample.");
+            }
+
+            return Enumerable.Repeat((byte)0x33, 16).ToArray();
+        });
+
+        var first = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        var second = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        await using var firstSession = Assert.IsType<LoadedRepositorySession>(first.Session);
+        await using var secondSession = Assert.IsType<LoadedRepositorySession>(second.Session);
+        Assert.Equal(2, calls);
+        Assert.Equal(firstSession.RepositoryContextRef, secondSession.RepositoryContextRef);
+    }
+
+    [Fact]
+    public async Task RepositoryContextRejectsMalformedSampleWithoutRetry()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var calls = 0;
+        var loader = CreateContextLoader(count =>
+        {
+            Assert.Equal(16, count);
+            calls++;
+            return new byte[15];
+        });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("loader.internal-error", outcome.PrimaryFailure?.Code);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task IsomorphicPhysicalRootsReceiveIndependentRepositoryContexts()
+    {
+        await using var firstFixture = await LoaderFixture.CreateAsync();
+        await using var secondFixture = await LoaderFixture.CreateAsync();
+        Assert.NotEqual(firstFixture.Root, secondFixture.Root);
+        var samples = new Queue<byte[]>(
+        [
+            Enumerable.Repeat((byte)0x44, 16).ToArray(),
+            Enumerable.Repeat((byte)0x55, 16).ToArray(),
+        ]);
+        var loader = CreateContextLoader(_ => samples.Dequeue());
+
+        var first = await loader.LoadAsync(
+            new RepositoryLoadRequest(firstFixture.Root, "App/App.csproj"));
+        var second = await loader.LoadAsync(
+            new RepositoryLoadRequest(secondFixture.Root, "App/App.csproj"));
+
+        await using var firstSession = Assert.IsType<LoadedRepositorySession>(first.Session);
+        await using var secondSession = Assert.IsType<LoadedRepositorySession>(second.Session);
+        Assert.NotEqual(firstSession.RepositoryContextRef, secondSession.RepositoryContextRef);
+        Assert.Equal(firstSession.InputIdentity, secondSession.InputIdentity);
+    }
+
+    private static RepositoryLoader CreateContextLoader(Func<int, byte[]> source)
+    {
+        var constructor = typeof(RepositoryLoader).GetConstructors(
+                BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(candidate => candidate.GetParameters().Length == 7);
+        return (RepositoryLoader)constructor.Invoke(
+            [null, null, null, null, null, null, source]);
+    }
 }
 
 internal sealed class LoaderFixture : IAsyncDisposable

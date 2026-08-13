@@ -2745,8 +2745,12 @@ public sealed class ClassificationTests
                 .Where(fact => fact is not null)!);
         }
 
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             fixtures[0].ProjectIdentity,
             new ToolchainIdentity("test", "test", "test", "test"),
             projects,

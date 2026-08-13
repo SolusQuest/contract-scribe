@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/ContractScribe.Cli/ContractScribe.Cli.csproj" />
     <Project Path="src/ContractScribe.Core/ContractScribe.Core.csproj" />
+    <Project Path="src/ContractScribe.Patching/ContractScribe.Patching.csproj" />
     <Project Path="src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
   </Folder>
   <Folder Name="/tests/">

@@ -190,7 +190,7 @@ public sealed class PolicyEvidenceExtractor
                 switch (source.Kind)
                 {
                     case LoadedSourceKind.Repository
-                        when source.RepositoryIdentity is { } path:
+                        when source.RepositoryPath is { } path:
                         inputs.Add(PolicyConfigurationInput.Repository(
                             project.ProjectIdentity,
                             path));
@@ -466,7 +466,7 @@ public sealed class PolicyEvidenceExtractor
             RepositoryDocumentationSourceIdentity repository =>
                 loaded.Kind == LoadedSourceKind.Repository
                 && string.Equals(
-                    loaded.RepositoryIdentity,
+                    loaded.RepositoryPath,
                     repository.Path,
                     StringComparison.Ordinal),
             GeneratedDocumentationSourceIdentity generated =>

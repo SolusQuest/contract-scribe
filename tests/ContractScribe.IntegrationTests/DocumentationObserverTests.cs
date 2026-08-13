@@ -1796,8 +1796,12 @@ public sealed class DocumentationObserverTests
             project,
             compilation,
             bindings);
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             ProjectIdentity,
             new ToolchainIdentity("test", "test", "test", "test"),
             [loadedProject],
@@ -1931,8 +1935,12 @@ public sealed class DocumentationObserverTests
                 }));
         }
 
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             ProjectIdentity,
             new ToolchainIdentity("test", "test", "test", "test"),
             projects,
@@ -2043,8 +2051,12 @@ public sealed class DocumentationObserverTests
             projects.Reverse();
         }
 
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             ProjectIdentity,
             new ToolchainIdentity("test", "test", "test", "test"),
             projects,

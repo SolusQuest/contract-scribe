@@ -1128,8 +1128,12 @@ public sealed class PolicyEvidenceExtractorTests
             project,
             compilation,
             bindings);
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             ProjectPath,
             new ToolchainIdentity("test", "test", "test", "test"),
             [loadedProject],
