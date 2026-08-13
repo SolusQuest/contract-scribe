@@ -344,6 +344,20 @@ public sealed class DocumentationPatchContractTests
     }
 
     [Fact]
+    public void RequestValidation_AppliesCategoryPrecedenceAcrossAllBlocks()
+    {
+        var bytes = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            root["blocks"]![0]!["provenanceRefs"]![0] = "prov.missing";
+            root["blocks"]![1]!["editKind"] = "invalid";
+        });
+
+        var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+        Assert.Equal("patch.request.invalid-vocabulary", failure!.Code);
+        Assert.Equal("/blocks/1/editKind", failure.Pointer);
+    }
+
+    [Fact]
     public void SchemaAndCoreRejectTheSameLogicalLineAndComponentIdentityOverflows()
     {
         var valid = ReadFixture("valid", "repository-request.json");
@@ -542,6 +556,18 @@ public sealed class DocumentationPatchContractTests
         var acceptedBytes = ReadFixture("valid", "same-file-accepted-result.json");
         var accepted = ParseResult(acceptedBytes);
         Assert.True(DocumentationPatchValidator.ValidateResult(request, accepted).IsValid);
+
+        var inconsistentHashRequest = ParseRequest(Mutate(requestBytes, root =>
+            root["blocks"]![1]!["locator"]!["originalFileSha256"] = new string('a', 64)));
+        var inconsistentlyCorrelatedResult = ParseResult(Mutate(acceptedBytes, root =>
+        {
+            root["patchRequestSha256"] = inconsistentHashRequest.ArtifactSha256;
+            root["targets"]![1]!["locator"]!["originalFileSha256"] = new string('a', 64);
+        }));
+        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(
+            inconsistentHashRequest,
+            inconsistentlyCorrelatedResult).Code);
+
         foreach (var mutation in new Action<JsonObject>[]
         {
             root =>

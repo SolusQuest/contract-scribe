@@ -95,7 +95,7 @@ public static class DocumentationPatchValidator
                 foreach (var element in blocksElement.EnumerateArray())
                 {
                     var pointer = $"/blocks/{index}";
-                    var block = ParseBlock(element, pointer, catalog);
+                    var block = ParseBlock(element, pointer);
                     if (!blockIds.Add(block.BlockId))
                     {
                         throw Fail("invalid-order", pointer + "/blockId");
@@ -116,6 +116,19 @@ public static class DocumentationPatchValidator
 
                     blocks.Add(block);
                     index++;
+                }
+
+                for (var blockIndex = 0; blockIndex < blocks.Count; blockIndex++)
+                {
+                    foreach (var provenanceRef in blocks[blockIndex].ProvenanceRefs)
+                    {
+                        if (catalog.BinarySearch(provenanceRef, StringComparer.Ordinal) < 0)
+                        {
+                            throw Fail(
+                                "invalid-reference",
+                                $"/blocks/{blockIndex}/provenanceRefs");
+                        }
+                    }
                 }
 
                 return new DocumentationPatchRequestParseResult(
@@ -381,10 +394,10 @@ public static class DocumentationPatchValidator
         foreach (var file in result.ChangedFiles)
         {
             if (!repositoryBlocks.TryGetValue(file.Path, out var pathBlocks)
-                || !pathBlocks
-                    .Select(block => ((DocumentationPatchRepositoryLocator)block.Locator)
-                        .OriginalFileSha256)
-                    .Contains(file.OriginalFileSha256, StringComparer.Ordinal))
+                || !pathBlocks.All(block => string.Equals(
+                    ((DocumentationPatchRepositoryLocator)block.Locator).OriginalFileSha256,
+                    file.OriginalFileSha256,
+                    StringComparison.Ordinal)))
             {
                 return Invalid("patch.result.invalid-correlation");
             }
@@ -671,8 +684,7 @@ public static class DocumentationPatchValidator
 
     private static DocumentationPatchBlockRequest ParseBlock(
         JsonElement element,
-        string pointer,
-        ImmutableArray<string> provenanceCatalog)
+        string pointer)
     {
         ExpectProperties(
             element,
@@ -702,13 +714,6 @@ public static class DocumentationPatchValidator
             pointer + "/provenanceRefs",
             64,
             allowEmpty: true);
-        foreach (var provenanceRef in provenanceRefs)
-        {
-            if (provenanceCatalog.BinarySearch(provenanceRef, StringComparer.Ordinal) < 0)
-            {
-                throw Fail("invalid-reference", pointer + "/provenanceRefs");
-            }
-        }
 
         return new DocumentationPatchBlockRequest(
             blockId,
