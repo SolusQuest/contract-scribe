@@ -2707,14 +2707,16 @@ public sealed class ClassificationTests
             bindings.Add(
                 trees[index],
                 source.Kind == LoadedSourceKind.Repository
-                    ? new LoadedSourceTree(
-                        LoadedSourceKind.Repository,
-                        source.Path,
-                        null)
-                    : new LoadedSourceTree(
-                        source.Kind,
-                        null,
-                        source.GeneratedSource));
+                     ? new LoadedSourceTree(
+                         LoadedSourceKind.Repository,
+                         source.Path,
+                         source.Path,
+                         null)
+                     : new LoadedSourceTree(
+                         source.Kind,
+                         null,
+                         null,
+                         source.GeneratedSource));
         }
 
         return new CompilationFixture(compilation, bindings, sources);

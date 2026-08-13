@@ -1781,10 +1781,13 @@ public sealed class DocumentationObserverTests
                 pair.First,
                 new LoadedSourceTree(
                     pair.Second.Kind,
-                    pair.Second.Kind == LoadedSourceKind.Repository
-                        ? pair.Second.Path
-                        : null,
-                    pair.Second.GeneratedSource));
+                     pair.Second.Kind == LoadedSourceKind.Repository
+                         ? pair.Second.Path
+                         : null,
+                     pair.Second.Kind == LoadedSourceKind.Repository
+                         ? pair.Second.Path
+                         : null,
+                     pair.Second.GeneratedSource));
         }
 
         var loadedProject = new LoadedProject(
@@ -1909,10 +1912,11 @@ public sealed class DocumentationObserverTests
                 new Dictionary<SyntaxTree, LoadedSourceTree>(
                     ReferenceEqualityComparer.Instance)
                 {
-                    [directTree] = new(
-                        LoadedSourceKind.Repository,
-                        "src/Direct.cs",
-                        null),
+                     [directTree] = new(
+                         LoadedSourceKind.Repository,
+                         "src/Direct.cs",
+                         "src/Direct.cs",
+                         null),
                 }),
         };
         if (includeDependencyProject)
@@ -1929,9 +1933,10 @@ public sealed class DocumentationObserverTests
                     ReferenceEqualityComparer.Instance)
                 {
                     [endpointTree] = new(
-                        LoadedSourceKind.Repository,
-                        "dependency/Endpoint.cs",
-                        null),
+                         LoadedSourceKind.Repository,
+                         "dependency/Endpoint.cs",
+                         "dependency/Endpoint.cs",
+                         null),
                 }));
         }
 
@@ -2040,9 +2045,10 @@ public sealed class DocumentationObserverTests
                     ReferenceEqualityComparer.Instance)
                 {
                     [syntaxTree] = new(
-                        LoadedSourceKind.Repository,
-                        descriptor.Path,
-                        null),
+                         LoadedSourceKind.Repository,
+                         descriptor.Path,
+                         descriptor.Path,
+                         null),
                 }));
         }
 

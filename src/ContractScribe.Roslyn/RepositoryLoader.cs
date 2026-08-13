@@ -509,7 +509,8 @@ internal static class PostRegistrationLoader
                         pair.Key,
                         new LoadedSourceTree(
                             LoadedSourceKind.Repository,
-                            pair.Value,
+                            pair.Value.RepositoryPath,
+                            pair.Value.PhysicalSourceIdentity,
                             null));
                 }
 
@@ -519,6 +520,7 @@ internal static class PostRegistrationLoader
                         binding.SyntaxTree,
                         new LoadedSourceTree(
                             binding.Kind,
+                            null,
                             null,
                             binding.Fact));
                 }
@@ -826,7 +828,7 @@ internal static class PostRegistrationLoader
         return graph;
     }
 
-    private static async Task<IReadOnlyDictionary<SyntaxTree, string>> ValidateWorkspaceSourcesAsync(
+    private static async Task<IReadOnlyDictionary<SyntaxTree, WorkspaceSourceBinding>> ValidateWorkspaceSourcesAsync(
         ResolvedRepositoryPaths paths,
         EvaluatedProject node,
         RoslynProject project,
@@ -835,7 +837,8 @@ internal static class PostRegistrationLoader
         LoaderExecutionState state,
         CancellationToken cancellationToken)
     {
-        var trees = new Dictionary<SyntaxTree, string>(ReferenceEqualityComparer.Instance);
+        var trees = new Dictionary<SyntaxTree, WorkspaceSourceBinding>(
+            ReferenceEqualityComparer.Instance);
         foreach (var document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -852,9 +855,9 @@ internal static class PostRegistrationLoader
                 []);
             var tree = await document.GetSyntaxTreeAsync(cancellationToken)
                 ?? throw LoaderException.Graph("graph.source-outside-root");
-            trees.Add(
-                tree,
-                resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath)));
+            trees.Add(tree, new WorkspaceSourceBinding(
+                resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath)),
+                resolver.PhysicalIdentity(paths.PhysicalRoot, resolution.PhysicalPath)));
         }
 
         foreach (var document in project.AdditionalDocuments.Concat(project.AnalyzerConfigDocuments))
@@ -1301,6 +1304,10 @@ internal static class PostRegistrationLoader
     private static StringComparer PathComparer() =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
+
+internal sealed record WorkspaceSourceBinding(
+    string RepositoryPath,
+    string PhysicalSourceIdentity);
 
 internal sealed record GeneratedAuthorityDocument(
     string Name,

@@ -1113,10 +1113,13 @@ public sealed class PolicyEvidenceExtractorTests
                 pair.First,
                 new LoadedSourceTree(
                     pair.Second.Kind,
-                    pair.Second.Kind == LoadedSourceKind.Repository
-                        ? pair.Second.Path
-                        : null,
-                    pair.Second.GeneratedSource));
+                     pair.Second.Kind == LoadedSourceKind.Repository
+                         ? pair.Second.Path
+                         : null,
+                     pair.Second.Kind == LoadedSourceKind.Repository
+                         ? pair.Second.Path
+                         : null,
+                     pair.Second.GeneratedSource));
         }
 
         var loadedProject = new LoadedProject(

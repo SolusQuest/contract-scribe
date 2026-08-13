@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using ContractScribe.Core;
 using ContractScribe.Patching.Resolution;
 using Microsoft.CodeAnalysis;
@@ -63,6 +65,57 @@ public sealed class DocumentationPatchResolutionTests
 
         Assert.Equal(DocumentationPatchResolutionStatus.Resolved, result.Status);
         Assert.Single(result.Targets);
+    }
+
+    [Fact]
+    public async Task PhysicalSourceAliasesCannotEvadeOwnerExclusivity()
+    {
+        await using var fixture = await PhysicalOwnerFixture.CreateAsync(useAlias: true);
+        Assert.NotEqual(
+            fixture.RepositoryPaths[0],
+            fixture.RepositoryPaths[1]);
+        Assert.Equal(
+            fixture.PhysicalSourceIdentities[0],
+            fixture.PhysicalSourceIdentities[1]);
+        Assert.All(
+            fixture.PhysicalSourceIdentities,
+            identity => Assert.False(Path.IsPathRooted(identity)));
+
+        foreach (var block in fixture.Blocks)
+        {
+            var single = new DocumentationPatchResolver().Resolve(
+                fixture.ClassifiedSession,
+                fixture.Request([block]));
+            Assert.Equal(DocumentationPatchResolutionStatus.Rejected, single.Status);
+            Assert.Equal("patch.rejected.ambiguous-target", single.PrimaryCode);
+            Assert.Empty(single.Targets);
+        }
+
+        var both = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(fixture.Blocks));
+        Assert.Equal(DocumentationPatchResolutionStatus.Rejected, both.Status);
+        Assert.Equal("patch.rejected.ambiguous-target", both.PrimaryCode);
+        Assert.Empty(both.Targets);
+    }
+
+    [Fact]
+    public async Task EqualBytesAndSpansOnDifferentPhysicalFilesRemainDistinctOwners()
+    {
+        await using var fixture = await PhysicalOwnerFixture.CreateAsync(useAlias: false);
+        Assert.NotEqual(
+            fixture.RepositoryPaths[0],
+            fixture.RepositoryPaths[1]);
+        Assert.NotEqual(
+            fixture.PhysicalSourceIdentities[0],
+            fixture.PhysicalSourceIdentities[1]);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(fixture.Blocks));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Resolved, result.Status);
+        Assert.Equal(2, result.Targets.Length);
     }
 
     [Theory]
@@ -723,6 +776,35 @@ public sealed class DocumentationPatchResolutionTests
         Assert.Empty(result.Targets);
     }
 
+    [Fact]
+    public void PartialConstructorIsAmbiguous()
+    {
+        const string source = """
+            namespace N;
+            public partial class C
+            {
+                public partial C(string defining);
+                /// <summary>implementation</summary>
+                public partial C(string implementing) { }
+            }
+            """;
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName: "C",
+            declarationOccurrence: 1,
+            primaryKind: PrimarySymbolKind.Constructor,
+            useRealClassifier: true);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(editKind: DocumentationPatchEditKind.Replace));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Rejected, result.Status);
+        Assert.Equal("patch.rejected.ambiguous-target", result.PrimaryCode);
+        Assert.Empty(result.Targets);
+    }
+
     [Theory]
     [InlineData("well-formed")]
     [InlineData("whitespace")]
@@ -828,6 +910,195 @@ public sealed class DocumentationPatchResolutionTests
                 fixture.ClassifiedSession,
                 fixture.Request(),
                 cancellation.Token));
+    }
+
+    private sealed class PhysicalOwnerFixture : IAsyncDisposable
+    {
+        private const string Source = "public class Api { }";
+        private readonly LoaderFixture loaderFixture;
+        private readonly LoadedRepositorySession repositorySession;
+
+        private PhysicalOwnerFixture(
+            LoaderFixture loaderFixture,
+            LoadedRepositorySession repositorySession,
+            ClassifiedRepositorySession classifiedSession,
+            ImmutableArray<DocumentationPatchBlockRequest> blocks,
+            ImmutableArray<string> repositoryPaths,
+            ImmutableArray<string> physicalSourceIdentities)
+        {
+            this.loaderFixture = loaderFixture;
+            this.repositorySession = repositorySession;
+            ClassifiedSession = classifiedSession;
+            Blocks = blocks;
+            RepositoryPaths = repositoryPaths;
+            PhysicalSourceIdentities = physicalSourceIdentities;
+        }
+
+        public ClassifiedRepositorySession ClassifiedSession { get; }
+
+        public ImmutableArray<DocumentationPatchBlockRequest> Blocks { get; }
+
+        public ImmutableArray<string> RepositoryPaths { get; }
+
+        public ImmutableArray<string> PhysicalSourceIdentities { get; }
+
+        public static async Task<PhysicalOwnerFixture> CreateAsync(bool useAlias)
+        {
+            var loaderFixture = await LoaderFixture.CreateAsync();
+            var sharedDirectory = Path.Join(loaderFixture.Root, "Shared");
+            var aliasDirectory = Path.Join(loaderFixture.Root, "Alias");
+            Directory.CreateDirectory(sharedDirectory);
+            await File.WriteAllTextAsync(Path.Join(sharedDirectory, "Api.cs"), Source);
+            if (useAlias)
+            {
+                CreateDirectoryLink(aliasDirectory, sharedDirectory);
+            }
+            else
+            {
+                Directory.CreateDirectory(aliasDirectory);
+                await File.WriteAllTextAsync(Path.Join(aliasDirectory, "Api.cs"), Source);
+            }
+
+            await ConfigureProjectAsync(
+                Path.Join(loaderFixture.Root, "App", "App.csproj"),
+                "../Shared/Api.cs");
+            await ConfigureProjectAsync(
+                Path.Join(loaderFixture.Root, "Library", "Library.csproj"),
+                "../Alias/Api.cs");
+
+            var outcome = await new RepositoryLoader().LoadAsync(
+                new RepositoryLoadRequest(loaderFixture.Root, "Fixture.slnx"));
+            Assert.Equal(RepositoryLoadStatus.Success, outcome.Status);
+            var repository = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+            var classified = new SymbolClassifier().ClassifySession(
+                repository,
+                TargetProfile.ExternalApi);
+            var classification = Assert.IsType<ClassificationSet>(
+                classified.Classification.ClassificationSet);
+            var targets = classification.Targets
+                .Where(target => target.SupportStatus == SupportStatus.Supported
+                    && target.SymbolRef.DocumentationCommentId == "T:Api")
+                .OrderBy(target => target.SymbolRef.CompilationContextRef, StringComparer.Ordinal)
+                .ToImmutableArray();
+            Assert.Equal(2, targets.Length);
+
+            var blocks = ImmutableArray.CreateBuilder<DocumentationPatchBlockRequest>();
+            var repositoryPaths = ImmutableArray.CreateBuilder<string>();
+            var physicalSourceIdentities = ImmutableArray.CreateBuilder<string>();
+            for (var index = 0; index < targets.Length; index++)
+            {
+                var target = targets[index];
+                var project = Assert.Single(repository.Projects, candidate =>
+                    candidate.CompilationContextRef == target.SymbolRef.CompilationContextRef);
+                var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+                    target.SymbolRef.DocumentationCommentId,
+                    project.Compilation));
+                var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
+                var source = project.SourceTrees[reference.SyntaxTree];
+                var repositoryPath = Assert.IsType<string>(source.RepositoryPath);
+                var physicalSourceIdentity = Assert.IsType<string>(
+                    source.PhysicalSourceIdentity);
+                var bytes = await File.ReadAllBytesAsync(Path.Join(
+                    loaderFixture.Root,
+                    repositoryPath.Replace('/', Path.DirectorySeparatorChar)));
+                blocks.Add(new DocumentationPatchBlockRequest(
+                    $"block-{index + 1}",
+                    target.SymbolRef,
+                    new DocumentationPatchRepositoryLocator(
+                        repositoryPath,
+                        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                        DocumentationPatchRepositoryEncoding.Utf8,
+                        DocumentationObservationInput.Span(
+                            reference.Span.Start,
+                            reference.Span.End)),
+                    DocumentationPatchEditKind.Insert,
+                    [],
+                    new DocumentationPatchInheritDocContent(),
+                    []));
+                repositoryPaths.Add(repositoryPath);
+                physicalSourceIdentities.Add(physicalSourceIdentity);
+            }
+
+            return new PhysicalOwnerFixture(
+                loaderFixture,
+                repository,
+                classified,
+                blocks.ToImmutable(),
+                repositoryPaths.ToImmutable(),
+                physicalSourceIdentities.ToImmutable());
+        }
+
+        public DocumentationPatchRequest Request(
+            ImmutableArray<DocumentationPatchBlockRequest> blocks) =>
+            new(
+                new string('0', 64),
+                new DocumentationPatchContext(
+                    repositorySession.RepositoryContextRef,
+                    repositorySession.InputIdentity,
+                    TargetProfile.ExternalApi),
+                [],
+                blocks);
+
+        public async ValueTask DisposeAsync()
+        {
+            await repositorySession.DisposeAsync();
+            await loaderFixture.DisposeAsync();
+        }
+
+        private static async Task ConfigureProjectAsync(
+            string projectPath,
+            string sourcePath)
+        {
+            var document = XDocument.Load(projectPath);
+            var root = Assert.IsType<XElement>(document.Root);
+            var xmlNamespace = root.Name.Namespace;
+            foreach (var reference in root.Descendants(xmlNamespace + "ProjectReference").ToArray())
+            {
+                reference.Remove();
+            }
+
+            root.Add(
+                new XElement(
+                    xmlNamespace + "PropertyGroup",
+                    new XElement(xmlNamespace + "EnableDefaultCompileItems", "false")),
+                new XElement(
+                    xmlNamespace + "ItemGroup",
+                    new XElement(
+                        xmlNamespace + "Compile",
+                        new XAttribute("Include", sourcePath),
+                        new XAttribute("Link", "Api.cs"))));
+            await File.WriteAllTextAsync(projectPath, document.ToString());
+        }
+
+        private static void CreateDirectoryLink(string link, string target)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Directory.CreateSymbolicLink(link, target);
+                return;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add("mklink");
+            startInfo.ArgumentList.Add("/J");
+            startInfo.ArgumentList.Add(link);
+            startInfo.ArgumentList.Add(target);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Junction setup failed.");
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException("Mandatory Windows junction setup failed.");
+            }
+        }
     }
 
     private sealed class PatchFixture : IDisposable
@@ -945,6 +1216,8 @@ public sealed class DocumentationPatchResolutionTests
                 {
                     MethodDeclarationSyntax method =>
                         string.Equals(method.Identifier.ValueText, declarationName, StringComparison.Ordinal),
+                    ConstructorDeclarationSyntax constructor =>
+                        string.Equals(constructor.Identifier.ValueText, declarationName, StringComparison.Ordinal),
                     VariableDeclaratorSyntax variable =>
                         string.Equals(variable.Identifier.ValueText, declarationName, StringComparison.Ordinal),
                     TypeDeclarationSyntax type =>
@@ -1013,10 +1286,13 @@ public sealed class DocumentationPatchResolutionTests
                     tree => tree,
                     tree => new LoadedSourceTree(
                         sourceKind,
-                        sourceKind == LoadedSourceKind.Repository
-                            ? Path.GetFileName(tree.FilePath)
-                            : null,
-                        generatedFact)));
+                         sourceKind == LoadedSourceKind.Repository
+                             ? Path.GetFileName(tree.FilePath)
+                             : null,
+                         sourceKind == LoadedSourceKind.Repository
+                             ? Path.GetFileName(tree.FilePath)
+                             : null,
+                         generatedFact)));
             Assert.True(RepositoryContextRef.TryParse(
                 "repoctx-0123456789abcdef0123456789abcdef",
                 out var repositoryContextRef));

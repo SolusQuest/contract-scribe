@@ -46,6 +46,7 @@ public sealed record DocumentationPatchResolvedDeclaration
         SymbolRef symbolRef,
         string projectIdentity,
         string repositoryPath,
+        string physicalSourceIdentity,
         string sourceSha256,
         DocumentationPatchRepositoryEncoding encoding,
         Utf16Span requestedDeclarationSpan,
@@ -63,6 +64,7 @@ public sealed record DocumentationPatchResolvedDeclaration
         SymbolRef = symbolRef;
         ProjectIdentity = projectIdentity;
         RepositoryPath = repositoryPath;
+        PhysicalSourceIdentity = physicalSourceIdentity;
         SourceSha256 = sourceSha256;
         Encoding = encoding;
         RequestedDeclarationSpan = requestedDeclarationSpan;
@@ -84,6 +86,8 @@ public sealed record DocumentationPatchResolvedDeclaration
     public string ProjectIdentity { get; }
 
     public string RepositoryPath { get; }
+
+    public string PhysicalSourceIdentity { get; }
 
     public string SourceSha256 { get; }
 
@@ -309,8 +313,7 @@ public sealed class DocumentationPatchDeclarationResolver
 
         var symbol = symbols[0];
         var definition = CanonicalPartialMember(symbol);
-        if (definition is IPropertySymbol { PartialImplementationPart: not null }
-            or IEventSymbol { PartialImplementationPart: not null })
+        if (HasUnauthorizedPartialImplementation(definition))
         {
             AddFailure(failures, block, "patch.rejected.ambiguous-target");
             return null;
@@ -359,6 +362,9 @@ public sealed class DocumentationPatchDeclarationResolver
 
         var reference = matching[0];
         var syntax = reference.GetSyntax(cancellationToken);
+        var physicalSourceIdentity = project.SourceTrees[reference.SyntaxTree].PhysicalSourceIdentity
+            ?? throw new InvalidOperationException(
+                "A repository source must retain its physical source identity.");
         var owner = GetDocumentationOwner(syntax);
         if (owner is null)
         {
@@ -373,7 +379,7 @@ public sealed class DocumentationPatchDeclarationResolver
         var ownerResolution = ResolveOwnerSymbols(
             classifications,
             projects,
-            locator.Path,
+            physicalSourceIdentity,
             owner.Span.Start,
             owner.Span.End,
             cancellationToken);
@@ -398,6 +404,7 @@ public sealed class DocumentationPatchDeclarationResolver
             block.SymbolRef,
             project.ProjectIdentity,
             locator.Path,
+            physicalSourceIdentity,
             locator.OriginalFileSha256,
             locator.Encoding,
             locator.DeclarationSpan,
@@ -499,7 +506,7 @@ public sealed class DocumentationPatchDeclarationResolver
     private static OwnerResolution ResolveOwnerSymbols(
         ClassificationSet classifications,
         IReadOnlyDictionary<string, LoadedProject> projects,
-        string path,
+        string physicalSourceIdentity,
         int ownerStart,
         int ownerEnd,
         CancellationToken cancellationToken)
@@ -520,12 +527,14 @@ public sealed class DocumentationPatchDeclarationResolver
                 project.Compilation).Select(CanonicalPartialMember))
             {
                 var references = canonical.DeclaringSyntaxReferences
-                    .Concat(GetPartialImplementation(canonical)?.DeclaringSyntaxReferences ?? []);
+                    .Concat(GetAnyPartialImplementation(canonical)?.DeclaringSyntaxReferences ?? []);
                 foreach (var reference in references)
                 {
                     if (!project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source)
-                        || source.RepositoryPath is not { } sourcePath
-                        || !string.Equals(sourcePath, path, StringComparison.Ordinal))
+                        || !string.Equals(
+                            source.PhysicalSourceIdentity,
+                            physicalSourceIdentity,
+                            StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -866,7 +875,21 @@ public sealed class DocumentationPatchDeclarationResolver
     private static ISymbol? GetPartialImplementation(ISymbol symbol) =>
         symbol switch
         {
+            IMethodSymbol { MethodKind: MethodKind.Ordinary } method =>
+                method.PartialImplementationPart,
+            _ => null,
+        };
+
+    private static bool HasUnauthorizedPartialImplementation(ISymbol symbol) =>
+        GetAnyPartialImplementation(symbol) is not null
+        && GetPartialImplementation(symbol) is null;
+
+    private static ISymbol? GetAnyPartialImplementation(ISymbol symbol) =>
+        symbol switch
+        {
             IMethodSymbol method => method.PartialImplementationPart,
+            IPropertySymbol property => property.PartialImplementationPart,
+            IEventSymbol @event => @event.PartialImplementationPart,
             _ => null,
         };
 

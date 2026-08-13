@@ -270,6 +270,7 @@ internal enum LoadedSourceKind
 internal sealed record LoadedSourceTree(
     LoadedSourceKind Kind,
     string? RepositoryPath,
+    string? PhysicalSourceIdentity,
     GeneratedSourceFact? GeneratedSource);
 
 internal sealed record GeneratedSourceBinding(

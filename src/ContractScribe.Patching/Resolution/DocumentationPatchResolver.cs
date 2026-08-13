@@ -190,7 +190,7 @@ public sealed class DocumentationPatchResolver
 
         foreach (var group in declarations.GroupBy(
             declaration => new OwnerKey(
-                declaration.RepositoryPath,
+                declaration.PhysicalSourceIdentity,
                 declaration.OwnerSpan.Start,
                 declaration.OwnerSpan.End)))
         {
@@ -310,7 +310,7 @@ public sealed class DocumentationPatchResolver
         new(status, code, blockId, []);
 
     private readonly record struct OwnerKey(
-        string RepositoryPath,
+        string PhysicalSourceIdentity,
         int Start,
         int End);
 }
