@@ -382,6 +382,7 @@ public sealed class DocumentationPatchDeclarationResolver
             physicalSourceIdentity,
             owner.Span.Start,
             owner.Span.End,
+            cache,
             cancellationToken);
         var attached = GetAttachedDocumentation(owner.GetLeadingTrivia());
         var blockState = AnalyzeBlock(attached);
@@ -509,6 +510,7 @@ public sealed class DocumentationPatchDeclarationResolver
         string physicalSourceIdentity,
         int ownerStart,
         int ownerEnd,
+        ResolverCache cache,
         CancellationToken cancellationToken)
     {
         var symbols = ImmutableHashSet.CreateBuilder<SymbolRef>();
@@ -531,8 +533,15 @@ public sealed class DocumentationPatchDeclarationResolver
                 foreach (var reference in references)
                 {
                     if (!project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source)
+                        || source.RepositoryPath is not { } sourcePath)
+                    {
+                        continue;
+                    }
+
+                    var current = cache.Read(sourcePath);
+                    if (current.FailureCode is not null
                         || !string.Equals(
-                            source.PhysicalSourceIdentity,
+                            current.PhysicalSourceIdentity,
                             physicalSourceIdentity,
                             StringComparison.Ordinal))
                     {
@@ -616,6 +625,10 @@ public sealed class DocumentationPatchDeclarationResolver
             var current = cache.Read(path);
             if (current.FailureCode is not null
                 || !string.Equals(
+                    current.PhysicalSourceIdentity,
+                    source.PhysicalSourceIdentity,
+                    StringComparison.Ordinal)
+                || !string.Equals(
                     current.DecodedText,
                     reference.SyntaxTree.GetText(cancellationToken).ToString(),
                     StringComparison.Ordinal))
@@ -638,11 +651,13 @@ public sealed class DocumentationPatchDeclarationResolver
         if (locator is DocumentationPatchRepositoryLocator repositoryLocator)
         {
             var matchingTrees = repository.Projects
+                .Where(project => string.Equals(
+                    project.CompilationContextRef,
+                    symbolRef.CompilationContextRef,
+                    StringComparison.Ordinal))
                 .SelectMany(project => project.SourceTrees)
                 .Where(pair => pair.Value.RepositoryPath is { } path
                     && string.Equals(path, repositoryLocator.Path, StringComparison.Ordinal))
-                .Select(pair => pair.Key)
-                .Distinct()
                 .ToImmutableArray();
             if (matchingTrees.IsEmpty)
             {
@@ -655,6 +670,14 @@ public sealed class DocumentationPatchDeclarationResolver
                 return SourceCheck.Failure(readFailure);
             }
 
+            if (matchingTrees.Any(pair => !string.Equals(
+                pair.Value.PhysicalSourceIdentity,
+                current.PhysicalSourceIdentity,
+                StringComparison.Ordinal)))
+            {
+                return SourceCheck.Failure("patch.stale.source-bytes");
+            }
+
             var validated = DocumentationPatchValidator.ValidateRepositorySource(
                 repositoryLocator,
                 current.Bytes);
@@ -663,16 +686,16 @@ public sealed class DocumentationPatchDeclarationResolver
                 return SourceCheck.Failure(validated.Code!);
             }
 
-            if (!matchingTrees.Any(tree => string.Equals(
-                tree.GetText(cancellationToken).ToString(),
+            if (!matchingTrees.Any(pair => string.Equals(
+                pair.Key.GetText(cancellationToken).ToString(),
                 validated.DecodedText,
                 StringComparison.Ordinal)))
             {
                 return SourceCheck.Failure("patch.stale.source-bytes");
             }
 
-            if (!matchingTrees.Any(tree => HasExactDeclarationSpan(
-                tree,
+            if (!matchingTrees.Any(pair => HasExactDeclarationSpan(
+                pair.Key,
                 repositoryLocator.DeclarationSpan,
                 cancellationToken)))
             {
@@ -906,6 +929,7 @@ public sealed class DocumentationPatchDeclarationResolver
     private sealed record CurrentSource(
         byte[] Bytes,
         string? DecodedText,
+        string? PhysicalSourceIdentity,
         string? FailureCode);
 
     private sealed record OwnerResolution(
@@ -949,11 +973,21 @@ public sealed class DocumentationPatchDeclarationResolver
                     physicalRepositoryRoot,
                     candidate);
                 var bytes = File.ReadAllBytes(resolved.PhysicalPath);
-                result = new CurrentSource(bytes, Decode(bytes), null);
+                result = new CurrentSource(
+                    bytes,
+                    Decode(bytes),
+                    pathResolver.PhysicalIdentity(
+                        physicalRepositoryRoot,
+                        resolved.PhysicalPath),
+                    null);
             }
             catch (DecoderFallbackException)
             {
-                result = new CurrentSource([], null, "patch.stale.source-encoding");
+                result = new CurrentSource(
+                    [],
+                    null,
+                    null,
+                    "patch.stale.source-encoding");
             }
             catch (Exception exception) when (exception is IOException
                 or UnauthorizedAccessException
@@ -961,7 +995,11 @@ public sealed class DocumentationPatchDeclarationResolver
                 or NotSupportedException
                 or LoaderException)
             {
-                result = new CurrentSource([], null, "patch.stale.source-bytes");
+                result = new CurrentSource(
+                    [],
+                    null,
+                    null,
+                    "patch.stale.source-bytes");
             }
 
             sources.Add(repositoryPath, result);

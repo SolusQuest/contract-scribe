@@ -118,6 +118,31 @@ public sealed class DocumentationPatchResolutionTests
         Assert.Equal(2, result.Targets.Length);
     }
 
+    [Fact]
+    public async Task LiveContainedAliasConvergenceCannotEvadeOwnerExclusivity()
+    {
+        await using var fixture = await PhysicalOwnerFixture.CreateAsync(useAlias: false);
+        Assert.NotEqual(
+            fixture.PhysicalSourceIdentities[0],
+            fixture.PhysicalSourceIdentities[1]);
+        fixture.RetargetAliasToShared();
+
+        foreach (var block in fixture.Blocks)
+        {
+            var single = new DocumentationPatchResolver().Resolve(
+                fixture.ClassifiedSession,
+                fixture.Request([block]));
+            Assert.NotEqual(DocumentationPatchResolutionStatus.Resolved, single.Status);
+            Assert.Empty(single.Targets);
+        }
+
+        var both = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(fixture.Blocks));
+        Assert.NotEqual(DocumentationPatchResolutionStatus.Resolved, both.Status);
+        Assert.Empty(both.Targets);
+    }
+
     [Theory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8)]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom)]
@@ -1039,6 +1064,15 @@ public sealed class DocumentationPatchResolutionTests
                 [],
                 blocks);
 
+        public void RetargetAliasToShared()
+        {
+            var aliasDirectory = Path.Join(loaderFixture.Root, "Alias");
+            Directory.Delete(aliasDirectory, recursive: true);
+            CreateDirectoryLink(
+                aliasDirectory,
+                Path.Join(loaderFixture.Root, "Shared"));
+        }
+
         public async ValueTask DisposeAsync()
         {
             await repositorySession.DisposeAsync();
@@ -1286,13 +1320,15 @@ public sealed class DocumentationPatchResolutionTests
                     tree => tree,
                     tree => new LoadedSourceTree(
                         sourceKind,
-                         sourceKind == LoadedSourceKind.Repository
-                             ? Path.GetFileName(tree.FilePath)
-                             : null,
-                         sourceKind == LoadedSourceKind.Repository
-                             ? Path.GetFileName(tree.FilePath)
-                             : null,
-                         generatedFact)));
+                        sourceKind == LoadedSourceKind.Repository
+                            ? Path.GetFileName(tree.FilePath)
+                            : null,
+                        sourceKind == LoadedSourceKind.Repository
+                            ? new RepositoryPathResolver().PhysicalIdentity(
+                                root,
+                                tree.FilePath)
+                            : null,
+                        generatedFact)));
             Assert.True(RepositoryContextRef.TryParse(
                 "repoctx-0123456789abcdef0123456789abcdef",
                 out var repositoryContextRef));
