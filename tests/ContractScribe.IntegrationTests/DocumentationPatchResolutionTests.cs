@@ -35,7 +35,7 @@ public sealed class DocumentationPatchResolutionTests
         var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
         var source = project.SourceTrees[reference.SyntaxTree];
         var path = Assert.IsType<string>(source.RepositoryPath);
-        var bytes = await File.ReadAllBytesAsync(Path.Combine(
+        var bytes = await File.ReadAllBytesAsync(Path.Join(
             fixture.Root,
             path.Replace('/', Path.DirectorySeparatorChar)));
         var locator = new DocumentationPatchRepositoryLocator(
@@ -697,16 +697,16 @@ public sealed class DocumentationPatchResolutionTests
             bool includePrimaryConstructorTarget = false,
             bool unresolvedAmbiguous = false)
         {
-            var root = Path.Combine(
+            var root = Path.Join(
                 Path.GetTempPath(),
                 "contract-scribe-patch-resolution-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            var sourcePath = Path.Combine(root, "Sample.cs");
+            var sourcePath = Path.Join(root, "Sample.cs");
             var exactBytes = Encode(source, encoding);
             File.WriteAllBytes(sourcePath, exactBytes);
             var secondarySourcePath = secondarySource is null
                 ? null
-                : Path.Combine(root, "Secondary.cs");
+                : Path.Join(root, "Secondary.cs");
             if (secondarySourcePath is not null)
             {
                 File.WriteAllBytes(secondarySourcePath, Encode(secondarySource!, encoding));
@@ -1002,14 +1002,14 @@ public sealed class DocumentationPatchResolutionTests
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null
-            && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+            && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
         {
             directory = directory.Parent;
         }
 
         var root = directory?.FullName
             ?? throw new InvalidOperationException("Repository root not found.");
-        using var document = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+        using var document = JsonDocument.Parse(File.ReadAllBytes(Path.Join(
             root,
             "tests",
             "fixtures",

@@ -501,11 +501,10 @@ public sealed class DocumentationPatchDeclarationResolver
                 continue;
             }
 
-            foreach (var symbol in DocumentationCommentId.GetSymbolsForDeclarationId(
+            foreach (var canonical in DocumentationCommentId.GetSymbolsForDeclarationId(
                 target.SymbolRef.DocumentationCommentId,
-                project.Compilation))
+                project.Compilation).Select(CanonicalPartialMember))
             {
-                var canonical = CanonicalPartialMember(symbol);
                 var references = canonical.DeclaringSyntaxReferences
                     .Concat(GetPartialImplementation(canonical)?.DeclaringSyntaxReferences ?? []);
                 foreach (var reference in references)
@@ -898,9 +897,19 @@ public sealed class DocumentationPatchDeclarationResolver
             CurrentSource result;
             try
             {
-                var candidate = Path.GetFullPath(Path.Combine(
+                var relativePath = repositoryPath.Replace(
+                    '/',
+                    Path.DirectorySeparatorChar);
+                if (Path.IsPathRooted(relativePath))
+                {
+                    throw new ArgumentException(
+                        "The repository source identity must be relative.",
+                        nameof(repositoryPath));
+                }
+
+                var candidate = Path.GetFullPath(Path.Join(
                     physicalRepositoryRoot,
-                    repositoryPath.Replace('/', Path.DirectorySeparatorChar)));
+                    relativePath));
                 var resolved = pathResolver.ResolveSource(
                     physicalRepositoryRoot,
                     candidate);

@@ -14,7 +14,7 @@ public sealed class DocumentationPatchArchitectureTests
     public void PatchingProjectHasOnlyTheReadOnlyCoreAndRoslynEdges()
     {
         var root = FindRepositoryRoot();
-        var project = XDocument.Load(Path.Combine(
+        var project = XDocument.Load(Path.Join(
             root,
             "src",
             "ContractScribe.Patching",
@@ -30,7 +30,7 @@ public sealed class DocumentationPatchArchitectureTests
         Assert.Empty(project.Descendants("PackageReference"));
 
         foreach (var projectPath in Directory.EnumerateFiles(
-            Path.Combine(root, "src"),
+            Path.Join(root, "src"),
             "*.csproj",
             SearchOption.AllDirectories).Where(path =>
                 !path.Contains("ContractScribe.Patching", StringComparison.Ordinal)))
@@ -123,7 +123,7 @@ public sealed class DocumentationPatchArchitectureTests
             .GetParameters());
 
         var root = FindRepositoryRoot();
-        var loader = File.ReadAllText(Path.Combine(
+        var loader = File.ReadAllText(Path.Join(
             root,
             "src",
             "ContractScribe.Roslyn",
@@ -178,7 +178,7 @@ public sealed class DocumentationPatchArchitectureTests
         var source = string.Join(
             Environment.NewLine,
             Directory.EnumerateFiles(
-                Path.Combine(root, "src", "ContractScribe.Patching"),
+                Path.Join(root, "src", "ContractScribe.Patching"),
                 "*.cs",
                 SearchOption.AllDirectories).Select(File.ReadAllText));
 
@@ -200,7 +200,7 @@ public sealed class DocumentationPatchArchitectureTests
 
     private static void AssertDirectReference(string root, string projectName)
     {
-        var project = XDocument.Load(Path.Combine(
+        var project = XDocument.Load(Path.Join(
             root,
             "tests",
             projectName,
@@ -254,7 +254,7 @@ public sealed class DocumentationPatchArchitectureTests
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null
-            && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+            && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
         {
             directory = directory.Parent;
         }
