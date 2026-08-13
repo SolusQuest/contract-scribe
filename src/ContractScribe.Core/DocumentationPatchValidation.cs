@@ -79,43 +79,89 @@ public static class DocumentationPatchValidator
                     "provenanceCatalog",
                     "blocks");
 
-                var context = ParseContext(root.GetProperty("context"), "/context");
-                var catalog = ParseOrderedIds(
-                    root.GetProperty("provenanceCatalog"),
-                    "/provenanceCatalog",
-                    4_096,
-                    allowEmpty: true);
+                ContractFailure? selectedFailure = null;
+                DocumentationPatchContext? context = null;
+                try
+                {
+                    context = ParseContext(root.GetProperty("context"), "/context");
+                }
+                catch (ContractFailure failure)
+                {
+                    selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                }
+
+                var catalog = ImmutableArray<string>.Empty;
+                try
+                {
+                    catalog = ParseOrderedIds(
+                        root.GetProperty("provenanceCatalog"),
+                        "/provenanceCatalog",
+                        4_096,
+                        allowEmpty: true);
+                }
+                catch (ContractFailure failure)
+                {
+                    selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                }
+
                 var blocksElement = root.GetProperty("blocks");
-                ExpectArray(blocksElement, "/blocks", 1, 512);
                 var blocks = ImmutableArray.CreateBuilder<DocumentationPatchBlockRequest>();
                 var blockIds = new HashSet<string>(StringComparer.Ordinal);
                 var symbols = new HashSet<string>(StringComparer.Ordinal);
                 var locators = new HashSet<string>(StringComparer.Ordinal);
-                var index = 0;
-                foreach (var element in blocksElement.EnumerateArray())
+                try
                 {
-                    var pointer = $"/blocks/{index}";
-                    var block = ParseBlock(element, pointer);
-                    if (!blockIds.Add(block.BlockId))
+                    ExpectArray(blocksElement, "/blocks", 1, 512);
+                    var index = 0;
+                    foreach (var element in blocksElement.EnumerateArray())
                     {
-                        throw Fail("invalid-order", pointer + "/blockId");
-                    }
+                        var pointer = $"/blocks/{index}";
+                        DocumentationPatchBlockRequest? block = null;
+                        try
+                        {
+                            block = ParseBlock(element, pointer);
+                        }
+                        catch (ContractFailure failure)
+                        {
+                            selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                        }
 
-                    var symbolKey = block.SymbolRef.CompilationContextRef
-                        + "\u0000"
-                        + block.SymbolRef.DocumentationCommentId;
-                    if (!symbols.Add(symbolKey) || !locators.Add(GetLocatorBindingKey(block.Locator)))
-                    {
-                        throw Fail("invalid-order", pointer);
-                    }
+                        if (block is not null)
+                        {
+                            if (!blockIds.Add(block.BlockId))
+                            {
+                                selectedFailure = SelectRequestFailure(
+                                    selectedFailure,
+                                    Fail("invalid-order", pointer + "/blockId"));
+                            }
 
-                    if (blocks.Count > 0 && CompareBlocks(blocks[^1], block) >= 0)
-                    {
-                        throw Fail("invalid-order", pointer);
-                    }
+                            var symbolKey = block.SymbolRef.CompilationContextRef
+                                + "\u0000"
+                                + block.SymbolRef.DocumentationCommentId;
+                            if (!symbols.Add(symbolKey)
+                                || !locators.Add(GetLocatorBindingKey(block.Locator)))
+                            {
+                                selectedFailure = SelectRequestFailure(
+                                    selectedFailure,
+                                    Fail("invalid-order", pointer));
+                            }
 
-                    blocks.Add(block);
-                    index++;
+                            if (blocks.Count > 0 && CompareBlocks(blocks[^1], block) >= 0)
+                            {
+                                selectedFailure = SelectRequestFailure(
+                                    selectedFailure,
+                                    Fail("invalid-order", pointer));
+                            }
+
+                            blocks.Add(block);
+                        }
+
+                        index++;
+                    }
+                }
+                catch (ContractFailure failure)
+                {
+                    selectedFailure = SelectRequestFailure(selectedFailure, failure);
                 }
 
                 for (var blockIndex = 0; blockIndex < blocks.Count; blockIndex++)
@@ -124,17 +170,24 @@ public static class DocumentationPatchValidator
                     {
                         if (catalog.BinarySearch(provenanceRef, StringComparer.Ordinal) < 0)
                         {
-                            throw Fail(
-                                "invalid-reference",
-                                $"/blocks/{blockIndex}/provenanceRefs");
+                            selectedFailure = SelectRequestFailure(
+                                selectedFailure,
+                                Fail(
+                                    "invalid-reference",
+                                    $"/blocks/{blockIndex}/provenanceRefs"));
                         }
                     }
+                }
+
+                if (selectedFailure is not null)
+                {
+                    throw selectedFailure;
                 }
 
                 return new DocumentationPatchRequestParseResult(
                     new DocumentationPatchRequest(
                         Convert.ToHexString(SHA256.HashData(utf8Json.Span)).ToLowerInvariant(),
-                        context,
+                        context!,
                         catalog,
                         blocks.ToImmutable()),
                     null);
@@ -393,11 +446,22 @@ public static class DocumentationPatchValidator
         var acceptedObservationsAreValid = true;
         foreach (var file in result.ChangedFiles)
         {
-            if (!repositoryBlocks.TryGetValue(file.Path, out var pathBlocks)
-                || !pathBlocks.All(block => string.Equals(
-                    ((DocumentationPatchRepositoryLocator)block.Locator).OriginalFileSha256,
-                    file.OriginalFileSha256,
-                    StringComparison.Ordinal)))
+            if (!repositoryBlocks.TryGetValue(file.Path, out var pathBlocks))
+            {
+                return Invalid("patch.result.invalid-correlation");
+            }
+
+            var expectedEncoding = ((DocumentationPatchRepositoryLocator)pathBlocks[0].Locator)
+                .Encoding;
+            if (!pathBlocks.All(block =>
+                {
+                    var locator = (DocumentationPatchRepositoryLocator)block.Locator;
+                    return string.Equals(
+                            locator.OriginalFileSha256,
+                            file.OriginalFileSha256,
+                            StringComparison.Ordinal)
+                        && locator.Encoding == expectedEncoding;
+                }))
             {
                 return Invalid("patch.result.invalid-correlation");
             }
@@ -651,6 +715,42 @@ public static class DocumentationPatchValidator
         _ => 2,
     };
 
+    private static ContractFailure SelectRequestFailure(
+        ContractFailure? current,
+        ContractFailure candidate) => current is null
+        || GetRequestFailurePrecedence(candidate.Category)
+            < GetRequestFailurePrecedence(current.Category)
+            ? candidate
+            : current;
+
+    private static bool TryParseRequestValue<T>(
+        Func<T> parser,
+        ref ContractFailure? selectedFailure,
+        out T value)
+    {
+        try
+        {
+            value = parser();
+            return true;
+        }
+        catch (ContractFailure failure)
+        {
+            selectedFailure = SelectRequestFailure(selectedFailure, failure);
+            value = default!;
+            return false;
+        }
+    }
+
+    private static int GetRequestFailurePrecedence(string category) => category switch
+    {
+        "invalid-shape" => 0,
+        "invalid-vocabulary" => 1,
+        "invalid-content" => 2,
+        "invalid-order" => 3,
+        "invalid-reference" => 4,
+        _ => int.MaxValue,
+    };
+
     private static int GetDiagnosticBlockIndex(
         DocumentationPatchDiagnostic diagnostic,
         IReadOnlyDictionary<string, int> blockIndexes) =>
@@ -696,32 +796,63 @@ public static class DocumentationPatchValidator
             "applicableComponents",
             "content",
             "provenanceRefs");
-        var blockId = ReadOpaqueId(element, "blockId", pointer);
-        var symbol = ParseSymbolRef(element.GetProperty("symbolRef"), pointer + "/symbolRef");
-        var locator = ParseLocator(element.GetProperty("locator"), pointer + "/locator");
-        var editKind = ReadString(element, "editKind", pointer, 16) switch
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadOpaqueId(element, "blockId", pointer),
+            ref selectedFailure,
+            out string? blockId);
+        TryParseRequestValue(
+            () => ParseSymbolRef(element.GetProperty("symbolRef"), pointer + "/symbolRef"),
+            ref selectedFailure,
+            out SymbolRef? symbol);
+        TryParseRequestValue(
+            () => ParseLocator(element.GetProperty("locator"), pointer + "/locator"),
+            ref selectedFailure,
+            out DocumentationPatchSourceLocator? locator);
+        TryParseRequestValue(
+            () => ReadString(element, "editKind", pointer, 16) switch
+            {
+                "insert" => DocumentationPatchEditKind.Insert,
+                "replace" => DocumentationPatchEditKind.Replace,
+                _ => throw Fail("invalid-vocabulary", pointer + "/editKind"),
+            },
+            ref selectedFailure,
+            out DocumentationPatchEditKind editKind);
+        var componentsAreValid = TryParseRequestValue(
+            () => ParseComponents(
+                element.GetProperty("applicableComponents"),
+                pointer + "/applicableComponents"),
+            ref selectedFailure,
+            out ImmutableArray<DocumentationPatchApplicableComponent> components);
+        TryParseRequestValue(
+            () => ParseContent(
+                element.GetProperty("content"),
+                pointer + "/content",
+                components,
+                validateComponentClosure: componentsAreValid),
+            ref selectedFailure,
+            out DocumentationPatchContent? content);
+        TryParseRequestValue(
+            () => ParseOrderedIds(
+                element.GetProperty("provenanceRefs"),
+                pointer + "/provenanceRefs",
+                64,
+                allowEmpty: true),
+            ref selectedFailure,
+            out ImmutableArray<string> provenanceRefs);
+
+        if (selectedFailure is not null)
         {
-            "insert" => DocumentationPatchEditKind.Insert,
-            "replace" => DocumentationPatchEditKind.Replace,
-            _ => throw Fail("invalid-vocabulary", pointer + "/editKind"),
-        };
-        var components = ParseComponents(
-            element.GetProperty("applicableComponents"),
-            pointer + "/applicableComponents");
-        var content = ParseContent(element.GetProperty("content"), pointer + "/content", components);
-        var provenanceRefs = ParseOrderedIds(
-            element.GetProperty("provenanceRefs"),
-            pointer + "/provenanceRefs",
-            64,
-            allowEmpty: true);
+            throw selectedFailure;
+        }
 
         return new DocumentationPatchBlockRequest(
-            blockId,
-            symbol,
-            locator,
+            blockId!,
+            symbol!.Value,
+            locator!,
             editKind,
             components,
-            content,
+            content!,
             provenanceRefs);
     }
 
@@ -944,7 +1075,8 @@ public static class DocumentationPatchValidator
     private static DocumentationPatchContent ParseContent(
         JsonElement element,
         string pointer,
-        ImmutableArray<DocumentationPatchApplicableComponent> components)
+        ImmutableArray<DocumentationPatchApplicableComponent> components,
+        bool validateComponentClosure)
     {
         ExpectObject(element, pointer);
         var kind = ReadString(element, "kind", pointer, 16);
@@ -1012,13 +1144,16 @@ public static class DocumentationPatchValidator
             throw Fail("invalid-content", pointer);
         }
 
-        ValidateContentComponentClosure(
-            components,
-            typeParameters,
-            parameters,
-            returnContent,
-            valueContent,
-            pointer);
+        if (validateComponentClosure)
+        {
+            ValidateContentComponentClosure(
+                components,
+                typeParameters,
+                parameters,
+                returnContent,
+                valueContent,
+                pointer);
+        }
         return new DocumentationPatchStructuredContent(
             summary,
             typeParameters,
@@ -1383,29 +1518,45 @@ public static class DocumentationPatchValidator
     {
         ExpectArray(element, pointer, allowEmpty ? 0 : 1, maximum);
         var builder = ImmutableArray.CreateBuilder<string>();
+        ContractFailure? selectedFailure = null;
         string? previous = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
             {
-                throw Fail("invalid-shape", $"{pointer}/{index}");
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-shape", $"{pointer}/{index}"));
+                index++;
+                continue;
             }
 
             var id = item.GetString()!;
             if (!IsOpaqueId(id, 128))
             {
-                throw Fail("invalid-vocabulary", $"{pointer}/{index}");
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-vocabulary", $"{pointer}/{index}"));
+                index++;
+                continue;
             }
 
             if (previous is not null && string.CompareOrdinal(previous, id) >= 0)
             {
-                throw Fail("invalid-order", $"{pointer}/{index}");
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-order", $"{pointer}/{index}"));
             }
 
             builder.Add(id);
             previous = id;
             index++;
+        }
+
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
         }
 
         return builder.ToImmutable();

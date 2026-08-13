@@ -346,15 +346,52 @@ public sealed class DocumentationPatchContractTests
     [Fact]
     public void RequestValidation_AppliesCategoryPrecedenceAcrossAllBlocks()
     {
-        var bytes = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        var danglingReference = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
         {
             root["blocks"]![0]!["provenanceRefs"]![0] = "prov.missing";
             root["blocks"]![1]!["editKind"] = "invalid";
         });
 
-        var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
-        Assert.Equal("patch.request.invalid-vocabulary", failure!.Code);
-        Assert.Equal("/blocks/1/editKind", failure.Pointer);
+        AssertVocabularyPrecedesEarlierFailure(danglingReference);
+
+        var duplicateReference = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            root["blocks"]![0]!["provenanceRefs"]!.AsArray().Add("prov.synthetic");
+            root["blocks"]![1]!["editKind"] = "invalid";
+        });
+
+        AssertVocabularyPrecedesEarlierFailure(duplicateReference);
+
+        var sameBlockOrdering = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            var components = root["blocks"]![0]!["applicableComponents"]!.AsArray();
+            var first = components[0]!.DeepClone();
+            components[0] = components[1]!.DeepClone();
+            components[1] = first;
+            root["blocks"]![0]!["content"]!["kind"] = "invalid";
+        });
+
+        var sameBlockFailure = DocumentationPatchValidator.ParseRequest(sameBlockOrdering).Failure;
+        Assert.Equal("patch.request.invalid-vocabulary", sameBlockFailure!.Code);
+        Assert.Equal("/blocks/0/content/kind", sameBlockFailure.Pointer);
+
+        var catalogOrdering = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            var catalog = root["provenanceCatalog"]!.AsArray();
+            catalog.Add("prov.synthetic");
+            catalog.Add("invalid id");
+        });
+
+        var catalogFailure = DocumentationPatchValidator.ParseRequest(catalogOrdering).Failure;
+        Assert.Equal("patch.request.invalid-vocabulary", catalogFailure!.Code);
+        Assert.Equal("/provenanceCatalog/2", catalogFailure.Pointer);
+
+        static void AssertVocabularyPrecedesEarlierFailure(byte[] bytes)
+        {
+            var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+            Assert.Equal("patch.request.invalid-vocabulary", failure!.Code);
+            Assert.Equal("/blocks/1/editKind", failure.Pointer);
+        }
     }
 
     [Fact]
@@ -567,6 +604,17 @@ public sealed class DocumentationPatchContractTests
         Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(
             inconsistentHashRequest,
             inconsistentlyCorrelatedResult).Code);
+
+        var inconsistentEncodingRequest = ParseRequest(Mutate(requestBytes, root =>
+            root["blocks"]![1]!["locator"]!["encoding"] = "utf-8-bom"));
+        var inconsistentlyEncodedResult = ParseResult(Mutate(acceptedBytes, root =>
+        {
+            root["patchRequestSha256"] = inconsistentEncodingRequest.ArtifactSha256;
+            root["targets"]![1]!["locator"]!["encoding"] = "utf-8-bom";
+        }));
+        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(
+            inconsistentEncodingRequest,
+            inconsistentlyEncodedResult).Code);
 
         foreach (var mutation in new Action<JsonObject>[]
         {
