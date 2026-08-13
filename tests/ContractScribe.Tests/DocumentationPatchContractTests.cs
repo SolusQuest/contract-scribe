@@ -489,6 +489,96 @@ public sealed class DocumentationPatchContractTests
         }
     }
 
+    [Theory]
+    [InlineData("parameter", "parameter/1", "parameters", 2)]
+    [InlineData("typeParameter", "type-parameter/1", "typeParameters", 1)]
+    public void RequestValidation_UsesCanonicalComponentProjectionForRecoverableOrderFailures(
+        string componentKind,
+        string secondIdentity,
+        string contentProperty,
+        int secondComponentIndex)
+    {
+        var canonical = CreateTwoNamedComponentStructuredRequest(
+            componentKind,
+            secondIdentity,
+            contentProperty,
+            secondComponentIndex);
+        Assert.True(DocumentationPatchValidator.ParseRequest(canonical).IsValid);
+
+        var reversedComponents = Mutate(canonical, root =>
+        {
+            var components = root["blocks"]![0]!["applicableComponents"]!.AsArray();
+            var first = components[secondComponentIndex - 1]!.DeepClone();
+            components[secondComponentIndex - 1] = components[secondComponentIndex]!.DeepClone();
+            components[secondComponentIndex] = first;
+        });
+        AssertFailure(
+            reversedComponents,
+            "patch.request.invalid-order",
+            $"/blocks/0/applicableComponents/{secondComponentIndex}");
+
+        var reversedComponentsWithMissingContent = Mutate(reversedComponents, root =>
+            root["blocks"]![0]!["content"]![contentProperty]!.AsArray().RemoveAt(1));
+        AssertFailure(
+            reversedComponentsWithMissingContent,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        static void AssertFailure(byte[] bytes, string code, string pointer)
+        {
+            var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+            Assert.Equal(code, failure!.Code);
+            Assert.Equal(pointer, failure.Pointer);
+        }
+    }
+
+    [Theory]
+    [InlineData("parameter", "parameter/1", "parameter/2", "parameters", 2)]
+    [InlineData("typeParameter", "type-parameter/1", "type-parameter/2", "typeParameters", 1)]
+    public void RequestValidation_UsesCanonicalNamedContentProjectionForRecoverableOrderFailures(
+        string componentKind,
+        string secondIdentity,
+        string mismatchIdentity,
+        string contentProperty,
+        int secondComponentIndex)
+    {
+        var canonical = CreateTwoNamedComponentStructuredRequest(
+            componentKind,
+            secondIdentity,
+            contentProperty,
+            secondComponentIndex);
+        Assert.True(DocumentationPatchValidator.ParseRequest(canonical).IsValid);
+        var reversedContent = Mutate(canonical, root =>
+        {
+            var namedContent = root["blocks"]![0]!["content"]![contentProperty]!.AsArray();
+            var first = namedContent[0]!.DeepClone();
+            namedContent[0] = namedContent[1]!.DeepClone();
+            namedContent[1] = first;
+        });
+        AssertFailure(
+            reversedContent,
+            "patch.request.invalid-order",
+            $"/blocks/0/content/{contentProperty}/1");
+
+        var reversedContentWithMismatch = Mutate(reversedContent, root =>
+        {
+            var first = root["blocks"]![0]!["content"]![contentProperty]![0]!;
+            first["componentIdentity"] = mismatchIdentity;
+            first["name"] = "unexpected";
+        });
+        AssertFailure(
+            reversedContentWithMismatch,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        static void AssertFailure(byte[] bytes, string code, string pointer)
+        {
+            var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+            Assert.Equal(code, failure!.Code);
+            Assert.Equal(pointer, failure.Pointer);
+        }
+    }
+
     [Fact]
     public void SchemaAndCoreRejectTheSameLogicalLineAndComponentIdentityOverflows()
     {
@@ -853,6 +943,29 @@ public sealed class DocumentationPatchContractTests
         mutation(root);
         return JsonSerializer.SerializeToUtf8Bytes(root);
     }
+
+    private static byte[] CreateTwoNamedComponentStructuredRequest(
+        string componentKind,
+        string secondIdentity,
+        string contentProperty,
+        int secondComponentIndex) =>
+        Mutate(ReadFixture("valid", "repository-request.json"), root =>
+        {
+            root["blocks"]![0]!["applicableComponents"]!.AsArray().Insert(
+                secondComponentIndex,
+                new JsonObject
+                {
+                    ["kind"] = componentKind,
+                    ["identity"] = secondIdentity,
+                    ["name"] = "other",
+                });
+            root["blocks"]![0]!["content"]![contentProperty]!.AsArray().Add(new JsonObject
+            {
+                ["componentIdentity"] = secondIdentity,
+                ["name"] = "other",
+                ["lines"] = new JsonArray("The other value."),
+            });
+        });
 
     private static JsonSchema LoadSchema(string name) => JsonSchema.FromText(File.ReadAllText(
         Path.Combine(FindRepositoryRoot(), "schemas", "documentation-patch", name)));

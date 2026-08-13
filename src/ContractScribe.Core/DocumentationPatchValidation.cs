@@ -1260,6 +1260,9 @@ public static class DocumentationPatchValidator
             index++;
         }
 
+        // Keep the serialized-order failure above, but expose canonical recoverable data
+        // to dependent semantic validation so ordering alone cannot manufacture content failure.
+        builder.Sort(CompareComponents);
         return builder.ToImmutable();
     }
 
@@ -1321,20 +1324,46 @@ public static class DocumentationPatchValidator
                 ref scalarTotal),
             ref selectedFailure,
             out ImmutableArray<string> summary);
-        var typeParametersAreValid = TryParseRequestValue(
-            () => ParseNamedContent(
+        var typeParameters = ImmutableArray<DocumentationPatchNamedContent>.Empty;
+        var typeParametersAreMaterializable = false;
+        try
+        {
+            typeParameters = ParseNamedContent(
                 element.GetProperty("typeParameters"),
                 pointer + "/typeParameters",
-                ref scalarTotal),
-            ref selectedFailure,
-            out ImmutableArray<DocumentationPatchNamedContent> typeParameters);
-        var parametersAreValid = TryParseRequestValue(
-            () => ParseNamedContent(
+                ref scalarTotal,
+                out var typeParameterFailure,
+                out typeParametersAreMaterializable);
+            if (typeParameterFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, typeParameterFailure);
+            }
+        }
+        catch (ContractFailure failure)
+        {
+            selectedFailure = SelectRequestFailure(selectedFailure, failure);
+        }
+
+        var parameters = ImmutableArray<DocumentationPatchNamedContent>.Empty;
+        var parametersAreMaterializable = false;
+        try
+        {
+            parameters = ParseNamedContent(
                 element.GetProperty("parameters"),
                 pointer + "/parameters",
-                ref scalarTotal),
-            ref selectedFailure,
-            out ImmutableArray<DocumentationPatchNamedContent> parameters);
+                ref scalarTotal,
+                out var parameterFailure,
+                out parametersAreMaterializable);
+            if (parameterFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, parameterFailure);
+            }
+        }
+        catch (ContractFailure failure)
+        {
+            selectedFailure = SelectRequestFailure(selectedFailure, failure);
+        }
+
         var returnIsValid = TryParseRequestValue(
             () => ParseOptionalComponentContent(
                 element.GetProperty("return"),
@@ -1382,8 +1411,8 @@ public static class DocumentationPatchValidator
 
         if (validateComponentClosure
             && summaryIsValid
-            && typeParametersAreValid
-            && parametersAreValid
+            && typeParametersAreMaterializable
+            && parametersAreMaterializable
             && returnIsValid
             && valueIsValid
             && exceptionsAreValid
@@ -1423,12 +1452,16 @@ public static class DocumentationPatchValidator
     private static ImmutableArray<DocumentationPatchNamedContent> ParseNamedContent(
         JsonElement element,
         string pointer,
-        ref int scalarTotal)
+        ref int scalarTotal,
+        out ContractFailure? selectedFailure,
+        out bool namedContentIsMaterializable)
     {
         ExpectArray(element, pointer, 0, 512);
         var accumulatedScalarTotal = scalarTotal;
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchNamedContent>();
-        ContractFailure? selectedFailure = null;
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        selectedFailure = null;
+        namedContentIsMaterializable = true;
         string? previous = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
@@ -1441,6 +1474,7 @@ public static class DocumentationPatchValidator
             catch (ContractFailure failure)
             {
                 selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                namedContentIsMaterializable = false;
                 index++;
                 continue;
             }
@@ -1481,9 +1515,15 @@ public static class DocumentationPatchValidator
             if (itemFailure is not null)
             {
                 selectedFailure = SelectRequestFailure(selectedFailure, itemFailure);
+                namedContentIsMaterializable = false;
             }
             else
             {
+                if (!identities.Add(identity!))
+                {
+                    namedContentIsMaterializable = false;
+                }
+
                 builder.Add(new DocumentationPatchNamedContent(identity!, name!, lines));
             }
 
@@ -1495,13 +1535,12 @@ public static class DocumentationPatchValidator
             index++;
         }
 
-        if (selectedFailure is not null)
-        {
-            scalarTotal = accumulatedScalarTotal;
-            throw selectedFailure;
-        }
-
         scalarTotal = accumulatedScalarTotal;
+        // As with applicable components, ordering remains a recorded artifact failure while
+        // dependent closure operates on canonical recoverable identities.
+        builder.Sort(static (left, right) => string.CompareOrdinal(
+            left.ComponentIdentity,
+            right.ComponentIdentity));
         return builder.ToImmutable();
     }
 
