@@ -386,11 +386,93 @@ public sealed class DocumentationPatchContractTests
         Assert.Equal("patch.request.invalid-vocabulary", catalogFailure!.Code);
         Assert.Equal("/provenanceCatalog/2", catalogFailure.Pointer);
 
+        var contextShape = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            root["context"]!["repositoryContextRef"] = "invalid";
+            root["context"]!["targetProfile"] = 1;
+        });
+        AssertFailure(
+            contextShape,
+            "patch.request.invalid-shape",
+            "/context/targetProfile");
+
+        var symbolShape = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            root["blocks"]![0]!["symbolRef"]!["compilationContextRef"] = "INVALID";
+            root["blocks"]![0]!["symbolRef"]!["documentationCommentId"] = 1;
+        });
+        AssertFailure(
+            symbolShape,
+            "patch.request.invalid-shape",
+            "/blocks/0/symbolRef/documentationCommentId");
+
+        var locatorShape = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            root["blocks"]![0]!["locator"]!["path"] = "../invalid";
+            root["blocks"]![0]!["locator"]!["encoding"] = 1;
+        });
+        AssertFailure(
+            locatorShape,
+            "patch.request.invalid-shape",
+            "/blocks/0/locator/encoding");
+
+        var componentShape = Mutate(ReadFixture("valid", "same-file-request.json"), root =>
+        {
+            var components = root["blocks"]![0]!["applicableComponents"]!.AsArray();
+            var first = components[0]!.DeepClone();
+            components[0] = components[1]!.DeepClone();
+            components[1] = first;
+            components[2]!["kind"] = "invalid";
+        });
+        AssertFailure(
+            componentShape,
+            "patch.request.invalid-vocabulary",
+            "/blocks/0/applicableComponents/2/kind");
+
+        var contentShape = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+        {
+            root["blocks"]![0]!["content"]!["summaryLines"]![0] = "bad\nline";
+            root["blocks"]![0]!["content"]!["remarksLines"] = 1;
+        });
+        AssertFailure(
+            contentShape,
+            "patch.request.invalid-shape",
+            "/blocks/0/content/remarksLines");
+
+        var namedContentShape = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+        {
+            var parameters = root["blocks"]![0]!["content"]!["parameters"]!.AsArray();
+            parameters.Add(parameters[0]!.DeepClone());
+            var invalid = parameters[0]!.DeepClone();
+            invalid!["componentIdentity"] = 1;
+            parameters.Add(invalid);
+        });
+        AssertFailure(
+            namedContentShape,
+            "patch.request.invalid-shape",
+            "/blocks/0/content/parameters/2/componentIdentity");
+
+        var exceptionShape = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+        {
+            var exceptions = root["blocks"]![0]!["content"]!["exceptions"]!.AsArray();
+            exceptions.Insert(1, exceptions[0]!.DeepClone());
+            exceptions[2]!["typeDocumentationId"] = 1;
+        });
+        AssertFailure(
+            exceptionShape,
+            "patch.request.invalid-shape",
+            "/blocks/0/content/exceptions/2/typeDocumentationId");
+
         static void AssertVocabularyPrecedesEarlierFailure(byte[] bytes)
         {
+            AssertFailure(bytes, "patch.request.invalid-vocabulary", "/blocks/1/editKind");
+        }
+
+        static void AssertFailure(byte[] bytes, string code, string pointer)
+        {
             var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
-            Assert.Equal("patch.request.invalid-vocabulary", failure!.Code);
-            Assert.Equal("/blocks/1/editKind", failure.Pointer);
+            Assert.Equal(code, failure!.Code);
+            Assert.Equal(pointer, failure.Pointer);
         }
     }
 

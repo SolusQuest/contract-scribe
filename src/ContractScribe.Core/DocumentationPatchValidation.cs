@@ -866,42 +866,84 @@ public static class DocumentationPatchValidator
             "repositoryContextRef",
             "inputIdentity",
             "targetProfile");
-        var rawContext = ReadString(element, "repositoryContextRef", pointer, 40);
-        if (!RepositoryContextRef.TryParse(rawContext, out var contextRef))
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadString(element, "repositoryContextRef", pointer, 40),
+            ref selectedFailure,
+            out string? rawContext);
+        var contextRef = default(RepositoryContextRef);
+        if (rawContext is not null && !RepositoryContextRef.TryParse(rawContext, out contextRef))
         {
-            throw Fail("invalid-vocabulary", pointer + "/repositoryContextRef");
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/repositoryContextRef"));
         }
 
-        var inputIdentity = ReadString(element, "inputIdentity", pointer, 512);
-        if (!IsCanonicalRepositoryPath(inputIdentity))
+        TryParseRequestValue(
+            () => ReadString(element, "inputIdentity", pointer, 512),
+            ref selectedFailure,
+            out string? inputIdentity);
+        if (inputIdentity is not null && !IsCanonicalRepositoryPath(inputIdentity))
         {
-            throw Fail("invalid-vocabulary", pointer + "/inputIdentity");
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/inputIdentity"));
         }
 
-        var targetProfile = ReadString(element, "targetProfile", pointer, 32) switch
+        TryParseRequestValue(
+            () => ReadString(element, "targetProfile", pointer, 32) switch
+            {
+                "profile.external-api" => TargetProfile.ExternalApi,
+                "profile.assembly-visible" => TargetProfile.AssemblyVisible,
+                _ => throw Fail("invalid-vocabulary", pointer + "/targetProfile"),
+            },
+            ref selectedFailure,
+            out TargetProfile targetProfile);
+
+        if (selectedFailure is not null)
         {
-            "profile.external-api" => TargetProfile.ExternalApi,
-            "profile.assembly-visible" => TargetProfile.AssemblyVisible,
-            _ => throw Fail("invalid-vocabulary", pointer + "/targetProfile"),
-        };
-        return new DocumentationPatchContext(contextRef, inputIdentity, targetProfile);
+            throw selectedFailure;
+        }
+
+        return new DocumentationPatchContext(contextRef, inputIdentity!, targetProfile);
     }
 
     private static SymbolRef ParseSymbolRef(JsonElement element, string pointer)
     {
         ExpectProperties(element, pointer, "compilationContextRef", "documentationCommentId");
-        var contextRef = ReadString(element, "compilationContextRef", pointer, 128);
-        var documentationId = ReadString(element, "documentationCommentId", pointer, 1_024);
-        if (!IsCompilationContextRef(contextRef)
-            || documentationId.Length < 3
-            || !"TMPFEN".Contains(documentationId[0], StringComparison.Ordinal)
-            || documentationId[1] != ':'
-            || ContainsControlOrInvalidScalar(documentationId))
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadString(element, "compilationContextRef", pointer, 128),
+            ref selectedFailure,
+            out string? contextRef);
+        if (contextRef is not null && !IsCompilationContextRef(contextRef))
         {
-            throw Fail("invalid-vocabulary", pointer);
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/compilationContextRef"));
         }
 
-        return new SymbolRef(contextRef, documentationId);
+        TryParseRequestValue(
+            () => ReadString(element, "documentationCommentId", pointer, 1_024),
+            ref selectedFailure,
+            out string? documentationId);
+        if (documentationId is not null
+            && (documentationId.Length < 3
+                || !"TMPFEN".Contains(documentationId[0], StringComparison.Ordinal)
+                || documentationId[1] != ':'
+                || ContainsControlOrInvalidScalar(documentationId)))
+        {
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/documentationCommentId"));
+        }
+
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
+        }
+
+        return new SymbolRef(contextRef!, documentationId!);
     }
 
     private static DocumentationPatchSourceLocator ParseLocator(
@@ -909,81 +951,147 @@ public static class DocumentationPatchValidator
         string pointer)
     {
         ExpectObject(element, pointer);
-        var kind = ReadString(element, "kind", pointer, 32);
-        switch (kind)
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadString(element, "kind", pointer, 32),
+            ref selectedFailure,
+            out string? kind);
+        if (kind is not null && kind is not ("repository" or "sourceGenerator" or "toolGenerated"))
         {
-            case "repository":
-                {
-                    ExpectProperties(
-                        element,
-                        pointer,
-                        "kind",
-                        "path",
-                        "originalFileSha256",
-                        "encoding",
-                        "declarationSpan");
-                    var path = ReadString(element, "path", pointer, 512);
-                    var digest = ReadString(element, "originalFileSha256", pointer, 64);
-                    if (!IsCanonicalRepositoryPath(path) || !IsSha256(digest))
-                    {
-                        throw Fail("invalid-vocabulary", pointer);
-                    }
-
-                    var encoding = ReadString(element, "encoding", pointer, 32) switch
-                    {
-                        "utf-8" => DocumentationPatchRepositoryEncoding.Utf8,
-                        "utf-8-bom" => DocumentationPatchRepositoryEncoding.Utf8Bom,
-                        "utf-16le-bom" => DocumentationPatchRepositoryEncoding.Utf16LittleEndianBom,
-                        "utf-16be-bom" => DocumentationPatchRepositoryEncoding.Utf16BigEndianBom,
-                        _ => throw Fail("invalid-vocabulary", pointer + "/encoding"),
-                    };
-                    return new DocumentationPatchRepositoryLocator(
-                        path,
-                        digest,
-                        encoding,
-                        ParseSpan(element.GetProperty("declarationSpan"), pointer + "/declarationSpan"));
-                }
-            case "sourceGenerator":
-            case "toolGenerated":
-                {
-                    ExpectProperties(
-                        element,
-                        pointer,
-                        "kind",
-                        "producerId",
-                        "outputId",
-                        "sourceSha256",
-                        "declarationSpan");
-                    var producerId = ReadString(element, "producerId", pointer, 68);
-                    var outputId = ReadString(element, "outputId", pointer, 68);
-                    var digest = ReadString(element, "sourceSha256", pointer, 64);
-                    var expectedProducer = kind == "sourceGenerator" ? "sgp." : "tgp.";
-                    var expectedOutput = kind == "sourceGenerator" ? "sgo." : "tgo.";
-                    if (!IsPrefixedDigest(producerId, expectedProducer)
-                        || !IsPrefixedDigest(outputId, expectedOutput)
-                        || !IsSha256(digest))
-                    {
-                        throw Fail("invalid-vocabulary", pointer);
-                    }
-
-                    var span = ParseSpan(
-                        element.GetProperty("declarationSpan"),
-                        pointer + "/declarationSpan");
-                    return kind == "sourceGenerator"
-                        ? new DocumentationPatchSourceGeneratorLocator(
-                            producerId,
-                            outputId,
-                            digest,
-                            span)
-                        : new DocumentationPatchToolGeneratedLocator(
-                            producerId,
-                            outputId,
-                            digest,
-                            span);
-                }
-            default:
-                throw Fail("invalid-vocabulary", pointer + "/kind");
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/kind"));
         }
+
+        var repositoryShape = string.Equals(kind, "repository", StringComparison.Ordinal)
+            || kind is not ("sourceGenerator" or "toolGenerated")
+                && element.TryGetProperty("path", out _);
+        if (repositoryShape)
+        {
+            ExpectProperties(
+                element,
+                pointer,
+                "kind",
+                "path",
+                "originalFileSha256",
+                "encoding",
+                "declarationSpan");
+            TryParseRequestValue(
+                () => ReadString(element, "path", pointer, 512),
+                ref selectedFailure,
+                out string? path);
+            if (path is not null && !IsCanonicalRepositoryPath(path))
+            {
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-vocabulary", pointer + "/path"));
+            }
+
+            TryParseRequestValue(
+                () => ReadString(element, "originalFileSha256", pointer, 64),
+                ref selectedFailure,
+                out string? digest);
+            if (digest is not null && !IsSha256(digest))
+            {
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-vocabulary", pointer + "/originalFileSha256"));
+            }
+
+            TryParseRequestValue(
+                () => ReadString(element, "encoding", pointer, 32) switch
+                {
+                    "utf-8" => DocumentationPatchRepositoryEncoding.Utf8,
+                    "utf-8-bom" => DocumentationPatchRepositoryEncoding.Utf8Bom,
+                    "utf-16le-bom" => DocumentationPatchRepositoryEncoding.Utf16LittleEndianBom,
+                    "utf-16be-bom" => DocumentationPatchRepositoryEncoding.Utf16BigEndianBom,
+                    _ => throw Fail("invalid-vocabulary", pointer + "/encoding"),
+                },
+                ref selectedFailure,
+                out DocumentationPatchRepositoryEncoding encoding);
+            TryParseRequestValue(
+                () => ParseSpan(
+                    element.GetProperty("declarationSpan"),
+                    pointer + "/declarationSpan"),
+                ref selectedFailure,
+                out Utf16Span span);
+
+            if (selectedFailure is not null)
+            {
+                throw selectedFailure;
+            }
+
+            return new DocumentationPatchRepositoryLocator(path!, digest!, encoding, span);
+        }
+
+        ExpectProperties(
+            element,
+            pointer,
+            "kind",
+            "producerId",
+            "outputId",
+            "sourceSha256",
+            "declarationSpan");
+        TryParseRequestValue(
+            () => ReadString(element, "producerId", pointer, 68),
+            ref selectedFailure,
+            out string? producerId);
+        TryParseRequestValue(
+            () => ReadString(element, "outputId", pointer, 68),
+            ref selectedFailure,
+            out string? outputId);
+        TryParseRequestValue(
+            () => ReadString(element, "sourceSha256", pointer, 64),
+            ref selectedFailure,
+            out string? digestValue);
+        var generatedKind = kind is "sourceGenerator" or "toolGenerated"
+            ? kind
+            : "sourceGenerator";
+        var expectedProducer = generatedKind == "sourceGenerator" ? "sgp." : "tgp.";
+        var expectedOutput = generatedKind == "sourceGenerator" ? "sgo." : "tgo.";
+        if (producerId is not null && !IsPrefixedDigest(producerId, expectedProducer))
+        {
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/producerId"));
+        }
+
+        if (outputId is not null && !IsPrefixedDigest(outputId, expectedOutput))
+        {
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/outputId"));
+        }
+
+        if (digestValue is not null && !IsSha256(digestValue))
+        {
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/sourceSha256"));
+        }
+
+        TryParseRequestValue(
+            () => ParseSpan(
+                element.GetProperty("declarationSpan"),
+                pointer + "/declarationSpan"),
+            ref selectedFailure,
+            out Utf16Span generatedSpan);
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
+        }
+
+        return kind == "sourceGenerator"
+            ? new DocumentationPatchSourceGeneratorLocator(
+                producerId!,
+                outputId!,
+                digestValue!,
+                generatedSpan)
+            : new DocumentationPatchToolGeneratedLocator(
+                producerId!,
+                outputId!,
+                digestValue!,
+                generatedSpan);
     }
 
     private static Utf16Span ParseSpan(JsonElement element, string pointer)
@@ -1010,63 +1118,130 @@ public static class DocumentationPatchValidator
         var namedComponents = new HashSet<string>(StringComparer.Ordinal);
         var hasReturn = false;
         var hasValue = false;
+        ContractFailure? selectedFailure = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
             var itemPointer = $"{pointer}/{index}";
-            ExpectObject(item, itemPointer);
-            var kindText = ReadString(item, "kind", itemPointer, 16);
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-shape", itemPointer));
+                index++;
+                continue;
+            }
+
+            ContractFailure? itemFailure = null;
+            TryParseRequestValue(
+                () => ReadString(item, "kind", itemPointer, 16),
+                ref itemFailure,
+                out string? kindText);
+            var hasNamedShape = item.TryGetProperty("name", out _);
+            try
+            {
+                if (kindText is "typeParameter" or "parameter" || hasNamedShape)
+                {
+                    ExpectProperties(item, itemPointer, "kind", "identity", "name");
+                }
+                else
+                {
+                    ExpectProperties(item, itemPointer, "kind", "identity");
+                }
+            }
+            catch (ContractFailure failure)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                index++;
+                continue;
+            }
+
             var kind = kindText switch
             {
                 "typeParameter" => DocumentationPatchComponentKind.TypeParameter,
                 "parameter" => DocumentationPatchComponentKind.Parameter,
                 "return" => DocumentationPatchComponentKind.Return,
                 "value" => DocumentationPatchComponentKind.Value,
-                _ => throw Fail("invalid-vocabulary", itemPointer + "/kind"),
+                _ => (DocumentationPatchComponentKind?)null,
             };
+            if (kind is null && kindText is not null)
+            {
+                itemFailure = SelectRequestFailure(
+                    itemFailure,
+                    Fail("invalid-vocabulary", itemPointer + "/kind"));
+            }
+
+            TryParseRequestValue(
+                () => ReadString(item, "identity", itemPointer, 128),
+                ref itemFailure,
+                out string? identity);
+            if (kind is not null && identity is not null && !IsComponentIdentity(kind.Value, identity))
+            {
+                itemFailure = SelectRequestFailure(
+                    itemFailure,
+                    Fail("invalid-vocabulary", itemPointer + "/identity"));
+            }
+
             var named = kind is DocumentationPatchComponentKind.TypeParameter
-                or DocumentationPatchComponentKind.Parameter;
+                or DocumentationPatchComponentKind.Parameter
+                || kind is null && hasNamedShape;
+            string? name = null;
             if (named)
             {
-                ExpectProperties(item, itemPointer, "kind", "identity", "name");
-            }
-            else
-            {
-                ExpectProperties(item, itemPointer, "kind", "identity");
-            }
-
-            var identity = ReadString(item, "identity", itemPointer, 128);
-            var name = named ? ReadString(item, "name", itemPointer, 128) : null;
-            if (!IsComponentIdentity(kind, identity)
-                || named && (string.IsNullOrEmpty(name)
-                    || !TryCountXmlScalars(name, out _)))
-            {
-                throw Fail("invalid-vocabulary", itemPointer + "/name");
+                TryParseRequestValue(
+                    () => ReadString(item, "name", itemPointer, 128),
+                    ref itemFailure,
+                    out name);
+                if (name is not null
+                    && (string.IsNullOrEmpty(name) || !TryCountXmlScalars(name, out _)))
+                {
+                    itemFailure = SelectRequestFailure(
+                        itemFailure,
+                        Fail("invalid-vocabulary", itemPointer + "/name"));
+                }
             }
 
-            if (!identities.Add(identity)
+            if (itemFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, itemFailure);
+                index++;
+                continue;
+            }
+
+            if (!identities.Add(identity!)
                 || named && !namedComponents.Add(kindText + "\u0000" + name)
                 || kind == DocumentationPatchComponentKind.Return && hasReturn
                 || kind == DocumentationPatchComponentKind.Value && hasValue)
             {
-                throw Fail("invalid-content", itemPointer);
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-content", itemPointer));
             }
 
-            var component = new DocumentationPatchApplicableComponent(kind, identity, name);
+            var component = new DocumentationPatchApplicableComponent(kind!.Value, identity!, name);
             if (builder.Count > 0 && CompareComponents(builder[^1], component) >= 0)
             {
-                throw Fail("invalid-order", itemPointer);
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-order", itemPointer));
             }
 
             hasReturn |= kind == DocumentationPatchComponentKind.Return;
             hasValue |= kind == DocumentationPatchComponentKind.Value;
             if (hasReturn && hasValue)
             {
-                throw Fail("invalid-content", itemPointer);
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-content", itemPointer));
             }
 
             builder.Add(component);
             index++;
+        }
+
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
         }
 
         return builder.ToImmutable();
@@ -1079,16 +1254,29 @@ public static class DocumentationPatchValidator
         bool validateComponentClosure)
     {
         ExpectObject(element, pointer);
-        var kind = ReadString(element, "kind", pointer, 16);
-        if (kind == "inheritDoc")
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadString(element, "kind", pointer, 16),
+            ref selectedFailure,
+            out string? kind);
+        var structuredShape = kind == "structured"
+            || kind != "inheritDoc" && element.EnumerateObject().Count() > 1;
+        if (!structuredShape)
         {
             ExpectProperties(element, pointer, "kind");
-            return new DocumentationPatchInheritDocContent();
-        }
+            if (kind != "inheritDoc")
+            {
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-vocabulary", pointer + "/kind"));
+            }
 
-        if (kind != "structured")
-        {
-            throw Fail("invalid-vocabulary", pointer + "/kind");
+            if (selectedFailure is not null)
+            {
+                throw selectedFailure;
+            }
+
+            return new DocumentationPatchInheritDocContent();
         }
 
         ExpectProperties(
@@ -1102,58 +1290,110 @@ public static class DocumentationPatchValidator
             "value",
             "exceptions",
             "remarksLines");
-        var scalarTotal = 0;
-        var summary = ParseLines(
-            element.GetProperty("summaryLines"),
-            pointer + "/summaryLines",
-            ref scalarTotal);
-        var typeParameters = ParseNamedContent(
-            element.GetProperty("typeParameters"),
-            pointer + "/typeParameters",
-            ref scalarTotal);
-        var parameters = ParseNamedContent(
-            element.GetProperty("parameters"),
-            pointer + "/parameters",
-            ref scalarTotal);
-        var returnContent = ParseOptionalComponentContent(
-            element.GetProperty("return"),
-            pointer + "/return",
-            ref scalarTotal);
-        var valueContent = ParseOptionalComponentContent(
-            element.GetProperty("value"),
-            pointer + "/value",
-            ref scalarTotal);
-        if (returnContent is not null && valueContent is not null)
+        if (kind != "structured")
         {
-            throw Fail("invalid-content", pointer);
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-vocabulary", pointer + "/kind"));
         }
 
-        var exceptions = ParseExceptions(
-            element.GetProperty("exceptions"),
-            pointer + "/exceptions",
-            ref scalarTotal);
-        ImmutableArray<string>? remarks = null;
-        var remarksElement = element.GetProperty("remarksLines");
-        if (remarksElement.ValueKind != JsonValueKind.Null)
+        var scalarTotal = 0;
+        var summaryIsValid = TryParseRequestValue(
+            () => ParseLines(
+                element.GetProperty("summaryLines"),
+                pointer + "/summaryLines",
+                ref scalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<string> summary);
+        var typeParametersAreValid = TryParseRequestValue(
+            () => ParseNamedContent(
+                element.GetProperty("typeParameters"),
+                pointer + "/typeParameters",
+                ref scalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<DocumentationPatchNamedContent> typeParameters);
+        var parametersAreValid = TryParseRequestValue(
+            () => ParseNamedContent(
+                element.GetProperty("parameters"),
+                pointer + "/parameters",
+                ref scalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<DocumentationPatchNamedContent> parameters);
+        var returnIsValid = TryParseRequestValue(
+            () => ParseOptionalComponentContent(
+                element.GetProperty("return"),
+                pointer + "/return",
+                ref scalarTotal),
+            ref selectedFailure,
+            out DocumentationPatchComponentContent? returnContent);
+        var valueIsValid = TryParseRequestValue(
+            () => ParseOptionalComponentContent(
+                element.GetProperty("value"),
+                pointer + "/value",
+                ref scalarTotal),
+            ref selectedFailure,
+            out DocumentationPatchComponentContent? valueContent);
+        if (returnContent is not null && valueContent is not null)
         {
-            remarks = ParseLines(remarksElement, pointer + "/remarksLines", ref scalarTotal);
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-content", pointer));
         }
+
+        var exceptionsAreValid = TryParseRequestValue(
+            () => ParseExceptions(
+                element.GetProperty("exceptions"),
+                pointer + "/exceptions",
+                ref scalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<DocumentationPatchExceptionContent> exceptions);
+        var remarksAreValid = TryParseRequestValue(
+            () => element.GetProperty("remarksLines").ValueKind == JsonValueKind.Null
+                ? (ImmutableArray<string>?)null
+                : ParseLines(
+                    element.GetProperty("remarksLines"),
+                    pointer + "/remarksLines",
+                    ref scalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<string>? remarks);
 
         if (scalarTotal > MaximumBlockTextScalars)
         {
-            throw Fail("invalid-content", pointer);
+            selectedFailure = SelectRequestFailure(
+                selectedFailure,
+                Fail("invalid-content", pointer));
         }
 
-        if (validateComponentClosure)
+        if (validateComponentClosure
+            && summaryIsValid
+            && typeParametersAreValid
+            && parametersAreValid
+            && returnIsValid
+            && valueIsValid
+            && exceptionsAreValid
+            && remarksAreValid)
         {
-            ValidateContentComponentClosure(
-                components,
-                typeParameters,
-                parameters,
-                returnContent,
-                valueContent,
-                pointer);
+            try
+            {
+                ValidateContentComponentClosure(
+                    components,
+                    typeParameters,
+                    parameters,
+                    returnContent,
+                    valueContent,
+                    pointer);
+            }
+            catch (ContractFailure failure)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, failure);
+            }
         }
+
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
+        }
+
         return new DocumentationPatchStructuredContent(
             summary,
             typeParameters,
@@ -1170,34 +1410,82 @@ public static class DocumentationPatchValidator
         ref int scalarTotal)
     {
         ExpectArray(element, pointer, 0, 512);
+        var accumulatedScalarTotal = scalarTotal;
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchNamedContent>();
+        ContractFailure? selectedFailure = null;
         string? previous = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
             var itemPointer = $"{pointer}/{index}";
-            ExpectProperties(item, itemPointer, "componentIdentity", "name", "lines");
-            var identity = ReadString(item, "componentIdentity", itemPointer, 128);
-            var name = ReadString(item, "name", itemPointer, 128);
-            if (string.IsNullOrEmpty(name) || !TryCountXmlScalars(name, out _))
+            try
             {
-                throw Fail("invalid-content", itemPointer + "/name");
+                ExpectProperties(item, itemPointer, "componentIdentity", "name", "lines");
+            }
+            catch (ContractFailure failure)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                index++;
+                continue;
             }
 
-            if (previous is not null
+            ContractFailure? itemFailure = null;
+            TryParseRequestValue(
+                () => ReadString(item, "componentIdentity", itemPointer, 128),
+                ref itemFailure,
+                out string? identity);
+            TryParseRequestValue(
+                () => ReadString(item, "name", itemPointer, 128),
+                ref itemFailure,
+                out string? name);
+            if (name is not null
+                && (string.IsNullOrEmpty(name) || !TryCountXmlScalars(name, out _)))
+            {
+                itemFailure = SelectRequestFailure(
+                    itemFailure,
+                    Fail("invalid-content", itemPointer + "/name"));
+            }
+
+            TryParseRequestValue(
+                () => ParseLines(
+                    item.GetProperty("lines"),
+                    itemPointer + "/lines",
+                    ref accumulatedScalarTotal),
+                ref itemFailure,
+                out ImmutableArray<string> lines);
+            if (identity is not null
+                && previous is not null
                 && string.CompareOrdinal(previous, identity) >= 0)
             {
-                throw Fail("invalid-order", itemPointer);
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-order", itemPointer));
             }
 
-            builder.Add(new DocumentationPatchNamedContent(
-                identity,
-                name,
-                ParseLines(item.GetProperty("lines"), itemPointer + "/lines", ref scalarTotal)));
-            previous = identity;
+            if (itemFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, itemFailure);
+            }
+            else
+            {
+                builder.Add(new DocumentationPatchNamedContent(identity!, name!, lines));
+            }
+
+            if (identity is not null)
+            {
+                previous = identity;
+            }
+
             index++;
         }
 
+        if (selectedFailure is not null)
+        {
+            scalarTotal = accumulatedScalarTotal;
+            throw selectedFailure;
+        }
+
+        scalarTotal = accumulatedScalarTotal;
         return builder.ToImmutable();
     }
 
@@ -1212,9 +1500,27 @@ public static class DocumentationPatchValidator
         }
 
         ExpectProperties(element, pointer, "componentIdentity", "lines");
-        return new DocumentationPatchComponentContent(
-            ReadString(element, "componentIdentity", pointer, 128),
-            ParseLines(element.GetProperty("lines"), pointer + "/lines", ref scalarTotal));
+        var accumulatedScalarTotal = scalarTotal;
+        ContractFailure? selectedFailure = null;
+        TryParseRequestValue(
+            () => ReadString(element, "componentIdentity", pointer, 128),
+            ref selectedFailure,
+            out string? identity);
+        TryParseRequestValue(
+            () => ParseLines(
+                element.GetProperty("lines"),
+                pointer + "/lines",
+                ref accumulatedScalarTotal),
+            ref selectedFailure,
+            out ImmutableArray<string> lines);
+        if (selectedFailure is not null)
+        {
+            scalarTotal = accumulatedScalarTotal;
+            throw selectedFailure;
+        }
+
+        scalarTotal = accumulatedScalarTotal;
+        return new DocumentationPatchComponentContent(identity!, lines);
     }
 
     private static ImmutableArray<DocumentationPatchExceptionContent> ParseExceptions(
@@ -1223,31 +1529,77 @@ public static class DocumentationPatchValidator
         ref int scalarTotal)
     {
         ExpectArray(element, pointer, 0, 256);
+        var accumulatedScalarTotal = scalarTotal;
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchExceptionContent>();
+        ContractFailure? selectedFailure = null;
         string? previous = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
             var itemPointer = $"{pointer}/{index}";
-            ExpectProperties(item, itemPointer, "typeDocumentationId", "lines");
-            var id = ReadString(item, "typeDocumentationId", itemPointer, 1_024);
-            if (!IsExceptionDocumentationId(id))
+            try
             {
-                throw Fail("invalid-content", itemPointer + "/typeDocumentationId");
+                ExpectProperties(item, itemPointer, "typeDocumentationId", "lines");
+            }
+            catch (ContractFailure failure)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                index++;
+                continue;
             }
 
-            if (previous is not null && string.CompareOrdinal(previous, id) >= 0)
+            ContractFailure? itemFailure = null;
+            TryParseRequestValue(
+                () => ReadString(item, "typeDocumentationId", itemPointer, 1_024),
+                ref itemFailure,
+                out string? id);
+            if (id is not null && !IsExceptionDocumentationId(id))
             {
-                throw Fail("invalid-order", itemPointer);
+                itemFailure = SelectRequestFailure(
+                    itemFailure,
+                    Fail("invalid-content", itemPointer + "/typeDocumentationId"));
             }
 
-            builder.Add(new DocumentationPatchExceptionContent(
-                id,
-                ParseLines(item.GetProperty("lines"), itemPointer + "/lines", ref scalarTotal)));
-            previous = id;
+            TryParseRequestValue(
+                () => ParseLines(
+                    item.GetProperty("lines"),
+                    itemPointer + "/lines",
+                    ref accumulatedScalarTotal),
+                ref itemFailure,
+                out ImmutableArray<string> lines);
+            if (id is not null
+                && previous is not null
+                && string.CompareOrdinal(previous, id) >= 0)
+            {
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-order", itemPointer));
+            }
+
+            if (itemFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, itemFailure);
+            }
+            else
+            {
+                builder.Add(new DocumentationPatchExceptionContent(id!, lines));
+            }
+
+            if (id is not null)
+            {
+                previous = id;
+            }
+
             index++;
         }
 
+        if (selectedFailure is not null)
+        {
+            scalarTotal = accumulatedScalarTotal;
+            throw selectedFailure;
+        }
+
+        scalarTotal = accumulatedScalarTotal;
         return builder.ToImmutable();
     }
 
@@ -1258,12 +1610,17 @@ public static class DocumentationPatchValidator
     {
         ExpectArray(element, pointer, 1, 256);
         var builder = ImmutableArray.CreateBuilder<string>();
+        ContractFailure? selectedFailure = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
             {
-                throw Fail("invalid-content", $"{pointer}/{index}");
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-content", $"{pointer}/{index}"));
+                index++;
+                continue;
             }
 
             var line = item.GetString()!;
@@ -1271,12 +1628,21 @@ public static class DocumentationPatchValidator
                 || !TryCountXmlScalars(line, out var count)
                 || count > MaximumLogicalLineScalars)
             {
-                throw Fail("invalid-content", $"{pointer}/{index}");
+                selectedFailure = SelectRequestFailure(
+                    selectedFailure,
+                    Fail("invalid-content", $"{pointer}/{index}"));
+                index++;
+                continue;
             }
 
             scalarTotal = checked(scalarTotal + count);
             builder.Add(line);
             index++;
+        }
+
+        if (selectedFailure is not null)
+        {
+            throw selectedFailure;
         }
 
         return builder.ToImmutable();
