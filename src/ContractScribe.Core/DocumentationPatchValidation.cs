@@ -1317,7 +1317,7 @@ public static class DocumentationPatchValidator
         }
 
         var scalarTotal = 0;
-        var summaryIsValid = TryParseRequestValue(
+        TryParseRequestValue(
             () => ParseLines(
                 element.GetProperty("summaryLines"),
                 pointer + "/summaryLines",
@@ -1385,14 +1385,14 @@ public static class DocumentationPatchValidator
                 Fail("invalid-content", pointer));
         }
 
-        var exceptionsAreValid = TryParseRequestValue(
+        TryParseRequestValue(
             () => ParseExceptions(
                 element.GetProperty("exceptions"),
                 pointer + "/exceptions",
                 ref scalarTotal),
             ref selectedFailure,
             out ImmutableArray<DocumentationPatchExceptionContent> exceptions);
-        var remarksAreValid = TryParseRequestValue(
+        TryParseRequestValue(
             () => element.GetProperty("remarksLines").ValueKind == JsonValueKind.Null
                 ? (ImmutableArray<string>?)null
                 : ParseLines(
@@ -1409,23 +1409,20 @@ public static class DocumentationPatchValidator
                 Fail("invalid-content", pointer));
         }
 
-        if (validateComponentClosure
-            && summaryIsValid
-            && typeParametersAreMaterializable
-            && parametersAreMaterializable
-            && returnIsValid
-            && valueIsValid
-            && exceptionsAreValid
-            && remarksAreValid)
+        if (validateComponentClosure)
         {
             try
             {
                 ValidateContentComponentClosure(
                     components,
                     typeParameters,
+                    typeParametersAreMaterializable,
                     parameters,
+                    parametersAreMaterializable,
                     returnContent,
+                    returnIsValid,
                     valueContent,
+                    valueIsValid,
                     pointer);
             }
             catch (ContractFailure failure)
@@ -1519,12 +1516,10 @@ public static class DocumentationPatchValidator
             }
             else
             {
-                if (!identities.Add(identity!))
+                if (identities.Add(identity!))
                 {
-                    namedContentIsMaterializable = false;
+                    builder.Add(new DocumentationPatchNamedContent(identity!, name!, lines));
                 }
-
-                builder.Add(new DocumentationPatchNamedContent(identity!, name!, lines));
             }
 
             if (identity is not null)
@@ -1706,41 +1701,65 @@ public static class DocumentationPatchValidator
     private static void ValidateContentComponentClosure(
         ImmutableArray<DocumentationPatchApplicableComponent> components,
         ImmutableArray<DocumentationPatchNamedContent> typeParameters,
+        bool validateTypeParameters,
         ImmutableArray<DocumentationPatchNamedContent> parameters,
+        bool validateParameters,
         DocumentationPatchComponentContent? returnContent,
+        bool validateReturn,
         DocumentationPatchComponentContent? valueContent,
+        bool validateValue,
         string pointer)
     {
-        var expectedTypeParameters = components
-            .Where(component => component.Kind == DocumentationPatchComponentKind.TypeParameter)
-            .ToArray();
-        var expectedParameters = components
-            .Where(component => component.Kind == DocumentationPatchComponentKind.Parameter)
-            .ToArray();
-        if (!MatchesNamed(expectedTypeParameters, typeParameters)
-            || !MatchesNamed(expectedParameters, parameters))
+        if (validateTypeParameters)
         {
-            throw Fail("invalid-content", pointer);
+            var expectedTypeParameters = components
+                .Where(component => component.Kind == DocumentationPatchComponentKind.TypeParameter)
+                .ToArray();
+            if (!MatchesNamed(expectedTypeParameters, typeParameters))
+            {
+                throw Fail("invalid-content", pointer);
+            }
         }
 
-        var expectedReturn = components.SingleOrDefault(
-            component => component.Kind == DocumentationPatchComponentKind.Return);
-        var expectedValue = components.SingleOrDefault(
-            component => component.Kind == DocumentationPatchComponentKind.Value);
-        if ((expectedReturn is null) != (returnContent is null)
-            || expectedReturn is not null
-                && !string.Equals(
-                    expectedReturn.Identity,
-                    returnContent!.ComponentIdentity,
-                    StringComparison.Ordinal)
-            || (expectedValue is null) != (valueContent is null)
-            || expectedValue is not null
-                && !string.Equals(
-                    expectedValue.Identity,
-                    valueContent!.ComponentIdentity,
-                    StringComparison.Ordinal))
+        if (validateParameters)
         {
-            throw Fail("invalid-content", pointer);
+            var expectedParameters = components
+                .Where(component => component.Kind == DocumentationPatchComponentKind.Parameter)
+                .ToArray();
+            if (!MatchesNamed(expectedParameters, parameters))
+            {
+                throw Fail("invalid-content", pointer);
+            }
+        }
+
+        if (validateReturn)
+        {
+            var expectedReturn = components.SingleOrDefault(
+                component => component.Kind == DocumentationPatchComponentKind.Return);
+            if ((expectedReturn is null) != (returnContent is null)
+                || expectedReturn is not null
+                    && !string.Equals(
+                        expectedReturn.Identity,
+                        returnContent!.ComponentIdentity,
+                        StringComparison.Ordinal))
+            {
+                throw Fail("invalid-content", pointer);
+            }
+        }
+
+        if (validateValue)
+        {
+            var expectedValue = components.SingleOrDefault(
+                component => component.Kind == DocumentationPatchComponentKind.Value);
+            if ((expectedValue is null) != (valueContent is null)
+                || expectedValue is not null
+                    && !string.Equals(
+                        expectedValue.Identity,
+                        valueContent!.ComponentIdentity,
+                        StringComparison.Ordinal))
+            {
+                throw Fail("invalid-content", pointer);
+            }
         }
     }
 

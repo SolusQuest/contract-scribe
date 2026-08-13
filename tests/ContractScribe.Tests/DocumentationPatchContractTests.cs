@@ -580,6 +580,124 @@ public sealed class DocumentationPatchContractTests
     }
 
     [Fact]
+    public void RequestValidation_ValidatesIndependentComponentClosureDimensions()
+    {
+        var valid = ReadFixture("valid", "repository-request.json");
+
+        var reversedExceptions = Mutate(valid, root =>
+        {
+            var exceptions = root["blocks"]![0]!["content"]!["exceptions"]!.AsArray();
+            var first = exceptions[0]!.DeepClone();
+            exceptions[0] = exceptions[1]!.DeepClone();
+            exceptions[1] = first;
+        });
+        AssertFailure(
+            reversedExceptions,
+            "patch.request.invalid-order",
+            "/blocks/0/content/exceptions/1");
+        AssertFailure(
+            Mutate(reversedExceptions, root =>
+                root["blocks"]![0]!["content"]!["parameters"] = new JsonArray()),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var duplicateTypeParameters = Mutate(valid, root =>
+        {
+            var typeParameters = root["blocks"]![0]!["content"]!["typeParameters"]!.AsArray();
+            typeParameters.Add(typeParameters[0]!.DeepClone());
+        });
+        AssertFailure(
+            duplicateTypeParameters,
+            "patch.request.invalid-order",
+            "/blocks/0/content/typeParameters/1");
+        AssertFailure(
+            Mutate(duplicateTypeParameters, root =>
+                root["blocks"]![0]!["content"]!["parameters"] = new JsonArray()),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var twoTypeParameters = CreateTwoNamedComponentStructuredRequest(
+            "typeParameter",
+            "type-parameter/1",
+            "typeParameters",
+            1);
+        AssertFailure(
+            Mutate(twoTypeParameters, root =>
+            {
+                var typeParameters = root["blocks"]![0]!["content"]!["typeParameters"]!.AsArray();
+                typeParameters[1] = typeParameters[0]!.DeepClone();
+            }),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var duplicateParameters = Mutate(valid, root =>
+        {
+            var parameters = root["blocks"]![0]!["content"]!["parameters"]!.AsArray();
+            parameters.Add(parameters[0]!.DeepClone());
+        });
+        AssertFailure(
+            duplicateParameters,
+            "patch.request.invalid-order",
+            "/blocks/0/content/parameters/1");
+        AssertFailure(
+            Mutate(duplicateParameters, root =>
+                root["blocks"]![0]!["content"]!["typeParameters"] = new JsonArray()),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+        AssertFailure(
+            Mutate(duplicateParameters, root =>
+                root["blocks"]![0]!["content"]!["return"] = null),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var twoParameters = CreateTwoNamedComponentStructuredRequest(
+            "parameter",
+            "parameter/1",
+            "parameters",
+            2);
+        AssertFailure(
+            Mutate(twoParameters, root =>
+            {
+                var parameters = root["blocks"]![0]!["content"]!["parameters"]!.AsArray();
+                parameters[1] = parameters[0]!.DeepClone();
+            }),
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        var valueRequest = Mutate(valid, root =>
+        {
+            var block = root["blocks"]![0]!;
+            block["applicableComponents"]![2]!["kind"] = "value";
+            block["applicableComponents"]![2]!["identity"] = "value";
+            block["content"]!["return"] = null;
+            block["content"]!["value"] = new JsonObject
+            {
+                ["componentIdentity"] = "value",
+                ["lines"] = new JsonArray("The stored value."),
+            };
+        });
+        Assert.True(DocumentationPatchValidator.ParseRequest(valueRequest).IsValid);
+        var duplicateParametersWithMissingValue = Mutate(valueRequest, root =>
+        {
+            var content = root["blocks"]![0]!["content"]!;
+            var parameters = content["parameters"]!.AsArray();
+            parameters.Add(parameters[0]!.DeepClone());
+            content["value"] = null;
+        });
+        AssertFailure(
+            duplicateParametersWithMissingValue,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
+        static void AssertFailure(byte[] bytes, string code, string pointer)
+        {
+            var failure = DocumentationPatchValidator.ParseRequest(bytes).Failure;
+            Assert.Equal(code, failure!.Code);
+            Assert.Equal(pointer, failure.Pointer);
+        }
+    }
+
+    [Fact]
     public void SchemaAndCoreRejectTheSameLogicalLineAndComponentIdentityOverflows()
     {
         var valid = ReadFixture("valid", "repository-request.json");
