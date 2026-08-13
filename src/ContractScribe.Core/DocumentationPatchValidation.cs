@@ -818,18 +818,31 @@ public static class DocumentationPatchValidator
             },
             ref selectedFailure,
             out DocumentationPatchEditKind editKind);
-        var componentsAreValid = TryParseRequestValue(
-            () => ParseComponents(
+        var components = ImmutableArray<DocumentationPatchApplicableComponent>.Empty;
+        var componentsAreMaterializable = false;
+        try
+        {
+            components = ParseComponents(
                 element.GetProperty("applicableComponents"),
-                pointer + "/applicableComponents"),
-            ref selectedFailure,
-            out ImmutableArray<DocumentationPatchApplicableComponent> components);
+                pointer + "/applicableComponents",
+                out var componentFailure,
+                out componentsAreMaterializable);
+            if (componentFailure is not null)
+            {
+                selectedFailure = SelectRequestFailure(selectedFailure, componentFailure);
+            }
+        }
+        catch (ContractFailure failure)
+        {
+            selectedFailure = SelectRequestFailure(selectedFailure, failure);
+        }
+
         TryParseRequestValue(
             () => ParseContent(
                 element.GetProperty("content"),
                 pointer + "/content",
                 components,
-                validateComponentClosure: componentsAreValid),
+                validateComponentClosure: componentsAreMaterializable),
             ref selectedFailure,
             out DocumentationPatchContent? content);
         TryParseRequestValue(
@@ -1110,7 +1123,9 @@ public static class DocumentationPatchValidator
 
     private static ImmutableArray<DocumentationPatchApplicableComponent> ParseComponents(
         JsonElement element,
-        string pointer)
+        string pointer,
+        out ContractFailure? selectedFailure,
+        out bool componentsAreMaterializable)
     {
         ExpectArray(element, pointer, 0, 512);
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchApplicableComponent>();
@@ -1118,7 +1133,8 @@ public static class DocumentationPatchValidator
         var namedComponents = new HashSet<string>(StringComparer.Ordinal);
         var hasReturn = false;
         var hasValue = false;
-        ContractFailure? selectedFailure = null;
+        selectedFailure = null;
+        componentsAreMaterializable = true;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
@@ -1128,6 +1144,7 @@ public static class DocumentationPatchValidator
                 selectedFailure = SelectRequestFailure(
                     selectedFailure,
                     Fail("invalid-shape", itemPointer));
+                componentsAreMaterializable = false;
                 index++;
                 continue;
             }
@@ -1152,6 +1169,7 @@ public static class DocumentationPatchValidator
             catch (ContractFailure failure)
             {
                 selectedFailure = SelectRequestFailure(selectedFailure, failure);
+                componentsAreMaterializable = false;
                 index++;
                 continue;
             }
@@ -1204,6 +1222,7 @@ public static class DocumentationPatchValidator
             if (itemFailure is not null)
             {
                 selectedFailure = SelectRequestFailure(selectedFailure, itemFailure);
+                componentsAreMaterializable = false;
                 index++;
                 continue;
             }
@@ -1216,6 +1235,7 @@ public static class DocumentationPatchValidator
                 selectedFailure = SelectRequestFailure(
                     selectedFailure,
                     Fail("invalid-content", itemPointer));
+                componentsAreMaterializable = false;
             }
 
             var component = new DocumentationPatchApplicableComponent(kind!.Value, identity!, name);
@@ -1233,15 +1253,11 @@ public static class DocumentationPatchValidator
                 selectedFailure = SelectRequestFailure(
                     selectedFailure,
                     Fail("invalid-content", itemPointer));
+                componentsAreMaterializable = false;
             }
 
             builder.Add(component);
             index++;
-        }
-
-        if (selectedFailure is not null)
-        {
-            throw selectedFailure;
         }
 
         return builder.ToImmutable();

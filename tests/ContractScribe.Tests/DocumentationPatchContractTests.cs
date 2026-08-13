@@ -429,6 +429,19 @@ public sealed class DocumentationPatchContractTests
             "patch.request.invalid-vocabulary",
             "/blocks/0/applicableComponents/2/kind");
 
+        var componentClosure = Mutate(ReadFixture("valid", "repository-request.json"), root =>
+        {
+            var components = root["blocks"]![0]!["applicableComponents"]!.AsArray();
+            var first = components[0]!.DeepClone();
+            components[0] = components[1]!.DeepClone();
+            components[1] = first;
+            root["blocks"]![0]!["content"]!["parameters"] = new JsonArray();
+        });
+        AssertFailure(
+            componentClosure,
+            "patch.request.invalid-content",
+            "/blocks/0/content");
+
         var contentShape = Mutate(ReadFixture("valid", "repository-request.json"), root =>
         {
             root["blocks"]![0]!["content"]!["summaryLines"]![0] = "bad\nline";
