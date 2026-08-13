@@ -309,6 +309,13 @@ public sealed class DocumentationPatchDeclarationResolver
 
         var symbol = symbols[0];
         var definition = CanonicalPartialMember(symbol);
+        if (definition is IPropertySymbol { PartialImplementationPart: not null }
+            or IEventSymbol { PartialImplementationPart: not null })
+        {
+            AddFailure(failures, block, "patch.rejected.ambiguous-target");
+            return null;
+        }
+
         var implementation = GetPartialImplementation(definition);
         ImmutableArray<SyntaxReference> authorityReferences;
         if (implementation is not null)
@@ -362,7 +369,7 @@ public sealed class DocumentationPatchDeclarationResolver
         var components = ResolveComponents(
             classifications,
             block.SymbolRef,
-            definition);
+            owner);
         var ownerResolution = ResolveOwnerSymbols(
             classifications,
             projects,
@@ -408,7 +415,7 @@ public sealed class DocumentationPatchDeclarationResolver
     private static ImmutableArray<DocumentationPatchResolvedComponent> ResolveComponents(
         ClassificationSet classifications,
         SymbolRef symbolRef,
-        ISymbol symbol)
+        SyntaxNode owner)
     {
         var components = ImmutableArray.CreateBuilder<DocumentationPatchResolvedComponent>();
         foreach (var component in classifications.Components
@@ -432,7 +439,7 @@ public sealed class DocumentationPatchDeclarationResolver
             components.Add(new DocumentationPatchResolvedComponent(
                 kind,
                 component.Identity,
-                GetComponentName(symbol, component.ComponentKind, component.Identity)));
+                GetComponentName(owner, component.ComponentKind, component.Identity)));
         }
 
         return components
@@ -442,7 +449,7 @@ public sealed class DocumentationPatchDeclarationResolver
     }
 
     private static string? GetComponentName(
-        ISymbol symbol,
+        SyntaxNode owner,
         ComponentKind kind,
         string identity)
     {
@@ -464,22 +471,29 @@ public sealed class DocumentationPatchDeclarationResolver
 
         if (kind == ComponentKind.TypeParameter)
         {
-            var parameters = symbol switch
+            var typeParameterSyntax = owner switch
             {
-                INamedTypeSymbol type => type.TypeParameters,
-                IMethodSymbol method => method.TypeParameters,
-                _ => ImmutableArray<ITypeParameterSymbol>.Empty,
+                TypeDeclarationSyntax type => type.TypeParameterList?.Parameters,
+                DelegateDeclarationSyntax @delegate => @delegate.TypeParameterList?.Parameters,
+                MethodDeclarationSyntax method => method.TypeParameterList?.Parameters,
+                _ => null,
             };
-            return ordinal < parameters.Length ? parameters[ordinal].Name : null;
+            return typeParameterSyntax is { } typeParameters && ordinal < typeParameters.Count
+                ? typeParameters[ordinal].Identifier.ValueText
+                : null;
         }
 
-        var valueParameters = symbol switch
+        SeparatedSyntaxList<ParameterSyntax>? valueParameters = owner switch
         {
-            IMethodSymbol method => method.Parameters,
-            IPropertySymbol property => property.Parameters,
-            _ => ImmutableArray<IParameterSymbol>.Empty,
+            BaseMethodDeclarationSyntax method => method.ParameterList.Parameters,
+            DelegateDeclarationSyntax @delegate => @delegate.ParameterList.Parameters,
+            IndexerDeclarationSyntax indexer => indexer.ParameterList.Parameters,
+            TypeDeclarationSyntax type => type.ParameterList?.Parameters,
+            _ => null,
         };
-        return ordinal < valueParameters.Length ? valueParameters[ordinal].Name : null;
+        return valueParameters is { } parameters && ordinal < parameters.Count
+            ? parameters[ordinal].Identifier.ValueText
+            : null;
     }
 
     private static OwnerResolution ResolveOwnerSymbols(
@@ -853,8 +867,6 @@ public sealed class DocumentationPatchDeclarationResolver
         symbol switch
         {
             IMethodSymbol method => method.PartialImplementationPart,
-            IPropertySymbol property => property.PartialImplementationPart,
-            IEventSymbol @event => @event.PartialImplementationPart,
             _ => null,
         };
 

@@ -521,6 +521,208 @@ public sealed class DocumentationPatchResolutionTests
         Assert.Empty(stale.Targets);
     }
 
+    [Fact]
+    public void PartialMethodUsesParameterNameFromDocumentedImplementation()
+    {
+        const string source = """
+            namespace N;
+            public partial class C
+            {
+                public partial void Run(string defining);
+                /// <summary>implementation</summary>
+                public partial void Run(string implementing) { }
+            }
+            """;
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName: "Run",
+            declarationOccurrence: 1,
+            components: [(ComponentKind.Parameter, "parameter/0")],
+            traits: [SymbolTrait.Partial]);
+
+        var resolved = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(
+                editKind: DocumentationPatchEditKind.Replace,
+                applicableComponents:
+                [
+                    new DocumentationPatchApplicableComponent(
+                        DocumentationPatchComponentKind.Parameter,
+                        "parameter/0",
+                        "implementing"),
+                ]));
+        var rejected = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(
+                editKind: DocumentationPatchEditKind.Replace,
+                applicableComponents:
+                [
+                    new DocumentationPatchApplicableComponent(
+                        DocumentationPatchComponentKind.Parameter,
+                        "parameter/0",
+                        "defining"),
+                ]));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Resolved, resolved.Status);
+        Assert.Equal(
+            "implementing",
+            Assert.Single(Assert.Single(resolved.Targets).ApplicableComponents).Name);
+        Assert.Equal(DocumentationPatchResolutionStatus.Rejected, rejected.Status);
+        Assert.Equal("patch.rejected.unsafe-change", rejected.PrimaryCode);
+    }
+
+    [Fact]
+    public void PartialMethodFallbackUsesParameterNameFromDocumentedDefinition()
+    {
+        const string source = """
+            namespace N;
+            public partial class C
+            {
+                /// <summary>definition</summary>
+                public partial void Run(string defining);
+                public partial void Run(string implementing) { }
+            }
+            """;
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName: "Run",
+            components: [(ComponentKind.Parameter, "parameter/0")],
+            traits: [SymbolTrait.Partial]);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(
+                editKind: DocumentationPatchEditKind.Replace,
+                applicableComponents:
+                [
+                    new DocumentationPatchApplicableComponent(
+                        DocumentationPatchComponentKind.Parameter,
+                        "parameter/0",
+                        "defining"),
+                ]));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Resolved, result.Status);
+        Assert.Equal(
+            "defining",
+            Assert.Single(Assert.Single(result.Targets).ApplicableComponents).Name);
+    }
+
+    [Fact]
+    public void PartialMethodUsesTypeParameterNameFromDocumentedImplementation()
+    {
+        const string source = """
+            namespace N;
+            public partial class C
+            {
+                public partial void Map<TDefinition>(TDefinition value);
+                /// <summary>implementation</summary>
+                public partial void Map<TImplementation>(TImplementation value) { }
+            }
+            """;
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName: "Map",
+            declarationOccurrence: 1,
+            components: [(ComponentKind.TypeParameter, "type-parameter/0")],
+            traits: [SymbolTrait.Partial]);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(
+                editKind: DocumentationPatchEditKind.Replace,
+                applicableComponents:
+                [
+                    new DocumentationPatchApplicableComponent(
+                        DocumentationPatchComponentKind.TypeParameter,
+                        "type-parameter/0",
+                        "TImplementation"),
+                ]));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Resolved, result.Status);
+        Assert.Equal(
+            "TImplementation",
+            Assert.Single(Assert.Single(result.Targets).ApplicableComponents).Name);
+    }
+
+    [Fact]
+    public void GenericDelegateUsesNamesFromItsSelectedDeclaration()
+    {
+        const string source = "namespace N; public delegate TResult Transform<TValue, TResult>(TValue value);";
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName: "Transform",
+            primaryKind: PrimarySymbolKind.Delegate,
+            useRealClassifier: true);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(applicableComponents:
+            [
+                new DocumentationPatchApplicableComponent(
+                    DocumentationPatchComponentKind.TypeParameter,
+                    "type-parameter/0",
+                    "TValue"),
+                new DocumentationPatchApplicableComponent(
+                    DocumentationPatchComponentKind.TypeParameter,
+                    "type-parameter/1",
+                    "TResult"),
+                new DocumentationPatchApplicableComponent(
+                    DocumentationPatchComponentKind.Parameter,
+                    "parameter/0",
+                    "value"),
+                new DocumentationPatchApplicableComponent(
+                    DocumentationPatchComponentKind.Return,
+                    "return",
+                    null),
+            ]));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Resolved, result.Status);
+        Assert.Equal(4, Assert.Single(result.Targets).ApplicableComponents.Length);
+    }
+
+    [Theory]
+    [InlineData(
+        "namespace N; public partial class C { public partial int Value { get; }\n/// <summary>implementation</summary>\npublic partial int Value { get => 1; } }",
+        "Value",
+        1,
+        PrimarySymbolKind.Property)]
+    [InlineData(
+        "namespace N; public partial class C { public partial int this[int value] { get; }\n/// <summary>implementation</summary>\npublic partial int this[int value] { get => value; } }",
+        "this",
+        1,
+        PrimarySymbolKind.Indexer)]
+    [InlineData(
+        "using System; namespace N; public partial class C { public partial event Action Changed;\n/// <summary>implementation</summary>\npublic partial event Action Changed { add { } remove { } } }",
+        "Changed",
+        1,
+        PrimarySymbolKind.Event)]
+    public void NonMethodPartialMembersAreAmbiguous(
+        string source,
+        string declarationName,
+        int declarationOccurrence,
+        PrimarySymbolKind primaryKind)
+    {
+        using var fixture = PatchFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            declarationName,
+            declarationOccurrence,
+            primaryKind,
+            useRealClassifier: true);
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request(editKind: DocumentationPatchEditKind.Replace));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Rejected, result.Status);
+        Assert.Equal("patch.rejected.ambiguous-target", result.PrimaryCode);
+        Assert.Empty(result.Targets);
+    }
+
     [Theory]
     [InlineData("well-formed")]
     [InlineData("whitespace")]
@@ -695,7 +897,8 @@ public sealed class DocumentationPatchResolutionTests
             string? secondarySource = null,
             ClassificationOrigin? origin = null,
             bool includePrimaryConstructorTarget = false,
-            bool unresolvedAmbiguous = false)
+            bool unresolvedAmbiguous = false,
+            bool useRealClassifier = false)
         {
             var root = Path.Join(
                 Path.GetTempPath(),
@@ -746,6 +949,14 @@ public sealed class DocumentationPatchResolutionTests
                         string.Equals(variable.Identifier.ValueText, declarationName, StringComparison.Ordinal),
                     TypeDeclarationSyntax type =>
                         string.Equals(type.Identifier.ValueText, declarationName, StringComparison.Ordinal),
+                    DelegateDeclarationSyntax @delegate =>
+                        string.Equals(@delegate.Identifier.ValueText, declarationName, StringComparison.Ordinal),
+                    PropertyDeclarationSyntax property =>
+                        string.Equals(property.Identifier.ValueText, declarationName, StringComparison.Ordinal),
+                    IndexerDeclarationSyntax =>
+                        string.Equals(declarationName, "this", StringComparison.Ordinal),
+                    EventDeclarationSyntax @event =>
+                        string.Equals(@event.Identifier.ValueText, declarationName, StringComparison.Ordinal),
                     _ => false,
                 })
                 .ToArray();
@@ -873,9 +1084,13 @@ public sealed class DocumentationPatchResolutionTests
                             Path.GetFileName(reference.SyntaxTree.FilePath),
                             declarationSpan))]
                     : []);
-            var classified = ClassifiedRepositorySession.Bind(
-                repositorySession,
-                ClassificationOutcome.Success(classificationSet));
+            var classified = useRealClassifier
+                ? new SymbolClassifier().ClassifySession(
+                    repositorySession,
+                    TargetProfile.ExternalApi)
+                : ClassifiedRepositorySession.Bind(
+                    repositorySession,
+                    ClassificationOutcome.Success(classificationSet));
             var locator = new DocumentationPatchRepositoryLocator(
                 Path.GetFileName(reference.SyntaxTree.FilePath),
                 sourceSha256,
