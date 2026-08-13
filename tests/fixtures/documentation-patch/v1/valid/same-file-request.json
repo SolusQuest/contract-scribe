@@ -1,0 +1,93 @@
+{
+  "patchRequestVersion": 1,
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.external-api"
+  },
+  "provenanceCatalog": [
+    "prov.synthetic"
+  ],
+  "blocks": [
+    {
+      "blockId": "block.first",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.First`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 21,
+          "end": 57
+        }
+      },
+      "editKind": "insert",
+      "applicableComponents": [
+        {
+          "kind": "typeParameter",
+          "identity": "type-parameter/0",
+          "name": "T"
+        },
+        {
+          "kind": "parameter",
+          "identity": "parameter/0",
+          "name": "value"
+        },
+        {
+          "kind": "return",
+          "identity": "return"
+        }
+      ],
+      "content": {
+        "kind": "inheritDoc"
+      },
+      "provenanceRefs": [
+        "prov.synthetic"
+      ]
+    },
+    {
+      "blockId": "block.second",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Second`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 100,
+          "end": 137
+        }
+      },
+      "editKind": "insert",
+      "applicableComponents": [
+        {
+          "kind": "typeParameter",
+          "identity": "type-parameter/0",
+          "name": "T"
+        },
+        {
+          "kind": "parameter",
+          "identity": "parameter/0",
+          "name": "value"
+        },
+        {
+          "kind": "return",
+          "identity": "return"
+        }
+      ],
+      "content": {
+        "kind": "inheritDoc"
+      },
+      "provenanceRefs": [
+        "prov.synthetic"
+      ]
+    }
+  ]
+}

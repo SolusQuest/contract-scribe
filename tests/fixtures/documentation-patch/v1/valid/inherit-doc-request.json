@@ -1,0 +1,55 @@
+{
+  "patchRequestVersion": 1,
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.external-api"
+  },
+  "provenanceCatalog": [
+    "prov.audit",
+    "prov.proposal"
+  ],
+  "blocks": [
+    {
+      "blockId": "block.widget",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Widget`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Widget.cs",
+        "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 21,
+          "end": 58
+        }
+      },
+      "editKind": "insert",
+      "applicableComponents": [
+        {
+          "kind": "typeParameter",
+          "identity": "type-parameter/0",
+          "name": "T"
+        },
+        {
+          "kind": "parameter",
+          "identity": "parameter/0",
+          "name": "value"
+        },
+        {
+          "kind": "return",
+          "identity": "return"
+        }
+      ],
+      "content": {
+        "kind": "inheritDoc"
+      },
+      "provenanceRefs": [
+        "prov.audit",
+        "prov.proposal"
+      ]
+    }
+  ]
+}

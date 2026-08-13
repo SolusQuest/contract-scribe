@@ -6,20 +6,23 @@ The patch engine turns one or more validated structured documentation proposals 
 
 This boundary separates model-assisted writing from source mutation. The Documentation Scribe does not produce a diff and does not receive an edit tool.
 
+The normative serialization and validation rules are defined by [Documentation Patch v1](contracts/documentation-patch-v1.md). This page describes how the later patch engine uses that contract.
+
 The production implementation lives in `ContractScribe.Patching`. It may reuse read-only declaration resolution from `ContractScribe.Roslyn`, but neither the Roslyn audit project nor `ContractScribe.Agent` references the patching project. See [Project structure](project-structure.md).
 
 ## Input
 
 A patch request binds:
 
-- repository and input snapshot identity;
-- selected `SymbolRef`;
-- canonical source declaration and expected source hash;
-- structured documentation fields;
-- style-profile identity;
-- evidence references;
-- proposal-contract identity;
-- deterministic target ordering when several proposals share a file.
+- an opaque `repositoryContextRef`, the canonical repository-relative `inputIdentity`, and the exact `TargetProfile`;
+- each selected `SymbolRef` and its compilation-context reference;
+- a closed repository, source-generator, or tool-generated source locator;
+- exact source identity: repository locators commit to file bytes, encoding, BOM form, and a UTF-16 declaration span, while generated locators commit to exact UTF-8 source text and a UTF-16 declaration span;
+- applicable documentation components and complete-block structured content or `<inheritdoc/>` intent;
+- bounded provenance references; and
+- canonical ordinal target ordering.
+
+`repositoryContextRef` is a process-local opaque value shaped as `repoctx-` plus 32 lowercase hexadecimal characters. A successful production repository load samples it from 16 cryptographically secure random bytes. It deliberately reveals no local path, Git remote, commit, GitHub repository identity, or filesystem metadata. It is a substitution guard, not a durable repository identity: values are not persisted, derived, retried for uniqueness, or promised never to collide.
 
 The engine rejects stale source, an unresolved or ambiguous declaration, mismatched parameters or type parameters, unsupported XML structures, invalid Unicode, and proposals for unselected targets.
 
@@ -37,7 +40,7 @@ The renderer owns:
 - `///` trivia construction;
 - tag ordering;
 - indentation;
-- line wrapping allowed by the style profile;
+- preservation of logical-line boundaries without width-based reflow;
 - placement on the canonical declaration;
 - replacement rules for an allowed existing documentation block;
 - file encoding, BOM, and newline preservation.
@@ -54,7 +57,7 @@ A publishable patch must prove:
 4. Symbol identity, signatures, modifiers, attributes, generic constraints, and semantic relationships are unchanged.
 5. Project files, build scripts, tests, and unselected source files are unchanged.
 6. File encoding, BOM, newline, and indentation policies are preserved.
-7. Applying the same accepted patch again produces no diff.
+7. Applying an internally rebound accepted candidate again produces no second byte change; replaying the original public request against changed source instead reports stale input.
 8. Every changed documentation block maps to one accepted proposal and evidence set.
 9. Uncertainty, stale input, or an unsupported syntax shape fails closed.
 
@@ -83,14 +86,14 @@ M2 must cover:
 
 Patch rendering occurs in a candidate workspace or proposal branch, never directly on an unvalidated target branch. A patch validation result records:
 
-- input and output identities;
-- selected targets;
-- changed files and documentation-block count;
-- patch bytes and line counts;
-- invariant results;
-- diagnostics;
-- accepted, rejected, or stale outcome;
-- bounded failure codes.
+- the request context and one correlated trace per selected target;
+- changed repository files, exact original and candidate hashes, and documentation-block counts;
+- exact documentation-region byte and physical `///` line observations;
+- all nine invariant results;
+- bounded diagnostics selected deterministically; and
+- an `accepted`, `rejected`, or `stale` outcome.
+
+Malformed, oversized, incorrectly encoded, duplicate-property, unsupported-version, or otherwise intrinsically invalid request artifacts produce `PatchRequestValidationFailure`; they never produce a Patch Validation Result. A result exists only after an intrinsically valid request enters live execution, and it must be validated by explicit correlation against that request.
 
 Only an accepted result may be handed to the GitHub adapter.
 

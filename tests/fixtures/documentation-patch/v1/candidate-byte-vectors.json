@@ -1,0 +1,50 @@
+{
+  "vectors": [
+    {
+      "caseId": "single-inherit-doc-lf",
+      "requestFile": "valid/inherit-doc-request.json",
+      "resultFile": "valid/accepted-result.json",
+      "encoding": "utf-8",
+      "originalBase64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsKcHVibGljIGRlbGVnYXRlIFQgV2lkZ2V0PFQ+KFQgdmFsdWUpOwo=",
+      "expectedOriginalLength": 59,
+      "expectedOriginalSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+      "candidateBase64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsKLy8vIDxpbmhlcml0ZG9jLz4KcHVibGljIGRlbGVnYXRlIFQgV2lkZ2V0PFQ+KFQgdmFsdWUpOwo=",
+      "expectedCandidateLength": 77,
+      "expectedCandidateSha256": "1c144c3684c910057a311fdb32e36744ba6c0429a8dabf501a6521d51c881634",
+      "documentationRegions": [
+        {
+          "offset": 21,
+          "byteLength": 18,
+          "physicalLineCount": 1,
+          "base64": "Ly8vIDxpbmhlcml0ZG9jLz4K"
+        }
+      ]
+    },
+    {
+      "caseId": "same-file-two-targets-lf",
+      "requestFile": "valid/same-file-request.json",
+      "resultFile": "valid/same-file-accepted-result.json",
+      "encoding": "utf-8",
+      "originalBase64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsKcHVibGljIGRlbGVnYXRlIFQgRmlyc3Q8VD4oVCB2YWx1ZSk7CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCnB1YmxpYyBkZWxlZ2F0ZSBUIFNlY29uZDxUPihUIHZhbHVlKTsK",
+      "expectedOriginalLength": 138,
+      "expectedOriginalSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+      "candidateBase64": "bmFtZXNwYWNlIFN5bnRoZXRpYzsKLy8vIDxpbmhlcml0ZG9jLz4KcHVibGljIGRlbGVnYXRlIFQgRmlyc3Q8VD4oVCB2YWx1ZSk7CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCi8vLyA8aW5oZXJpdGRvYy8+CnB1YmxpYyBkZWxlZ2F0ZSBUIFNlY29uZDxUPihUIHZhbHVlKTsK",
+      "expectedCandidateLength": 174,
+      "expectedCandidateSha256": "30835dcbba48473c2cbfcd87b34c426c6f8908a8c8dcd299e45e326f8fc7f1f9",
+      "documentationRegions": [
+        {
+          "offset": 21,
+          "byteLength": 18,
+          "physicalLineCount": 1,
+          "base64": "Ly8vIDxpbmhlcml0ZG9jLz4K"
+        },
+        {
+          "offset": 118,
+          "byteLength": 18,
+          "physicalLineCount": 1,
+          "base64": "Ly8vIDxpbmhlcml0ZG9jLz4K"
+        }
+      ]
+    }
+  ]
+}

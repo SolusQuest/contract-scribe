@@ -1,0 +1,106 @@
+{
+  "patchValidationResultVersion": 1,
+  "patchRequestSha256": "0dce44067fe96c40d81cabafde208c97155b5f6a3139ad32f91d4b446e3193cb",
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.external-api"
+  },
+  "outcome": "accepted",
+  "targets": [
+    {
+      "blockId": "block.first",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.First`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 21,
+          "end": 57
+        }
+      },
+      "provenanceRefs": [
+        "prov.synthetic"
+      ],
+      "status": "valid"
+    },
+    {
+      "blockId": "block.second",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Second`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Delegates.cs",
+        "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+        "encoding": "utf-8",
+        "declarationSpan": {
+          "start": 100,
+          "end": 137
+        }
+      },
+      "provenanceRefs": [
+        "prov.synthetic"
+      ],
+      "status": "valid"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "src/Synthetic/Delegates.cs",
+      "originalFileSha256": "dea0c74978af166ef65bdbc8ea60d5659314acbc0eff520a0a1ad5e3e0819514",
+      "candidateFileSha256": "30835dcbba48473c2cbfcd87b34c426c6f8908a8c8dcd299e45e326f8fc7f1f9",
+      "changedDocumentationBlockCount": 2,
+      "originalDocumentationByteCount": 0,
+      "candidateDocumentationByteCount": 36,
+      "originalDocumentationLineCount": 0,
+      "candidateDocumentationLineCount": 2
+    }
+  ],
+  "changedDocumentationBlockCount": 2,
+  "invariants": [
+    {
+      "id": "patch.invariant.non-documentation-tokens-unchanged",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.selected-documentation-only",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.no-new-parse-diagnostics",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.symbol-semantics-unchanged",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.repository-scope",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.file-representation-preserved",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.idempotent",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.traceable",
+      "status": "passed"
+    },
+    {
+      "id": "patch.invariant.fail-closed",
+      "status": "passed"
+    }
+  ],
+  "diagnostics": []
+}

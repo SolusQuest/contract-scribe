@@ -1,0 +1,65 @@
+{
+  "patchRequestVersion": 1,
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.assembly-visible"
+  },
+  "provenanceCatalog": [],
+  "blocks": [
+    {
+      "blockId": "block.repository",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Widget`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Widget.cs",
+        "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "encoding": "utf-8",
+        "declarationSpan": { "start": 21, "end": 58 }
+      },
+      "editKind": "insert",
+      "applicableComponents": [],
+      "content": { "kind": "inheritDoc" },
+      "provenanceRefs": []
+    },
+    {
+      "blockId": "block.source-generator",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.GeneratedWidget"
+      },
+      "locator": {
+        "kind": "sourceGenerator",
+        "producerId": "sgp.0000000000000000000000000000000000000000000000000000000000000001",
+        "outputId": "sgo.0000000000000000000000000000000000000000000000000000000000000002",
+        "sourceSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "declarationSpan": { "start": 21, "end": 58 }
+      },
+      "editKind": "insert",
+      "applicableComponents": [],
+      "content": { "kind": "inheritDoc" },
+      "provenanceRefs": []
+    },
+    {
+      "blockId": "block.tool-generated",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.ToolWidget"
+      },
+      "locator": {
+        "kind": "toolGenerated",
+        "producerId": "tgp.0000000000000000000000000000000000000000000000000000000000000003",
+        "outputId": "tgo.0000000000000000000000000000000000000000000000000000000000000004",
+        "sourceSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "declarationSpan": { "start": 21, "end": 58 }
+      },
+      "editKind": "replace",
+      "applicableComponents": [],
+      "content": { "kind": "inheritDoc" },
+      "provenanceRefs": []
+    }
+  ]
+}
