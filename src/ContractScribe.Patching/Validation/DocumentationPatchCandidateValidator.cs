@@ -97,7 +97,7 @@ internal static class DocumentationPatchCandidateValidator
             {
                 return Rejected(
                     roslyn.FailureCode ?? "patch.rejected.unsafe-change",
-                    resolution.Targets[0].BlockId,
+                    null,
                     roslyn);
             }
 

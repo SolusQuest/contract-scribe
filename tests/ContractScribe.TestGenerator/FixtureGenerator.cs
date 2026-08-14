@@ -9,6 +9,16 @@ namespace ContractScribe.TestGenerator;
 [Generator]
 public sealed class FixtureGenerator : IIncrementalGenerator
 {
+#pragma warning disable RS2008 // Test-only stable diagnostic fixture.
+    private static readonly DiagnosticDescriptor StableWarning = new(
+        "CSG0001",
+        "Stable fixture warning",
+        "Stable fixture warning",
+        "ContractScribe.TestGenerator",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+#pragma warning restore RS2008
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(output =>
@@ -192,6 +202,38 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     $$"""public static class FixtureDynamicAdditional { public const string Value = "{{value}}"; }""",
                     Encoding.UTF8)));
 
+        var additionalDocumentationSensitiveEnabled =
+            context.AnalyzerConfigOptionsProvider.Select(
+                static (options, _) =>
+                    options.GlobalOptions.TryGetValue(
+                        "build_property.ContractScribeTestGeneratorAdditionalDocumentationSensitive",
+                        out var enabled)
+                    && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        var appAdditionalFiles = context.AdditionalTextsProvider
+            .Where(static text => string.Equals(
+                Path.GetFileName(text.Path),
+                "App.cs",
+                StringComparison.OrdinalIgnoreCase))
+            .Collect();
+        context.RegisterSourceOutput(
+            appAdditionalFiles.Combine(additionalDocumentationSensitiveEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right)
+                {
+                    return;
+                }
+
+                var count = input.Left.Sum(text => CountOccurrences(
+                    text.GetText(output.CancellationToken)?.ToString() ?? string.Empty,
+                    "///"));
+                output.AddSource(
+                    "Fixture.AdditionalDocumentationSensitive.g.cs",
+                    SourceText.From(
+                        $"public static class FixtureAdditionalDocumentationSensitive {{ public const int Count = {count}; }}",
+                        Encoding.UTF8));
+            });
+
         var dynamicAnalyzerConfigValues = context.AnalyzerConfigOptionsProvider.Select(
             static (options, _) =>
                 options.GlobalOptions.TryGetValue(
@@ -210,7 +252,21 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                 "Fixture.DynamicAnalyzerConfig.g.cs",
                 SourceText.From(
                     $$"""public static class FixtureDynamicAnalyzerConfig { public const string Value = "{{value}}"; }""",
-                Encoding.UTF8));
+                    Encoding.UTF8));
+        });
+
+        var stableDiagnosticEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorStableDiagnostic",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(stableDiagnosticEnabled, static (output, enabled) =>
+        {
+            if (enabled)
+            {
+                output.ReportDiagnostic(Diagnostic.Create(StableWarning, Location.None));
+            }
         });
 
         var documentationSensitiveEnabled = context.AnalyzerConfigOptionsProvider.Select(
@@ -265,8 +321,21 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     "Fixture.NoOutputToOutput.g.cs",
                     SourceText.From(
                         "public static class FixtureNoOutputToOutput { }",
-                        Encoding.UTF8));
+                    Encoding.UTF8));
             });
+    }
+
+    private static int CountOccurrences(string value, string pattern)
+    {
+        var count = 0;
+        var start = 0;
+        while ((start = value.IndexOf(pattern, start, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            start += pattern.Length;
+        }
+
+        return count;
     }
 }
 

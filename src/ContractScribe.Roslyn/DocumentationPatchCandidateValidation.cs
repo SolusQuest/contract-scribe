@@ -885,6 +885,11 @@ public static class DocumentationPatchCandidateValidation
         return result.Order(StringComparer.Ordinal).ToImmutableArray();
     }
 
+    internal static ImmutableArray<string> SymbolProjectionForTests(
+        Compilation compilation,
+        CancellationToken cancellationToken = default) =>
+        SymbolProjection(compilation, cancellationToken);
+
     private static void AddNamespace(
         INamespaceSymbol @namespace,
         ImmutableArray<string>.Builder result,
@@ -928,42 +933,20 @@ public static class DocumentationPatchCandidateValidation
 
     private static string SymbolProjection(ISymbol symbol)
     {
-        var attributes = symbol.GetAttributes().Select(attribute =>
-                (attribute.AttributeClass?.GetDocumentationCommentId()
-                    ?? attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-                    ?? string.Empty)
-                + "(" + string.Join(',', attribute.ConstructorArguments.Select(TypedConstantProjection)) + ")"
-                + "{" + string.Join(',', attribute.NamedArguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                    .Select(pair => pair.Key + "=" + TypedConstantProjection(pair.Value))) + "}")
-            .Order(StringComparer.Ordinal);
         var typeDetails = symbol switch
         {
-            INamedTypeSymbol type => "base="
-                + TypeProjection(type.BaseType) + ";interfaces="
-                + string.Join(',', type.Interfaces.Select(TypeProjection).Order(StringComparer.Ordinal))
-                + ";constraints=" + string.Join(',', type.TypeParameters.Select(TypeParameterProjection)),
-            IMethodSymbol method => "return=" + TypeProjection(method.ReturnType)
-                + ";ref=" + method.RefKind
-                + ";params=" + string.Join(',', method.Parameters.Select(ParameterProjection))
-                + ";constraints=" + string.Join(',', method.TypeParameters.Select(TypeParameterProjection))
-                + ";explicit=" + string.Join(',', method.ExplicitInterfaceImplementations
-                    .Select(MethodIdentity).Order(StringComparer.Ordinal)),
-            IPropertySymbol property => "type=" + TypeProjection(property.Type)
-                + ";ref=" + property.RefKind
-                + ";params=" + string.Join(',', property.Parameters.Select(ParameterProjection))
-                + ";explicit=" + string.Join(',', property.ExplicitInterfaceImplementations
-                    .Select(item => item.GetDocumentationCommentId()
-                        ?? item.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))
-                    .Order(StringComparer.Ordinal)),
-            IEventSymbol @event => "type=" + TypeProjection(@event.Type)
-                + ";explicit=" + string.Join(',', @event.ExplicitInterfaceImplementations
-                    .Select(item => item.GetDocumentationCommentId()
-                        ?? item.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))
-                    .Order(StringComparer.Ordinal)),
+            INamedTypeSymbol type => NamedTypeProjection(type),
+            IMethodSymbol method => MethodProjection(method),
+            IPropertySymbol property => PropertyProjection(property),
+            IEventSymbol @event => EventProjection(@event),
             IFieldSymbol field => "type=" + TypeProjection(field.Type)
                 + ";const=" + (field.HasConstantValue
                     ? Convert.ToString(field.ConstantValue, CultureInfo.InvariantCulture)
-                    : string.Empty),
+                    : string.Empty)
+                + ";readonly=" + field.IsReadOnly
+                + ";volatile=" + field.IsVolatile
+                + ";required=" + field.IsRequired
+                + ";fixed=" + field.IsFixedSizeBuffer,
             IParameterSymbol parameter => ParameterProjection(parameter),
             ITypeParameterSymbol parameter => TypeParameterProjection(parameter),
             _ => string.Empty,
@@ -982,12 +965,127 @@ public static class DocumentationPatchCandidateValidation
             symbol.IsSealed,
             symbol.IsExtern,
             typeDetails,
-            string.Join(';', attributes));
+            AttributesProjection(symbol.GetAttributes()));
     }
 
-    private static string MethodIdentity(IMethodSymbol method) =>
-        method.GetDocumentationCommentId()
-        ?? method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+    private static string NamedTypeProjection(INamedTypeSymbol type) =>
+        "type-kind=" + type.TypeKind
+        + ";base=" + TypeProjection(type.BaseType)
+        + ";interfaces="
+        + string.Join(',', type.Interfaces.Select(TypeProjection).Order(StringComparer.Ordinal))
+        + ";constraints=" + string.Join(',', type.TypeParameters.Select(TypeParameterProjection))
+        + ";enum-underlying=" + TypeProjection(type.EnumUnderlyingType)
+        + ";delegate-invoke=" + (type.DelegateInvokeMethod is null
+            ? string.Empty
+            : MethodShapeProjection(type.DelegateInvokeMethod))
+        + ";record=" + type.IsRecord
+        + ";readonly=" + type.IsReadOnly
+        + ";ref-like=" + type.IsRefLikeType
+        + ";implicit-components=" + string.Join(',', type.GetMembers()
+            .Where(member => member.IsImplicitlyDeclared
+                && member.Locations.Any(location => location.IsInSource))
+            .Select(ImplicitComponentProjection)
+            .Order(StringComparer.Ordinal));
+
+    private static string MethodProjection(IMethodSymbol method) =>
+        MethodShapeProjection(method)
+        + ";overridden=" + SymbolIdentity(method.OverriddenMethod)
+        + ";explicit=" + string.Join(',', method.ExplicitInterfaceImplementations
+            .Select(InterfaceEndpointProjection).Order(StringComparer.Ordinal))
+        + ";implemented=" + InterfaceImplementationProjection(method);
+
+    private static string MethodShapeProjection(IMethodSymbol method) =>
+        "kind=" + method.MethodKind
+        + ";return=" + TypeProjection(method.ReturnType)
+        + ";ref=" + method.RefKind
+        + ";return-attributes=" + AttributesProjection(method.GetReturnTypeAttributes())
+        + ";params=" + string.Join(',', method.Parameters.Select(ParameterProjection))
+        + ";constraints=" + string.Join(',', method.TypeParameters.Select(TypeParameterProjection))
+        + ";async=" + method.IsAsync
+        + ";readonly=" + method.IsReadOnly
+        + ";init-only=" + method.IsInitOnly
+        + ";vararg=" + method.IsVararg
+        + ";attributes=" + AttributesProjection(method.GetAttributes());
+
+    private static string PropertyProjection(IPropertySymbol property) =>
+        "type=" + TypeProjection(property.Type)
+        + ";ref=" + property.RefKind
+        + ";indexer=" + property.IsIndexer
+        + ";required=" + property.IsRequired
+        + ";params=" + string.Join(',', property.Parameters.Select(ParameterProjection))
+        + ";get=" + AccessorProjection(property.GetMethod)
+        + ";set=" + AccessorProjection(property.SetMethod)
+        + ";overridden=" + SymbolIdentity(property.OverriddenProperty)
+        + ";explicit=" + string.Join(',', property.ExplicitInterfaceImplementations
+            .Select(InterfaceEndpointProjection).Order(StringComparer.Ordinal))
+        + ";implemented=" + InterfaceImplementationProjection(property);
+
+    private static string EventProjection(IEventSymbol @event) =>
+        "type=" + TypeProjection(@event.Type)
+        + ";add=" + AccessorProjection(@event.AddMethod)
+        + ";remove=" + AccessorProjection(@event.RemoveMethod)
+        + ";raise=" + AccessorProjection(@event.RaiseMethod)
+        + ";overridden=" + SymbolIdentity(@event.OverriddenEvent)
+        + ";explicit=" + string.Join(',', @event.ExplicitInterfaceImplementations
+            .Select(InterfaceEndpointProjection).Order(StringComparer.Ordinal))
+        + ";implemented=" + InterfaceImplementationProjection(@event);
+
+    private static string AccessorProjection(IMethodSymbol? accessor) => accessor is null
+        ? string.Empty
+        : string.Join(
+            ':',
+            accessor.MethodKind,
+            accessor.DeclaredAccessibility,
+            accessor.IsStatic,
+            accessor.IsAbstract,
+            accessor.IsVirtual,
+            accessor.IsOverride,
+            accessor.IsSealed,
+            accessor.IsExtern,
+            MethodShapeProjection(accessor));
+
+    private static string InterfaceImplementationProjection(ISymbol symbol)
+    {
+        if (symbol.ContainingType is not { } containingType)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(',', containingType.AllInterfaces
+            .SelectMany(@interface => @interface.GetMembers())
+            .Where(member => SymbolEqualityComparer.Default.Equals(
+                containingType.FindImplementationForInterfaceMember(member),
+                symbol))
+            .Select(InterfaceEndpointProjection)
+            .Order(StringComparer.Ordinal));
+    }
+
+    private static string InterfaceEndpointProjection(ISymbol symbol) =>
+        SymbolIdentity(symbol.OriginalDefinition) + "=>" + SymbolIdentity(symbol);
+
+    private static string ImplicitComponentProjection(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol method => "method:" + MethodProjection(method),
+        IPropertySymbol property => "property:" + PropertyProjection(property),
+        IEventSymbol @event => "event:" + EventProjection(@event),
+        IFieldSymbol field => "field:" + TypeProjection(field.Type),
+        _ => symbol.Kind + ":" + SymbolIdentity(symbol),
+    };
+
+    private static string SymbolIdentity(ISymbol? symbol) => symbol is null
+        ? string.Empty
+        : symbol.GetDocumentationCommentId()
+            ?? symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+    private static string AttributesProjection(IEnumerable<AttributeData> attributes) =>
+        string.Join(';', attributes.Select(attribute =>
+                (attribute.AttributeClass?.GetDocumentationCommentId()
+                    ?? attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                    ?? string.Empty)
+                + "(" + string.Join(',', attribute.ConstructorArguments.Select(TypedConstantProjection)) + ")"
+                + "{" + string.Join(',', attribute.NamedArguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => pair.Key + "=" + TypedConstantProjection(pair.Value))) + "}")
+            .Order(StringComparer.Ordinal));
 
     private static string ParameterProjection(IParameterSymbol parameter) => string.Join(
         ':',
@@ -999,7 +1097,8 @@ public static class DocumentationPatchCandidateValidation
         TypeProjection(parameter.Type),
         parameter.HasExplicitDefaultValue
             ? Convert.ToString(parameter.ExplicitDefaultValue, CultureInfo.InvariantCulture)
-            : string.Empty);
+            : string.Empty,
+        AttributesProjection(parameter.GetAttributes()));
 
     private static string TypeParameterProjection(ITypeParameterSymbol parameter) => string.Join(
         ':',
@@ -1012,7 +1111,8 @@ public static class DocumentationPatchCandidateValidation
         parameter.HasUnmanagedTypeConstraint,
         parameter.HasNotNullConstraint,
         parameter.HasConstructorConstraint,
-        string.Join(',', parameter.ConstraintTypes.Select(TypeProjection).Order(StringComparer.Ordinal)));
+        string.Join(',', parameter.ConstraintTypes.Select(TypeProjection).Order(StringComparer.Ordinal)),
+        AttributesProjection(parameter.GetAttributes()));
 
     private static string TypeProjection(ITypeSymbol? type) => type is null
         ? string.Empty

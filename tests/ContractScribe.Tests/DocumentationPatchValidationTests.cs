@@ -187,6 +187,127 @@ public sealed class DocumentationPatchValidationTests
         Assert.Equal("patch.rejected.unsafe-change", decision.FailureCode);
     }
 
+    [Fact]
+    public void SymbolProjectionContainsDelegateEnumAccessorAttributeAndRelationshipShapes()
+    {
+        const string source = """
+            using System;
+            namespace N;
+            [AttributeUsage(AttributeTargets.All)]
+            public sealed class MarkerAttribute : Attribute { }
+            public interface IContract
+            {
+                [return: Marker]
+                int M<[Marker] T>([Marker] ref T value);
+                int P { get; set; }
+            }
+            public abstract class Base
+            {
+                public abstract int M<T>(ref T value);
+                public abstract int P { get; set; }
+            }
+            public sealed class C : Base, IContract
+            {
+                [return: Marker]
+                public override int M<[Marker] T>([Marker] ref T value) => 0;
+                public override int P { get; set; }
+            }
+            [return: Marker]
+            public delegate int Transform<[Marker] T>([Marker] ref T value);
+            public enum Choice : byte { First }
+            """;
+        var compilation = CompileProjection("projection-shapes", source);
+
+        var projection = DocumentationPatchCandidateValidation.SymbolProjectionForTests(
+            compilation);
+
+        var @delegate = Assert.Single(projection, item =>
+            item.StartsWith("T:N.Transform`1", StringComparison.Ordinal));
+        Assert.Contains("type-kind=Delegate", @delegate, StringComparison.Ordinal);
+        Assert.Contains("delegate-invoke=kind=DelegateInvoke", @delegate, StringComparison.Ordinal);
+        Assert.Contains("return-attributes=T:N.MarkerAttribute", @delegate, StringComparison.Ordinal);
+        Assert.Contains("attributes=T:N.MarkerAttribute", @delegate, StringComparison.Ordinal);
+
+        var @enum = Assert.Single(projection, item =>
+            item.StartsWith("T:N.Choice", StringComparison.Ordinal));
+        Assert.Contains("enum-underlying=byte?NotAnnotated", @enum, StringComparison.Ordinal);
+
+        var method = Assert.Single(projection, item =>
+            item.StartsWith("M:N.C.M", StringComparison.Ordinal));
+        Assert.Contains("overridden=M:N.Base.M", method, StringComparison.Ordinal);
+        Assert.Contains("implemented=M:N.IContract.M", method, StringComparison.Ordinal);
+        Assert.Contains("return-attributes=T:N.MarkerAttribute", method, StringComparison.Ordinal);
+
+        var property = Assert.Single(projection, item =>
+            item.StartsWith("P:N.C.P", StringComparison.Ordinal));
+        Assert.Contains("get=PropertyGet", property, StringComparison.Ordinal);
+        Assert.Contains("set=PropertySet", property, StringComparison.Ordinal);
+        Assert.Contains("overridden=P:N.Base.P", property, StringComparison.Ordinal);
+        Assert.Contains("implemented=P:N.IContract.P", property, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SymbolProjectionChangesWhenTheSameSourceRebindsInterfaceEndpoints()
+    {
+        var firstReference = EmitReference(
+            "external-one",
+            "namespace External; public interface I<T> { void M(T value); }");
+        var secondReference = EmitReference(
+            "external-two",
+            "namespace External; public interface I<T> { void M(int value); }");
+        const string source =
+            "namespace N; public sealed class C : External.I<int> { public void M(int value) { } }";
+        var first = CompileProjection("consumer-one", source, firstReference);
+        var second = CompileProjection("consumer-two", source, secondReference);
+
+        var firstProjection = DocumentationPatchCandidateValidation.SymbolProjectionForTests(first);
+        var secondProjection = DocumentationPatchCandidateValidation.SymbolProjectionForTests(second);
+
+        Assert.NotEqual(firstProjection, secondProjection);
+        var firstMethod = Assert.Single(firstProjection, item =>
+            item.StartsWith("M:N.C.M", StringComparison.Ordinal));
+        var secondMethod = Assert.Single(secondProjection, item =>
+            item.StartsWith("M:N.C.M", StringComparison.Ordinal));
+        Assert.True(
+            firstMethod.Contains(
+                "implemented=M:External.I`1.M(`0)=>M:External.I{System.Int32}.M(System.Int32)",
+                StringComparison.Ordinal),
+            firstMethod);
+        Assert.True(
+            secondMethod.Contains(
+                "implemented=M:External.I`1.M(System.Int32)=>M:External.I{System.Int32}.M(System.Int32)",
+                StringComparison.Ordinal),
+            secondMethod);
+    }
+
+    private static CSharpCompilation CompileProjection(
+        string assemblyName,
+        string source,
+        params MetadataReference[] additionalReferences)
+    {
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .Concat(additionalReferences);
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview))],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error);
+        return compilation;
+    }
+
+    private static MetadataReference EmitReference(string assemblyName, string source)
+    {
+        var compilation = CompileProjection(assemblyName, source);
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        return MetadataReference.CreateFromImage(stream.ToArray());
+    }
+
     private sealed class ValidationFixture : IDisposable
     {
         private static readonly ImmutableArray<MetadataReference> PlatformReferences =

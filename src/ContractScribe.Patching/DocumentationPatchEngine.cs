@@ -413,8 +413,29 @@ public sealed class DocumentationPatchEngine
         string code,
         string? blockId)
     {
-        blockId ??= request.Blocks[0].BlockId;
-        return TargetFailure(request, code, blockId);
+        if (blockId is not null)
+        {
+            return TargetFailure(request, code, blockId);
+        }
+
+        return DocumentationPatchValidator.CreateResult(
+            request,
+            DocumentationPatchOutcome.Rejected,
+            Enumerable.Repeat(
+                DocumentationPatchTargetStatus.Invalid,
+                request.Blocks.Length),
+            [],
+            DocumentationPatchCandidateValidator.RootFailureInvariants(),
+            request.Blocks.Select(block =>
+            {
+                var locator = block.Locator as DocumentationPatchRepositoryLocator;
+                return new DocumentationPatchDiagnostic(
+                    DocumentationPatchDiagnosticSeverity.Error,
+                    code,
+                    block.BlockId,
+                    locator?.Path,
+                    null);
+            }));
     }
 
     private static DocumentationPatchValidationResult NoEffectiveChange(

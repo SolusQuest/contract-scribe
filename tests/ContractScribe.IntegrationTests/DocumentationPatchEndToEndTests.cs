@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
@@ -24,7 +25,9 @@ public sealed class DocumentationPatchEndToEndTests
 
         await using var fixture = await RealLoaderEngineFixture.CreateAsync(
             enableDocumentationSensitiveGenerator: false,
-            enableNoOutputToOutputGenerator: false);
+            enableNoOutputToOutputGenerator: false,
+            enableSelfObservingGenerator: true,
+            enableStableGeneratorDiagnostic: true);
 
         var outcome = new DocumentationPatchEngine(
             () => fixture.StagingParent,
@@ -38,11 +41,31 @@ public sealed class DocumentationPatchEndToEndTests
         var appFacts = capability.Baseline.SemanticInputs.Where(fact =>
                 fact.RepositoryPath == "App/App.cs")
             .ToArray();
-        Assert.Equal(3, appFacts.Length);
+        Assert.Equal(4, appFacts.Length);
         Assert.Equal(2, appFacts.Count(fact =>
             fact.Role == DocumentationPatchSemanticInputRole.Source));
         Assert.Single(appFacts, fact =>
             fact.Role == DocumentationPatchSemanticInputRole.AdditionalFile);
+        Assert.Single(appFacts, fact =>
+            fact.Role == DocumentationPatchSemanticInputRole.AnalyzerConfig);
+        Assert.Contains(appFacts, fact => fact.LogicalPath == "Logical/Input/App-copy.cs");
+        Assert.Contains(appFacts, fact => fact.LogicalPath == "Logical/Config/App-as-config.cs");
+        var app = Assert.Single(fixture.Repository.Projects, project =>
+            project.ProjectIdentity == "App/App.csproj");
+        var library = Assert.Single(fixture.Repository.Projects, project =>
+            project.ProjectIdentity == "Library/Library.csproj");
+        Assert.Contains(
+            "APP_CONTEXT",
+            Assert.IsType<CSharpParseOptions>(app.Project.ParseOptions).PreprocessorSymbolNames);
+        Assert.Contains(
+            "LIBRARY_CONTEXT",
+            Assert.IsType<CSharpParseOptions>(library.Project.ParseOptions).PreprocessorSymbolNames);
+        Assert.Contains(fixture.Repository.GeneratedSources, fact =>
+            fact.SourceText.Contains(
+                "FixtureSelfAware { public const string Value = \"clean\"; }",
+                StringComparison.Ordinal));
+        Assert.Contains(fixture.Repository.Projects.SelectMany(project =>
+            project.SourceTrees.Values), source => source.Kind == LoadedSourceKind.ToolGenerated);
         Assert.All(result.Invariants, invariant =>
             Assert.Equal(DocumentationPatchInvariantStatus.Passed, invariant.Status));
     }
@@ -77,6 +100,199 @@ public sealed class DocumentationPatchEndToEndTests
             Assert.Equal(DocumentationPatchTargetStatus.Invalid, target.Status));
         Assert.Equal("patch.rejected.unsafe-change", Assert.Single(result.Diagnostics).Code);
         Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task RequestWideGeneratorFailureMarksEveryResolvedTargetInvalid()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await RealLoaderEngineFixture.CreateAsync(
+            enableDocumentationSensitiveGenerator: true,
+            enableNoOutputToOutputGenerator: false,
+            multiTarget: true);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(2, result.Targets.Length);
+        Assert.All(result.Targets, target =>
+            Assert.Equal(DocumentationPatchTargetStatus.Invalid, target.Status));
+        Assert.Equal(
+            ["block-1", "block-2"],
+            result.Diagnostics.Select(diagnostic => diagnostic.BlockId));
+        Assert.All(result.Diagnostics, diagnostic =>
+            Assert.Equal("patch.rejected.unsafe-change", diagnostic.Code));
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task AdditionalFileSensitiveGeneratorChangeFailsClosed()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await RealLoaderEngineFixture.CreateAsync(
+            enableDocumentationSensitiveGenerator: false,
+            enableNoOutputToOutputGenerator: false,
+            enableAdditionalDocumentationSensitiveGenerator: true);
+        Assert.Contains(fixture.Repository.GeneratedSources, fact =>
+            fact.SourceText.Contains(
+                "FixtureAdditionalDocumentationSensitive { public const int Count = 0; }",
+                StringComparison.Ordinal));
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.All(result.Targets, target =>
+            Assert.Equal(DocumentationPatchTargetStatus.Invalid, target.Status));
+        Assert.Equal("patch.rejected.unsafe-change", Assert.Single(result.Diagnostics).Code);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void FinalEngineAcceptsTheFrozenDeclarationShapeMatrix()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const string source = """
+            using System;
+            namespace N;
+            public interface IContract { void M(); }
+            public abstract class Base { public virtual void M() { } }
+            public partial class Partial
+            {
+                public partial void Run(string defining);
+                public partial void Run(string implementing) { }
+            }
+            public record Row(int Value);
+            public class Shape : Base, IContract
+            {
+                public override void M() { }
+                void IContract.M() { }
+                public static Shape operator +(Shape left, Shape right) => left;
+                public static implicit operator int(Shape value) => 0;
+                public int this[int index] => index;
+                public event Action? Changed;
+            }
+            public delegate TResult Transform<TValue, TResult>(TValue value);
+            """;
+        EngineTarget[] targets =
+        [
+            new("T:N.Partial"),
+            new("M:N.Partial.Run(System.String)"),
+            new("T:N.Row"),
+            new("M:N.Shape.op_Addition(N.Shape,N.Shape)"),
+            new("M:N.Shape.op_Implicit(N.Shape)~System.Int32"),
+            new("P:N.Shape.Item(System.Int32)"),
+            new("E:N.Shape.Changed"),
+            new("T:N.Transform`2"),
+            new("M:N.Shape.M"),
+            new("M:N.IContract.M"),
+        ];
+        using var fixture = EngineFixture.Create(source, targets);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Accepted, result.Outcome);
+        Assert.Equal(targets.Length, result.Targets.Length);
+        Assert.All(result.Targets, target =>
+            Assert.Equal(DocumentationPatchTargetStatus.Valid, target.Status));
+        Assert.All(result.Invariants, invariant =>
+            Assert.Equal(DocumentationPatchInvariantStatus.Passed, invariant.Status));
+        Assert.NotNull(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void FinalEngineRejectsPrimaryConstructorOwnershipWithoutCapability()
+    {
+        const string source = "namespace N; public class Primary(int value) { }";
+        using var fixture = EngineFixture.Create(
+            source,
+            [new EngineTarget(
+                "M:N.Primary.#ctor(System.Int32)",
+                RequireSupported: false)]);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(
+            DocumentationPatchTargetStatus.Invalid,
+            Assert.Single(result.Targets).Status);
+        Assert.Equal(
+            "patch.rejected.unsupported-target",
+            Assert.Single(result.Diagnostics).Code);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData((int)LoadedSourceKind.ToolGenerated)]
+    [InlineData((int)LoadedSourceKind.SourceGenerator)]
+    public void FinalEngineRejectsGeneratedTargetsWithoutCapability(int sourceKindValue)
+    {
+        var sourceKind = (LoadedSourceKind)sourceKindValue;
+        using var fixture = EngineFixture.CreateGenerated(sourceKind);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(
+            DocumentationPatchTargetStatus.Invalid,
+            Assert.Single(result.Targets).Status);
+        Assert.Equal(
+            "patch.rejected.non-writable-target",
+            Assert.Single(result.Diagnostics).Code);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void PositionShiftedUnresolvedDeclarationRemainsAccepted()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const string source =
+            "namespace N;\npublic class C\n{\n    public MissingType? Unresolved;\n    public void M() { }\n}\n";
+        using var fixture = EngineFixture.Create(source);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        Assert.Equal(DocumentationPatchExecutionStatus.Result, outcome.Status);
+        Assert.Equal(DocumentationPatchOutcome.Accepted, outcome.Result!.Outcome);
+        Assert.NotNull(outcome.AcceptedCandidate);
     }
 
     [Fact]
@@ -117,6 +333,15 @@ public sealed class DocumentationPatchEndToEndTests
             file.RepositoryPath == "Sample.cs");
         Assert.Contains("/// <inheritdoc/>", Encoding.UTF8.GetString(source.Bytes.AsSpan()));
         Assert.Equal(Sha256(source.Bytes.AsSpan()), source.Sha256);
+        Assert.Equal(capability.Files.Length, capability.IdentityEvidence.Length);
+        var identity = Assert.Single(capability.IdentityEvidence, evidence =>
+            evidence.RepositoryPath == "Sample.cs");
+        Assert.False(identity.OriginalIdentity.IsDirectory);
+        Assert.Equal(1UL, identity.OriginalIdentity.LinkCount);
+        Assert.False(identity.CandidateIdentity.IsDirectory);
+        Assert.Equal(1UL, identity.CandidateIdentity.LinkCount);
+        Assert.Equal(source.Bytes.Length, identity.CandidateIdentity.Length);
+        Assert.NotEqual(identity.OriginalIdentity.FileId, identity.CandidateIdentity.FileId);
         Assert.NotNull(stagingRoot);
         Assert.False(Directory.Exists(stagingRoot));
 
@@ -290,6 +515,163 @@ public sealed class DocumentationPatchEndToEndTests
         Assert.Null(outcome.AcceptedCandidate);
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("extra")]
+    [InlineData("replaced-file")]
+    [InlineData("hard-link")]
+    [InlineData("symbolic-link")]
+    [InlineData("replaced-root")]
+    [InlineData("replaced-nested-directory")]
+    [InlineData("symbolic-linked-directory")]
+    public void CandidateInventoryIdentityAndTopologyChangesReturnCandidateState(
+        string mutation)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var repositoryPath = mutation is "replaced-nested-directory"
+            or "symbolic-linked-directory"
+            ? "Nested/Sample.cs"
+            : "Sample.cs";
+        using var fixture = EngineFixture.Create(repositoryPath: repositoryPath);
+        string? stagingRoot = null;
+        var engine = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            (stage, root) =>
+            {
+                if (stage == DocumentationPatchApplicationStage.AfterSealBeforeReturn)
+                {
+                    stagingRoot = root;
+                }
+            },
+            stage =>
+            {
+                if (stage == DocumentationPatchEngineStage.BeforeCandidateTerminalPass)
+                {
+                    MutateCandidate(
+                        Assert.IsType<string>(stagingRoot),
+                        fixture.StagingParent,
+                        repositoryPath,
+                        mutation);
+                }
+            });
+
+        var outcome = engine.Execute(fixture.ClassifiedSession, fixture.Request);
+
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Rejected,
+            DocumentationPatchTargetStatus.Valid,
+            "patch.rejected.candidate-state");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData("file", "before-e1-seal")]
+    [InlineData("directory", "before-e1-seal")]
+    [InlineData("file", "before-e2-commit")]
+    [InlineData("directory", "before-e2-commit")]
+    public void BoundedOriginalTopologyRejectionReturnsRepositoryState(
+        string topology,
+        string stageName)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var repositoryPath = topology == "directory"
+            ? "Nested/Sample.cs"
+            : "Sample.cs";
+        using var fixture = EngineFixture.Create(repositoryPath: repositoryPath);
+        var mutated = false;
+        void Mutate()
+        {
+            if (mutated)
+            {
+                return;
+            }
+
+            mutated = true;
+            ReplaceOriginalWithSymbolicAlias(fixture.SourcePath, topology);
+        }
+
+        var engine = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            (stage, _) =>
+            {
+                if (stageName == "before-e1-seal"
+                    && stage == DocumentationPatchApplicationStage.BeforeOriginalRebind)
+                {
+                    Mutate();
+                }
+            },
+            stage =>
+            {
+                if (stageName == "before-e2-commit"
+                    && stage == DocumentationPatchEngineStage.BeforeFinalOriginalRebind)
+                {
+                    Mutate();
+                }
+            });
+
+        var outcome = engine.Execute(fixture.ClassifiedSession, fixture.Request);
+
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Stale,
+            DocumentationPatchTargetStatus.NotEvaluated,
+            "patch.stale.repository-state");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void BoundedOriginalTopologyRejectionWinsOverCandidateMismatch()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = EngineFixture.Create();
+        string? stagingRoot = null;
+        var engine = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            (stage, root) =>
+            {
+                if (stage == DocumentationPatchApplicationStage.AfterSealBeforeReturn)
+                {
+                    stagingRoot = root;
+                }
+            },
+            stage =>
+            {
+                if (stage == DocumentationPatchEngineStage.BeforeCandidateTerminalPass)
+                {
+                    File.AppendAllText(
+                        Path.Join(stagingRoot!, "Sample.cs"),
+                        " ",
+                        new UTF8Encoding(false));
+                }
+                else if (stage == DocumentationPatchEngineStage.BeforeFinalOriginalRebind)
+                {
+                    ReplaceOriginalWithSymbolicAlias(fixture.SourcePath, "file");
+                }
+            });
+
+        var outcome = engine.Execute(fixture.ClassifiedSession, fixture.Request);
+
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Stale,
+            DocumentationPatchTargetStatus.NotEvaluated,
+            "patch.stale.repository-state");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
     [Fact]
     public void CancellationIsNotConvertedIntoAResultOrHostFailure()
     {
@@ -372,8 +754,109 @@ public sealed class DocumentationPatchEndToEndTests
             Assert.Equal(DocumentationPatchInvariantStatus.NotRun, invariant.Status));
     }
 
+    private static void MutateCandidate(
+        string stagingRoot,
+        string stagingParent,
+        string repositoryPath,
+        string mutation)
+    {
+        var candidatePath = Path.Join(
+            stagingRoot,
+            repositoryPath.Replace('/', Path.DirectorySeparatorChar));
+        switch (mutation)
+        {
+            case "missing":
+                File.Delete(candidatePath);
+                break;
+            case "extra":
+                File.WriteAllText(
+                    Path.Join(stagingRoot, "Extra.cs"),
+                    "// extra",
+                    new UTF8Encoding(false));
+                break;
+            case "replaced-file":
+                var replacementBytes = File.ReadAllBytes(candidatePath);
+                File.Delete(candidatePath);
+                File.WriteAllBytes(candidatePath, replacementBytes);
+                break;
+            case "hard-link":
+                var hardLinkTarget = Path.Join(
+                    stagingParent,
+                    "hard-link-target-" + Guid.NewGuid().ToString("N"));
+                File.WriteAllBytes(hardLinkTarget, File.ReadAllBytes(candidatePath));
+                File.Delete(candidatePath);
+                Assert.Equal(0, Link(hardLinkTarget, candidatePath));
+                break;
+            case "symbolic-link":
+                var symbolicTarget = Path.Join(
+                    stagingParent,
+                    "symbolic-target-" + Guid.NewGuid().ToString("N"));
+                File.WriteAllBytes(symbolicTarget, File.ReadAllBytes(candidatePath));
+                File.Delete(candidatePath);
+                File.CreateSymbolicLink(candidatePath, symbolicTarget);
+                break;
+            case "replaced-root":
+                var movedRoot = stagingRoot + "-original";
+                Directory.Move(stagingRoot, movedRoot);
+                Directory.CreateDirectory(stagingRoot);
+                break;
+            case "replaced-nested-directory":
+                ReplaceCandidateDirectory(stagingRoot, stagingParent, useSymbolicLink: false);
+                break;
+            case "symbolic-linked-directory":
+                ReplaceCandidateDirectory(stagingRoot, stagingParent, useSymbolicLink: true);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+    }
+
+    private static void ReplaceCandidateDirectory(
+        string stagingRoot,
+        string stagingParent,
+        bool useSymbolicLink)
+    {
+        var nested = Path.Join(stagingRoot, "Nested");
+        var moved = Path.Join(
+            stagingParent,
+            "candidate-nested-original-" + Guid.NewGuid().ToString("N"));
+        Directory.Move(nested, moved);
+        if (useSymbolicLink)
+        {
+            Directory.CreateSymbolicLink(nested, moved);
+            return;
+        }
+
+        Directory.CreateDirectory(nested);
+        File.Copy(Path.Join(moved, "Sample.cs"), Path.Join(nested, "Sample.cs"));
+    }
+
+    private static void ReplaceOriginalWithSymbolicAlias(string sourcePath, string topology)
+    {
+        if (topology == "file")
+        {
+            var moved = sourcePath + ".original";
+            File.Move(sourcePath, moved);
+            File.CreateSymbolicLink(sourcePath, moved);
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(sourcePath)!;
+        var movedDirectory = directory + ".original";
+        Directory.Move(directory, movedDirectory);
+        Directory.CreateSymbolicLink(directory, movedDirectory);
+    }
+
     private static string Sha256(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int Link(string existingPath, string newPath);
+
+    private sealed record EngineTarget(
+        string DocumentationCommentId,
+        int DeclarationReferenceIndex = 0,
+        bool RequireSupported = true);
 
     private sealed class EngineFixture : IDisposable
     {
@@ -411,10 +894,14 @@ public sealed class DocumentationPatchEndToEndTests
 
         public DocumentationPatchRequest Request { get; }
 
-        public static EngineFixture Create(string? source = null)
+        public static EngineFixture Create(
+            string? source = null,
+            IReadOnlyList<EngineTarget>? requestedTargets = null,
+            string repositoryPath = "Sample.cs")
         {
             source ??=
                 "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
+            requestedTargets ??= [new EngineTarget("M:N.C.M")];
             var root = Path.Join(
                 Path.GetTempPath(),
                 "contract-scribe-patch-engine-source-" + Guid.NewGuid().ToString("N"));
@@ -423,7 +910,10 @@ public sealed class DocumentationPatchEndToEndTests
                 "contract-scribe-patch-engine-staging-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             Directory.CreateDirectory(stagingParent);
-            var sourcePath = Path.Join(root, "Sample.cs");
+            var sourcePath = Path.Join(
+                root,
+                repositoryPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
             var projectPath = Path.Join(root, "Fixture.csproj");
             File.WriteAllText(sourcePath, source, new UTF8Encoding(false));
             File.WriteAllText(projectPath, "<Project />", new UTF8Encoding(false));
@@ -446,7 +936,7 @@ public sealed class DocumentationPatchEndToEndTests
             var documentId = DocumentId.CreateNewId(projectId);
             solution = solution.AddDocument(DocumentInfo.Create(
                 documentId,
-                "Sample.cs",
+                Path.GetFileName(repositoryPath),
                 filePath: sourcePath,
                 loader: TextLoader.From(TextAndVersion.Create(
                     SourceText.From(source, new UTF8Encoding(false, true)),
@@ -469,7 +959,7 @@ public sealed class DocumentationPatchEndToEndTests
                 {
                     [tree] = new(
                         LoadedSourceKind.Repository,
-                        "Sample.cs",
+                        repositoryPath,
                         new RepositoryPathResolver().PhysicalIdentity(root, sourcePath),
                         null),
                 });
@@ -488,14 +978,173 @@ public sealed class DocumentationPatchEndToEndTests
             var classified = new SymbolClassifier().ClassifySession(
                 repository,
                 TargetProfile.ExternalApi);
+            var selected = requestedTargets.Select((requested, index) =>
+            {
+                var matches = classified.Classification.ClassificationSet!.Targets.Where(
+                        candidate => candidate.SymbolRef.DocumentationCommentId
+                                == requested.DocumentationCommentId
+                            && (!requested.RequireSupported
+                                || candidate.SupportStatus == SupportStatus.Supported))
+                    .ToArray();
+                Assert.True(
+                    matches.Length == 1,
+                    $"Expected one classified target for {requested.DocumentationCommentId}, found {matches.Length}. Available: {string.Join(", ", classified.Classification.ClassificationSet.Targets.Select(candidate => candidate.SymbolRef.DocumentationCommentId))}");
+                var target = matches[0];
+                var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+                    target.SymbolRef.DocumentationCommentId,
+                    compilation));
+                var references = symbol.DeclaringSyntaxReferences;
+                Assert.InRange(requested.DeclarationReferenceIndex, 0, references.Length - 1);
+                return (Target: target,
+                    Reference: references[requested.DeclarationReferenceIndex],
+                    BlockId: $"block-{index + 1}");
+            }).ToArray();
+            var request = new DocumentationPatchRequest(
+                new string('0', 64),
+                new DocumentationPatchContext(
+                    repositoryContextRef,
+                    "Fixture.csproj",
+                    TargetProfile.ExternalApi),
+                [],
+                selected.Select(item => new DocumentationPatchBlockRequest(
+                        item.BlockId,
+                        item.Target.SymbolRef,
+                        new DocumentationPatchRepositoryLocator(
+                            repositoryPath,
+                            Sha256(File.ReadAllBytes(sourcePath)),
+                            DocumentationPatchRepositoryEncoding.Utf8,
+                            DocumentationObservationInput.Span(
+                                item.Reference.Span.Start,
+                                item.Reference.Span.End)),
+                        DocumentationPatchEditKind.Insert,
+                        [],
+                        new DocumentationPatchInheritDocContent(),
+                        []))
+                    .ToImmutableArray());
+            return new EngineFixture(
+                root,
+                sourcePath,
+                stagingParent,
+                repository,
+                classified,
+                request);
+        }
+
+        public static EngineFixture CreateGenerated(LoadedSourceKind sourceKind)
+        {
+            Assert.True(sourceKind is LoadedSourceKind.ToolGenerated
+                or LoadedSourceKind.SourceGenerator);
+            const string source =
+                "namespace N; public static class Generated { public static void M() { } }";
+            var root = Path.Join(
+                Path.GetTempPath(),
+                "contract-scribe-patch-engine-generated-" + Guid.NewGuid().ToString("N"));
+            var stagingParent = Path.Join(
+                Path.GetTempPath(),
+                "contract-scribe-patch-engine-generated-staging-"
+                + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(stagingParent);
+            var sourcePath = Path.Join(root, "Generated.g.cs");
+            var projectPath = Path.Join(root, "Fixture.csproj");
+            File.WriteAllText(sourcePath, source, new UTF8Encoding(false));
+            File.WriteAllText(projectPath, "<Project />", new UTF8Encoding(false));
+
+            var workspace = new AdhocWorkspace();
+            var projectId = ProjectId.CreateNewId();
+            var solution = workspace.CurrentSolution.AddProject(ProjectInfo.Create(
+                projectId,
+                VersionStamp.Create(),
+                "Fixture",
+                "Fixture",
+                LanguageNames.CSharp,
+                filePath: projectPath,
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary),
+                parseOptions: new CSharpParseOptions(
+                    LanguageVersion.Preview,
+                    documentationMode: DocumentationMode.Diagnose),
+                metadataReferences: PlatformReferences));
+            var documentId = DocumentId.CreateNewId(projectId);
+            solution = solution.AddDocument(DocumentInfo.Create(
+                documentId,
+                "Generated.g.cs",
+                filePath: sourcePath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(source, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    sourcePath))));
+            Assert.True(workspace.TryApplyChanges(solution));
+            var project = workspace.CurrentSolution.GetProject(projectId)!;
+            var document = project.GetDocument(documentId)!;
+            var tree = document.GetSyntaxTreeAsync().GetAwaiter().GetResult()!;
+            var compilation = project.GetCompilationAsync().GetAwaiter().GetResult()!;
+            var sourceBytes = Encoding.UTF8.GetBytes(source);
+            var producerId = (sourceKind == LoadedSourceKind.SourceGenerator
+                    ? "sgp."
+                    : "tgp.")
+                + new string('1', 64);
+            var outputId = (sourceKind == LoadedSourceKind.SourceGenerator
+                    ? "sgo."
+                    : "tgo.")
+                + new string('2', 64);
+            var generatedFact = new GeneratedSourceFact(
+                "Fixture.csproj",
+                "fixture.net10.0",
+                producerId,
+                outputId,
+                Sha256(sourceBytes),
+                source);
+            var loaded = new LoadedProject(
+                "Fixture.csproj",
+                "net10.0",
+                "fixture.net10.0",
+                LoadedProjectRole.AuditRoot,
+                [],
+                project,
+                compilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(ReferenceEqualityComparer.Instance)
+                {
+                    [tree] = new(sourceKind, null, null, generatedFact),
+                });
+            Assert.True(RepositoryContextRef.TryParse(
+                "repoctx-0123456789abcdef0123456789abcdef",
+                out var repositoryContextRef));
+            var repository = new LoadedRepositorySession(
+                repositoryContextRef,
+                root,
+                "Fixture.csproj",
+                new ToolchainIdentity("test", "test", "test", "test"),
+                [loaded],
+                [generatedFact],
+                workspace);
+            repository.SealDocumentationPatchRepositoryPolicyForTests([stagingParent]);
+            var classified = new SymbolClassifier().ClassifySession(
+                repository,
+                TargetProfile.ExternalApi);
             var target = Assert.Single(
                 classified.Classification.ClassificationSet!.Targets,
-                candidate => candidate.SymbolRef.DocumentationCommentId == "M:N.C.M"
-                    && candidate.SupportStatus == SupportStatus.Supported);
+                candidate => candidate.SymbolRef.DocumentationCommentId == "M:N.Generated.M");
             var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
                 target.SymbolRef.DocumentationCommentId,
                 compilation));
             var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
+            DocumentationPatchSourceLocator locator = sourceKind
+                == LoadedSourceKind.SourceGenerator
+                ? new DocumentationPatchSourceGeneratorLocator(
+                    producerId,
+                    outputId,
+                    generatedFact.SourceSha256,
+                    DocumentationObservationInput.Span(
+                        reference.Span.Start,
+                        reference.Span.End))
+                : new DocumentationPatchToolGeneratedLocator(
+                    producerId,
+                    outputId,
+                    generatedFact.SourceSha256,
+                    DocumentationObservationInput.Span(
+                        reference.Span.Start,
+                        reference.Span.End));
             var request = new DocumentationPatchRequest(
                 new string('0', 64),
                 new DocumentationPatchContext(
@@ -506,13 +1155,7 @@ public sealed class DocumentationPatchEndToEndTests
                 [new DocumentationPatchBlockRequest(
                     "block-1",
                     target.SymbolRef,
-                    new DocumentationPatchRepositoryLocator(
-                        "Sample.cs",
-                        Sha256(File.ReadAllBytes(sourcePath)),
-                        DocumentationPatchRepositoryEncoding.Utf8,
-                        DocumentationObservationInput.Span(
-                            reference.Span.Start,
-                            reference.Span.End)),
+                    locator,
                     DocumentationPatchEditKind.Insert,
                     [],
                     new DocumentationPatchInheritDocContent(),
@@ -569,7 +1212,11 @@ public sealed class DocumentationPatchEndToEndTests
 
         public static async Task<RealLoaderEngineFixture> CreateAsync(
             bool enableDocumentationSensitiveGenerator,
-            bool enableNoOutputToOutputGenerator)
+            bool enableNoOutputToOutputGenerator,
+            bool multiTarget = false,
+            bool enableAdditionalDocumentationSensitiveGenerator = false,
+            bool enableSelfObservingGenerator = false,
+            bool enableStableGeneratorDiagnostic = false)
         {
             var generatorProperties = new StringBuilder();
             var compilerVisibleProperties = new StringBuilder();
@@ -589,20 +1236,41 @@ public sealed class DocumentationPatchEndToEndTests
                     "    <CompilerVisibleProperty Include=\"ContractScribeTestGeneratorNoOutputToOutput\" />");
             }
 
+            if (enableAdditionalDocumentationSensitiveGenerator)
+            {
+                generatorProperties.AppendLine(
+                    "    <ContractScribeTestGeneratorAdditionalDocumentationSensitive>true</ContractScribeTestGeneratorAdditionalDocumentationSensitive>");
+                compilerVisibleProperties.AppendLine(
+                    "    <CompilerVisibleProperty Include=\"ContractScribeTestGeneratorAdditionalDocumentationSensitive\" />");
+            }
+
+            if (enableStableGeneratorDiagnostic)
+            {
+                generatorProperties.AppendLine(
+                    "    <ContractScribeTestGeneratorStableDiagnostic>true</ContractScribeTestGeneratorStableDiagnostic>");
+                compilerVisibleProperties.AppendLine(
+                    "    <CompilerVisibleProperty Include=\"ContractScribeTestGeneratorStableDiagnostic\" />");
+            }
+
             var appProject = $$"""
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <TargetFramework>net10.0</TargetFramework>
+                    <DefineConstants>APP_CONTEXT</DefineConstants>
                 {{generatorProperties}}  </PropertyGroup>
                   <ItemGroup>
                     <ProjectReference Include="../Library/Library.csproj" />
                     <AdditionalFiles Include="App.cs" Link="Logical/Input/App-copy.cs" />
+                    <AnalyzerConfigFiles Include="App.cs" Link="Logical/Config/App-as-config.cs" />
                 {{compilerVisibleProperties}}  </ItemGroup>
                 </Project>
                 """;
             const string libraryProject = """
                 <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <DefineConstants>LIBRARY_CONTEXT</DefineConstants>
+                  </PropertyGroup>
                   <ItemGroup>
                     <Compile Include="../App/App.cs" Link="Logical/Library/App-linked.cs" />
                   </ItemGroup>
@@ -611,11 +1279,13 @@ public sealed class DocumentationPatchEndToEndTests
             var loaderFixture = await LoaderFixture.CreateAsync(
                 appProject: appProject,
                 libraryProject: libraryProject,
-                withGenerator: true);
+                withGenerator: true,
+                selfObservingGenerator: enableSelfObservingGenerator);
             try
             {
-                const string source =
-                    "namespace N;\npublic class RealApi\n{\n    public void M() { }\n}\n";
+                var source = multiTarget
+                    ? "namespace N;\npublic class RealApi\n{\n    public void A() { }\n    public void B() { }\n}\n"
+                    : "namespace N;\npublic class RealApi\n{\n    public void M() { }\n}\n";
                 var sourcePath = Path.Join(loaderFixture.Root, "App", "App.cs");
                 await File.WriteAllTextAsync(sourcePath, source, new UTF8Encoding(false));
                 var load = await new RepositoryLoader().LoadAsync(
@@ -637,17 +1307,25 @@ public sealed class DocumentationPatchEndToEndTests
                     TargetProfile.ExternalApi);
                 var app = Assert.Single(repository.Projects, project =>
                     project.ProjectIdentity == "App/App.csproj");
-                var target = Assert.Single(
-                    classified.Classification.ClassificationSet!.Targets,
-                    candidate => candidate.SymbolRef.DocumentationCommentId == "M:N.RealApi.M"
-                        && candidate.SymbolRef.CompilationContextRef
-                            == app.CompilationContextRef
-                        && candidate.SupportStatus == SupportStatus.Supported);
-                var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
-                    target.SymbolRef.DocumentationCommentId,
-                    app.Compilation));
-                var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
-                var loadedSource = app.SourceTrees[reference.SyntaxTree];
+                var documentationIds = multiTarget
+                    ? new[] { "M:N.RealApi.A", "M:N.RealApi.B" }
+                    : ["M:N.RealApi.M"];
+                var targets = documentationIds.Select((documentationId, index) =>
+                {
+                    var target = Assert.Single(
+                        classified.Classification.ClassificationSet!.Targets,
+                        candidate => candidate.SymbolRef.DocumentationCommentId == documentationId
+                            && candidate.SymbolRef.CompilationContextRef
+                                == app.CompilationContextRef
+                            && candidate.SupportStatus == SupportStatus.Supported);
+                    var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+                        target.SymbolRef.DocumentationCommentId,
+                        app.Compilation));
+                    return (Target: target,
+                        Reference: Assert.Single(symbol.DeclaringSyntaxReferences),
+                        BlockId: $"block-{index + 1}");
+                }).ToArray();
+                var loadedSource = app.SourceTrees[targets[0].Reference.SyntaxTree];
                 var repositoryPath = Assert.IsType<string>(loadedSource.RepositoryPath);
                 var bytes = await File.ReadAllBytesAsync(sourcePath);
                 var request = new DocumentationPatchRequest(
@@ -657,20 +1335,21 @@ public sealed class DocumentationPatchEndToEndTests
                         repository.InputIdentity,
                         TargetProfile.ExternalApi),
                     [],
-                    [new DocumentationPatchBlockRequest(
-                        "block-1",
-                        target.SymbolRef,
-                        new DocumentationPatchRepositoryLocator(
-                            repositoryPath,
-                            Sha256(bytes),
-                            DocumentationPatchRepositoryEncoding.Utf8,
-                            DocumentationObservationInput.Span(
-                                reference.Span.Start,
-                                reference.Span.End)),
-                        DocumentationPatchEditKind.Insert,
-                        [],
-                        new DocumentationPatchInheritDocContent(),
-                        [])]);
+                    targets.Select(item => new DocumentationPatchBlockRequest(
+                            item.BlockId,
+                            item.Target.SymbolRef,
+                            new DocumentationPatchRepositoryLocator(
+                                repositoryPath,
+                                Sha256(bytes),
+                                DocumentationPatchRepositoryEncoding.Utf8,
+                                DocumentationObservationInput.Span(
+                                    item.Reference.Span.Start,
+                                    item.Reference.Span.End)),
+                            DocumentationPatchEditKind.Insert,
+                            [],
+                            new DocumentationPatchInheritDocContent(),
+                            []))
+                        .ToImmutableArray());
                 return new RealLoaderEngineFixture(
                     loaderFixture,
                     repository,
