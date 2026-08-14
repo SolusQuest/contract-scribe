@@ -32,8 +32,45 @@ internal static class DocumentationPatchCandidateFileSystem
         string leafName,
         CandidatePhysicalIdentity expectedDirectory)
     {
-        RequireLeafName(leafName);
+        using var directory = OpenOwnedDirectoryRetained(
+            parentPath,
+            expectedParent,
+            leafName,
+            expectedDirectory);
+        return directory.Identity;
+    }
+
+    public static CandidateDirectoryLease OpenOwnedDirectoryRetained(
+        string parentPath,
+        CandidatePhysicalIdentity expectedParent,
+        string leafName,
+        CandidatePhysicalIdentity expectedDirectory)
+    {
         using var parent = OpenDirectory(parentPath);
+        return OpenOwnedDirectoryRetained(
+            parent,
+            expectedParent,
+            leafName,
+            expectedDirectory);
+    }
+
+    public static CandidateDirectoryLease OpenOwnedDirectoryRetained(
+        CandidateDirectoryLease parent,
+        string leafName,
+        CandidatePhysicalIdentity expectedDirectory) =>
+        OpenOwnedDirectoryRetained(
+            parent.Handle,
+            parent.Identity,
+            leafName,
+            expectedDirectory);
+
+    private static CandidateDirectoryLease OpenOwnedDirectoryRetained(
+        SafeFileHandle parent,
+        CandidatePhysicalIdentity expectedParent,
+        string leafName,
+        CandidatePhysicalIdentity expectedDirectory)
+    {
+        RequireLeafName(leafName);
         if (ReadIdentity(parent, expectDirectory: true) != expectedParent)
         {
             throw new IOException("The candidate parent directory changed.");
@@ -44,7 +81,7 @@ internal static class DocumentationPatchCandidateFileSystem
             throw new PlatformNotSupportedException();
         }
 
-        using var directory = new SafeFileHandle(
+        var directory = new SafeFileHandle(
             (IntPtr)OpenAt(
                 checked((int)parent.DangerousGetHandle()),
                 leafName,
@@ -52,13 +89,21 @@ internal static class DocumentationPatchCandidateFileSystem
                 0),
             ownsHandle: true);
         RequireValid(directory);
-        var actual = ReadIdentity(directory, expectDirectory: true);
-        if (actual != expectedDirectory)
+        try
         {
-            throw new IOException("The candidate directory identity changed.");
-        }
+            var actual = ReadIdentity(directory, expectDirectory: true);
+            if (actual != expectedDirectory)
+            {
+                throw new IOException("The candidate directory identity changed.");
+            }
 
-        return actual;
+            return new CandidateDirectoryLease(actual, directory);
+        }
+        catch
+        {
+            directory.Dispose();
+            throw;
+        }
     }
 
     public static CandidatePhysicalIdentity CreateNewDirectory(
@@ -439,6 +484,23 @@ internal static class DocumentationPatchCandidateFileSystem
 
     [DllImport("libc", EntryPoint = "unlinkat", SetLastError = true)]
     private static extern int UnlinkAt(int directoryFileDescriptor, string path, int flags);
+}
+
+internal sealed class CandidateDirectoryLease : IDisposable
+{
+    public CandidateDirectoryLease(
+        DocumentationPatchCandidateFileSystem.CandidatePhysicalIdentity identity,
+        SafeFileHandle handle)
+    {
+        Identity = identity;
+        Handle = handle;
+    }
+
+    public DocumentationPatchCandidateFileSystem.CandidatePhysicalIdentity Identity { get; }
+
+    internal SafeFileHandle Handle { get; }
+
+    public void Dispose() => Handle.Dispose();
 }
 
 internal sealed class CandidateFileReadLease : IDisposable

@@ -235,6 +235,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         Action? beforeTerminalPass = null)
     {
         var retainedReads = new List<CandidateFileReadLease>(files.Count);
+        var retainedDirectories = new Dictionary<string, CandidateDirectoryLease>(PathComparer);
         try
         {
             var captured = CaptureCandidatePass(
@@ -246,7 +247,8 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                 files,
                 requireExpectedBytes,
                 cancellationToken,
-                retainedReads);
+                retainedReads,
+                retainedDirectories);
             beforeTerminalPass?.Invoke();
             var terminalExpected = captured.ToDictionary(
                 file => file.RepositoryPath,
@@ -260,7 +262,8 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                 terminalExpected,
                 requireExpectedBytes: true,
                 cancellationToken,
-                retainedReads: null);
+                retainedReads: null,
+                retainedDirectories: null);
             return captured;
         }
         finally
@@ -268,6 +271,12 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
             foreach (var retainedRead in retainedReads)
             {
                 retainedRead.Dispose();
+            }
+
+            foreach (var retainedDirectory in retainedDirectories
+                         .OrderByDescending(pair => pair.Key.Length))
+            {
+                retainedDirectory.Value.Dispose();
             }
         }
     }
@@ -281,18 +290,38 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         IReadOnlyDictionary<string, CandidateWorkspaceFile> files,
         bool requireExpectedBytes,
         CancellationToken cancellationToken,
-        ICollection<CandidateFileReadLease>? retainedReads)
+        ICollection<CandidateFileReadLease>? retainedReads,
+        IDictionary<string, CandidateDirectoryLease>? retainedDirectories)
     {
         if (!directories.TryGetValue(string.Empty, out var rootIdentity))
         {
             throw new IOException("The candidate root identity is unavailable.");
         }
 
-        _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
-            parentPath,
-            parentIdentity,
-            rootName,
-            rootIdentity);
+        if (retainedDirectories is null)
+        {
+            _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootIdentity);
+        }
+        else
+        {
+            if (retainedDirectories.Count != 0)
+            {
+                throw new IOException("The retained candidate directory set is not empty.");
+            }
+
+            RetainDirectory(
+                retainedDirectories,
+                string.Empty,
+                DocumentationPatchCandidateFileSystem.OpenOwnedDirectoryRetained(
+                    parentPath,
+                    parentIdentity,
+                    rootName,
+                    rootIdentity));
+        }
         var observedFiles = new HashSet<string>(PathComparer);
         var observedDirectories = new HashSet<string>(PathComparer);
         var captured = ImmutableArray.CreateBuilder<CandidateWorkspaceFile>(files.Count);
@@ -334,6 +363,24 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                     if (!directories.ContainsKey(relative))
                     {
                         throw new IOException("The candidate directory set changed.");
+                    }
+
+                    if (retainedDirectories is not null)
+                    {
+                        if (!retainedDirectories.TryGetValue(
+                                relativeDirectory,
+                                out var retainedParent))
+                        {
+                            throw new IOException("The retained candidate parent is unavailable.");
+                        }
+
+                        RetainDirectory(
+                            retainedDirectories,
+                            relative,
+                            DocumentationPatchCandidateFileSystem.OpenOwnedDirectoryRetained(
+                                retainedParent,
+                                Leaf(relative),
+                                directories[relative]));
                     }
 
                     pending.Push((path, relative));
@@ -412,6 +459,22 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         return captured
             .OrderBy(file => file.RepositoryPath, StringComparer.Ordinal)
             .ToImmutableArray();
+    }
+
+    private static void RetainDirectory(
+        IDictionary<string, CandidateDirectoryLease> retainedDirectories,
+        string relativePath,
+        CandidateDirectoryLease directory)
+    {
+        try
+        {
+            retainedDirectories.Add(relativePath, directory);
+        }
+        catch
+        {
+            directory.Dispose();
+            throw;
+        }
     }
 
     private static void RebindDirectory(

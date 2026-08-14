@@ -819,6 +819,7 @@ public sealed class DocumentationPatchApplicationTests
     [InlineData("add")]
     [InlineData("delete")]
     [InlineData("replace")]
+    [InlineData("replace-directory")]
     public void ConsumedCandidateRejectsTerminalTreeShapeDrift(string mutation)
     {
         if (!OperatingSystem.IsLinux())
@@ -858,6 +859,14 @@ public sealed class DocumentationPatchApplicationTests
                     case "replace":
                         File.Delete(input);
                         File.WriteAllBytes(input, "input"u8.ToArray());
+                        break;
+                    case "replace-directory":
+                        var directory = Path.GetDirectoryName(input)!;
+                        var parked = Path.Join(candidateRoot, "parked-input.txt");
+                        File.Move(input, parked);
+                        Directory.Delete(directory);
+                        Directory.CreateDirectory(directory);
+                        File.Move(parked, input);
                         break;
                     default:
                         throw new InvalidOperationException("Unknown terminal mutation.");
