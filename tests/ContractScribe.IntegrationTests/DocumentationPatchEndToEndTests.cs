@@ -163,50 +163,81 @@ public sealed class DocumentationPatchEndToEndTests
         Assert.Null(outcome.AcceptedCandidate);
     }
 
-    [Fact]
-    public void FinalEngineAcceptsTheFrozenDeclarationShapeMatrix()
+    public static TheoryData<string, string, string, int> SupportedDeclarationShapeCases => new()
+    {
+        {
+            "partial-type",
+            "namespace N; public partial class C { } public partial class C { }",
+            "T:N.C",
+            0
+        },
+        {
+            "partial-method",
+            "namespace N; public partial class C { public partial void Run(string defining); public partial void Run(string implementing) { } }",
+            "M:N.C.Run(System.String)",
+            0
+        },
+        { "record", "namespace N; public record Row(int Value);", "T:N.Row", 0 },
+        {
+            "operator",
+            "namespace N; public sealed class C { public static C operator +(C left, C right) => left; }",
+            "M:N.C.op_Addition(N.C,N.C)",
+            0
+        },
+        {
+            "conversion",
+            "namespace N; public sealed class C { public static implicit operator int(C value) => 0; }",
+            "M:N.C.op_Implicit(N.C)~System.Int32",
+            0
+        },
+        {
+            "indexer",
+            "namespace N; public sealed class C { public int this[int index] => index; }",
+            "P:N.C.Item(System.Int32)",
+            0
+        },
+        {
+            "event",
+            "using System; namespace N; public sealed class C { public event Action? Changed; }",
+            "E:N.C.Changed",
+            0
+        },
+        {
+            "delegate",
+            "namespace N; public delegate TResult Transform<TValue, TResult>(TValue value);",
+            "T:N.Transform`2",
+            0
+        },
+        {
+            "override-inheritdoc",
+            "namespace N; public abstract class Base { public virtual void M() { } } public sealed class C : Base { public override void M() { } }",
+            "M:N.C.M",
+            0
+        },
+        {
+            "explicit-interface-relationship",
+            "namespace N; public interface IContract { void M(); } public sealed class C : IContract { void IContract.M() { } }",
+            "M:N.IContract.M",
+            0
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(SupportedDeclarationShapeCases))]
+    public void FinalEngineAcceptsTheFrozenDeclarationShapeMatrix(
+        string caseName,
+        string source,
+        string documentationCommentId,
+        int declarationReferenceIndex)
     {
         if (!OperatingSystem.IsLinux())
         {
             return;
         }
 
-        const string source = """
-            using System;
-            namespace N;
-            public interface IContract { void M(); }
-            public abstract class Base { public virtual void M() { } }
-            public partial class Partial
-            {
-                public partial void Run(string defining);
-                public partial void Run(string implementing) { }
-            }
-            public record Row(int Value);
-            public class Shape : Base, IContract
-            {
-                public override void M() { }
-                void IContract.M() { }
-                public static Shape operator +(Shape left, Shape right) => left;
-                public static implicit operator int(Shape value) => 0;
-                public int this[int index] => index;
-                public event Action? Changed;
-            }
-            public delegate TResult Transform<TValue, TResult>(TValue value);
-            """;
-        EngineTarget[] targets =
-        [
-            new("T:N.Partial"),
-            new("M:N.Partial.Run(System.String)"),
-            new("T:N.Row"),
-            new("M:N.Shape.op_Addition(N.Shape,N.Shape)"),
-            new("M:N.Shape.op_Implicit(N.Shape)~System.Int32"),
-            new("P:N.Shape.Item(System.Int32)"),
-            new("E:N.Shape.Changed"),
-            new("T:N.Transform`2"),
-            new("M:N.Shape.M"),
-            new("M:N.IContract.M"),
-        ];
-        using var fixture = EngineFixture.Create(source, targets);
+        using var fixture = EngineFixture.Create(
+            source,
+            [new EngineTarget(documentationCommentId, declarationReferenceIndex)]);
 
         var outcome = new DocumentationPatchEngine(
             () => fixture.StagingParent,
@@ -214,8 +245,11 @@ public sealed class DocumentationPatchEndToEndTests
             null).Execute(fixture.ClassifiedSession, fixture.Request);
 
         var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
-        Assert.Equal(DocumentationPatchOutcome.Accepted, result.Outcome);
-        Assert.Equal(targets.Length, result.Targets.Length);
+        Assert.True(
+            result.Outcome == DocumentationPatchOutcome.Accepted,
+            caseName + ":" + string.Join(',', result.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Code}:{diagnostic.BlockId}")));
+        Assert.Single(result.Targets);
         Assert.All(result.Targets, target =>
             Assert.Equal(DocumentationPatchTargetStatus.Valid, target.Status));
         Assert.All(result.Invariants, invariant =>
@@ -1318,9 +1352,13 @@ public sealed class DocumentationPatchEndToEndTests
                             && candidate.SymbolRef.CompilationContextRef
                                 == app.CompilationContextRef
                             && candidate.SupportStatus == SupportStatus.Supported);
-                    var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
-                        target.SymbolRef.DocumentationCommentId,
-                        app.Compilation));
+                    var symbol = Assert.Single(
+                        DocumentationCommentId.GetSymbolsForDeclarationId(
+                            target.SymbolRef.DocumentationCommentId,
+                            app.Compilation),
+                        candidate => SymbolEqualityComparer.Default.Equals(
+                            candidate.ContainingAssembly,
+                            app.Compilation.Assembly));
                     return (Target: target,
                         Reference: Assert.Single(symbol.DeclaringSyntaxReferences),
                         BlockId: $"block-{index + 1}");
