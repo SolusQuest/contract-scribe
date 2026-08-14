@@ -209,14 +209,16 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                         "build_property.ContractScribeTestGeneratorAdditionalDocumentationSensitive",
                         out var enabled)
                     && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
-        var appAdditionalFiles = context.AdditionalTextsProvider
-            .Where(static text => string.Equals(
-                Path.GetFileName(text.Path),
-                "App.cs",
-                StringComparison.OrdinalIgnoreCase))
+        var documentationAdditionalFiles = context.AdditionalTextsProvider
+            .Where(static text => Path.GetFileName(text.Path) is var fileName
+                && (string.Equals(fileName, "App.cs", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(
+                        fileName,
+                        "Target.cs",
+                        StringComparison.OrdinalIgnoreCase)))
             .Collect();
         context.RegisterSourceOutput(
-            appAdditionalFiles.Combine(additionalDocumentationSensitiveEnabled),
+            documentationAdditionalFiles.Combine(additionalDocumentationSensitiveEnabled),
             static (output, input) =>
             {
                 if (!input.Right)

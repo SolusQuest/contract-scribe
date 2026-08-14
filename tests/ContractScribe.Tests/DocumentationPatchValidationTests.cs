@@ -205,11 +205,13 @@ public sealed class DocumentationPatchValidationTests
         File.WriteAllText(firstPath, firstSource, new UTF8Encoding(false));
         File.WriteAllText(secondPath, secondSource, new UTF8Encoding(false));
         File.WriteAllText(Path.Join(root, "Fixture.csproj"), "<Project />", new UTF8Encoding(false));
+        File.WriteAllText(Path.Join(root, "Cross.csproj"), "<Project />", new UTF8Encoding(false));
 
         using var workspace = new AdhocWorkspace();
         try
         {
             var projectId = ProjectId.CreateNewId();
+            var crossProjectId = ProjectId.CreateNewId();
             var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
                 .Split(Path.PathSeparator)
                 .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
@@ -226,10 +228,25 @@ public sealed class DocumentationPatchValidationTests
                     LanguageVersion.Preview,
                     documentationMode: DocumentationMode.Diagnose),
                 metadataReferences: references));
+            solution = solution.AddProject(ProjectInfo.Create(
+                crossProjectId,
+                VersionStamp.Create(),
+                "Cross",
+                "Cross",
+                LanguageNames.CSharp,
+                filePath: Path.Join(root, "Cross.csproj"),
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary),
+                parseOptions: new CSharpParseOptions(
+                    LanguageVersion.Preview,
+                    documentationMode: DocumentationMode.Diagnose,
+                    preprocessorSymbols: ["CROSS_CONTEXT"]),
+                metadataReferences: references));
             var firstDocumentId = DocumentId.CreateNewId(projectId);
             var secondDocumentId = DocumentId.CreateNewId(projectId);
             var firstAdditionalId = DocumentId.CreateNewId(projectId);
             var secondAdditionalId = DocumentId.CreateNewId(projectId);
+            var crossAdditionalId = DocumentId.CreateNewId(crossProjectId);
             solution = solution.AddDocument(DocumentInfo.Create(
                 firstDocumentId,
                 "Api.cs",
@@ -266,11 +283,22 @@ public sealed class DocumentationPatchValidationTests
                     SourceText.From(secondSource, new UTF8Encoding(false, true)),
                     VersionStamp.Create(),
                     secondPath))));
+            solution = solution.AddAdditionalDocument(DocumentInfo.Create(
+                crossAdditionalId,
+                "Input.cs",
+                folders: ["Cross"],
+                filePath: firstPath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(firstSource, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    firstPath))));
             Assert.True(workspace.TryApplyChanges(solution));
             var project = workspace.CurrentSolution.GetProject(projectId)!;
+            var crossProject = workspace.CurrentSolution.GetProject(crossProjectId)!;
             var firstTree = (await project.GetDocument(firstDocumentId)!.GetSyntaxTreeAsync())!;
             var secondTree = (await project.GetDocument(secondDocumentId)!.GetSyntaxTreeAsync())!;
             var compilation = (await project.GetCompilationAsync())!;
+            var crossCompilation = (await crossProject.GetCompilationAsync())!;
             var loaded = new LoadedProject(
                 "Fixture.csproj",
                 "net10.0",
@@ -292,6 +320,16 @@ public sealed class DocumentationPatchValidationTests
                         new RepositoryPathResolver().PhysicalIdentity(root, secondPath),
                         null),
                 });
+            var crossLoaded = new LoadedProject(
+                "Cross.csproj",
+                "net10.0",
+                "cross.net10.0",
+                LoadedProjectRole.AuditRoot,
+                [],
+                crossProject,
+                crossCompilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(
+                    ReferenceEqualityComparer.Instance));
             Assert.True(RepositoryContextRef.TryParse(
                 "repoctx-0123456789abcdef0123456789abcdef",
                 out var repositoryContextRef));
@@ -300,7 +338,7 @@ public sealed class DocumentationPatchValidationTests
                 root,
                 "Fixture.csproj",
                 new ToolchainIdentity("test", "test", "test", "test"),
-                [loaded],
+                [loaded, crossLoaded],
                 [],
                 workspace);
             repository.SealDocumentationPatchRepositoryPolicyForTests();
@@ -320,13 +358,20 @@ public sealed class DocumentationPatchValidationTests
                     ImmutableArray.CreateRange(candidateBytes))]);
 
             Assert.True(result.IsValid, result.FailureCode);
-            Assert.Equal(2, result.ValidatedSemanticInputCount);
+            Assert.Equal(3, result.ValidatedSemanticInputCount);
+            Assert.Equal(2, result.ValidatedCompilationContextCount);
             Assert.Equal(
                 [
                     DocumentationPatchSemanticInputRole.Source,
                     DocumentationPatchSemanticInputRole.AdditionalFile,
+                    DocumentationPatchSemanticInputRole.AdditionalFile,
                 ],
                 result.ValidatedSemanticInputs.Select(fact => fact.Role).Order());
+            Assert.Contains(result.ValidatedSemanticInputs, fact =>
+                fact.ProjectIdentity == "Cross.csproj"
+                && fact.CompilationContextRef == "cross.net10.0"
+                && fact.LogicalPath == "Cross/Input.cs"
+                && fact.Role == DocumentationPatchSemanticInputRole.AdditionalFile);
             Assert.All(result.ValidatedSemanticInputs, fact =>
             {
                 Assert.Equal("First.cs", fact.RepositoryPath);

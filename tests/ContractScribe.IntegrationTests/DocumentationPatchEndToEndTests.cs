@@ -45,18 +45,29 @@ public sealed class DocumentationPatchEndToEndTests
         Assert.Equal(DocumentationPatchOutcome.Accepted, result.Outcome);
         var capability = Assert.IsType<DocumentationPatchAcceptedCandidate>(
             outcome.AcceptedCandidate);
-        var appFacts = capability.Baseline.SemanticInputs.Where(fact =>
-                fact.RepositoryPath == "App/App.cs")
+        var targetFacts = capability.Baseline.SemanticInputs.Where(fact =>
+                fact.RepositoryPath == "App/Target.cs")
             .ToArray();
-        Assert.Equal(4, appFacts.Length);
-        Assert.Equal(2, appFacts.Count(fact =>
-            fact.Role == DocumentationPatchSemanticInputRole.Source));
-        Assert.Single(appFacts, fact =>
+        Assert.Equal(3, targetFacts.Length);
+        Assert.Single(targetFacts, fact =>
+            fact.Role == DocumentationPatchSemanticInputRole.Source);
+        Assert.Single(targetFacts, fact =>
             fact.Role == DocumentationPatchSemanticInputRole.AdditionalFile);
-        Assert.Single(appFacts, fact =>
+        Assert.Single(targetFacts, fact =>
             fact.Role == DocumentationPatchSemanticInputRole.AnalyzerConfig);
-        Assert.Contains(appFacts, fact => fact.LogicalPath == "Logical/Input/App-copy.cs");
-        Assert.Contains(appFacts, fact => fact.LogicalPath == "Logical/Config/App-as-config.cs");
+        Assert.Contains(targetFacts, fact => fact.LogicalPath == "Target.cs");
+        Assert.Contains(targetFacts, fact =>
+            fact.LogicalPath == "Logical/Input/Target-copy.cs");
+        Assert.Contains(targetFacts, fact =>
+            fact.LogicalPath == "Logical/Config/Target-as-config.cs");
+        var linkedSourceFacts = capability.Baseline.SemanticInputs.Where(fact =>
+                fact.RepositoryPath == "App/App.cs"
+                && fact.Role == DocumentationPatchSemanticInputRole.Source)
+            .ToArray();
+        Assert.Equal(2, linkedSourceFacts.Length);
+        Assert.Contains(linkedSourceFacts, fact => fact.LogicalPath == "App.cs");
+        Assert.Contains(linkedSourceFacts, fact =>
+            fact.LogicalPath == "Logical/Library/App-linked.cs");
         var app = Assert.Single(fixture.Repository.Projects, project =>
             project.ProjectIdentity == "App/App.csproj");
         var library = Assert.Single(fixture.Repository.Projects, project =>
@@ -82,10 +93,10 @@ public sealed class DocumentationPatchEndToEndTests
             capability.RoslynEvidence.ValidatedGeneratedSourceCount);
         var acceptedSource = Assert.Single(
             capability.Files,
-            file => file.RepositoryPath == "App/App.cs");
+            file => file.RepositoryPath == "App/Target.cs");
         var analyzerConfigEvidence = Assert.Single(
             capability.RoslynEvidence.ValidatedSemanticInputs,
-            fact => fact.RepositoryPath == "App/App.cs"
+            fact => fact.RepositoryPath == "App/Target.cs"
                 && fact.Role == DocumentationPatchSemanticInputRole.AnalyzerConfig);
         Assert.Equal(acceptedSource.Sha256, analyzerConfigEvidence.CandidateSha256);
         Assert.All(result.Invariants, invariant =>
@@ -1448,9 +1459,12 @@ public sealed class DocumentationPatchEndToEndTests
                     <DefineConstants>APP_CONTEXT</DefineConstants>
                 {{generatorProperties}}  </PropertyGroup>
                   <ItemGroup>
-                    <AdditionalFiles Include="App.cs" Link="Logical/Input/App-copy.cs" />
-                    <AnalyzerConfigFiles Include="App.cs" Link="Logical/Config/App-as-config.cs" />
+                    <AdditionalFiles Include="Target.cs" Link="Logical/Input/Target-copy.cs" />
+                    <AnalyzerConfigFiles Include="Target.cs" Link="Logical/Config/Target-as-config.cs" />
                 {{compilerVisibleProperties}}  </ItemGroup>
+                  <Target Name="CreateDocumentationPatchTarget" BeforeTargets="BeforeBuild" Condition="!Exists('$(MSBuildProjectDirectory)/Target.cs')">
+                    <WriteLinesToFile File="$(MSBuildProjectDirectory)/Target.cs" Lines="internal static class DocumentationPatchTargetSeed { }" Overwrite="true" />
+                  </Target>
                 </Project>
                 """;
             const string libraryProject = """
@@ -1474,8 +1488,12 @@ public sealed class DocumentationPatchEndToEndTests
                 var source = multiTarget
                     ? "namespace N;\npublic class RealApi\n{\n    public void A() { }\n    public void B() { }\n}\n"
                     : "namespace N;\npublic class RealApi\n{\n    public void M() { }\n}\n";
-                var sourcePath = Path.Join(loaderFixture.Root, "App", "App.cs");
+                var sourcePath = Path.Join(loaderFixture.Root, "App", "Target.cs");
                 await File.WriteAllTextAsync(sourcePath, source, new UTF8Encoding(false));
+                await File.WriteAllTextAsync(
+                    Path.Join(loaderFixture.Root, "App", "App.cs"),
+                    "#if APP_CONTEXT\nnamespace Contexts; internal static class LinkedContext { internal const string Value = \"app\"; }\n#elif LIBRARY_CONTEXT\nnamespace Contexts; internal static class LinkedContext { internal const string Value = \"library\"; }\n#endif\n",
+                    new UTF8Encoding(false));
                 var load = await new RepositoryLoader().LoadAsync(
                     new RepositoryLoadRequest(
                         loaderFixture.Root,
@@ -1501,7 +1519,7 @@ public sealed class DocumentationPatchEndToEndTests
                 var classified = new SymbolClassifier().ClassifySession(
                     repository,
                     TargetProfile.ExternalApi);
-                var app = Assert.Single(repository.Projects, project =>
+                var targetProject = Assert.Single(repository.Projects, project =>
                     project.ProjectIdentity == "App/App.csproj");
                 var documentationIds = multiTarget
                     ? new[] { "M:N.RealApi.A", "M:N.RealApi.B" }
@@ -1510,19 +1528,20 @@ public sealed class DocumentationPatchEndToEndTests
                 {
                     var target = Assert.Single(
                         classified.Classification.ClassificationSet!.Targets,
-                        candidate => candidate.SymbolRef.DocumentationCommentId == documentationId
-                            && candidate.SymbolRef.CompilationContextRef
-                                == app.CompilationContextRef
-                            && candidate.SupportStatus == SupportStatus.Supported);
+                            candidate => candidate.SymbolRef.DocumentationCommentId == documentationId
+                                && candidate.SymbolRef.CompilationContextRef
+                                == targetProject.CompilationContextRef
+                                && candidate.SupportStatus == SupportStatus.Supported);
+                    Assert.Equal(ClassificationOrigin.Source, target.Origin);
                     var symbol = Assert.Single(
                         DocumentationCommentId.GetSymbolsForDeclarationId(
                             target.SymbolRef.DocumentationCommentId,
-                            app.Compilation));
+                            targetProject.Compilation));
                     return (Target: target,
                         Reference: Assert.Single(symbol.DeclaringSyntaxReferences),
                         BlockId: $"block-{index + 1}");
                 }).ToArray();
-                var loadedSource = app.SourceTrees[targets[0].Reference.SyntaxTree];
+                var loadedSource = targetProject.SourceTrees[targets[0].Reference.SyntaxTree];
                 var repositoryPath = Assert.IsType<string>(loadedSource.RepositoryPath);
                 var bytes = await File.ReadAllBytesAsync(sourcePath);
                 var request = new DocumentationPatchRequest(
@@ -1547,6 +1566,11 @@ public sealed class DocumentationPatchEndToEndTests
                             new DocumentationPatchInheritDocContent(),
                             []))
                         .ToImmutableArray());
+                var declarationBatch = new DocumentationPatchDeclarationResolver().Resolve(
+                    classified,
+                    request);
+                Assert.Null(declarationBatch.RootFailureCode);
+                Assert.All(declarationBatch.Blocks, block => Assert.Empty(block.Failures));
                 return new RealLoaderEngineFixture(
                     loaderFixture,
                     repository,
