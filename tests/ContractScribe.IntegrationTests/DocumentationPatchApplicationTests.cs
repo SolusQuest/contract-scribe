@@ -37,7 +37,7 @@ public sealed class DocumentationPatchApplicationTests
         Directory.CreateDirectory(build);
         await File.WriteAllTextAsync(
             Path.Join(shared, "Linked.cs"),
-            "public class LinkedApi { public void Linked() { } }\n");
+            "internal class LinkedInternal { public void Linked() { } }\n");
         await File.WriteAllTextAsync(Path.Join(inputs, "input.txt"), "input\n");
         await File.WriteAllTextAsync(
             Path.Join(inputs, "settings.globalconfig"),
@@ -62,13 +62,26 @@ public sealed class DocumentationPatchApplicationTests
                 "</Project>",
                 """
                 <ItemGroup>
-                  <Compile Include="../Shared/Linked.cs" Link="Logical/Nested/Linked.cs" />
+                  <Compile Include="../Shared/Linked.cs" Link="Logical/App/Linked.cs" />
                   <AdditionalFiles Include="App.cs" Link="Logical/Input/App-copy.cs" />
                   <AdditionalFiles Include="../Inputs/input.txt" Link="Logical/Input/input.txt" />
                   <AdditionalFiles Include="obj/GeneratedInput.txt" Link="Logical/Input/output.txt" />
                   <EditorConfigFiles Include="../Inputs/settings.globalconfig" Link="Logical/Config/settings.globalconfig" />
                 </ItemGroup>
                 <Import Project="../Build/Custom.targets" />
+                </Project>
+                """,
+                StringComparison.Ordinal));
+        var libraryProjectPath = Path.Join(fixture.Root, "Library", "Library.csproj");
+        var libraryProjectText = await File.ReadAllTextAsync(libraryProjectPath);
+        await File.WriteAllTextAsync(
+            libraryProjectPath,
+            libraryProjectText.Replace(
+                "</Project>",
+                """
+                <ItemGroup>
+                  <Compile Include="../Shared/Linked.cs" Link="Logical/Library/Linked.cs" />
+                </ItemGroup>
                 </Project>
                 """,
                 StringComparison.Ordinal));
@@ -127,10 +140,14 @@ public sealed class DocumentationPatchApplicationTests
             entry.RepositoryPath == "Directory.Build.targets");
         Assert.Contains(candidate.Baseline.Entries, entry =>
             entry.RepositoryPath == "Build/Custom.targets");
-        Assert.Contains(candidate.Baseline.SemanticInputs, fact =>
+        var linkedSourceFacts = candidate.Baseline.SemanticInputs.Where(fact =>
             fact.RepositoryPath == "Shared/Linked.cs"
-            && fact.Role == DocumentationPatchSemanticInputRole.Source
-            && fact.LogicalPath == "Logical/Nested/Linked.cs");
+            && fact.Role == DocumentationPatchSemanticInputRole.Source).ToArray();
+        Assert.Equal(2, linkedSourceFacts.Length);
+        Assert.Equal(2, linkedSourceFacts.Select(fact => fact.ProjectIdentity).Distinct().Count());
+        Assert.Equal(
+            ["Logical/App/Linked.cs", "Logical/Library/Linked.cs"],
+            linkedSourceFacts.Select(fact => fact.LogicalPath).Order(StringComparer.Ordinal));
         Assert.Contains(candidate.Baseline.SemanticInputs, fact =>
             fact.RepositoryPath == "App/App.cs"
             && fact.Role == DocumentationPatchSemanticInputRole.AdditionalFile
@@ -518,6 +535,55 @@ public sealed class DocumentationPatchApplicationTests
     }
 
     [Fact]
+    public void AnyNoEffectiveBlockRejectsTheWholeMultiBlockRequest()
+    {
+        const string source =
+            "namespace N;\npublic class C\n{\n"
+            + "    /// <inheritdoc/>\n    public void A() { }\n\n"
+            + "    /// <summary>Old.</summary>\n    public void B() { }\n}\n";
+        using var fixture = ApplicationFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            targetAllMethods: true);
+
+        var result = new CandidatePatchApplicator().Apply(
+            fixture.ClassifiedSession,
+            fixture.Request(DocumentationPatchEditKind.Replace));
+
+        Assert.Equal(DocumentationPatchApplicationStatus.Rejected, result.Status);
+        Assert.Equal("patch.rejected.no-effective-change", result.PrimaryCode);
+        Assert.Null(result.Candidate);
+    }
+
+    [Fact]
+    public void UnprotectedDirectoryShapeDriftDoesNotInvalidateTheRepositoryBaseline()
+    {
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
+        using var fixture = ApplicationFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            additionalSources: new Dictionary<string, string>
+            {
+                ["output/Protected.cs"] = "namespace N; internal class Protected { }\n",
+            },
+            allowedOutputRoots: ["output"]);
+        var capture = fixture.ClassifiedSession.RepositorySession
+            .CaptureDocumentationPatchRepositoryBaseline();
+        var baseline = Assert.IsType<DocumentationPatchRepositoryBaseline>(capture.Baseline);
+        Directory.CreateDirectory(Path.Join(fixture.Root, "output", "transient"));
+
+        Assert.Equal(
+            DocumentationPatchRepositoryRebindStatus.Unchanged,
+            baseline.Rebind().Status);
+
+        File.AppendAllText(Path.Join(fixture.Root, "output", "Protected.cs"), " ");
+        Assert.Equal(
+            DocumentationPatchRepositoryRebindStatus.Stale,
+            baseline.Rebind().Status);
+    }
+
+    [Fact]
     public void ProtectedDriftAfterAuthoritySealIsStaleAndProducesNoHandle()
     {
         const string source = "namespace N; public class C { public void M() { } }";
@@ -747,6 +813,64 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Equal(
             DocumentationPatchCandidateCaptureStatus.Mismatch,
             consumption.CaptureCandidateForValidation().Status);
+    }
+
+    [Theory]
+    [InlineData("add")]
+    [InlineData("delete")]
+    [InlineData("replace")]
+    public void ConsumedCandidateRejectsTerminalTreeShapeDrift(string mutation)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
+        using var fixture = ApplicationFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            additionalFiles: new Dictionary<string, byte[]>
+            {
+                ["nested/input.txt"] = "input"u8.ToArray(),
+            });
+        var result = new CandidatePatchApplicator().Apply(
+            fixture.ClassifiedSession,
+            fixture.Request());
+        var candidate = Assert.IsType<DocumentationPatchCandidateHandle>(result.Candidate);
+        var candidateRoot = candidate.RootPath;
+        using var consumption = Assert.IsType<DocumentationPatchCandidateConsumption>(
+            candidate.TryConsume());
+
+        var capture = consumption.CaptureCandidateForValidation(
+            beforeTerminalPass: () =>
+            {
+                var input = Path.Join(candidateRoot, "nested", "input.txt");
+                switch (mutation)
+                {
+                    case "add":
+                        File.WriteAllText(Path.Join(candidateRoot, "extra.txt"), "extra");
+                        break;
+                    case "delete":
+                        File.Delete(input);
+                        break;
+                    case "replace":
+                        File.Delete(input);
+                        File.WriteAllBytes(input, "input"u8.ToArray());
+                        break;
+                    default:
+                        throw new InvalidOperationException("Unknown terminal mutation.");
+                }
+            });
+
+        Assert.Equal(DocumentationPatchCandidateCaptureStatus.Mismatch, capture.Status);
+        Assert.Empty(capture.Files);
+        consumption.Dispose();
+        if (Directory.Exists(candidateRoot))
+        {
+            Directory.Delete(candidateRoot, recursive: true);
+        }
     }
 
     [Fact]

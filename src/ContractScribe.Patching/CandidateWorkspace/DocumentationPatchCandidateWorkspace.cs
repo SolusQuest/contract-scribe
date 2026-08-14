@@ -231,6 +231,42 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         IReadOnlyDictionary<string, CandidateIdentity> directories,
         IReadOnlyDictionary<string, CandidateWorkspaceFile> files,
         bool requireExpectedBytes,
+        CancellationToken cancellationToken,
+        Action? beforeTerminalPass = null)
+    {
+        var captured = CaptureCandidatePass(
+            parentPath,
+            parentIdentity,
+            rootName,
+            rootPath,
+            directories,
+            files,
+            requireExpectedBytes,
+            cancellationToken);
+        beforeTerminalPass?.Invoke();
+        var terminalExpected = captured.ToDictionary(
+            file => file.RepositoryPath,
+            PathComparer);
+        _ = CaptureCandidatePass(
+            parentPath,
+            parentIdentity,
+            rootName,
+            rootPath,
+            directories,
+            terminalExpected,
+            requireExpectedBytes: true,
+            cancellationToken);
+        return captured;
+    }
+
+    private static ImmutableArray<CandidateWorkspaceFile> CaptureCandidatePass(
+        string parentPath,
+        CandidateIdentity parentIdentity,
+        string rootName,
+        string rootPath,
+        IReadOnlyDictionary<string, CandidateIdentity> directories,
+        IReadOnlyDictionary<string, CandidateWorkspaceFile> files,
+        bool requireExpectedBytes,
         CancellationToken cancellationToken)
     {
         if (!directories.TryGetValue(string.Empty, out var rootIdentity))
@@ -438,7 +474,8 @@ internal sealed class CandidateWorkspaceLease
     public string RootPath { get; }
 
     public DocumentationPatchCandidateCaptureResult Capture(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? beforeTerminalPass = null)
     {
         try
         {
@@ -450,7 +487,8 @@ internal sealed class CandidateWorkspaceLease
                 directories,
                 files,
                 requireExpectedBytes: false,
-                cancellationToken);
+                cancellationToken,
+                beforeTerminalPass);
             return new DocumentationPatchCandidateCaptureResult(
                 DocumentationPatchCandidateCaptureStatus.Captured,
                 captured);
@@ -633,7 +671,8 @@ internal sealed class DocumentationPatchCandidateConsumption : IDisposable
     internal string RootPath => lease.RootPath;
 
     internal DocumentationPatchCandidateCaptureResult CaptureCandidateForValidation(
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? beforeTerminalPass = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (Volatile.Read(ref disposed) != 0
@@ -644,7 +683,7 @@ internal sealed class DocumentationPatchCandidateConsumption : IDisposable
                 []);
         }
 
-        return lease.Capture(cancellationToken);
+        return lease.Capture(cancellationToken, beforeTerminalPass);
     }
 
     public void Dispose()

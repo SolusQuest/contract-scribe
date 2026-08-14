@@ -247,6 +247,11 @@ public sealed class CandidatePatchApplicator
                         ReplacementRegion(source, documentation, ownerLineStart),
                     _ => throw Rejected(),
                 };
+                if (source.AsSpan(start, end - start).SequenceEqual(rendered.AsSpan()))
+                {
+                    throw NoEffectiveChange();
+                }
+
                 edits.Add(new DocumentationPatchTextEdit(
                     start,
                     end,
@@ -275,9 +280,7 @@ public sealed class CandidatePatchApplicator
             var encoded = Encode(candidate, firstLocator.Encoding);
             if (entry.Bytes.AsSpan().SequenceEqual(encoded))
             {
-                throw new DocumentationPatchApplicationException(
-                    DocumentationPatchApplicationStatus.Rejected,
-                    "patch.rejected.no-effective-change");
+                throw NoEffectiveChange();
             }
 
             result.Add(group.Key, encoded);
@@ -285,6 +288,11 @@ public sealed class CandidatePatchApplicator
 
         return result;
     }
+
+    private static DocumentationPatchApplicationException NoEffectiveChange() =>
+        new(
+            DocumentationPatchApplicationStatus.Rejected,
+            "patch.rejected.no-effective-change");
 
     private static (int Start, int End) ReplacementRegion(
         string source,

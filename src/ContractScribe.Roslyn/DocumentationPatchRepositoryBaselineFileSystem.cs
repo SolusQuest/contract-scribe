@@ -172,7 +172,7 @@ internal static class DocumentationPatchBaselineFileSystem
                 expectDirectory
                     ? 0
                     : ((long)information.FileSizeHigh << 32) | information.FileSizeLow,
-                information.NumberOfLinks,
+                expectDirectory ? 0 : information.NumberOfLinks,
                 expectDirectory);
         }
 
@@ -190,7 +190,7 @@ internal static class DocumentationPatchBaselineFileSystem
                 information.Device,
                 information.Inode,
                 expectDirectory ? 0 : information.Size,
-                information.LinkCount,
+                expectDirectory ? 0 : information.LinkCount,
                 expectDirectory);
         }
 
