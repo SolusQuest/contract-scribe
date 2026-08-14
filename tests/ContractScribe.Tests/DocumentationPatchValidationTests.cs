@@ -206,10 +206,9 @@ public sealed class DocumentationPatchValidationTests
         File.WriteAllText(secondPath, secondSource, new UTF8Encoding(false));
         File.WriteAllText(Path.Join(root, "Fixture.csproj"), "<Project />", new UTF8Encoding(false));
 
-        LoadedRepositorySession? repository = null;
+        using var workspace = new AdhocWorkspace();
         try
         {
-            var workspace = new AdhocWorkspace();
             var projectId = ProjectId.CreateNewId();
             var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
                 .Split(Path.PathSeparator)
@@ -296,7 +295,7 @@ public sealed class DocumentationPatchValidationTests
             Assert.True(RepositoryContextRef.TryParse(
                 "repoctx-0123456789abcdef0123456789abcdef",
                 out var repositoryContextRef));
-            repository = new LoadedRepositorySession(
+            using var repository = new LoadedRepositorySession(
                 repositoryContextRef,
                 root,
                 "Fixture.csproj",
@@ -338,7 +337,6 @@ public sealed class DocumentationPatchValidationTests
         }
         finally
         {
-            repository?.Dispose();
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
