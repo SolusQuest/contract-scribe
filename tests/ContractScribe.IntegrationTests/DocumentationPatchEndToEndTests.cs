@@ -31,6 +31,14 @@ public sealed class DocumentationPatchEndToEndTests
                 Assert.Equal(LoadedProjectRole.AuditRoot, project.Role);
                 Assert.Empty(project.ProjectReferences);
             });
+            var preflightApp = Assert.Single(fixture.Repository.Projects, project =>
+                project.ProjectIdentity == "App/App.csproj");
+            Assert.Contains(preflightApp.Project.Documents, document =>
+                Path.GetFileName(document.FilePath) == "Target.cs");
+            Assert.Contains(preflightApp.Project.AdditionalDocuments, document =>
+                Path.GetFileName(document.FilePath) == "Target.cs");
+            Assert.Contains(preflightApp.Project.AnalyzerConfigDocuments, document =>
+                Path.GetFileName(document.FilePath) == "Target.cs");
             Assert.Contains(fixture.Repository.Projects.SelectMany(project =>
                 project.SourceTrees.Values), source => source.Kind == LoadedSourceKind.ToolGenerated);
             return;
@@ -1460,7 +1468,7 @@ public sealed class DocumentationPatchEndToEndTests
                 {{generatorProperties}}  </PropertyGroup>
                   <ItemGroup>
                     <AdditionalFiles Include="Target.cs" Link="Logical/Input/Target-copy.cs" />
-                    <AnalyzerConfigFiles Include="Target.cs" Link="Logical/Config/Target-as-config.cs" />
+                    <EditorConfigFiles Include="Target.cs" Link="Logical/Config/Target-as-config.cs" />
                 {{compilerVisibleProperties}}  </ItemGroup>
                   <Target Name="CreateDocumentationPatchTarget" BeforeTargets="BeforeBuild" Condition="!Exists('$(MSBuildProjectDirectory)/Target.cs')">
                     <WriteLinesToFile File="$(MSBuildProjectDirectory)/Target.cs" Lines="internal static class DocumentationPatchTargetSeed { }" Overwrite="true" />
