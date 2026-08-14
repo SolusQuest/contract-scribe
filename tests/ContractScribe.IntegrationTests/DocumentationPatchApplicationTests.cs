@@ -66,7 +66,7 @@ public sealed class DocumentationPatchApplicationTests
                   <AdditionalFiles Include="App.cs" Link="Logical/Input/App-copy.cs" />
                   <AdditionalFiles Include="../Inputs/input.txt" Link="Logical/Input/input.txt" />
                   <AdditionalFiles Include="obj/GeneratedInput.txt" Link="Logical/Input/output.txt" />
-                  <AnalyzerConfigFiles Include="../Inputs/settings.globalconfig" Link="Logical/Config/settings.globalconfig" />
+                  <EditorConfigFiles Include="../Inputs/settings.globalconfig" Link="Logical/Config/settings.globalconfig" />
                 </ItemGroup>
                 <Import Project="../Build/Custom.targets" />
                 </Project>
@@ -395,14 +395,15 @@ public sealed class DocumentationPatchApplicationTests
             return;
         }
 
-        const string source = "namespace N; public class C { public void A() { } }";
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void A() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
             DocumentationPatchRepositoryEncoding.Utf8,
             additionalSources: new Dictionary<string, string>
             {
                 ["Nested/Other.cs"] =
-                    "namespace N; public class Other { public void B() { } }",
+                    "namespace N;\npublic class Other\n{\n    public void B() { }\n}\n",
             },
             targetAllMethods: true,
             targetAllSources: true);
@@ -739,10 +740,10 @@ public sealed class DocumentationPatchApplicationTests
 
         Assert.Equal(DocumentationPatchCandidateCaptureStatus.Captured, capture.Status);
         Assert.Equal(candidate.Files.Length, capture.Files.Length);
-        Assert.All(capture.Files, captured => Assert.Equal(
+        Assert.All(capture.Files, captured => Assert.True(
             candidate.Files.Single(expected =>
-                expected.RepositoryPath == captured.RepositoryPath).Bytes,
-            captured.Bytes));
+                    expected.RepositoryPath == captured.RepositoryPath)
+                .Bytes.AsSpan().SequenceEqual(captured.Bytes.AsSpan())));
         Assert.Equal(
             DocumentationPatchCandidateCaptureStatus.Mismatch,
             consumption.CaptureCandidateForValidation().Status);
@@ -830,7 +831,8 @@ public sealed class DocumentationPatchApplicationTests
             return;
         }
 
-        const string source = "namespace N; public class C { public void M() { } }";
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
             DocumentationPatchRepositoryEncoding.Utf8);
@@ -862,7 +864,8 @@ public sealed class DocumentationPatchApplicationTests
             return;
         }
 
-        const string source = "namespace N; public class C { public void M() { } }";
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
             DocumentationPatchRepositoryEncoding.Utf8);
@@ -924,7 +927,8 @@ public sealed class DocumentationPatchApplicationTests
             return;
         }
 
-        const string source = "namespace N; public class C { public void M() { } }";
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
             DocumentationPatchRepositoryEncoding.Utf8,
@@ -965,7 +969,8 @@ public sealed class DocumentationPatchApplicationTests
             return;
         }
 
-        const string source = "namespace N; public class C { public void M() { } }";
+        const string source =
+            "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
             DocumentationPatchRepositoryEncoding.Utf8);
@@ -1016,8 +1021,12 @@ public sealed class DocumentationPatchApplicationTests
                 fixture.Request()).Candidate);
 
         Assert.Equal(
-            first.Files.Select(file => (file.RepositoryPath, file.Bytes)),
-            second.Files.Select(file => (file.RepositoryPath, file.Bytes)));
+            first.Files.Select(file => file.RepositoryPath),
+            second.Files.Select(file => file.RepositoryPath));
+        Assert.All(first.Files, firstFile => Assert.True(
+            second.Files.Single(secondFile =>
+                    secondFile.RepositoryPath == firstFile.RepositoryPath)
+                .Bytes.AsSpan().SequenceEqual(firstFile.Bytes.AsSpan())));
         Assert.NotEqual(first.RootPath, second.RootPath);
     }
 
