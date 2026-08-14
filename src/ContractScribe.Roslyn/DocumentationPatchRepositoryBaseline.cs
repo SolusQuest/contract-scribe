@@ -303,7 +303,8 @@ public sealed class DocumentationPatchRepositoryBaseline
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
             or ArgumentException
-            or NotSupportedException)
+            or NotSupportedException
+            or DocumentationPatchBaselineException)
         {
             return new DocumentationPatchCandidateRootValidation(false, null);
         }
@@ -346,7 +347,8 @@ public sealed class DocumentationPatchRepositoryBaseline
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
             or ArgumentException
-            or NotSupportedException)
+            or NotSupportedException
+            or DocumentationPatchBaselineException)
         {
             return new DocumentationPatchCandidateLocationValidation(false, null);
         }
