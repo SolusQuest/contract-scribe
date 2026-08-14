@@ -1,0 +1,31 @@
+{
+  "vectors": [
+    {
+      "id": "insert-inheritdoc",
+      "sourceLines": [
+        "namespace N;",
+        "",
+        "public class C",
+        "{",
+        "    public void M() { }",
+        "}"
+      ],
+      "candidateLines": [
+        "namespace N;",
+        "",
+        "public class C",
+        "{",
+        "    /// <inheritdoc/>",
+        "    public void M() { }",
+        "}"
+      ],
+      "terminalNewline": true,
+      "representations": [
+        "utf-8",
+        "utf-8-bom",
+        "utf-16le-bom",
+        "utf-16be-bom"
+      ]
+    }
+  ]
+}

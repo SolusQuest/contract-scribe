@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The `Core` / `Roslyn` / `Patching` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority while request-level edit authorization and the future candidate-write path need a separate mutation owner. `Patching -> Core` and `Patching -> Roslyn` are therefore current one-way edges; `Core` and `Roslyn` do not reference Patching. Future project names and edges remain candidates selected by their implementing milestones.
+The `Core` / `Roslyn` / `Patching` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority, and issue #92 added a narrow session-bound immutable repository baseline plus isolated candidate writes under Patching. `Patching -> Core` and `Patching -> Roslyn` are therefore current one-way edges; `Core` and `Roslyn` do not reference Patching, and Roslyn does not grant Patching broad friend access. Future project names and edges remain candidates selected by their implementing milestones.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
@@ -123,21 +123,23 @@ It depends on `ContractScribe.Core` and Roslyn/MSBuild packages. It must not ref
 - a GitHub token;
 - arbitrary source-writing APIs.
 
-The project may read repository files only through repository-root-confined services. It does not own candidate source writes.
+The project may read repository files only through repository-root-confined services. For documentation patching, it owns the session-bound baseline capture/rebind capability used by declaration resolution and candidate sealing; the capability exposes immutable repository-relative facts and bytes, not the original absolute root or a writer. Roslyn does not own candidate source writes.
 
 ### `ContractScribe.Patching`
 
-M2 executable evidence met the mutation-authority split threshold. `ContractScribe.Patching` currently owns deterministic request-level declaration resolution and the immutable handoff to the future candidate workspace:
+M2 executable evidence met the mutation-authority split threshold. `ContractScribe.Patching` currently owns deterministic request-level declaration resolution, typed rendering, and isolated candidate construction:
 
 - stale-source and declaration-identity validation;
 - edit-state and exact applicable-component authorization;
 - physical documentation-owner exclusivity and duplicate/shared-owner rejection;
 - stable failure precedence across the complete request;
-- immutable repository-relative source, declaration, owner, and documentation-span facts.
+- immutable repository-relative source, declaration, owner, and documentation-span facts;
+- deterministic XML-documentation rendering with exact encoding, BOM, newline, and indentation preservation; and
+- complete request-local candidate materialization and an opaque disposable handoff.
 
-It depends directly on `ContractScribe.Core` and the read-only declaration-resolution surface in `ContractScribe.Roslyn`. The dependency is one-way: `ContractScribe.Roslyn` never references `ContractScribe.Patching`. The project adds no package dependency; its only additional runtime footprint is the existing transitive Roslyn dependency.
+It depends directly on `ContractScribe.Core` and the narrow declaration-resolution/baseline surface in `ContractScribe.Roslyn`. The dependency is one-way: `ContractScribe.Roslyn` never references `ContractScribe.Patching`. Candidate files are created anew outside the original checkout; the original root remains read-only to Patching. The public candidate handle exposes neither root nor arbitrary writer and is explicitly unaccepted until the validation stage owned by issue #93. The project adds no package dependency; its only additional runtime footprint is the existing transitive Roslyn dependency.
 
-Issue #91 moved no existing source into the project and added no renderer, candidate workspace, validation-result construction, file writer, provider, GitHub, or Agent behavior. Those later M2 capabilities remain owned by their implementing issues. Fast architecture tests pin the graph and public API closure; integration tests exercise exact encodings, live source revalidation, canonical declarations, edit state, components, generated non-writability, owner rules, and cancellation. The existing split thresholds fully explain this boundary, so no new ADR was required.
+Issue #92 adds the renderer and the bounded candidate workspace but no validation-result construction, original-root writer, provider, GitHub, or Agent behavior. Issue #93 remains the sole owner of final candidate validation and accepted/rejected/stale Patch Validation Results. Fast architecture tests pin the graph, the absence of broad Roslyn-to-Patching friend access, and the closed public handle; integration tests exercise exact encodings, baseline-bound resolution, candidate isolation, filesystem identity, cleanup, and cancellation. The existing split thresholds fully explain this boundary, so no new ADR was required.
 
 It must not reference a model-provider or GitHub SDK. It accepts only validated structured proposals; it never accepts arbitrary diffs or model-generated source text.
 
@@ -202,7 +204,7 @@ The same CLI is the payload invoked locally, from validation workflows, and by a
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn are current. The CLI-to-Patching composition edge remains a candidate until the patch command is implemented; Agent and GitHub edges likewise remain candidates until their milestones meet the split thresholds.
+Patching's outbound edges to Core and Roslyn are current. Its candidate-write authority is internal and does not add a reverse edge or package dependency. The CLI-to-Patching composition edge remains a candidate until the patch command is implemented; Agent and GitHub edges likewise remain candidates until their milestones meet the split thresholds.
 
 ```text
 ContractScribe.Cli
@@ -235,7 +237,7 @@ Current architecture tests enumerate existing project references and fail when a
 | --- | --- |
 | M0 | `Core` and `Cli` remain the minimal product skeleton; Roslyn projects remain test-only experiments. |
 | M1 | Add production `ContractScribe.Roslyn`; keep `Core` and `Cli`; add integration tests when real workspace/process behavior requires them. |
-| M2 | Add `ContractScribe.Patching`; issue #91 establishes its deterministic resolution/handoff boundary, with candidate mutation and validation following in later M2 issues. |
+| M2 | Add `ContractScribe.Patching`; issue #91 establishes deterministic resolution, issue #92 adds baseline-bound rendering and isolated unaccepted candidates, and issue #93 owns final validation/results. |
 | M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
 | M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |

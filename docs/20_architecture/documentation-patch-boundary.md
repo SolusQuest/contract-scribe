@@ -24,7 +24,7 @@ A patch request binds:
 
 `repositoryContextRef` is a process-local opaque value shaped as `repoctx-` plus 32 lowercase hexadecimal characters. A successful production repository load samples it from 16 cryptographically secure random bytes. It deliberately reveals no local path, Git remote, commit, GitHub repository identity, or filesystem metadata. It is a substitution guard, not a durable repository identity: values are not persisted, derived, retried for uniqueness, or promised never to collide.
 
-Repository declaration resolution retains the request-facing repository path separately from a session-local, repository-relative physical source identity. Locator correlation and later rebinding continue to use the request-facing path; live validation re-resolves that path and rejects a requested or authority-consulted source when its physical identity changed after loading. Documentation-owner reverse lookup uses current confined physical identities, and cross-block exclusivity uses the validated physical identity plus the owner span, so contained symbolic-link or junction aliases cannot represent one physical owner as multiple writable targets either at load time or after retargeting. The handoff exposes no absolute filesystem path. The multiple-declaration authority exception applies only to ordinary partial methods; partial constructors, properties, indexers, events, and every other non-type multi-declaration shape fail closed as ambiguous.
+Repository declaration resolution retains the request-facing repository path separately from a session-local, repository-relative physical source identity. A successful loader session seals a narrow immutable repository baseline authority; C2 resolution and E1 rendering consume the same captured bytes rather than independently authorizing live reads. Locator correlation and final original-root rebinding continue to use the request-facing path and fail closed when observable repository identity, topology, or protected commitments drift. Documentation-owner reverse lookup uses baseline-confined physical identities, and cross-block exclusivity uses the validated physical identity plus the owner span, so contained symbolic-link or junction aliases cannot represent one physical owner as multiple writable targets. The handoff exposes no absolute original filesystem path. The multiple-declaration authority exception applies only to ordinary partial methods; partial constructors, properties, indexers, events, and every other non-type multi-declaration shape fail closed as ambiguous.
 
 The engine rejects stale source, an unresolved or ambiguous declaration, mismatched parameters or type parameters, unsupported XML structures, invalid Unicode, and proposals for unselected targets.
 
@@ -48,6 +48,8 @@ The renderer owns:
 - file encoding, BOM, and newline preservation.
 
 The initial product inserts or replaces complete documentation blocks. It does not apply arbitrary textual edits from the model.
+
+Every requested block must produce an intrinsic byte change in its own documentation region. A replacement that would reproduce that region is rejected as `patch.rejected.no-effective-change` even when another block in the request would change; other unsafe rendering shapes remain `patch.rejected.unsafe-change`.
 
 ## Safety invariants
 
@@ -86,7 +88,13 @@ M2 must cover:
 
 ## Candidate workspace
 
-Patch rendering occurs in a candidate workspace or proposal branch, never directly on an unvalidated target branch. A patch validation result records:
+E1 renders into a fresh request-local candidate workspace outside and physically distinct from the original checkout. Before creating any entry, the loader-owned baseline authority validates the proposed root location and binds the staging parent identity; the candidate builder then creates every directory and regular file relative to an identity-checked parent without following links. Every governed file is created anew: selected source files receive deterministic rendered bytes and all other governed files retain their baseline bytes. Candidate entries are sealed only after complete readback and a final original-baseline rebind. Construction failure or cancellation returns no usable handle; disposal invalidates the opaque handle and performs identity-bound best-effort cleanup without following changed topology.
+
+Candidate mutation currently requires Linux handle-relative filesystem operations, as provided by the required GitHub-hosted Ubuntu x64 execution lane. Native Windows execution still provides read-only loader and renderer feedback but fails closed before candidate-root creation; adding Windows candidate mutation requires an explicit handle-relative implementation rather than path-based managed writes.
+
+Consumption transfers cleanup ownership exactly once. The internal #93 handoff can perform one identity-bound disk capture that rebinds the staging parent, root, every directory, and every regular file, rejects extra, missing, linked, or replaced entries, and returns the current bounded bytes. The capture retains handles for the first-pass root, nested directories, and regular files, opening each nested directory relative to its retained parent, then finishes with a second complete-tree pass bound to the exact paths, kinds, identities, and bytes. Original filesystem objects therefore remain pinned so a released identity cannot be recycled between the passes to hide a same-name file, root, or subtree replacement. A second capture operation, a disposed consumer, or any identity/topology mismatch returns no candidate capture.
+
+The E1 result is complete but unaccepted. Its public handle exposes no staging path or arbitrary writer, and no E1 status is a Patch Validation Result outcome. Issue #93 consumes the internal correlated candidate, revalidates it, and constructs the Patch Validation Result, which records:
 
 - the request context and one correlated trace per selected target;
 - changed repository files, exact original and candidate hashes, and documentation-block counts;
@@ -95,7 +103,7 @@ Patch rendering occurs in a candidate workspace or proposal branch, never direct
 - bounded diagnostics selected deterministically; and
 - an `accepted`, `rejected`, or `stale` outcome.
 
-Malformed, oversized, incorrectly encoded, duplicate-property, unsupported-version, or otherwise intrinsically invalid request artifacts produce `PatchRequestValidationFailure`; they never produce a Patch Validation Result. A result exists only after an intrinsically valid request enters live execution, and it must be validated by explicit correlation against that request.
+Malformed, oversized, incorrectly encoded, duplicate-property, unsupported-version, or otherwise intrinsically invalid request artifacts produce `PatchRequestValidationFailure`; they never produce a Patch Validation Result. A validation result exists only after an intrinsically valid request enters the #93 validation stage, and it must be validated by explicit correlation against that request and the sealed E1 candidate.
 
 Only an accepted result may be handed to the GitHub adapter.
 

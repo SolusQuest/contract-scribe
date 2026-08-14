@@ -89,7 +89,10 @@ public sealed class RepositoryLoadOutcome
 
 public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
 {
+    private readonly object documentationPatchGate = new();
     private readonly IDisposable workspace;
+    private DocumentationPatchRepositoryPolicy? documentationPatchPolicy;
+    private bool disposed;
 
     internal LoadedRepositorySession(
         RepositoryContextRef repositoryContextRef,
@@ -121,7 +124,113 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
 
     public IReadOnlyList<GeneratedSourceFact> GeneratedSources { get; }
 
-    public void Dispose() => workspace.Dispose();
+    internal bool IsDisposed
+    {
+        get
+        {
+            lock (documentationPatchGate)
+            {
+                return disposed;
+            }
+        }
+    }
+
+    public DocumentationPatchRepositoryBaselineCaptureResult CaptureDocumentationPatchRepositoryBaseline(
+        CancellationToken cancellationToken = default)
+    {
+        DocumentationPatchRepositoryPolicy? policy;
+        lock (documentationPatchGate)
+        {
+            policy = disposed ? null : documentationPatchPolicy;
+        }
+
+        if (policy is null)
+        {
+            return new DocumentationPatchRepositoryBaselineCaptureResult(
+                DocumentationPatchRepositoryBaselineStatus.Stale,
+                "patch.stale.repository-context",
+                null);
+        }
+
+        return DocumentationPatchRepositoryBaselineCapture.Capture(
+            this,
+            policy,
+            cancellationToken);
+    }
+
+    internal DocumentationPatchRepositoryBaselineCaptureResult CaptureDocumentationPatchResolutionBaseline(
+        CancellationToken cancellationToken = default)
+    {
+        DocumentationPatchRepositoryPolicy? policy;
+        lock (documentationPatchGate)
+        {
+            policy = disposed ? null : documentationPatchPolicy;
+        }
+
+        if (policy is null)
+        {
+            return new DocumentationPatchRepositoryBaselineCaptureResult(
+                DocumentationPatchRepositoryBaselineStatus.Stale,
+                "patch.stale.repository-context",
+                null);
+        }
+
+        return DocumentationPatchRepositoryBaselineCapture.CaptureForResolution(
+            this,
+            policy,
+            cancellationToken);
+    }
+
+    internal void SealDocumentationPatchRepositoryPolicy(
+        DocumentationPatchRepositoryPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        lock (documentationPatchGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (documentationPatchPolicy is not null)
+            {
+                throw new InvalidOperationException(
+                    "The documentation patch repository policy is already sealed.");
+            }
+
+            documentationPatchPolicy = policy;
+        }
+    }
+
+    internal void SealDocumentationPatchRepositoryPolicyForTests(
+        IEnumerable<string>? allowedOutputRoots = null)
+    {
+        SealDocumentationPatchRepositoryPolicy(
+            DocumentationPatchRepositoryPolicy.CreateForTests(
+                PhysicalRepositoryRoot,
+                Projects,
+                allowedOutputRoots));
+    }
+
+    internal bool IsDocumentationPatchAuthorityAvailable(
+        DocumentationPatchRepositoryPolicy policy)
+    {
+        lock (documentationPatchGate)
+        {
+            return !disposed && ReferenceEquals(documentationPatchPolicy, policy);
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (documentationPatchGate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+        }
+
+        workspace.Dispose();
+    }
 
     public ValueTask DisposeAsync()
     {

@@ -176,6 +176,17 @@ public sealed class RepositoryLoader
 
             if (drift.Length == 0)
             {
+                if (outcome.Session is { } successfulSession)
+                {
+                    successfulSession.SealDocumentationPatchRepositoryPolicy(
+                        DocumentationPatchRepositoryPolicy.Create(
+                            paths.PhysicalRoot,
+                            state is null ? Array.Empty<string>() : state.ProtectedPaths,
+                            state is null ? Array.Empty<string>() : state.AllowedOutputRoots,
+                            after,
+                            successfulSession.Projects));
+                }
+
                 return outcome;
             }
 

@@ -143,6 +143,21 @@ public sealed class DocumentationPatchResolutionTests
         Assert.Empty(both.Targets);
     }
 
+    [Fact]
+    public async Task ContainedDirectoryAliasCycleFailsClosed()
+    {
+        await using var fixture = await PhysicalOwnerFixture.CreateAsync(useAlias: false);
+        fixture.CreateContainedDirectoryAliasCycle();
+
+        var result = new DocumentationPatchResolver().Resolve(
+            fixture.ClassifiedSession,
+            fixture.Request([fixture.Blocks[0]]));
+
+        Assert.Equal(DocumentationPatchResolutionStatus.Stale, result.Status);
+        Assert.Equal("patch.rejected.unsafe-change", result.PrimaryCode);
+        Assert.Empty(result.Targets);
+    }
+
     [Theory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8)]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom)]
@@ -1073,6 +1088,14 @@ public sealed class DocumentationPatchResolutionTests
                 Path.Join(loaderFixture.Root, "Shared"));
         }
 
+        public void CreateContainedDirectoryAliasCycle()
+        {
+            var sharedDirectory = Path.Join(loaderFixture.Root, "Shared");
+            var nestedDirectory = Path.Join(sharedDirectory, "Nested");
+            Directory.CreateDirectory(nestedDirectory);
+            CreateDirectoryLink(Path.Join(nestedDirectory, "Loop"), sharedDirectory);
+        }
+
         public async ValueTask DisposeAsync()
         {
             await repositorySession.DisposeAsync();
@@ -1340,6 +1363,7 @@ public sealed class DocumentationPatchResolutionTests
                 [loadedProject],
                 generatedFact is null ? [] : [generatedFact],
                 workspace);
+            repositorySession.SealDocumentationPatchRepositoryPolicyForTests();
             var targets = ImmutableArray.CreateBuilder<TargetClassification>();
             if (!unresolvedAmbiguous)
             {

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Xml.Linq;
 using ContractScribe.Core;
+using ContractScribe.Patching;
 using ContractScribe.Patching.Resolution;
 using ContractScribe.Roslyn;
 using Microsoft.CodeAnalysis;
@@ -172,7 +173,7 @@ public sealed class DocumentationPatchArchitectureTests
     }
 
     [Fact]
-    public void PatchingOwnsNoRenderingOrWriteSurface()
+    public void PatchingOwnsOnlyTheOpaqueCandidateWriteSurface()
     {
         var root = FindRepositoryRoot();
         var source = string.Join(
@@ -182,20 +183,67 @@ public sealed class DocumentationPatchArchitectureTests
                 "*.cs",
                 SearchOption.AllDirectories).Select(File.ReadAllText));
 
+        Assert.Contains("DocumentationPatchRenderer", source, StringComparison.Ordinal);
+        Assert.Contains("CreateNewRegularFile", source, StringComparison.Ordinal);
         foreach (var forbidden in new[]
         {
             "File.Write",
             "File.Create",
             "StreamWriter",
             "MSBuildWorkspace",
-            "CandidateWorkspace",
             "DocumentationPatchValidationResult",
             "HttpClient",
             "Octokit",
+            "GitHub",
         })
         {
             Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
         }
+
+        var publicTypes = typeof(CandidatePatchApplicator).Assembly.GetExportedTypes();
+        var exposed = publicTypes
+            .SelectMany(PublicSignatureTypes)
+            .SelectMany(ExpandType)
+            .Distinct()
+            .ToArray();
+        Assert.DoesNotContain(exposed, type =>
+            type.Assembly.GetName().Name is { } name
+            && (name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal)
+                || name.StartsWith("Microsoft.Build", StringComparison.Ordinal)));
+        Assert.DoesNotContain(exposed, type =>
+            type.Name.Contains("Workspace", StringComparison.Ordinal)
+            || type.Name.Contains("Syntax", StringComparison.Ordinal)
+            || type.Name.Contains("Writer", StringComparison.Ordinal)
+            || typeof(Stream).IsAssignableFrom(type)
+            || type == typeof(FileInfo)
+            || type == typeof(DirectoryInfo));
+        Assert.DoesNotContain(
+            publicTypes.SelectMany(type => type.GetProperties(
+                BindingFlags.Instance | BindingFlags.Public)),
+            property => property.Name.Contains("RootPath", StringComparison.Ordinal)
+                || property.Name.Contains("WorkspacePath", StringComparison.Ordinal)
+                || property.Name.Contains("PhysicalPath", StringComparison.Ordinal));
+
+        Assert.Equal(
+            [nameof(DocumentationPatchCandidateHandle.IsInvalidated)],
+            typeof(DocumentationPatchCandidateHandle)
+                .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Select(property => property.Name));
+        Assert.Empty(typeof(DocumentationPatchCandidateHandle).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public));
+        Assert.Empty(typeof(DocumentationPatchApplicationResult).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public));
+
+        var roslynFriends = File.ReadAllText(Path.Join(
+            root,
+            "src",
+            "ContractScribe.Roslyn",
+            "Properties",
+            "AssemblyInfo.cs"));
+        Assert.DoesNotContain(
+            "InternalsVisibleTo(\"ContractScribe.Patching\")",
+            roslynFriends,
+            StringComparison.Ordinal);
     }
 
     private static void AssertDirectReference(string root, string projectName)
