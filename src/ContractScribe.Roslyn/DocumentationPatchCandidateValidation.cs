@@ -81,6 +81,7 @@ internal enum DocumentationPatchCandidateValidationCorruption
 {
     None,
     ParseOptions,
+    CompilationOptions,
     MetadataReferences,
     CompilationContext,
 }
@@ -212,6 +213,16 @@ public static class DocumentationPatchCandidateValidation
                 solution = solution.WithProjectParseOptions(
                     corruptedProject.Id,
                     parseOptions.WithPreprocessorSymbols("CONTRACT_SCRIBE_CORRUPTED"));
+            }
+            else if (corruption
+                == DocumentationPatchCandidateValidationCorruption.CompilationOptions)
+            {
+                var compilationOptions = (CSharpCompilationOptions?)corruptedProject.CompilationOptions
+                    ?? throw new InvalidOperationException(
+                        "Candidate compilation options are unavailable.");
+                solution = solution.WithProjectCompilationOptions(
+                    corruptedProject.Id,
+                    compilationOptions.WithOverflowChecks(!compilationOptions.CheckOverflow));
             }
             else if (corruption
                 == DocumentationPatchCandidateValidationCorruption.MetadataReferences)
@@ -557,10 +568,29 @@ public static class DocumentationPatchCandidateValidation
 
     private static bool HasSameProjectConfiguration(Project original, Project candidate) =>
         Equals(original.ParseOptions, candidate.ParseOptions)
-        && Equals(original.CompilationOptions, candidate.CompilationOptions)
+        && HasSameFixedCompilationOptions(original.CompilationOptions, candidate.CompilationOptions)
         && original.ProjectReferences.SequenceEqual(candidate.ProjectReferences)
         && original.MetadataReferences.SequenceEqual(candidate.MetadataReferences)
         && original.AnalyzerReferences.SequenceEqual(candidate.AnalyzerReferences);
+
+    private static bool HasSameFixedCompilationOptions(
+        CompilationOptions? original,
+        CompilationOptions? candidate)
+    {
+        if (Equals(original, candidate))
+        {
+            return true;
+        }
+
+        // Replacing an AnalyzerConfigDocument makes Roslyn rebuild this provider even when
+        // the fixed compiler options are unchanged. Its observable effects are validated by
+        // the candidate compilation, generator, diagnostic, symbol, and classifier checks.
+        return original is CSharpCompilationOptions originalCSharp
+            && candidate is CSharpCompilationOptions candidateCSharp
+            && Equals(
+                originalCSharp.WithSyntaxTreeOptionsProvider(null),
+                candidateCSharp.WithSyntaxTreeOptionsProvider(null));
+    }
 
     private static bool TryDecode(
         DocumentationPatchCandidateValidationFile file,

@@ -50,7 +50,9 @@ public sealed class DocumentationPatchEndToEndTests
             null).Execute(fixture.ClassifiedSession, fixture.Request);
 
         var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
-        Assert.Equal(DocumentationPatchOutcome.Accepted, result.Outcome);
+        Assert.True(
+            result.Outcome == DocumentationPatchOutcome.Accepted,
+            $"Expected an accepted result, observed {result.Outcome}: {string.Join(',', result.Diagnostics.Select(diagnostic => $"{diagnostic.Code}/{diagnostic.BlockId}"))}");
         var capability = Assert.IsType<DocumentationPatchAcceptedCandidate>(
             outcome.AcceptedCandidate);
         var targetFacts = capability.Baseline.SemanticInputs.Where(fact =>

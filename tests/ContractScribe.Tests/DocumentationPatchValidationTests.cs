@@ -74,6 +74,7 @@ public sealed class DocumentationPatchValidationTests
 
     [Theory]
     [InlineData((int)DocumentationPatchCandidateValidationCorruption.ParseOptions)]
+    [InlineData((int)DocumentationPatchCandidateValidationCorruption.CompilationOptions)]
     [InlineData((int)DocumentationPatchCandidateValidationCorruption.MetadataReferences)]
     [InlineData((int)DocumentationPatchCandidateValidationCorruption.CompilationContext)]
     public void CorruptedReconstructionInputsFailClosed(int corruptionValue)
@@ -188,7 +189,7 @@ public sealed class DocumentationPatchValidationTests
     }
 
     [Fact]
-    public async Task CandidateValidationDisambiguatesDuplicateLogicalPathsAcrossSourceAndAdditionalRoles()
+    public async Task CandidateValidationDisambiguatesDuplicateLogicalPathsAcrossEveryModeledRole()
     {
         const string firstSource =
             "namespace N;\npublic class First\n{\n    public void M() { }\n}\n";
@@ -246,6 +247,7 @@ public sealed class DocumentationPatchValidationTests
             var secondDocumentId = DocumentId.CreateNewId(projectId);
             var firstAdditionalId = DocumentId.CreateNewId(projectId);
             var secondAdditionalId = DocumentId.CreateNewId(projectId);
+            var firstAnalyzerConfigId = DocumentId.CreateNewId(projectId);
             var crossAdditionalId = DocumentId.CreateNewId(crossProjectId);
             solution = solution.AddDocument(DocumentInfo.Create(
                 firstDocumentId,
@@ -283,6 +285,12 @@ public sealed class DocumentationPatchValidationTests
                     SourceText.From(secondSource, new UTF8Encoding(false, true)),
                     VersionStamp.Create(),
                     secondPath))));
+            solution = solution.AddAnalyzerConfigDocument(
+                firstAnalyzerConfigId,
+                "Input.cs",
+                SourceText.From(firstSource, new UTF8Encoding(false, true)),
+                ["Config"],
+                firstPath);
             solution = solution.AddAdditionalDocument(DocumentInfo.Create(
                 crossAdditionalId,
                 "Input.cs",
@@ -358,15 +366,21 @@ public sealed class DocumentationPatchValidationTests
                     ImmutableArray.CreateRange(candidateBytes))]);
 
             Assert.True(result.IsValid, result.FailureCode);
-            Assert.Equal(3, result.ValidatedSemanticInputCount);
+            Assert.Equal(4, result.ValidatedSemanticInputCount);
             Assert.Equal(2, result.ValidatedCompilationContextCount);
             Assert.Equal(
                 [
                     DocumentationPatchSemanticInputRole.Source,
                     DocumentationPatchSemanticInputRole.AdditionalFile,
                     DocumentationPatchSemanticInputRole.AdditionalFile,
+                    DocumentationPatchSemanticInputRole.AnalyzerConfig,
                 ],
                 result.ValidatedSemanticInputs.Select(fact => fact.Role).Order());
+            Assert.Contains(result.ValidatedSemanticInputs, fact =>
+                fact.ProjectIdentity == "Fixture.csproj"
+                && fact.CompilationContextRef == "fixture.net10.0"
+                && fact.LogicalPath == "Config/Input.cs"
+                && fact.Role == DocumentationPatchSemanticInputRole.AnalyzerConfig);
             Assert.Contains(result.ValidatedSemanticInputs, fact =>
                 fact.ProjectIdentity == "Cross.csproj"
                 && fact.CompilationContextRef == "cross.net10.0"
