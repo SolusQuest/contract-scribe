@@ -150,8 +150,6 @@ public sealed record DocumentationPatchDeclarationBatch
 
 public sealed class DocumentationPatchDeclarationResolver
 {
-    private readonly RepositoryPathResolver pathResolver = new();
-
     public DocumentationPatchDeclarationBatch Resolve(
         ClassifiedRepositorySession session,
         DocumentationPatchRequest request,
@@ -168,6 +166,34 @@ public sealed class DocumentationPatchDeclarationResolver
             return RootFailure(request, "patch.stale.repository-context");
         }
 
+        var capture = session.RepositorySession.CaptureDocumentationPatchResolutionBaseline(
+            cancellationToken);
+        return capture.Baseline is { } baseline
+            ? Resolve(session, request, baseline, cancellationToken)
+            : RootFailure(
+                request,
+                capture.FailureCode ?? "patch.stale.repository-context");
+    }
+
+    public DocumentationPatchDeclarationBatch Resolve(
+        ClassifiedRepositorySession session,
+        DocumentationPatchRequest request,
+        DocumentationPatchRepositoryBaseline baseline,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(baseline);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!session.IsBoundToClassificationSession
+            || session.Classification.Status != ClassificationRunStatus.Success
+            || session.Classification.ClassificationSet is not { } classifications
+            || !baseline.IsBoundTo(session.RepositorySession))
+        {
+            return RootFailure(request, "patch.stale.repository-context");
+        }
+
         var repository = session.RepositorySession;
         var rootFailure = SelectRootFailure(request, repository, classifications);
         if (rootFailure is not null)
@@ -178,7 +204,7 @@ public sealed class DocumentationPatchDeclarationResolver
         var projects = repository.Projects
             .GroupBy(project => project.CompilationContextRef, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
-        var cache = new ResolverCache(repository.PhysicalRepositoryRoot, pathResolver);
+        var cache = new ResolverCache(baseline);
         var blocks = ImmutableArray.CreateBuilder<DocumentationPatchDeclarationBlock>(
             request.Blocks.Length);
         foreach (var block in request.Blocks)
@@ -937,8 +963,7 @@ public sealed class DocumentationPatchDeclarationResolver
         bool HasPrimaryConstructor);
 
     private sealed class ResolverCache(
-        string physicalRepositoryRoot,
-        RepositoryPathResolver pathResolver)
+        DocumentationPatchRepositoryBaseline baseline)
     {
         private static readonly UTF8Encoding StrictUtf8 = new(false, true);
         private static readonly UnicodeEncoding StrictUtf16Le = new(false, false, true);
@@ -956,29 +981,16 @@ public sealed class DocumentationPatchDeclarationResolver
             CurrentSource result;
             try
             {
-                var relativePath = repositoryPath.Replace(
-                    '/',
-                    Path.DirectorySeparatorChar);
-                if (Path.IsPathRooted(relativePath))
+                if (!baseline.TryGetEntry(repositoryPath, out var entry))
                 {
-                    throw new ArgumentException(
-                        "The repository source identity must be relative.",
-                        nameof(repositoryPath));
+                    throw new IOException("The baseline source entry is unavailable.");
                 }
 
-                var candidate = Path.GetFullPath(Path.Join(
-                    physicalRepositoryRoot,
-                    relativePath));
-                var resolved = pathResolver.ResolveSource(
-                    physicalRepositoryRoot,
-                    candidate);
-                var bytes = File.ReadAllBytes(resolved.PhysicalPath);
+                var bytes = entry.Bytes.ToArray();
                 result = new CurrentSource(
                     bytes,
                     Decode(bytes),
-                    pathResolver.PhysicalIdentity(
-                        physicalRepositoryRoot,
-                        resolved.PhysicalPath),
+                    entry.SourceIdentity,
                     null);
             }
             catch (DecoderFallbackException)
@@ -992,8 +1004,7 @@ public sealed class DocumentationPatchDeclarationResolver
             catch (Exception exception) when (exception is IOException
                 or UnauthorizedAccessException
                 or ArgumentException
-                or NotSupportedException
-                or LoaderException)
+                or NotSupportedException)
             {
                 result = new CurrentSource(
                     [],

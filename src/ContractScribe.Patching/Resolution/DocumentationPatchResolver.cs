@@ -83,12 +83,14 @@ public sealed record DocumentationPatchResolutionResult
         DocumentationPatchResolutionStatus status,
         string? primaryCode,
         string? primaryBlockId,
-        ImmutableArray<ResolvedDocumentationPatchTarget> targets)
+        ImmutableArray<ResolvedDocumentationPatchTarget> targets,
+        DocumentationPatchRepositoryBaseline? baseline = null)
     {
         Status = status;
         PrimaryCode = primaryCode;
         PrimaryBlockId = primaryBlockId;
         Targets = targets;
+        Baseline = baseline;
     }
 
     public DocumentationPatchResolutionStatus Status { get; }
@@ -98,6 +100,8 @@ public sealed record DocumentationPatchResolutionResult
     public string? PrimaryBlockId { get; }
 
     public ImmutableArray<ResolvedDocumentationPatchTarget> Targets { get; }
+
+    internal DocumentationPatchRepositoryBaseline? Baseline { get; }
 }
 
 public sealed class DocumentationPatchResolver
@@ -119,13 +123,29 @@ public sealed class DocumentationPatchResolver
     public DocumentationPatchResolutionResult Resolve(
         ClassifiedRepositorySession session,
         DocumentationPatchRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ResolveCore(session, request, null, cancellationToken);
+
+    internal DocumentationPatchResolutionResult Resolve(
+        ClassifiedRepositorySession session,
+        DocumentationPatchRequest request,
+        DocumentationPatchRepositoryBaseline baseline,
+        CancellationToken cancellationToken = default) =>
+        ResolveCore(session, request, baseline, cancellationToken);
+
+    private DocumentationPatchResolutionResult ResolveCore(
+        ClassifiedRepositorySession session,
+        DocumentationPatchRequest request,
+        DocumentationPatchRepositoryBaseline? baseline,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var batch = declarationResolver.Resolve(session, request, cancellationToken);
+        var batch = baseline is null
+            ? declarationResolver.Resolve(session, request, cancellationToken)
+            : declarationResolver.Resolve(session, request, baseline, cancellationToken);
         if (batch.RootFailureCode is { } rootFailure)
         {
             return Failed(
@@ -238,7 +258,8 @@ public sealed class DocumentationPatchResolver
                     new DocumentationPatchApplicableComponentFact(
                         component.Kind,
                         component.Identity,
-                        component.Name)).ToImmutableArray())).ToImmutableArray());
+                        component.Name)).ToImmutableArray())).ToImmutableArray(),
+            baseline);
     }
 
     internal static DocumentationPatchResolutionFailure SelectPrimary(

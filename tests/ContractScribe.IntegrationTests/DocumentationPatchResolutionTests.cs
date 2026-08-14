@@ -1340,6 +1340,7 @@ public sealed class DocumentationPatchResolutionTests
                 [loadedProject],
                 generatedFact is null ? [] : [generatedFact],
                 workspace);
+            repositorySession.SealDocumentationPatchRepositoryPolicyForTests();
             var targets = ImmutableArray.CreateBuilder<TargetClassification>();
             if (!unresolvedAmbiguous)
             {

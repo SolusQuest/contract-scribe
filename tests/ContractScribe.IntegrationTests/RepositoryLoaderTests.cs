@@ -61,6 +61,35 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task SuccessfulFinalInventorySealsTheDocumentationPatchBaselineAuthority()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        Assert.Equal(RepositoryLoadStatus.Success, outcome.Status);
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+
+        var capture = session.CaptureDocumentationPatchRepositoryBaseline();
+
+        Assert.Equal(DocumentationPatchRepositoryBaselineStatus.Captured, capture.Status);
+        Assert.Null(capture.FailureCode);
+        var baseline = Assert.IsType<DocumentationPatchRepositoryBaseline>(capture.Baseline);
+        Assert.Contains(baseline.Entries, entry => entry.RepositoryPath == "App/App.cs");
+        Assert.Contains(baseline.Entries, entry => entry.RepositoryPath == "App/App.csproj");
+        Assert.DoesNotContain(baseline.Entries, entry =>
+            (entry.RepositoryPath.StartsWith("App/bin/", StringComparison.Ordinal)
+                || entry.RepositoryPath.StartsWith("App/obj/", StringComparison.Ordinal))
+            && Path.GetExtension(entry.RepositoryPath) is not ".cs" and not ".csproj"
+                and not ".props" and not ".targets" and not ".editorconfig");
+        Assert.Contains(baseline.SemanticInputs, fact =>
+            fact.RepositoryPath == "App/App.cs"
+            && fact.Role == DocumentationPatchSemanticInputRole.Source);
+        Assert.Equal(
+            DocumentationPatchRepositoryRebindStatus.Unchanged,
+            baseline.Rebind().Status);
+    }
+
+    [Fact]
     public async Task LoadsSlnxAndKeepsEveryListedProjectAsAuditRoot()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
