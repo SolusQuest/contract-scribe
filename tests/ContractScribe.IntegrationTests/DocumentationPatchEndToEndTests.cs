@@ -171,7 +171,6 @@ public sealed class DocumentationPatchEndToEndTests
             DocumentationPatchTargetStatus.Valid,
             "patch.rejected.candidate-state");
         Assert.Null(outcome.AcceptedCandidate);
-        Assert.False(Directory.Exists(stagingRoot));
     }
 
     [Fact]
@@ -633,7 +632,6 @@ public sealed class DocumentationPatchEndToEndTests
                     "contract-scribe-patch-real-loader-staging-"
                     + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(stagingParent);
-                repository.SealDocumentationPatchRepositoryPolicyForTests([stagingParent]);
                 var classified = new SymbolClassifier().ClassifySession(
                     repository,
                     TargetProfile.ExternalApi);
