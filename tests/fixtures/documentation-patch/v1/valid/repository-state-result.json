@@ -1,0 +1,50 @@
+{
+  "patchValidationResultVersion": 1,
+  "patchRequestSha256": "359ba3b016da1bc5efe5d940c17d9f4933e6a06117431621c29a3e4112a42bec",
+  "context": {
+    "repositoryContextRef": "repoctx-00112233445566778899aabbccddeeff",
+    "inputIdentity": "src/Synthetic/Synthetic.csproj",
+    "targetProfile": "profile.external-api"
+  },
+  "outcome": "stale",
+  "targets": [
+    {
+      "blockId": "block.widget",
+      "symbolRef": {
+        "compilationContextRef": "ctx.synthetic.net10",
+        "documentationCommentId": "T:Synthetic.Widget`1"
+      },
+      "locator": {
+        "kind": "repository",
+        "path": "src/Synthetic/Widget.cs",
+        "originalFileSha256": "e55dcc5577377f530ff0a0a085cf775a24ce236095d83f7db99cba198fc16bb8",
+        "encoding": "utf-8",
+        "declarationSpan": { "start": 21, "end": 58 }
+      },
+      "provenanceRefs": ["prov.audit", "prov.proposal"],
+      "status": "not-evaluated"
+    }
+  ],
+  "changedFiles": [],
+  "changedDocumentationBlockCount": 0,
+  "invariants": [
+    { "id": "patch.invariant.non-documentation-tokens-unchanged", "status": "not-run" },
+    { "id": "patch.invariant.selected-documentation-only", "status": "not-run" },
+    { "id": "patch.invariant.no-new-parse-diagnostics", "status": "not-run" },
+    { "id": "patch.invariant.symbol-semantics-unchanged", "status": "not-run" },
+    { "id": "patch.invariant.repository-scope", "status": "not-run" },
+    { "id": "patch.invariant.file-representation-preserved", "status": "not-run" },
+    { "id": "patch.invariant.idempotent", "status": "not-run" },
+    { "id": "patch.invariant.traceable", "status": "not-run" },
+    { "id": "patch.invariant.fail-closed", "status": "passed" }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "patch.stale.repository-state",
+      "blockId": null,
+      "path": null,
+      "pointer": null
+    }
+  ]
+}

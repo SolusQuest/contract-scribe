@@ -494,6 +494,16 @@ public sealed record DocumentationPatchChangedFile
     public int CandidateDocumentationLineCount { get; }
 }
 
+public sealed record DocumentationPatchChangedFileInput(
+    string Path,
+    string OriginalFileSha256,
+    string CandidateFileSha256,
+    int ChangedDocumentationBlockCount,
+    int OriginalDocumentationByteCount,
+    int CandidateDocumentationByteCount,
+    int OriginalDocumentationLineCount,
+    int CandidateDocumentationLineCount);
+
 public sealed record DocumentationPatchInvariantResult(
     string Id,
     DocumentationPatchInvariantStatus Status);

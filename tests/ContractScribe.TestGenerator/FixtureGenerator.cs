@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 using System.Text;
 
@@ -209,8 +210,63 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                 "Fixture.DynamicAnalyzerConfig.g.cs",
                 SourceText.From(
                     $$"""public static class FixtureDynamicAnalyzerConfig { public const string Value = "{{value}}"; }""",
-                    Encoding.UTF8));
+                Encoding.UTF8));
         });
+
+        var documentationSensitiveEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorDocumentationSensitive",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(documentationSensitiveEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right)
+                {
+                    return;
+                }
+
+                var documentationTriviaCount = input.Left.SyntaxTrees
+                    .SelectMany(tree => tree.GetRoot().DescendantTrivia(descendIntoTrivia: true))
+                    .Count(trivia => trivia.IsKind(
+                            SyntaxKind.SingleLineDocumentationCommentTrivia)
+                        || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
+                output.AddSource(
+                    "Fixture.DocumentationSensitive.g.cs",
+                    SourceText.From(
+                        $"public static class FixtureDocumentationSensitive {{ public const int Count = {documentationTriviaCount}; }}",
+                        Encoding.UTF8));
+            });
+
+        var noOutputToOutputEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorNoOutputToOutput",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(noOutputToOutputEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right
+                    || !input.Left.SyntaxTrees.Any(tree => tree.GetRoot()
+                        .DescendantTrivia(descendIntoTrivia: true)
+                        .Any(trivia => trivia.IsKind(
+                                SyntaxKind.SingleLineDocumentationCommentTrivia)
+                            || trivia.IsKind(
+                                SyntaxKind.MultiLineDocumentationCommentTrivia))))
+                {
+                    return;
+                }
+
+                output.AddSource(
+                    "Fixture.NoOutputToOutput.g.cs",
+                    SourceText.From(
+                        "public static class FixtureNoOutputToOutput { }",
+                        Encoding.UTF8));
+            });
     }
 }
 

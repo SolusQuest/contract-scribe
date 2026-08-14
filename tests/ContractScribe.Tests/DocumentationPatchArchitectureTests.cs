@@ -185,13 +185,14 @@ public sealed class DocumentationPatchArchitectureTests
 
         Assert.Contains("DocumentationPatchRenderer", source, StringComparison.Ordinal);
         Assert.Contains("CreateNewRegularFile", source, StringComparison.Ordinal);
+        Assert.Contains("DocumentationPatchEngine", source, StringComparison.Ordinal);
+        Assert.Contains("DocumentationPatchValidationResult", source, StringComparison.Ordinal);
         foreach (var forbidden in new[]
         {
             "File.Write",
             "File.Create",
             "StreamWriter",
             "MSBuildWorkspace",
-            "DocumentationPatchValidationResult",
             "HttpClient",
             "Octokit",
             "GitHub",
@@ -233,6 +234,16 @@ public sealed class DocumentationPatchArchitectureTests
             BindingFlags.Instance | BindingFlags.Public));
         Assert.Empty(typeof(DocumentationPatchApplicationResult).GetConstructors(
             BindingFlags.Instance | BindingFlags.Public));
+        Assert.Empty(typeof(DocumentationPatchExecutionOutcome).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public));
+        Assert.Empty(typeof(DocumentationPatchAcceptedCandidate).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public));
+        Assert.DoesNotContain(
+            typeof(DocumentationPatchAcceptedCandidate).GetProperties(
+                BindingFlags.Instance | BindingFlags.Public),
+            property => property.Name.Contains("Path", StringComparison.Ordinal)
+                || property.Name.Contains("Root", StringComparison.Ordinal)
+                || property.Name.Contains("Writer", StringComparison.Ordinal));
 
         var roslynFriends = File.ReadAllText(Path.Join(
             root,

@@ -215,12 +215,14 @@
             "patch.stale.source-bytes",
             "patch.stale.source-encoding",
             "patch.stale.source-span",
+            "patch.stale.repository-state",
             "patch.rejected.unsupported-target",
             "patch.rejected.ambiguous-target",
             "patch.rejected.non-writable-target",
             "patch.rejected.edit-state",
             "patch.rejected.unsafe-change",
-            "patch.rejected.no-effective-change"
+            "patch.rejected.no-effective-change",
+            "patch.rejected.candidate-state"
           ]
         },
         "blockId": {

@@ -37,7 +37,7 @@ The product is not complete when it can only report missing documentation. Its u
 | --- | --- | --- |
 | M0 — Product, contracts, and architecture validation | Done | Evidence-backed execution and topology inputs |
 | M1 — Deterministic audit MVP | Current | Production read-only audit and CLI |
-| M2 — Deterministic XML documentation patch engine | Planned | Safe documentation-only source changes |
+| M2 — Deterministic XML documentation patch engine | Implemented; closure pending | Safe documentation-only source changes |
 | M3 — Documentation Scribe and proposal engine | Planned | Useful evidence-grounded structured documentation |
 | M4 — Resumable campaign orchestration | Planned | Deterministic budgeting, resume, and lineage |
 | M5 — GitHub proposal workflow | Planned | Idempotent ledger, branch, commit, and draft PR workflow |
@@ -54,7 +54,7 @@ The current candidate M5 product graph separates six production concerns. Existi
 | --- | --- |
 | M0 | Minimal `ContractScribe.Core` and `ContractScribe.Cli`; Roslyn work remains test-only experiment evidence. |
 | M1 | Add production `ContractScribe.Roslyn`. |
-| M2 | Candidate: add `ContractScribe.Patching` if the source-write boundary meets the project split thresholds. |
+| M2 | Added `ContractScribe.Patching` for the isolated candidate-write, validation, and accepted-candidate authority boundary. |
 | M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `ContractScribe.Core`; no new milestone-named project by default. |
 | M5 | Candidate: add `ContractScribe.GitHub` if platform-mutation isolation meets the split thresholds. |
@@ -145,6 +145,10 @@ Given a validated structured documentation proposal, render and validate an XML-
 - Candidate-workspace application.
 - Syntax, token, symbol, signature, target, encoding, and idempotency validation.
 - Adversarial fixtures for comments, preprocessors, partial declarations, generated source, records, interfaces, overrides, and multi-target files.
+
+### Implementation status
+
+The provider-independent M2 execution path is implemented: it consumes the validated Patch Request and matching classified session, composes the accepted M2-E1 baseline/resolution/rendering/candidate handoff, rereads the complete candidate from disk, reconstructs every represented Roslyn source/additional-file/analyzer-config context, reruns source generators, validates exact documentation-only bytes and semantic invariants, performs the final original-root rebind, and returns a bounded Patch Validation Result. Only acceptance returns an immutable managed candidate capability. This records executable implementation status and does not itself close M2, its coordination parent, or any later milestone.
 
 ### Exit criteria
 

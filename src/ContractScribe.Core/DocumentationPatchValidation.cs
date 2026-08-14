@@ -45,12 +45,14 @@ public static class DocumentationPatchValidator
         "patch.stale.source-bytes",
         "patch.stale.source-encoding",
         "patch.stale.source-span",
+        "patch.stale.repository-state",
         "patch.rejected.unsupported-target",
         "patch.rejected.ambiguous-target",
         "patch.rejected.non-writable-target",
         "patch.rejected.edit-state",
         "patch.rejected.unsafe-change",
         "patch.rejected.no-effective-change",
+        "patch.rejected.candidate-state",
     ];
 
     public static DocumentationPatchRequestParseResult ParseRequest(
@@ -281,6 +283,121 @@ public static class DocumentationPatchValidator
                         failure.Pointer));
             }
         }
+    }
+
+    public static DocumentationPatchValidationResult CreateResult(
+        DocumentationPatchRequest request,
+        DocumentationPatchOutcome outcome,
+        IEnumerable<DocumentationPatchTargetStatus> targetStatuses,
+        IEnumerable<DocumentationPatchChangedFileInput> changedFiles,
+        IEnumerable<DocumentationPatchInvariantResult> invariants,
+        IEnumerable<DocumentationPatchDiagnostic> diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(targetStatuses);
+        ArgumentNullException.ThrowIfNull(changedFiles);
+        ArgumentNullException.ThrowIfNull(invariants);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        var statuses = targetStatuses.ToImmutableArray();
+        var fileInputs = changedFiles.ToImmutableArray();
+        var invariantInputs = invariants.ToImmutableArray();
+        var diagnosticInputs = diagnostics.ToImmutableArray();
+        if (!Enum.IsDefined(outcome)
+            || statuses.Length != request.Blocks.Length
+            || statuses.Any(status => !Enum.IsDefined(status))
+            || fileInputs.Length > 512
+            || invariantInputs.Length != InvariantIds.Length
+            || diagnosticInputs.Length > 128)
+        {
+            throw new ArgumentException("The patch validation result input has an invalid shape.");
+        }
+
+        string? previousPath = null;
+        foreach (var file in fileInputs)
+        {
+            if (file is null
+                || !IsCanonicalRepositoryPath(file.Path)
+                || !IsSha256(file.OriginalFileSha256)
+                || !IsSha256(file.CandidateFileSha256)
+                || previousPath is not null
+                    && string.CompareOrdinal(previousPath, file.Path) >= 0
+                || file.ChangedDocumentationBlockCount < 0
+                || file.OriginalDocumentationByteCount < 0
+                || file.CandidateDocumentationByteCount < 0
+                || file.OriginalDocumentationLineCount < 0
+                || file.CandidateDocumentationLineCount < 0)
+            {
+                throw new ArgumentException("The changed-file input is not canonical.", nameof(changedFiles));
+            }
+
+            previousPath = file.Path;
+        }
+
+        for (var index = 0; index < invariantInputs.Length; index++)
+        {
+            var invariant = invariantInputs[index];
+            if (invariant is null
+                || !string.Equals(invariant.Id, InvariantIds[index], StringComparison.Ordinal)
+                || !Enum.IsDefined(invariant.Status))
+            {
+                throw new ArgumentException("The invariant input is not canonical.", nameof(invariants));
+            }
+        }
+
+        var changedBlockCount = fileInputs.Sum(file =>
+            (long)file.ChangedDocumentationBlockCount);
+        if (changedBlockCount > int.MaxValue)
+        {
+            throw new ArgumentException(
+                "The changed-file block count is out of range.",
+                nameof(changedFiles));
+        }
+
+        foreach (var diagnostic in diagnosticInputs)
+        {
+            if (diagnostic is null
+                || diagnostic.Severity != DocumentationPatchDiagnosticSeverity.Error
+                || !ResultDiagnosticCodes.Contains(diagnostic.Code)
+                || diagnostic.BlockId is not null && !IsOpaqueId(diagnostic.BlockId, 128)
+                || diagnostic.Path is not null && !IsCanonicalRepositoryPath(diagnostic.Path)
+                || diagnostic.Pointer is not null
+                    && (diagnostic.Pointer.Length > 512 || !IsJsonPointer(diagnostic.Pointer)))
+            {
+                throw new ArgumentException("The diagnostic input is not canonical.", nameof(diagnostics));
+            }
+        }
+
+        var result = new DocumentationPatchValidationResult(
+            request.ArtifactSha256,
+            request.Context,
+            outcome,
+            request.Blocks.Select((block, index) => new DocumentationPatchTargetTrace(
+                block.BlockId,
+                block.SymbolRef,
+                block.Locator,
+                block.ProvenanceRefs,
+                statuses[index])).ToImmutableArray(),
+            fileInputs.Select(file => new DocumentationPatchChangedFile(
+                file.Path,
+                file.OriginalFileSha256,
+                file.CandidateFileSha256,
+                file.ChangedDocumentationBlockCount,
+                file.OriginalDocumentationByteCount,
+                file.CandidateDocumentationByteCount,
+                file.OriginalDocumentationLineCount,
+                file.CandidateDocumentationLineCount)).ToImmutableArray(),
+            (int)changedBlockCount,
+            invariantInputs,
+            diagnosticInputs);
+        var validation = ValidateResult(request, result);
+        if (!validation.IsValid)
+        {
+            throw new ArgumentException(
+                "The patch validation result violates " + validation.Code + ".");
+        }
+
+        return result;
     }
 
     public static DocumentationPatchValidationCheck ValidateContext(
@@ -536,10 +653,7 @@ public static class DocumentationPatchValidator
                     || !result.Targets.Any(trace => trace.Status is
                         DocumentationPatchTargetStatus.Stale
                         or DocumentationPatchTargetStatus.NotEvaluated)
-                    || primaryDiagnosticCode is
-                        "patch.stale.repository-context"
-                        or "patch.stale.input-identity"
-                        or "patch.stale.target-profile"
+                    || IsRootStaleDiagnostic(primaryDiagnosticCode)
                         && result.Targets.Any(
                             trace => trace.Status != DocumentationPatchTargetStatus.NotEvaluated))
                 {
@@ -554,7 +668,10 @@ public static class DocumentationPatchValidator
                     || !primaryDiagnosticCode.StartsWith("patch.rejected.", StringComparison.Ordinal)
                     || result.Targets.Any(
                         trace => trace.Status == DocumentationPatchTargetStatus.Stale)
-                    || hasStaleDiagnostic)
+                    || hasStaleDiagnostic
+                    || primaryDiagnosticCode == "patch.rejected.candidate-state"
+                        && result.Targets.Any(
+                            trace => trace.Status != DocumentationPatchTargetStatus.Valid))
                 {
                     return Invalid("patch.result.invalid-outcome");
                 }
@@ -562,6 +679,13 @@ public static class DocumentationPatchValidator
                 break;
             default:
                 return Invalid("patch.result.invalid-outcome");
+        }
+
+        if (primaryDiagnosticCode is "patch.stale.repository-state"
+                or "patch.rejected.candidate-state"
+            && !HasRootExecutionInvariantMatrix(result.Invariants))
+        {
+            return Invalid("patch.result.invalid-outcome");
         }
 
         return Valid();
@@ -612,16 +736,24 @@ public static class DocumentationPatchValidator
             }
 
             var rootContextFailure = IsRootContextDiagnostic(diagnostic.Code);
+            var rootExecutionFailure = IsRootExecutionDiagnostic(diagnostic.Code);
             var noEffectiveChange = diagnostic.Code == "patch.rejected.no-effective-change";
-            if (rootContextFailure || noEffectiveChange)
+            if (rootContextFailure || rootExecutionFailure || noEffectiveChange)
             {
-                if (diagnostic.BlockId is not null || diagnostic.Path is not null)
+                if (diagnostic.BlockId is not null
+                    || diagnostic.Path is not null
+                    || rootExecutionFailure && diagnostic.Pointer is not null)
                 {
                     return Invalid("patch.result.invalid-correlation");
                 }
 
-                if (rootContextFailure && result.Targets.Any(
+                if ((rootContextFailure
+                        || diagnostic.Code == "patch.stale.repository-state")
+                    && result.Targets.Any(
                         target => target.Status != DocumentationPatchTargetStatus.NotEvaluated)
+                    || diagnostic.Code == "patch.rejected.candidate-state"
+                        && result.Targets.Any(
+                            target => target.Status != DocumentationPatchTargetStatus.Valid)
                     || noEffectiveChange && result.Targets.Any(
                         target => target.Status != DocumentationPatchTargetStatus.Valid))
                 {
@@ -707,6 +839,7 @@ public static class DocumentationPatchValidator
 
     private static int GetDiagnosticCategory(string code) => code switch
     {
+        "patch.stale.repository-state" => -1,
         "patch.stale.repository-context"
             or "patch.stale.input-identity"
             or "patch.stale.target-profile" => 0,
@@ -761,6 +894,7 @@ public static class DocumentationPatchValidator
 
     private static int GetDiagnosticCodePrecedence(string code) => code switch
     {
+        "patch.stale.repository-state" => -1,
         "patch.stale.repository-context" => 0,
         "patch.stale.input-identity" => 1,
         "patch.stale.target-profile" => 2,
@@ -774,6 +908,7 @@ public static class DocumentationPatchValidator
         "patch.rejected.edit-state" => 3,
         "patch.rejected.unsafe-change" => 4,
         "patch.rejected.no-effective-change" => 5,
+        "patch.rejected.candidate-state" => 6,
         _ => int.MaxValue,
     };
 
@@ -781,6 +916,22 @@ public static class DocumentationPatchValidator
         "patch.stale.repository-context"
         or "patch.stale.input-identity"
         or "patch.stale.target-profile";
+
+    private static bool IsRootExecutionDiagnostic(string code) => code is
+        "patch.stale.repository-state"
+        or "patch.rejected.candidate-state";
+
+    private static bool IsRootStaleDiagnostic(string code) =>
+        IsRootContextDiagnostic(code) || code == "patch.stale.repository-state";
+
+    private static bool HasRootExecutionInvariantMatrix(
+        ImmutableArray<DocumentationPatchInvariantResult> invariants) =>
+        invariants.Length == InvariantIds.Length
+        && invariants.Select((invariant, index) =>
+                invariant.Status == (index == InvariantIds.Length - 1
+                    ? DocumentationPatchInvariantStatus.Passed
+                    : DocumentationPatchInvariantStatus.NotRun))
+            .All(value => value);
 
     private static DocumentationPatchBlockRequest ParseBlock(
         JsonElement element,
