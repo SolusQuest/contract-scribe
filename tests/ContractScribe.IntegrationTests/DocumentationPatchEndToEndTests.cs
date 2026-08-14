@@ -167,56 +167,61 @@ public sealed class DocumentationPatchEndToEndTests
     {
         {
             "partial-type",
-            "namespace N; public partial class C { } public partial class C { }",
+            "namespace N;\npublic partial class C { }\npublic partial class C { }\n",
             "T:N.C",
             0
         },
         {
             "partial-method",
-            "namespace N; public partial class C { public partial void Run(string defining); public partial void Run(string implementing) { } }",
+            "namespace N;\npublic partial class C\n{\n    public partial void Run(string defining);\n    public partial void Run(string implementing) { }\n}\n",
             "M:N.C.Run(System.String)",
             0
         },
-        { "record", "namespace N; public record Row(int Value);", "T:N.Row", 0 },
+        {
+            "record",
+            "namespace N;\npublic record Row\n{\n    public int Value { get; init; }\n}\n",
+            "T:N.Row",
+            0
+        },
         {
             "operator",
-            "namespace N; public sealed class C { public static C operator +(C left, C right) => left; }",
+            "namespace N;\npublic sealed class C\n{\n    public static C operator +(C left, C right) => left;\n}\n",
             "M:N.C.op_Addition(N.C,N.C)",
             0
         },
         {
             "conversion",
-            "namespace N; public sealed class C { public static implicit operator int(C value) => 0; }",
+            "namespace N;\npublic sealed class C\n{\n    public static implicit operator int(C value) => 0;\n}\n",
             "M:N.C.op_Implicit(N.C)~System.Int32",
             0
         },
         {
             "indexer",
-            "namespace N; public sealed class C { public int this[int index] => index; }",
+            "namespace N;\npublic sealed class C\n{\n    public int this[int index] => index;\n}\n",
             "P:N.C.Item(System.Int32)",
             0
         },
         {
             "event",
-            "using System; namespace N; public sealed class C { public event Action? Changed; }",
+            "using System;\nnamespace N;\npublic sealed class C\n{\n    public event Action? Changed;\n}\n",
             "E:N.C.Changed",
             0
         },
         {
             "delegate",
-            "namespace N; public delegate TResult Transform<TValue, TResult>(TValue value);",
+            "namespace N;\npublic delegate TResult Transform<TValue, TResult>(TValue value);\n",
             "T:N.Transform`2",
             0
         },
         {
             "override-inheritdoc",
-            "namespace N; public abstract class Base { public virtual void M() { } } public sealed class C : Base { public override void M() { } }",
+            "namespace N;\npublic abstract class Base\n{\n    public virtual void M() { }\n}\npublic sealed class C : Base\n{\n    public override void M() { }\n}\n",
             "M:N.C.M",
             0
         },
         {
             "explicit-interface-relationship",
-            "namespace N; public interface IContract { void M(); } public sealed class C : IContract { void IContract.M() { } }",
+            "namespace N;\npublic interface IContract\n{\n    void M();\n}\npublic sealed class C : IContract\n{\n    void IContract.M() { }\n}\n",
             "M:N.IContract.M",
             0
         },
@@ -244,6 +249,9 @@ public sealed class DocumentationPatchEndToEndTests
             null,
             null).Execute(fixture.ClassifiedSession, fixture.Request);
 
+        Assert.True(
+            outcome.Status == DocumentationPatchExecutionStatus.Result,
+            $"{caseName}:status={outcome.Status};failure={outcome.FailureCode}");
         var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
         Assert.True(
             result.Outcome == DocumentationPatchOutcome.Accepted,
@@ -1033,7 +1041,7 @@ public sealed class DocumentationPatchEndToEndTests
                     Reference: references[requested.DeclarationReferenceIndex],
                     BlockId: $"block-{index + 1}");
             }).ToArray();
-            var request = new DocumentationPatchRequest(
+            var provisionalRequest = new DocumentationPatchRequest(
                 new string('0', 64),
                 new DocumentationPatchContext(
                     repositoryContextRef,
@@ -1055,6 +1063,39 @@ public sealed class DocumentationPatchEndToEndTests
                         new DocumentationPatchInheritDocContent(),
                         []))
                     .ToImmutableArray());
+            var declarationBatch = new DocumentationPatchDeclarationResolver().Resolve(
+                classified,
+                provisionalRequest);
+            Assert.Null(declarationBatch.RootFailureCode);
+            var request = new DocumentationPatchRequest(
+                new string('0', 64),
+                new DocumentationPatchContext(
+                    repositoryContextRef,
+                    "Fixture.csproj",
+                    TargetProfile.ExternalApi),
+                [],
+                provisionalRequest.Blocks.Select(block =>
+                {
+                    var declarationBlock = Assert.Single(
+                        declarationBatch.Blocks,
+                        candidate => candidate.BlockId == block.BlockId);
+                    Assert.Empty(declarationBlock.Failures);
+                    var declaration = Assert.IsType<DocumentationPatchResolvedDeclaration>(
+                        declarationBlock.Declaration);
+                    return new DocumentationPatchBlockRequest(
+                        block.BlockId,
+                        block.SymbolRef,
+                        block.Locator,
+                        block.EditKind,
+                        declaration.ApplicableComponents.Select(component =>
+                                new DocumentationPatchApplicableComponent(
+                                    component.Kind,
+                                    component.Identity,
+                                    component.Name))
+                            .ToImmutableArray(),
+                        block.Content,
+                        block.ProvenanceRefs);
+                }).ToImmutableArray());
             return new EngineFixture(
                 root,
                 sourcePath,
