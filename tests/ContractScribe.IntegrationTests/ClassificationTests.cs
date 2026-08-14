@@ -2707,14 +2707,16 @@ public sealed class ClassificationTests
             bindings.Add(
                 trees[index],
                 source.Kind == LoadedSourceKind.Repository
-                    ? new LoadedSourceTree(
-                        LoadedSourceKind.Repository,
-                        source.Path,
-                        null)
-                    : new LoadedSourceTree(
-                        source.Kind,
-                        null,
-                        source.GeneratedSource));
+                     ? new LoadedSourceTree(
+                         LoadedSourceKind.Repository,
+                         source.Path,
+                         source.Path,
+                         null)
+                     : new LoadedSourceTree(
+                         source.Kind,
+                         null,
+                         null,
+                         source.GeneratedSource));
         }
 
         return new CompilationFixture(compilation, bindings, sources);
@@ -2745,8 +2747,12 @@ public sealed class ClassificationTests
                 .Where(fact => fact is not null)!);
         }
 
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-00000000000000000000000000000000",
+            out var repositoryContextRef));
         return new LoadedRepositorySession(
-            ".",
+            repositoryContextRef,
+            Path.GetFullPath("."),
             fixtures[0].ProjectIdentity,
             new ToolchainIdentity("test", "test", "test", "test"),
             projects,

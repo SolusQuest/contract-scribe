@@ -4,7 +4,7 @@
 
 ContractScribe uses project boundaries to enforce dependency and authority boundaries, not to mirror roadmap milestones or create one assembly per feature.
 
-The current planning sketch separates up to six production concerns. `Core`, `Roslyn`, and `Cli` are existing M1 projects; the other names are candidate future splits rather than project contracts:
+The current graph contains `Core`, `Roslyn`, `Patching`, and `Cli`. `Agent` and `GitHub` remain candidate future splits rather than project contracts:
 
 1. `ContractScribe.Core`
 2. `ContractScribe.Roslyn`
@@ -13,7 +13,7 @@ The current planning sketch separates up to six production concerns. `Core`, `Ro
 5. `ContractScribe.GitHub`
 6. `ContractScribe.Cli`
 
-The existing M1 project boundaries are current architecture. The M2-M5 entries are candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing milestone applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
+The existing M1 boundaries and the M2 read-versus-mutation authority boundary are current architecture. The M3-M5 entries are candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing milestone applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
 
 The normal test graph contains two long-lived projects:
 
@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The existing M1 `Core` / `Roslyn` / `Cli` graph and its implemented dependency constraints are current architecture. The six-concern M2-M5 graph, future project names, reference edges, API boundaries, friend access, and negative-test mechanisms are candidates selected by each implementing milestone from executable dependency and authority evidence.
+The `Core` / `Roslyn` / `Patching` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority while request-level edit authorization and the future candidate-write path need a separate mutation owner. `Patching -> Core` and `Patching -> Roslyn` are therefore current one-way edges; `Core` and `Roslyn` do not reference Patching. Future project names and edges remain candidates selected by their implementing milestones.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
@@ -125,18 +125,19 @@ It depends on `ContractScribe.Core` and Roslyn/MSBuild packages. It must not ref
 
 The project may read repository files only through repository-root-confined services. It does not own candidate source writes.
 
-### Candidate `ContractScribe.Patching`
+### `ContractScribe.Patching`
 
-If M2 evidence meets the split thresholds, `ContractScribe.Patching` owns the only product path that may create candidate source modifications:
+M2 executable evidence met the mutation-authority split threshold. `ContractScribe.Patching` currently owns deterministic request-level declaration resolution and the immutable handoff to the future candidate workspace:
 
 - stale-source and declaration-identity validation;
-- XML-documentation rendering and escaping;
-- documentation-trivia insertion or replacement;
-- candidate-workspace writes;
-- syntax, non-documentation-token, symbol, signature, encoding, and idempotency validation;
-- patch and patch-validation results.
+- edit-state and exact applicable-component authorization;
+- physical documentation-owner exclusivity and duplicate/shared-owner rejection;
+- stable failure precedence across the complete request;
+- immutable repository-relative source, declaration, owner, and documentation-span facts.
 
-It depends on `ContractScribe.Core` and may depend on the read-only declaration-resolution facilities in `ContractScribe.Roslyn`. The dependency is one-way: `ContractScribe.Roslyn` never references `ContractScribe.Patching`.
+It depends directly on `ContractScribe.Core` and the read-only declaration-resolution surface in `ContractScribe.Roslyn`. The dependency is one-way: `ContractScribe.Roslyn` never references `ContractScribe.Patching`. The project adds no package dependency; its only additional runtime footprint is the existing transitive Roslyn dependency.
+
+Issue #91 moved no existing source into the project and added no renderer, candidate workspace, validation-result construction, file writer, provider, GitHub, or Agent behavior. Those later M2 capabilities remain owned by their implementing issues. Fast architecture tests pin the graph and public API closure; integration tests exercise exact encodings, live source revalidation, canonical declarations, edit state, components, generated non-writability, owner rules, and cancellation. The existing split thresholds fully explain this boundary, so no new ADR was required.
 
 It must not reference a model-provider or GitHub SDK. It accepts only validated structured proposals; it never accepts arbitrary diffs or model-generated source text.
 
@@ -199,9 +200,9 @@ It may reference every production project because it composes them. It must not 
 
 The same CLI is the payload invoked locally, from validation workflows, and by a future GitHub Action wrapper.
 
-## Candidate future dependency graph
+## Dependency graph
 
-The following graph is one candidate if M2, M3, and M5 independently meet their split thresholds. Only edges between projects that actually exist are current architecture requirements.
+Patching's outbound edges to Core and Roslyn are current. The CLI-to-Patching composition edge remains a candidate until the patch command is implemented; Agent and GitHub edges likewise remain candidates until their milestones meet the split thresholds.
 
 ```text
 ContractScribe.Cli
@@ -234,7 +235,7 @@ Current architecture tests enumerate existing project references and fail when a
 | --- | --- |
 | M0 | `Core` and `Cli` remain the minimal product skeleton; Roslyn projects remain test-only experiments. |
 | M1 | Add production `ContractScribe.Roslyn`; keep `Core` and `Cli`; add integration tests when real workspace/process behavior requires them. |
-| M2 | Candidate: add `ContractScribe.Patching` if the source-write authority and dependency graph meet the split thresholds. |
+| M2 | Add `ContractScribe.Patching`; issue #91 establishes its deterministic resolution/handoff boundary, with candidate mutation and validation following in later M2 issues. |
 | M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
 | M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |

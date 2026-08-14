@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Patching/ContractScribe.Patching.csproj" />
     <ProjectReference Include="../../src/ContractScribe.Cli/ContractScribe.Cli.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.ConsoleSignalSender/ContractScribe.ConsoleSignalSender.csproj"

@@ -571,7 +571,7 @@ public sealed class SymbolClassifier
 
             switch (source)
             {
-                case { Kind: LoadedSourceKind.Repository, RepositoryIdentity: { } path }:
+                case { Kind: LoadedSourceKind.Repository, RepositoryPath: { } path }:
                     origins.Add(ClassificationOrigin.Source);
                     locators.Add(ClassificationInput.RepositoryLocator(
                         path,

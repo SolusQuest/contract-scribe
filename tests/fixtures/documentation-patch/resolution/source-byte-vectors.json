@@ -1,0 +1,30 @@
+{
+  "fixtureVersion": 1,
+  "sourceText": "namespace N; public class C { public void M() { } }",
+  "vectors": [
+    {
+      "encoding": "utf-8",
+      "expectedLength": 51,
+      "expectedSha256": "3cf473041228109b3d987b55b1be7eb3ae8381de8b4078d622d8b7a8ec56372e",
+      "base64": "bmFtZXNwYWNlIE47IHB1YmxpYyBjbGFzcyBDIHsgcHVibGljIHZvaWQgTSgpIHsgfSB9"
+    },
+    {
+      "encoding": "utf-8-bom",
+      "expectedLength": 54,
+      "expectedSha256": "3659d6d0037a0bd8bcac3c0a95b8275883a7b0e039c79768f04671274a2a1cac",
+      "base64": "77u/bmFtZXNwYWNlIE47IHB1YmxpYyBjbGFzcyBDIHsgcHVibGljIHZvaWQgTSgpIHsgfSB9"
+    },
+    {
+      "encoding": "utf-16le-bom",
+      "expectedLength": 104,
+      "expectedSha256": "70774002eae1cb38137f978b0422694d2367093aeda534a6189ff4d0164b7605",
+      "base64": "//5uAGEAbQBlAHMAcABhAGMAZQAgAE4AOwAgAHAAdQBiAGwAaQBjACAAYwBsAGEAcwBzACAAQwAgAHsAIABwAHUAYgBsAGkAYwAgAHYAbwBpAGQAIABNACgAKQAgAHsAIAB9ACAAfQA="
+    },
+    {
+      "encoding": "utf-16be-bom",
+      "expectedLength": 104,
+      "expectedSha256": "ae2c7dc224300be71d3743969f835cf442c9f491127e69a6977071adf947fafd",
+      "base64": "/v8AbgBhAG0AZQBzAHAAYQBjAGUAIABOADsAIABwAHUAYgBsAGkAYwAgAGMAbABhAHMAcwAgAEMAIAB7ACAAcAB1AGIAbABpAGMAIAB2AG8AaQBkACAATQAoACkAIAB7ACAAfQAgAH0="
+    }
+  ]
+}

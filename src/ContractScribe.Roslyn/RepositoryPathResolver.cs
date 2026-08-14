@@ -96,6 +96,12 @@ internal sealed class RepositoryPathResolver
     public string RelativeIdentity(string physicalRoot, string physicalPath) =>
         Path.GetRelativePath(physicalRoot, physicalPath).Replace('\\', '/');
 
+    public string PhysicalIdentity(string physicalRoot, string physicalPath)
+    {
+        var identity = RelativeIdentity(physicalRoot, physicalPath);
+        return OperatingSystem.IsWindows() ? identity.ToUpperInvariant() : identity;
+    }
+
     public ResolvedPhysicalPath ResolveSource(string physicalRoot, string sourcePath)
     {
         if (string.IsNullOrWhiteSpace(sourcePath)

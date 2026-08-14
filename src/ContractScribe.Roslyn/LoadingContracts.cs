@@ -92,14 +92,16 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
     private readonly IDisposable workspace;
 
     internal LoadedRepositorySession(
-        string repositoryIdentity,
+        RepositoryContextRef repositoryContextRef,
+        string physicalRepositoryRoot,
         string inputIdentity,
         ToolchainIdentity toolchain,
         IReadOnlyList<LoadedProject> projects,
         IReadOnlyList<GeneratedSourceFact> generatedSources,
         IDisposable workspace)
     {
-        RepositoryIdentity = repositoryIdentity;
+        RepositoryContextRef = repositoryContextRef;
+        PhysicalRepositoryRoot = physicalRepositoryRoot;
         InputIdentity = inputIdentity;
         Toolchain = toolchain;
         Projects = projects;
@@ -107,7 +109,9 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         this.workspace = workspace;
     }
 
-    public string RepositoryIdentity { get; }
+    public RepositoryContextRef RepositoryContextRef { get; }
+
+    internal string PhysicalRepositoryRoot { get; }
 
     public string InputIdentity { get; }
 
@@ -265,7 +269,8 @@ internal enum LoadedSourceKind
 
 internal sealed record LoadedSourceTree(
     LoadedSourceKind Kind,
-    string? RepositoryIdentity,
+    string? RepositoryPath,
+    string? PhysicalSourceIdentity,
     GeneratedSourceFact? GeneratedSource);
 
 internal sealed record GeneratedSourceBinding(

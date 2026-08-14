@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using ContractScribe.Core;
 using Microsoft.Build.Construction;
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Exceptions;
@@ -22,9 +23,17 @@ public sealed class RepositoryLoader
     private readonly Action<int>? generatedAuthorityComparisonObserver;
     private readonly RegisteredToolchain? preselectedToolchain;
     private readonly LoaderExecutionTrace? trace;
+    private readonly Func<int, byte[]> repositoryContextBytes;
 
     public RepositoryLoader()
-        : this(null, null)
+        : this(
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            RandomNumberGenerator.GetBytes)
     {
     }
 
@@ -35,6 +44,25 @@ public sealed class RepositoryLoader
         Action<int>? generatedAuthorityComparisonObserver = null,
         RegisteredToolchain? preselectedToolchain = null,
         LoaderExecutionTrace? trace = null)
+        : this(
+            observer,
+            digest,
+            inventory,
+            generatedAuthorityComparisonObserver,
+            preselectedToolchain,
+            trace,
+            RandomNumberGenerator.GetBytes)
+    {
+    }
+
+    private RepositoryLoader(
+        Action<LoaderStage>? observer,
+        Func<ReadOnlyMemory<byte>, byte[]>? digest,
+        Func<string, CancellationToken, IReadOnlyDictionary<string, InventoryEntry>>? inventory,
+        Action<int>? generatedAuthorityComparisonObserver,
+        RegisteredToolchain? preselectedToolchain,
+        LoaderExecutionTrace? trace,
+        Func<int, byte[]> repositoryContextBytes)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
@@ -43,6 +71,8 @@ public sealed class RepositoryLoader
             generatedAuthorityComparisonObserver;
         this.preselectedToolchain = preselectedToolchain;
         this.trace = trace;
+        this.repositoryContextBytes = repositoryContextBytes
+            ?? throw new ArgumentNullException(nameof(repositoryContextBytes));
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -90,6 +120,7 @@ public sealed class RepositoryLoader
                 digest,
                 generatedAuthorityComparisonObserver,
                 trace,
+                repositoryContextBytes,
                 cancellationToken);
             trace?.MarkSessionTransferred();
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
@@ -285,6 +316,7 @@ internal static class PostRegistrationLoader
         Func<ReadOnlyMemory<byte>, byte[]> digest,
         Action<int>? generatedAuthorityComparisonObserver,
         LoaderExecutionTrace? trace,
+        Func<int, byte[]> repositoryContextBytes,
         CancellationToken cancellationToken)
     {
         var identities = new GeneratedIdentityHasher(digest);
@@ -477,7 +509,8 @@ internal static class PostRegistrationLoader
                         pair.Key,
                         new LoadedSourceTree(
                             LoadedSourceKind.Repository,
-                            pair.Value,
+                            pair.Value.RepositoryPath,
+                            pair.Value.PhysicalSourceIdentity,
                             null));
                 }
 
@@ -487,6 +520,7 @@ internal static class PostRegistrationLoader
                         binding.SyntaxTree,
                         new LoadedSourceTree(
                             binding.Kind,
+                            null,
                             null,
                             binding.Fact));
                 }
@@ -510,8 +544,19 @@ internal static class PostRegistrationLoader
 
             Observe(observer, trace, LoaderStage.TerminalValidation, cancellationToken);
             trace?.Enter(LoaderExecutionPhase.SessionConstruction);
+            var contextBytes = repositoryContextBytes(16);
+            if (contextBytes.Length != 16
+                || !RepositoryContextRef.TryParse(
+                    "repoctx-" + Convert.ToHexString(contextBytes).ToLowerInvariant(),
+                    out var repositoryContextRef))
+            {
+                throw new InvalidOperationException(
+                    "The repository context source returned a non-canonical sample.");
+            }
+
             var session = new LoadedRepositorySession(
-                ".",
+                repositoryContextRef,
+                paths.PhysicalRoot,
                 pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput),
                 toolchain.Identity,
                 loadedProjects,
@@ -783,7 +828,7 @@ internal static class PostRegistrationLoader
         return graph;
     }
 
-    private static async Task<IReadOnlyDictionary<SyntaxTree, string>> ValidateWorkspaceSourcesAsync(
+    private static async Task<IReadOnlyDictionary<SyntaxTree, WorkspaceSourceBinding>> ValidateWorkspaceSourcesAsync(
         ResolvedRepositoryPaths paths,
         EvaluatedProject node,
         RoslynProject project,
@@ -792,7 +837,8 @@ internal static class PostRegistrationLoader
         LoaderExecutionState state,
         CancellationToken cancellationToken)
     {
-        var trees = new Dictionary<SyntaxTree, string>(ReferenceEqualityComparer.Instance);
+        var trees = new Dictionary<SyntaxTree, WorkspaceSourceBinding>(
+            ReferenceEqualityComparer.Instance);
         foreach (var document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -809,9 +855,9 @@ internal static class PostRegistrationLoader
                 []);
             var tree = await document.GetSyntaxTreeAsync(cancellationToken)
                 ?? throw LoaderException.Graph("graph.source-outside-root");
-            trees.Add(
-                tree,
-                resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath)));
+            trees.Add(tree, new WorkspaceSourceBinding(
+                resolver.RelativeIdentity(paths.PhysicalRoot, Path.GetFullPath(sourcePath)),
+                resolver.PhysicalIdentity(paths.PhysicalRoot, resolution.PhysicalPath)));
         }
 
         foreach (var document in project.AdditionalDocuments.Concat(project.AnalyzerConfigDocuments))
@@ -1258,6 +1304,10 @@ internal static class PostRegistrationLoader
     private static StringComparer PathComparer() =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
+
+internal sealed record WorkspaceSourceBinding(
+    string RepositoryPath,
+    string PhysicalSourceIdentity);
 
 internal sealed record GeneratedAuthorityDocument(
     string Name,
