@@ -188,6 +188,202 @@ public sealed class DocumentationPatchValidationTests
     }
 
     [Fact]
+    public async Task CandidateValidationDisambiguatesDuplicateLogicalPathsAcrossSourceAndAdditionalRoles()
+    {
+        const string firstSource =
+            "namespace N;\npublic class First\n{\n    public void M() { }\n}\n";
+        const string secondSource =
+            "namespace N;\npublic class Second\n{\n    public void M() { }\n}\n";
+        const string candidateSource =
+            "namespace N;\npublic class First\n{\n    /// <inheritdoc/>\n    public void M() { }\n}\n";
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-duplicate-logical-paths-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var firstPath = Path.Join(root, "First.cs");
+        var secondPath = Path.Join(root, "Second.cs");
+        File.WriteAllText(firstPath, firstSource, new UTF8Encoding(false));
+        File.WriteAllText(secondPath, secondSource, new UTF8Encoding(false));
+        File.WriteAllText(Path.Join(root, "Fixture.csproj"), "<Project />", new UTF8Encoding(false));
+
+        LoadedRepositorySession? repository = null;
+        try
+        {
+            var workspace = new AdhocWorkspace();
+            var projectId = ProjectId.CreateNewId();
+            var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+                .Split(Path.PathSeparator)
+                .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
+            var solution = workspace.CurrentSolution.AddProject(ProjectInfo.Create(
+                projectId,
+                VersionStamp.Create(),
+                "Fixture",
+                "Fixture",
+                LanguageNames.CSharp,
+                filePath: Path.Join(root, "Fixture.csproj"),
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary),
+                parseOptions: new CSharpParseOptions(
+                    LanguageVersion.Preview,
+                    documentationMode: DocumentationMode.Diagnose),
+                metadataReferences: references));
+            var firstDocumentId = DocumentId.CreateNewId(projectId);
+            var secondDocumentId = DocumentId.CreateNewId(projectId);
+            var firstAdditionalId = DocumentId.CreateNewId(projectId);
+            var secondAdditionalId = DocumentId.CreateNewId(projectId);
+            solution = solution.AddDocument(DocumentInfo.Create(
+                firstDocumentId,
+                "Api.cs",
+                folders: ["Shared"],
+                filePath: firstPath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(firstSource, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    firstPath))));
+            solution = solution.AddDocument(DocumentInfo.Create(
+                secondDocumentId,
+                "Api.cs",
+                folders: ["Shared"],
+                filePath: secondPath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(secondSource, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    secondPath))));
+            solution = solution.AddAdditionalDocument(DocumentInfo.Create(
+                firstAdditionalId,
+                "Input.cs",
+                folders: ["Shared"],
+                filePath: firstPath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(firstSource, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    firstPath))));
+            solution = solution.AddAdditionalDocument(DocumentInfo.Create(
+                secondAdditionalId,
+                "Input.cs",
+                folders: ["Shared"],
+                filePath: secondPath,
+                loader: TextLoader.From(TextAndVersion.Create(
+                    SourceText.From(secondSource, new UTF8Encoding(false, true)),
+                    VersionStamp.Create(),
+                    secondPath))));
+            Assert.True(workspace.TryApplyChanges(solution));
+            var project = workspace.CurrentSolution.GetProject(projectId)!;
+            var firstTree = (await project.GetDocument(firstDocumentId)!.GetSyntaxTreeAsync())!;
+            var secondTree = (await project.GetDocument(secondDocumentId)!.GetSyntaxTreeAsync())!;
+            var compilation = (await project.GetCompilationAsync())!;
+            var loaded = new LoadedProject(
+                "Fixture.csproj",
+                "net10.0",
+                "fixture.net10.0",
+                LoadedProjectRole.AuditRoot,
+                [],
+                project,
+                compilation,
+                new Dictionary<SyntaxTree, LoadedSourceTree>(ReferenceEqualityComparer.Instance)
+                {
+                    [firstTree] = new(
+                        LoadedSourceKind.Repository,
+                        "First.cs",
+                        new RepositoryPathResolver().PhysicalIdentity(root, firstPath),
+                        null),
+                    [secondTree] = new(
+                        LoadedSourceKind.Repository,
+                        "Second.cs",
+                        new RepositoryPathResolver().PhysicalIdentity(root, secondPath),
+                        null),
+                });
+            Assert.True(RepositoryContextRef.TryParse(
+                "repoctx-0123456789abcdef0123456789abcdef",
+                out var repositoryContextRef));
+            repository = new LoadedRepositorySession(
+                repositoryContextRef,
+                root,
+                "Fixture.csproj",
+                new ToolchainIdentity("test", "test", "test", "test"),
+                [loaded],
+                [],
+                workspace);
+            repository.SealDocumentationPatchRepositoryPolicyForTests();
+            var classified = new SymbolClassifier().ClassifySession(
+                repository,
+                TargetProfile.ExternalApi);
+            var baseline = Assert.IsType<DocumentationPatchRepositoryBaseline>(
+                repository.CaptureDocumentationPatchRepositoryBaseline().Baseline);
+            var candidateBytes = Encoding.UTF8.GetBytes(candidateSource);
+
+            var result = DocumentationPatchCandidateValidation.Validate(
+                classified,
+                baseline,
+                [new DocumentationPatchCandidateValidationFile(
+                    "First.cs",
+                    DocumentationPatchRepositoryEncoding.Utf8,
+                    ImmutableArray.CreateRange(candidateBytes))]);
+
+            Assert.True(result.IsValid, result.FailureCode);
+            Assert.Equal(2, result.ValidatedSemanticInputCount);
+            Assert.Equal(
+                [
+                    DocumentationPatchSemanticInputRole.Source,
+                    DocumentationPatchSemanticInputRole.AdditionalFile,
+                ],
+                result.ValidatedSemanticInputs.Select(fact => fact.Role).Order());
+            Assert.All(result.ValidatedSemanticInputs, fact =>
+            {
+                Assert.Equal("First.cs", fact.RepositoryPath);
+                Assert.Equal(
+                    Convert.ToHexString(SHA256.HashData(candidateBytes)).ToLowerInvariant(),
+                    fact.CandidateSha256);
+            });
+        }
+        finally
+        {
+            repository?.Dispose();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void RequestWideProductRejectionBoundsDiagnosticsForContractSizedBatches()
+    {
+        var request = CreateCanonicalRequest(
+            Enumerable.Range(0, 129).Select(index => $"block-{index:000}").ToArray());
+
+        var result = DocumentationPatchEngine.ProductRejectionForTests(
+            request,
+            "patch.rejected.unsafe-change");
+
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(129, result.Targets.Length);
+        Assert.All(result.Targets, target =>
+            Assert.Equal(DocumentationPatchTargetStatus.Invalid, target.Status));
+        Assert.Equal(128, result.Diagnostics.Length);
+        Assert.Equal("block-000", result.Diagnostics[0].BlockId);
+        Assert.Equal(
+            Enumerable.Range(1, 127).Select(index => $"block-{index:000}"),
+            result.Diagnostics.Skip(1).Select(diagnostic => diagnostic.BlockId));
+        Assert.True(DocumentationPatchValidator.ValidateResult(request, result).IsValid);
+    }
+
+    [Fact]
+    public void RequestWideProductRejectionKeepsRequestPrimaryAndSortsSecondaries()
+    {
+        var request = CreateCanonicalRequest(["z", "b", "a"]);
+
+        var result = DocumentationPatchEngine.ProductRejectionForTests(
+            request,
+            "patch.rejected.unsafe-change");
+
+        Assert.Equal(
+            ["z", "a", "b"],
+            result.Diagnostics.Select(diagnostic => diagnostic.BlockId));
+        Assert.True(DocumentationPatchValidator.ValidateResult(request, result).IsValid);
+    }
+
+    [Fact]
     public void SymbolProjectionContainsDelegateEnumAccessorAttributeAndRelationshipShapes()
     {
         const string source = """
@@ -306,6 +502,50 @@ public sealed class DocumentationPatchValidationTests
         var emit = compilation.Emit(stream);
         Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
         return MetadataReference.CreateFromImage(stream.ToArray());
+    }
+
+    private static DocumentationPatchRequest CreateCanonicalRequest(
+        IReadOnlyList<string> blockIds)
+    {
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            patchRequestVersion = 1,
+            context = new
+            {
+                repositoryContextRef = "repoctx-0123456789abcdef0123456789abcdef",
+                inputIdentity = "Fixture.csproj",
+                targetProfile = "profile.external-api",
+            },
+            provenanceCatalog = Array.Empty<string>(),
+            blocks = blockIds.Select((blockId, index) => new
+            {
+                blockId,
+                symbolRef = new
+                {
+                    compilationContextRef = "fixture.net10.0",
+                    documentationCommentId = $"M:N.C.M{index:000}",
+                },
+                locator = new
+                {
+                    kind = "repository",
+                    path = "Sample.cs",
+                    originalFileSha256 = new string('0', 64),
+                    encoding = "utf-8",
+                    declarationSpan = new
+                    {
+                        start = index * 2,
+                        end = index * 2 + 1,
+                    },
+                },
+                editKind = "insert",
+                applicableComponents = Array.Empty<object>(),
+                content = new { kind = "inheritDoc" },
+                provenanceRefs = Array.Empty<string>(),
+            }).ToArray(),
+        });
+        var parsed = DocumentationPatchValidator.ParseRequest(requestBytes);
+        Assert.True(parsed.IsValid, parsed.Failure?.Code);
+        return Assert.IsType<DocumentationPatchRequest>(parsed.Request);
     }
 
     private sealed class ValidationFixture : IDisposable

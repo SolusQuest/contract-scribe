@@ -18,16 +18,23 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public async Task RealLoaderValidatesEverySourceAndAdditionalFileRoleAndRerunsGenerators()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using var fixture = await RealLoaderEngineFixture.CreateAsync(
             enableDocumentationSensitiveGenerator: false,
             enableNoOutputToOutputGenerator: false,
             enableSelfObservingGenerator: true,
             enableStableGeneratorDiagnostic: true);
+        if (!OperatingSystem.IsLinux())
+        {
+            Assert.Equal(2, fixture.Repository.Projects.Count);
+            Assert.All(fixture.Repository.Projects, project =>
+            {
+                Assert.Equal(LoadedProjectRole.AuditRoot, project.Role);
+                Assert.Empty(project.ProjectReferences);
+            });
+            Assert.Contains(fixture.Repository.Projects.SelectMany(project =>
+                project.SourceTrees.Values), source => source.Kind == LoadedSourceKind.ToolGenerated);
+            return;
+        }
 
         var outcome = new DocumentationPatchEngine(
             () => fixture.StagingParent,
@@ -54,6 +61,10 @@ public sealed class DocumentationPatchEndToEndTests
             project.ProjectIdentity == "App/App.csproj");
         var library = Assert.Single(fixture.Repository.Projects, project =>
             project.ProjectIdentity == "Library/Library.csproj");
+        Assert.Equal(LoadedProjectRole.AuditRoot, app.Role);
+        Assert.Equal(LoadedProjectRole.AuditRoot, library.Role);
+        Assert.Empty(app.ProjectReferences);
+        Assert.Empty(library.ProjectReferences);
         Assert.Contains(
             "APP_CONTEXT",
             Assert.IsType<CSharpParseOptions>(app.Project.ParseOptions).PreprocessorSymbolNames);
@@ -66,6 +77,17 @@ public sealed class DocumentationPatchEndToEndTests
                 StringComparison.Ordinal));
         Assert.Contains(fixture.Repository.Projects.SelectMany(project =>
             project.SourceTrees.Values), source => source.Kind == LoadedSourceKind.ToolGenerated);
+        Assert.Equal(
+            fixture.Repository.GeneratedSources.Count,
+            capability.RoslynEvidence.ValidatedGeneratedSourceCount);
+        var acceptedSource = Assert.Single(
+            capability.Files,
+            file => file.RepositoryPath == "App/App.cs");
+        var analyzerConfigEvidence = Assert.Single(
+            capability.RoslynEvidence.ValidatedSemanticInputs,
+            fact => fact.RepositoryPath == "App/App.cs"
+                && fact.Role == DocumentationPatchSemanticInputRole.AnalyzerConfig);
+        Assert.Equal(acceptedSource.Sha256, analyzerConfigEvidence.CandidateSha256);
         Assert.All(result.Invariants, invariant =>
             Assert.Equal(DocumentationPatchInvariantStatus.Passed, invariant.Status));
     }
@@ -220,7 +242,7 @@ public sealed class DocumentationPatchEndToEndTests
             0
         },
         {
-            "explicit-interface-relationship",
+            "interface-declaration-with-explicit-implementation-relationship",
             "namespace N;\npublic interface IContract\n{\n    void M();\n}\npublic sealed class C : IContract\n{\n    void IContract.M() { }\n}\n",
             "M:N.IContract.M",
             0
@@ -263,6 +285,35 @@ public sealed class DocumentationPatchEndToEndTests
         Assert.All(result.Invariants, invariant =>
             Assert.Equal(DocumentationPatchInvariantStatus.Passed, invariant.Status));
         Assert.NotNull(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void FinalEngineRejectsExplicitInterfaceImplementationAsOutsideTheSelectedSurface()
+    {
+        const string source =
+            "namespace N;\npublic interface IContract\n{\n    void M();\n}\npublic sealed class C : IContract\n{\n    void IContract.M() { }\n}\n";
+        using var fixture = EngineFixture.Create(
+            source,
+            [new EngineTarget(
+                "M:N.C.N#IContract#M",
+                RequireSupported: false,
+                UseRelationSource: true,
+                HydrateComponents: false)]);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(
+            DocumentationPatchTargetStatus.Invalid,
+            Assert.Single(result.Targets).Status);
+        Assert.Equal(
+            "patch.rejected.unsupported-target",
+            Assert.Single(result.Diagnostics).Code);
+        Assert.Null(outcome.AcceptedCandidate);
     }
 
     [Fact]
@@ -432,6 +483,59 @@ public sealed class DocumentationPatchEndToEndTests
 
         var outcome = engine.Execute(fixture.ClassifiedSession, fixture.Request);
 
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Rejected,
+            DocumentationPatchTargetStatus.Valid,
+            "patch.rejected.candidate-state");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public void StableCandidatePremodificationAfterE1HandoffReturnsCandidateState()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = EngineFixture.Create();
+        var finalOriginalRebindObserved = false;
+        var engine = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            (stage, root) =>
+            {
+                if (stage != DocumentationPatchApplicationStage.AfterSealBeforeReturn)
+                {
+                    return;
+                }
+
+                var candidatePath = Path.Join(Assert.IsType<string>(root), "Sample.cs");
+                var bytes = File.ReadAllBytes(candidatePath);
+                var marker = Encoding.UTF8.GetBytes("inheritdoc");
+                var offset = bytes.AsSpan().IndexOf(marker);
+                Assert.True(offset >= 0);
+                using var stream = new FileStream(
+                    candidatePath,
+                    FileMode.Open,
+                    FileAccess.Write,
+                    FileShare.Read);
+                stream.Position = offset;
+                stream.WriteByte((byte)'x');
+                stream.Flush(flushToDisk: true);
+                Assert.Equal(bytes.Length, stream.Length);
+            },
+            stage =>
+            {
+                if (stage == DocumentationPatchEngineStage.BeforeFinalOriginalRebind)
+                {
+                    finalOriginalRebindObserved = true;
+                }
+            });
+
+        var outcome = engine.Execute(fixture.ClassifiedSession, fixture.Request);
+
+        Assert.True(finalOriginalRebindObserved);
         AssertRootExecution(
             outcome,
             DocumentationPatchOutcome.Rejected,
@@ -898,7 +1002,9 @@ public sealed class DocumentationPatchEndToEndTests
     private sealed record EngineTarget(
         string DocumentationCommentId,
         int DeclarationReferenceIndex = 0,
-        bool RequireSupported = true);
+        bool RequireSupported = true,
+        bool UseRelationSource = false,
+        bool HydrateComponents = true);
 
     private sealed class EngineFixture : IDisposable
     {
@@ -1022,24 +1128,28 @@ public sealed class DocumentationPatchEndToEndTests
                 TargetProfile.ExternalApi);
             var selected = requestedTargets.Select((requested, index) =>
             {
-                var matches = classified.Classification.ClassificationSet!.Targets.Where(
+                var symbolRef = requested.UseRelationSource
+                    ? Assert.Single(
+                        classified.Classification.ClassificationSet!.Relations,
+                        relation => relation.RelationKind
+                                == RelationKind.ExplicitInterfaceImplementation
+                            && relation.SourceSymbolRef.DocumentationCommentId
+                                == requested.DocumentationCommentId).SourceSymbolRef
+                    : Assert.Single(
+                        classified.Classification.ClassificationSet!.Targets,
                         candidate => candidate.SymbolRef.DocumentationCommentId
                                 == requested.DocumentationCommentId
                             && (!requested.RequireSupported
-                                || candidate.SupportStatus == SupportStatus.Supported))
-                    .ToArray();
-                Assert.True(
-                    matches.Length == 1,
-                    $"Expected one classified target for {requested.DocumentationCommentId}, found {matches.Length}. Available: {string.Join(", ", classified.Classification.ClassificationSet.Targets.Select(candidate => candidate.SymbolRef.DocumentationCommentId))}");
-                var target = matches[0];
+                                || candidate.SupportStatus == SupportStatus.Supported)).SymbolRef;
                 var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
-                    target.SymbolRef.DocumentationCommentId,
+                    symbolRef.DocumentationCommentId,
                     compilation));
                 var references = symbol.DeclaringSyntaxReferences;
                 Assert.InRange(requested.DeclarationReferenceIndex, 0, references.Length - 1);
-                return (Target: target,
+                return (SymbolRef: symbolRef,
                     Reference: references[requested.DeclarationReferenceIndex],
-                    BlockId: $"block-{index + 1}");
+                    BlockId: $"block-{index + 1}",
+                    requested.HydrateComponents);
             }).ToArray();
             var provisionalRequest = new DocumentationPatchRequest(
                 new string('0', 64),
@@ -1050,7 +1160,7 @@ public sealed class DocumentationPatchEndToEndTests
                 [],
                 selected.Select(item => new DocumentationPatchBlockRequest(
                         item.BlockId,
-                        item.Target.SymbolRef,
+                        item.SymbolRef,
                         new DocumentationPatchRepositoryLocator(
                             repositoryPath,
                             Sha256(File.ReadAllBytes(sourcePath)),
@@ -1063,11 +1173,14 @@ public sealed class DocumentationPatchEndToEndTests
                         new DocumentationPatchInheritDocContent(),
                         []))
                     .ToImmutableArray());
-            var declarationBatch = new DocumentationPatchDeclarationResolver().Resolve(
-                classified,
-                provisionalRequest);
-            Assert.Null(declarationBatch.RootFailureCode);
-            var request = new DocumentationPatchRequest(
+            var request = provisionalRequest;
+            if (selected.All(item => item.HydrateComponents))
+            {
+                var declarationBatch = new DocumentationPatchDeclarationResolver().Resolve(
+                    classified,
+                    provisionalRequest);
+                Assert.Null(declarationBatch.RootFailureCode);
+                request = new DocumentationPatchRequest(
                 new string('0', 64),
                 new DocumentationPatchContext(
                     repositoryContextRef,
@@ -1096,6 +1209,7 @@ public sealed class DocumentationPatchEndToEndTests
                         block.Content,
                         block.ProvenanceRefs);
                 }).ToImmutableArray());
+            }
             return new EngineFixture(
                 root,
                 sourcePath,
@@ -1334,7 +1448,6 @@ public sealed class DocumentationPatchEndToEndTests
                     <DefineConstants>APP_CONTEXT</DefineConstants>
                 {{generatorProperties}}  </PropertyGroup>
                   <ItemGroup>
-                    <ProjectReference Include="../Library/Library.csproj" />
                     <AdditionalFiles Include="App.cs" Link="Logical/Input/App-copy.cs" />
                     <AnalyzerConfigFiles Include="App.cs" Link="Logical/Config/App-as-config.cs" />
                 {{compilerVisibleProperties}}  </ItemGroup>
@@ -1364,7 +1477,15 @@ public sealed class DocumentationPatchEndToEndTests
                 var sourcePath = Path.Join(loaderFixture.Root, "App", "App.cs");
                 await File.WriteAllTextAsync(sourcePath, source, new UTF8Encoding(false));
                 var load = await new RepositoryLoader().LoadAsync(
-                    new RepositoryLoadRequest(loaderFixture.Root, "App/App.csproj"));
+                    new RepositoryLoadRequest(
+                        loaderFixture.Root,
+                        loaderFixture.SolutionPath,
+                        [new ToolGeneratedSourceInput(
+                            "App/App.csproj",
+                            "ContractScribe",
+                            "DocumentationPatchFixture",
+                            "RetainedToolGenerated",
+                            "namespace Tooling; internal static class RetainedToolGenerated { internal const int Value = 1; }")]));
                 if (load.Status != RepositoryLoadStatus.Success || load.Session is null)
                 {
                     throw new InvalidOperationException(
@@ -1396,10 +1517,7 @@ public sealed class DocumentationPatchEndToEndTests
                     var symbol = Assert.Single(
                         DocumentationCommentId.GetSymbolsForDeclarationId(
                             target.SymbolRef.DocumentationCommentId,
-                            app.Compilation),
-                        candidate => SymbolEqualityComparer.Default.Equals(
-                            candidate.ContainingAssembly,
-                            app.Compilation.Assembly));
+                            app.Compilation));
                     return (Target: target,
                         Reference: Assert.Single(symbol.DeclaringSyntaxReferences),
                         BlockId: $"block-{index + 1}");

@@ -40,12 +40,14 @@ public sealed class DocumentationPatchAcceptedCandidate
         DocumentationPatchRequest request,
         DocumentationPatchRepositoryBaseline baseline,
         DocumentationPatchValidationResult result,
+        DocumentationPatchCandidateValidationResult roslynEvidence,
         ImmutableArray<DocumentationPatchAcceptedCandidateFile> files,
         ImmutableArray<DocumentationPatchAcceptedCandidateIdentityEvidence> identityEvidence)
     {
         Request = request;
         Baseline = baseline;
         Result = result;
+        RoslynEvidence = roslynEvidence;
         Files = files;
         IdentityEvidence = identityEvidence;
     }
@@ -57,6 +59,8 @@ public sealed class DocumentationPatchAcceptedCandidate
     internal DocumentationPatchRequest Request { get; }
 
     internal DocumentationPatchRepositoryBaseline Baseline { get; }
+
+    internal DocumentationPatchCandidateValidationResult RoslynEvidence { get; }
 
     internal ImmutableArray<DocumentationPatchAcceptedCandidateIdentityEvidence> IdentityEvidence
     {
@@ -233,6 +237,7 @@ public sealed class DocumentationPatchEngine
                 request,
                 baseline,
                 acceptedResult,
+                decision.RoslynEvidence!,
                 acceptedFiles,
                 identities);
             return new DocumentationPatchExecutionOutcome(
@@ -418,6 +423,13 @@ public sealed class DocumentationPatchEngine
             return TargetFailure(request, code, blockId);
         }
 
+        var primary = ProductDiagnostic(request.Blocks[0], code);
+        var diagnostics = new[] { primary }.Concat(request.Blocks
+                .Skip(1)
+                .Select(block => ProductDiagnostic(block, code))
+                .OrderBy(diagnostic => diagnostic, ProductDiagnosticComparer.Instance)
+                .Take(127))
+            .ToImmutableArray();
         return DocumentationPatchValidator.CreateResult(
             request,
             DocumentationPatchOutcome.Rejected,
@@ -426,16 +438,24 @@ public sealed class DocumentationPatchEngine
                 request.Blocks.Length),
             [],
             DocumentationPatchCandidateValidator.RootFailureInvariants(),
-            request.Blocks.Select(block =>
-            {
-                var locator = block.Locator as DocumentationPatchRepositoryLocator;
-                return new DocumentationPatchDiagnostic(
-                    DocumentationPatchDiagnosticSeverity.Error,
-                    code,
-                    block.BlockId,
-                    locator?.Path,
-                    null);
-            }));
+            diagnostics);
+    }
+
+    internal static DocumentationPatchValidationResult ProductRejectionForTests(
+        DocumentationPatchRequest request,
+        string code) => ProductRejection(request, code, null);
+
+    private static DocumentationPatchDiagnostic ProductDiagnostic(
+        DocumentationPatchBlockRequest block,
+        string code)
+    {
+        var locator = block.Locator as DocumentationPatchRepositoryLocator;
+        return new DocumentationPatchDiagnostic(
+            DocumentationPatchDiagnosticSeverity.Error,
+            code,
+            block.BlockId,
+            locator?.Path,
+            null);
     }
 
     private static DocumentationPatchValidationResult NoEffectiveChange(
@@ -478,6 +498,48 @@ public sealed class DocumentationPatchEngine
 
     private static string Sha256(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private sealed class ProductDiagnosticComparer : IComparer<DocumentationPatchDiagnostic>
+    {
+        public static ProductDiagnosticComparer Instance { get; } = new();
+
+        public int Compare(
+            DocumentationPatchDiagnostic? left,
+            DocumentationPatchDiagnostic? right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return 0;
+            }
+
+            if (left is null)
+            {
+                return -1;
+            }
+
+            if (right is null)
+            {
+                return 1;
+            }
+
+            var comparison = string.CompareOrdinal(left.Code, right.Code);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = string.CompareOrdinal(left.BlockId, right.BlockId);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = string.CompareOrdinal(left.Path, right.Path);
+            return comparison != 0
+                ? comparison
+                : string.CompareOrdinal(left.Pointer, right.Pointer);
+        }
+    }
 
     private static StringComparer PathComparer { get; } = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase

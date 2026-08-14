@@ -35,6 +35,14 @@ public sealed record DocumentationPatchCandidateValidationFile
     public ImmutableArray<byte> Bytes { get; }
 }
 
+internal sealed record DocumentationPatchValidatedSemanticInputFact(
+    string RepositoryPath,
+    string ProjectIdentity,
+    string CompilationContextRef,
+    DocumentationPatchSemanticInputRole Role,
+    string LogicalPath,
+    string CandidateSha256);
+
 public sealed record DocumentationPatchCandidateValidationResult
 {
     internal DocumentationPatchCandidateValidationResult(
@@ -42,13 +50,15 @@ public sealed record DocumentationPatchCandidateValidationResult
         string? failureCode,
         int validatedCompilationContextCount,
         int validatedSemanticInputCount,
-        int validatedGeneratedSourceCount)
+        int validatedGeneratedSourceCount,
+        ImmutableArray<DocumentationPatchValidatedSemanticInputFact> validatedSemanticInputs)
     {
         IsValid = isValid;
         FailureCode = failureCode;
         ValidatedCompilationContextCount = validatedCompilationContextCount;
         ValidatedSemanticInputCount = validatedSemanticInputCount;
         ValidatedGeneratedSourceCount = validatedGeneratedSourceCount;
+        ValidatedSemanticInputs = validatedSemanticInputs;
     }
 
     public bool IsValid { get; }
@@ -60,6 +70,11 @@ public sealed record DocumentationPatchCandidateValidationResult
     public int ValidatedSemanticInputCount { get; }
 
     public int ValidatedGeneratedSourceCount { get; }
+
+    internal ImmutableArray<DocumentationPatchValidatedSemanticInputFact> ValidatedSemanticInputs
+    {
+        get;
+    }
 }
 
 internal enum DocumentationPatchCandidateValidationCorruption
@@ -223,7 +238,10 @@ public static class DocumentationPatchCandidateValidation
                 }
 
                 var text = candidateTexts[fact.RepositoryPath].SourceText;
-                var document = FindDocument(project, fact);
+                var document = FindDocument(
+                    project,
+                    session.RepositorySession.PhysicalRepositoryRoot,
+                    fact);
                 if (document is null)
                 {
                     if (fact.Role != DocumentationPatchSemanticInputRole.Source
@@ -254,6 +272,23 @@ public static class DocumentationPatchCandidateValidation
                     _ => throw new InvalidOperationException(
                         "The semantic-input role is not closed."),
                 };
+                TextDocument? replacedDocument = fact.Role switch
+                {
+                    DocumentationPatchSemanticInputRole.Source =>
+                        solution.GetDocument(document.Id),
+                    DocumentationPatchSemanticInputRole.AdditionalFile =>
+                        solution.GetAdditionalDocument(document.Id),
+                    DocumentationPatchSemanticInputRole.AnalyzerConfig =>
+                        solution.GetAnalyzerConfigDocument(document.Id),
+                    _ => null,
+                };
+                var replacedText = replacedDocument?.GetTextAsync(cancellationToken)
+                    .GetAwaiter().GetResult();
+                if (replacedText is null || !replacedText.ContentEquals(text))
+                {
+                    return Invalid("patch.rejected.unsafe-change");
+                }
+
                 representedFacts.Add(SemanticFactKey.From(fact));
             }
 
@@ -316,6 +351,7 @@ public static class DocumentationPatchCandidateValidation
                     var fact = FindSemanticFact(
                         baseline.SemanticInputs,
                         loaded,
+                        session.RepositorySession.PhysicalRepositoryRoot,
                         document,
                         DocumentationPatchSemanticInputRole.Source);
                     var tree = document.GetSyntaxTreeAsync(cancellationToken)
@@ -488,7 +524,20 @@ public static class DocumentationPatchCandidateValidation
                 null,
                 candidateProjects.Count,
                 affectedFacts.Length,
-                candidateGenerated.Count);
+                candidateGenerated.Count,
+                affectedFacts.Select(fact => new DocumentationPatchValidatedSemanticInputFact(
+                        fact.RepositoryPath,
+                        fact.ProjectIdentity,
+                        fact.CompilationContextRef,
+                        fact.Role,
+                        fact.LogicalPath,
+                        candidateTexts[fact.RepositoryPath].Sha256))
+                    .OrderBy(fact => fact.RepositoryPath, StringComparer.Ordinal)
+                    .ThenBy(fact => fact.ProjectIdentity, StringComparer.Ordinal)
+                    .ThenBy(fact => fact.CompilationContextRef, StringComparer.Ordinal)
+                    .ThenBy(fact => fact.Role)
+                    .ThenBy(fact => fact.LogicalPath, StringComparer.Ordinal)
+                    .ToImmutableArray());
         }
         catch (OperationCanceledException)
         {
@@ -504,7 +553,7 @@ public static class DocumentationPatchCandidateValidation
     }
 
     private static DocumentationPatchCandidateValidationResult Invalid(string code) =>
-        new(false, code, 0, 0, 0);
+        new(false, code, 0, 0, 0, []);
 
     private static bool HasSameProjectConfiguration(Project original, Project candidate) =>
         Equals(original.ParseOptions, candidate.ParseOptions)
@@ -535,7 +584,11 @@ public static class DocumentationPatchCandidateValidation
                     (StrictUtf16Be.GetString(bytes[2..]), (Encoding)StrictUtf16Be),
                 _ => throw new DecoderFallbackException(),
             };
-            result = new CandidateText(text, SourceText.From(text, encoding), encoding);
+            result = new CandidateText(
+                text,
+                SourceText.From(text, encoding),
+                encoding,
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
             return true;
         }
         catch (DecoderFallbackException)
@@ -665,7 +718,10 @@ public static class DocumentationPatchCandidateValidation
         left.Select(SemanticFactKey.From).Order().SequenceEqual(
             right.Select(SemanticFactKey.From).Order());
 
-    private static TextDocument? FindDocument(Project project, DocumentationPatchSemanticInputFact fact)
+    private static TextDocument? FindDocument(
+        Project project,
+        string repositoryRoot,
+        DocumentationPatchSemanticInputFact fact)
     {
         IEnumerable<TextDocument> documents = fact.Role switch
         {
@@ -675,12 +731,15 @@ public static class DocumentationPatchCandidateValidation
             _ => [],
         };
         return documents.SingleOrDefault(document =>
-            string.Equals(LogicalPath(document), fact.LogicalPath, StringComparison.Ordinal));
+            TryRepositoryPath(repositoryRoot, document.FilePath, out var repositoryPath)
+            && PathComparer.Equals(repositoryPath, fact.RepositoryPath)
+            && string.Equals(LogicalPath(document), fact.LogicalPath, StringComparison.Ordinal));
     }
 
     private static DocumentationPatchSemanticInputFact? FindSemanticFact(
         IEnumerable<DocumentationPatchSemanticInputFact> facts,
         LoadedProject loaded,
+        string repositoryRoot,
         TextDocument document,
         DocumentationPatchSemanticInputRole role) =>
         facts.SingleOrDefault(fact => fact.Role == role
@@ -689,6 +748,8 @@ public static class DocumentationPatchCandidateValidation
                 fact.CompilationContextRef,
                 loaded.CompilationContextRef,
                 StringComparison.Ordinal)
+            && TryRepositoryPath(repositoryRoot, document.FilePath, out var repositoryPath)
+            && PathComparer.Equals(fact.RepositoryPath, repositoryPath)
             && string.Equals(fact.LogicalPath, LogicalPath(document), StringComparison.Ordinal));
 
     private static string LogicalPath(TextDocument document) => document.Folders.Count == 0
@@ -698,9 +759,15 @@ public static class DocumentationPatchCandidateValidation
     private static bool HasWorkspaceSourceDocument(
         LoadedProject loaded,
         DocumentationPatchSemanticInputFact fact) =>
-        HasWorkspaceSourceDocument(loaded, fact.RepositoryPath)
-        && loaded.Project.Documents.Any(document =>
-            string.Equals(LogicalPath(document), fact.LogicalPath, StringComparison.Ordinal));
+        loaded.Project.Documents.Any(document =>
+        {
+            var tree = document.GetSyntaxTreeAsync().GetAwaiter().GetResult();
+            return tree is not null
+                && loaded.SourceTrees.TryGetValue(tree, out var source)
+                && source.Kind == LoadedSourceKind.Repository
+                && PathComparer.Equals(source.RepositoryPath, fact.RepositoryPath)
+                && string.Equals(LogicalPath(document), fact.LogicalPath, StringComparison.Ordinal);
+        });
 
     private static bool HasWorkspaceSourceDocument(LoadedProject loaded, string path) =>
         loaded.Project.Documents.Any(document =>
@@ -1182,7 +1249,8 @@ public static class DocumentationPatchCandidateValidation
     private sealed record CandidateText(
         string Text,
         SourceText SourceText,
-        Encoding Encoding);
+        Encoding Encoding,
+        string Sha256);
 
     private sealed record GeneratedTreeFact(SyntaxTree Tree, GeneratedSourceFact Fact);
 
