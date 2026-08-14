@@ -746,14 +746,27 @@ internal static class DocumentationPatchRepositoryBaselineCapture
             DocumentationPatchRepositoryPolicy.PathComparer);
         var directories = new Dictionary<string, DocumentationPatchPhysicalIdentity>(
             DocumentationPatchRepositoryPolicy.PathComparer);
-        var pending = new Stack<(string FullPath, string RepositoryPath)>();
-        pending.Push((policy.PhysicalRoot, string.Empty));
+        var pending = new Stack<(
+            string FullPath,
+            string RepositoryPath,
+            ImmutableHashSet<(ulong Volume, ulong FileId)> Ancestors)>();
+        pending.Push((
+            policy.PhysicalRoot,
+            string.Empty,
+            ImmutableHashSet<(ulong Volume, ulong FileId)>.Empty));
         while (pending.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (directory, repositoryPath) = pending.Pop();
+            var (directory, repositoryPath, ancestors) = pending.Pop();
             var directoryIdentity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(
                 directory);
+            var directoryKey = (directoryIdentity.Volume, directoryIdentity.FileId);
+            if (ancestors.Contains(directoryKey))
+            {
+                throw DocumentationPatchBaselineException.Rejected();
+            }
+
+            var descendantAncestors = ancestors.Add(directoryKey);
             directories[repositoryPath] = directoryIdentity;
             foreach (var path in Directory.EnumerateFileSystemEntries(directory)
                          .Order(StringComparer.Ordinal))
@@ -791,7 +804,15 @@ internal static class DocumentationPatchRepositoryBaselineCapture
                             throw DocumentationPatchBaselineException.Rejected();
                         }
 
-                        pending.Push((targetPath, relative));
+                        var targetIdentity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(
+                            targetPath);
+                        if (descendantAncestors.Contains(
+                                (targetIdentity.Volume, targetIdentity.FileId)))
+                        {
+                            throw DocumentationPatchBaselineException.Rejected();
+                        }
+
+                        pending.Push((targetPath, relative, descendantAncestors));
                     }
                     else if (mode == DocumentationPatchRepositoryCaptureMode.Resolution
                         && policy.IsGoverned(relative))
@@ -817,7 +838,7 @@ internal static class DocumentationPatchRepositoryBaselineCapture
 
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    pending.Push((path, relative));
+                    pending.Push((path, relative, descendantAncestors));
                     continue;
                 }
 

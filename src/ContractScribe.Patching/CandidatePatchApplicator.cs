@@ -247,7 +247,8 @@ public sealed class CandidatePatchApplicator
                         ReplacementRegion(source, documentation, ownerLineStart),
                     _ => throw Rejected(),
                 };
-                if (source.AsSpan(start, end - start).SequenceEqual(rendered.AsSpan()))
+                var comparisonEnd = target.DocumentationSpan?.End ?? end;
+                if (source.AsSpan(start, comparisonEnd - start).SequenceEqual(rendered.AsSpan()))
                 {
                     throw NoEffectiveChange();
                 }

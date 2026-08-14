@@ -535,6 +535,23 @@ public sealed class DocumentationPatchApplicationTests
     }
 
     [Fact]
+    public void NoEffectiveReplacementIgnoresBlankLineBeforeDeclaration()
+    {
+        const string source = "namespace N;\npublic class C\n{\n    /// <inheritdoc/>\n\n    public void M() { }\n}\n";
+        using var fixture = ApplicationFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8);
+
+        var result = new CandidatePatchApplicator().Apply(
+            fixture.ClassifiedSession,
+            fixture.Request(DocumentationPatchEditKind.Replace));
+
+        Assert.Equal(DocumentationPatchApplicationStatus.Rejected, result.Status);
+        Assert.Equal("patch.rejected.no-effective-change", result.PrimaryCode);
+        Assert.Null(result.Candidate);
+    }
+
+    [Fact]
     public void AnyNoEffectiveBlockRejectsTheWholeMultiBlockRequest()
     {
         const string source =
