@@ -234,29 +234,42 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         CancellationToken cancellationToken,
         Action? beforeTerminalPass = null)
     {
-        var captured = CaptureCandidatePass(
-            parentPath,
-            parentIdentity,
-            rootName,
-            rootPath,
-            directories,
-            files,
-            requireExpectedBytes,
-            cancellationToken);
-        beforeTerminalPass?.Invoke();
-        var terminalExpected = captured.ToDictionary(
-            file => file.RepositoryPath,
-            PathComparer);
-        _ = CaptureCandidatePass(
-            parentPath,
-            parentIdentity,
-            rootName,
-            rootPath,
-            directories,
-            terminalExpected,
-            requireExpectedBytes: true,
-            cancellationToken);
-        return captured;
+        var retainedReads = new List<CandidateFileReadLease>(files.Count);
+        try
+        {
+            var captured = CaptureCandidatePass(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootPath,
+                directories,
+                files,
+                requireExpectedBytes,
+                cancellationToken,
+                retainedReads);
+            beforeTerminalPass?.Invoke();
+            var terminalExpected = captured.ToDictionary(
+                file => file.RepositoryPath,
+                PathComparer);
+            _ = CaptureCandidatePass(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootPath,
+                directories,
+                terminalExpected,
+                requireExpectedBytes: true,
+                cancellationToken,
+                retainedReads: null);
+            return captured;
+        }
+        finally
+        {
+            foreach (var retainedRead in retainedReads)
+            {
+                retainedRead.Dispose();
+            }
+        }
     }
 
     private static ImmutableArray<CandidateWorkspaceFile> CaptureCandidatePass(
@@ -267,7 +280,8 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         IReadOnlyDictionary<string, CandidateIdentity> directories,
         IReadOnlyDictionary<string, CandidateWorkspaceFile> files,
         bool requireExpectedBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ICollection<CandidateFileReadLease>? retainedReads)
     {
         if (!directories.TryGetValue(string.Empty, out var rootIdentity))
         {
@@ -333,29 +347,46 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                 }
 
                 var parent = Parent(relative);
-                var read = DocumentationPatchCandidateFileSystem.ReadOwnedRegularFile(
+                var read = DocumentationPatchCandidateFileSystem.ReadOwnedRegularFileRetained(
                     PhysicalPath(rootPath, parent),
                     directories[parent],
                     Leaf(relative),
                     expectedFile.Identity,
                     cancellationToken);
-                var confirmed = DocumentationPatchCandidateFileSystem.ReadOwnedRegularFile(
-                    PhysicalPath(rootPath, parent),
-                    directories[parent],
-                    Leaf(relative),
-                    expectedFile.Identity,
-                    cancellationToken);
-                if (!read.Bytes.AsSpan().SequenceEqual(confirmed.Bytes)
-                    || (requireExpectedBytes
-                        && !read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan())))
+                var retainRead = false;
+                try
                 {
-                    throw new IOException("The candidate file bytes changed.");
-                }
+                    using var confirmed =
+                        DocumentationPatchCandidateFileSystem.ReadOwnedRegularFileRetained(
+                            PhysicalPath(rootPath, parent),
+                            directories[parent],
+                            Leaf(relative),
+                            expectedFile.Identity,
+                            cancellationToken);
+                    if (!read.Bytes.AsSpan().SequenceEqual(confirmed.Bytes)
+                        || (requireExpectedBytes
+                            && !read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan())))
+                    {
+                        throw new IOException("The candidate file bytes changed.");
+                    }
 
-                captured.Add(new CandidateWorkspaceFile(
-                    relative,
-                    ImmutableArray.CreateRange(read.Bytes),
-                    read.Identity));
+                    captured.Add(new CandidateWorkspaceFile(
+                        relative,
+                        ImmutableArray.CreateRange(read.Bytes),
+                        read.Identity));
+                    if (retainedReads is not null)
+                    {
+                        retainedReads.Add(read);
+                        retainRead = true;
+                    }
+                }
+                finally
+                {
+                    if (!retainRead)
+                    {
+                        read.Dispose();
+                    }
+                }
             }
 
             RebindDirectory(

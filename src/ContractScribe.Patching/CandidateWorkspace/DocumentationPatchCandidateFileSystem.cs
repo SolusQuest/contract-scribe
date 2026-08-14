@@ -139,26 +139,42 @@ internal static class DocumentationPatchCandidateFileSystem
         }
     }
 
-    public static CandidateFileRead ReadOwnedRegularFile(
+    public static CandidateFileReadLease ReadOwnedRegularFileRetained(
         string parentPath,
         CandidatePhysicalIdentity expectedParent,
         string leafName,
         CandidatePhysicalIdentity expectedFile,
         CancellationToken cancellationToken)
     {
-        using var stream = OpenOwnedRegularFile(
+        var handle = OpenOwnedRegularFileHandle(
             parentPath,
             expectedParent,
             leafName,
             expectedFile);
-        var bytes = ReadAll(stream, cancellationToken);
-        var after = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
-        if (after != expectedFile || bytes.LongLength != expectedFile.Length)
+        try
         {
-            throw new IOException("The candidate file changed during readback.");
-        }
+            using var borrowedHandle = new SafeFileHandle(
+                handle.DangerousGetHandle(),
+                ownsHandle: false);
+            using var stream = new FileStream(
+                borrowedHandle,
+                FileAccess.Read,
+                64 * 1024,
+                isAsync: false);
+            var bytes = ReadAll(stream, cancellationToken);
+            var after = ReadIdentity(handle, expectDirectory: false);
+            if (after != expectedFile || bytes.LongLength != expectedFile.Length)
+            {
+                throw new IOException("The candidate file changed during readback.");
+            }
 
-        return new CandidateFileRead(bytes, after);
+            return new CandidateFileReadLease(bytes, after, handle);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 
     public static bool DeleteOwnedEntry(
@@ -208,7 +224,7 @@ internal static class DocumentationPatchCandidateFileSystem
     public static CandidatePhysicalIdentity ReadFileIdentity(FileStream stream) =>
         ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
 
-    private static FileStream OpenOwnedRegularFile(
+    private static SafeFileHandle OpenOwnedRegularFileHandle(
         string parentPath,
         CandidatePhysicalIdentity expectedParent,
         string leafName,
@@ -242,7 +258,7 @@ internal static class DocumentationPatchCandidateFileSystem
                 throw new IOException("The candidate file identity changed.");
             }
 
-            return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+            return handle;
         }
         catch
         {
@@ -425,6 +441,23 @@ internal static class DocumentationPatchCandidateFileSystem
     private static extern int UnlinkAt(int directoryFileDescriptor, string path, int flags);
 }
 
-internal sealed record CandidateFileRead(
-    byte[] Bytes,
-    DocumentationPatchCandidateFileSystem.CandidatePhysicalIdentity Identity);
+internal sealed class CandidateFileReadLease : IDisposable
+{
+    private readonly SafeFileHandle handle;
+
+    public CandidateFileReadLease(
+        byte[] bytes,
+        DocumentationPatchCandidateFileSystem.CandidatePhysicalIdentity identity,
+        SafeFileHandle handle)
+    {
+        Bytes = bytes;
+        Identity = identity;
+        this.handle = handle;
+    }
+
+    public byte[] Bytes { get; }
+
+    public DocumentationPatchCandidateFileSystem.CandidatePhysicalIdentity Identity { get; }
+
+    public void Dispose() => handle.Dispose();
+}
