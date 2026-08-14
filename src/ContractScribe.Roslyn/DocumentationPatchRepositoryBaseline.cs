@@ -159,6 +159,21 @@ public sealed record DocumentationPatchCandidateRootValidation
     public DocumentationPatchPhysicalIdentity? PhysicalIdentity { get; }
 }
 
+public sealed record DocumentationPatchCandidateLocationValidation
+{
+    internal DocumentationPatchCandidateLocationValidation(
+        bool isValid,
+        DocumentationPatchPhysicalIdentity? parentIdentity)
+    {
+        IsValid = isValid;
+        ParentIdentity = parentIdentity;
+    }
+
+    public bool IsValid { get; }
+
+    public DocumentationPatchPhysicalIdentity? ParentIdentity { get; }
+}
+
 public sealed class DocumentationPatchRepositoryBaseline
 {
     private readonly LoadedRepositorySession session;
@@ -278,9 +293,12 @@ public sealed class DocumentationPatchRepositoryBaseline
 
             var identity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(
                 candidate);
+            var isDistinct = !SameDirectory(identity, RootIdentity)
+                && !directoryIdentities.Values.Any(directory =>
+                    SameDirectory(identity, directory));
             return new DocumentationPatchCandidateRootValidation(
-                identity != RootIdentity,
-                identity != RootIdentity ? identity : null);
+                isDistinct,
+                isDistinct ? identity : null);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -288,6 +306,49 @@ public sealed class DocumentationPatchRepositoryBaseline
             or NotSupportedException)
         {
             return new DocumentationPatchCandidateRootValidation(false, null);
+        }
+    }
+
+    public DocumentationPatchCandidateLocationValidation ValidateCandidateLocation(
+        string parentPath,
+        string candidateRootName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateRootName);
+        if (session.IsDisposed
+            || candidateRootName is "." or ".."
+            || candidateRootName.IndexOfAny(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            return new DocumentationPatchCandidateLocationValidation(false, null);
+        }
+
+        try
+        {
+            var parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parentPath));
+            var candidate = Path.Join(parent, candidateRootName);
+            if (Contains(policy.PhysicalRoot, candidate)
+                || Contains(candidate, policy.PhysicalRoot))
+            {
+                return new DocumentationPatchCandidateLocationValidation(false, null);
+            }
+
+            var parentIdentity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(parent);
+            if (SameDirectory(parentIdentity, RootIdentity)
+                || directoryIdentities.Values.Any(identity =>
+                    SameDirectory(parentIdentity, identity)))
+            {
+                return new DocumentationPatchCandidateLocationValidation(false, null);
+            }
+
+            return new DocumentationPatchCandidateLocationValidation(true, parentIdentity);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            return new DocumentationPatchCandidateLocationValidation(false, null);
         }
     }
 
@@ -324,6 +385,14 @@ public sealed class DocumentationPatchRepositoryBaseline
                 prefix,
                 DocumentationPatchRepositoryPolicy.PathComparison);
     }
+
+    private static bool SameDirectory(
+        DocumentationPatchPhysicalIdentity left,
+        DocumentationPatchPhysicalIdentity right) =>
+        left.IsDirectory
+        && right.IsDirectory
+        && left.Volume == right.Volume
+        && left.FileId == right.FileId;
 
     private static DocumentationPatchRepositoryRebindResult StaleRebind() =>
         new(
@@ -377,7 +446,8 @@ internal sealed record DocumentationPatchRepositoryPolicy(
 
     internal static DocumentationPatchRepositoryPolicy CreateForTests(
         string physicalRoot,
-        IReadOnlyList<LoadedProject> projects)
+        IReadOnlyList<LoadedProject> projects,
+        IEnumerable<string>? allowedOutputRoots = null)
     {
         var protectedPaths = projects
             .SelectMany(project => project.SourceTrees.Values)
@@ -388,7 +458,7 @@ internal sealed record DocumentationPatchRepositoryPolicy(
         return Create(
             physicalRoot,
             protectedPaths,
-            [],
+            allowedOutputRoots ?? [],
             RepositoryInventory.Capture(physicalRoot, CancellationToken.None),
             projects);
     }
@@ -436,17 +506,7 @@ internal sealed record DocumentationPatchRepositoryPolicy(
         var facts = ImmutableArray.CreateBuilder<DocumentationPatchSemanticInputFact>();
         foreach (var loaded in projects)
         {
-            foreach (var source in loaded.SourceTrees.Values.Where(source =>
-                         source.Kind == LoadedSourceKind.Repository
-                         && source.RepositoryPath is not null))
-            {
-                facts.Add(new DocumentationPatchSemanticInputFact(
-                    source.RepositoryPath!,
-                    loaded.ProjectIdentity,
-                    loaded.CompilationContextRef,
-                    DocumentationPatchSemanticInputRole.Source,
-                    source.RepositoryPath!));
-            }
+            AddSourceDocuments(facts, root, loaded);
 
             AddDocuments(
                 facts,
@@ -472,6 +532,45 @@ internal sealed record DocumentationPatchRepositoryPolicy(
             .ToImmutableArray();
     }
 
+    private static void AddSourceDocuments(
+        ImmutableArray<DocumentationPatchSemanticInputFact>.Builder facts,
+        string root,
+        LoadedProject loaded)
+    {
+        var repositorySources = loaded.SourceTrees.Values
+            .Where(source => source.Kind == LoadedSourceKind.Repository
+                && source.RepositoryPath is not null)
+            .Select(source => source.RepositoryPath!)
+            .ToHashSet(PathComparer);
+        var represented = new HashSet<string>(PathComparer);
+        foreach (var document in loaded.Project.Documents)
+        {
+            if (document.FilePath is not { } path
+                || !TryRepositoryPath(root, path, out var repositoryPath)
+                || !repositorySources.Contains(repositoryPath))
+            {
+                continue;
+            }
+
+            represented.Add(repositoryPath);
+            AddDocument(facts, loaded, document, repositoryPath,
+                DocumentationPatchSemanticInputRole.Source);
+        }
+
+        // Synthetic sessions can carry a compilation without a workspace document.
+        // Production MSBuild sessions take the document path above so linked logical
+        // paths and same-physical-file multiplicity remain intact.
+        foreach (var repositoryPath in repositorySources.Except(represented, PathComparer))
+        {
+            facts.Add(new DocumentationPatchSemanticInputFact(
+                repositoryPath,
+                loaded.ProjectIdentity,
+                loaded.CompilationContextRef,
+                DocumentationPatchSemanticInputRole.Source,
+                repositoryPath));
+        }
+    }
+
     private static void AddDocuments(
         ImmutableArray<DocumentationPatchSemanticInputFact>.Builder facts,
         string root,
@@ -487,16 +586,26 @@ internal sealed record DocumentationPatchRepositoryPolicy(
                 continue;
             }
 
-            var logicalPath = document.Folders.Count == 0
-                ? document.Name
-                : string.Join('/', document.Folders.Append(document.Name));
-            facts.Add(new DocumentationPatchSemanticInputFact(
-                repositoryPath,
-                loaded.ProjectIdentity,
-                loaded.CompilationContextRef,
-                role,
-                logicalPath));
+            AddDocument(facts, loaded, document, repositoryPath, role);
         }
+    }
+
+    private static void AddDocument(
+        ImmutableArray<DocumentationPatchSemanticInputFact>.Builder facts,
+        LoadedProject loaded,
+        TextDocument document,
+        string repositoryPath,
+        DocumentationPatchSemanticInputRole role)
+    {
+        var logicalPath = document.Folders.Count == 0
+            ? document.Name
+            : string.Join('/', document.Folders.Append(document.Name));
+        facts.Add(new DocumentationPatchSemanticInputFact(
+            repositoryPath,
+            loaded.ProjectIdentity,
+            loaded.CompilationContextRef,
+            role,
+            logicalPath));
     }
 
     private static bool TryRepositoryPath(
@@ -662,9 +771,9 @@ internal static class DocumentationPatchRepositoryBaselineCapture
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     if (mode == DocumentationPatchRepositoryCaptureMode.Candidate
-                        && (policy.IsGoverned(relative)
-                        || policy.HasProtectedDescendant(relative))
-                    )
+                        && (Directory.Exists(path)
+                            || policy.IsGoverned(relative)
+                            || policy.HasProtectedDescendant(relative)))
                     {
                         throw DocumentationPatchBaselineException.Rejected();
                     }

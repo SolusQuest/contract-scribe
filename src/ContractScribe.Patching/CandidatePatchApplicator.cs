@@ -56,6 +56,7 @@ public sealed class CandidatePatchApplicator
     private static readonly UnicodeEncoding StrictUtf16Be = new(true, false, true);
     private readonly DocumentationPatchResolver resolver;
     private readonly Action<DocumentationPatchApplicationStage, string?>? observer;
+    private readonly Func<string>? stagingParentFactory;
 
     public CandidatePatchApplicator()
         : this(new DocumentationPatchResolver(), null)
@@ -64,10 +65,12 @@ public sealed class CandidatePatchApplicator
 
     internal CandidatePatchApplicator(
         DocumentationPatchResolver resolver,
-        Action<DocumentationPatchApplicationStage, string?>? observer)
+        Action<DocumentationPatchApplicationStage, string?>? observer,
+        Func<string>? stagingParentFactory = null)
     {
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.observer = observer;
+        this.stagingParentFactory = stagingParentFactory;
     }
 
     public DocumentationPatchApplicationResult Apply(
@@ -117,7 +120,9 @@ public sealed class CandidatePatchApplicator
                 request,
                 cancellationToken);
             observer?.Invoke(DocumentationPatchApplicationStage.RenderingCompleted, null);
-            candidate = new DocumentationPatchCandidateWorkspaceBuilder(observer).Build(
+            candidate = new DocumentationPatchCandidateWorkspaceBuilder(
+                observer,
+                stagingParentFactory).Build(
                 baseline,
                 selectedBytes,
                 cancellationToken);
@@ -270,7 +275,9 @@ public sealed class CandidatePatchApplicator
             var encoded = Encode(candidate, firstLocator.Encoding);
             if (entry.Bytes.AsSpan().SequenceEqual(encoded))
             {
-                throw Rejected();
+                throw new DocumentationPatchApplicationException(
+                    DocumentationPatchApplicationStatus.Rejected,
+                    "patch.rejected.no-effective-change");
             }
 
             result.Add(group.Key, encoded);

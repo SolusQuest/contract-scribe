@@ -12,11 +12,14 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         : StringComparer.Ordinal;
 
     private readonly Action<DocumentationPatchApplicationStage, string?>? observer;
+    private readonly Func<string> stagingParentFactory;
 
     public DocumentationPatchCandidateWorkspaceBuilder(
-        Action<DocumentationPatchApplicationStage, string?>? observer = null)
+        Action<DocumentationPatchApplicationStage, string?>? observer = null,
+        Func<string>? stagingParentFactory = null)
     {
         this.observer = observer;
+        this.stagingParentFactory = stagingParentFactory ?? Path.GetTempPath;
     }
 
     public DocumentationPatchCandidateHandle Build(
@@ -27,6 +30,12 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(selectedBytes);
         cancellationToken.ThrowIfCancellationRequested();
+        if (!OperatingSystem.IsLinux())
+        {
+            throw new PlatformNotSupportedException(
+                "Candidate workspace mutation requires Linux handle-relative filesystem operations.");
+        }
+
         var remainingSelectedPaths = selectedBytes.Keys
             .Select(ValidateRepositoryPath)
             .ToHashSet(PathComparer);
@@ -38,10 +47,25 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         }
 
         var parentPath = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(Path.GetTempPath()));
+            Path.GetFullPath(stagingParentFactory()));
+        var rootName = "contract-scribe-candidate-" + Guid.NewGuid().ToString("N");
+        var location = baseline.ValidateCandidateLocation(parentPath, rootName);
+        if (!location.IsValid || location.ParentIdentity is not { } validatedParent)
+        {
+            throw new DocumentationPatchApplicationException(
+                DocumentationPatchApplicationStatus.Rejected,
+                "patch.rejected.unsafe-change");
+        }
+
         var parentIdentity = DocumentationPatchCandidateFileSystem.ReadDirectoryIdentity(
             parentPath);
-        var rootName = "contract-scribe-candidate-" + Guid.NewGuid().ToString("N");
+        if (!Matches(parentIdentity, validatedParent))
+        {
+            throw new DocumentationPatchApplicationException(
+                DocumentationPatchApplicationStatus.Rejected,
+                "patch.rejected.unsafe-change");
+        }
+
         var rootPath = Path.Join(parentPath, rootName);
         var rootIdentity = DocumentationPatchCandidateFileSystem.CreateNewDirectory(
             parentPath,
@@ -62,7 +86,6 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                 "patch.rejected.unsafe-change");
         }
 
-        observer?.Invoke(DocumentationPatchApplicationStage.CandidateRootCreated, rootPath);
         var directories = new Dictionary<string, CandidateIdentity>(PathComparer)
         {
             [string.Empty] = rootIdentity,
@@ -77,6 +100,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
             files);
         try
         {
+            observer?.Invoke(DocumentationPatchApplicationStage.CandidateRootCreated, rootPath);
             var originalIdentities = baseline.Entries
                 .Select(entry => (
                     entry.PhysicalIdentity.Volume,
@@ -129,7 +153,15 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            VerifyCandidate(rootPath, directories, files, cancellationToken);
+            _ = CaptureCandidate(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootPath,
+                directories,
+                files,
+                requireExpectedBytes: true,
+                cancellationToken);
             observer?.Invoke(DocumentationPatchApplicationStage.CandidateReadbackComplete, rootPath);
             observer?.Invoke(DocumentationPatchApplicationStage.BeforeOriginalRebind, rootPath);
             var rebind = baseline.Rebind(cancellationToken);
@@ -191,13 +223,29 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         }
     }
 
-    private static void VerifyCandidate(
+    internal static ImmutableArray<CandidateWorkspaceFile> CaptureCandidate(
+        string parentPath,
+        CandidateIdentity parentIdentity,
+        string rootName,
         string rootPath,
         IReadOnlyDictionary<string, CandidateIdentity> directories,
         IReadOnlyDictionary<string, CandidateWorkspaceFile> files,
+        bool requireExpectedBytes,
         CancellationToken cancellationToken)
     {
-        var observed = new HashSet<string>(PathComparer);
+        if (!directories.TryGetValue(string.Empty, out var rootIdentity))
+        {
+            throw new IOException("The candidate root identity is unavailable.");
+        }
+
+        _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
+            parentPath,
+            parentIdentity,
+            rootName,
+            rootIdentity);
+        var observedFiles = new HashSet<string>(PathComparer);
+        var observedDirectories = new HashSet<string>(PathComparer);
+        var captured = ImmutableArray.CreateBuilder<CandidateWorkspaceFile>(files.Count);
         var pending = new Stack<(string FullPath, string RelativePath)>();
         pending.Push((rootPath, string.Empty));
         while (pending.Count > 0)
@@ -205,11 +253,18 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
             cancellationToken.ThrowIfCancellationRequested();
             var (directory, relativeDirectory) = pending.Pop();
             if (!directories.TryGetValue(relativeDirectory, out var expectedDirectory)
-                || DocumentationPatchCandidateFileSystem.ReadDirectoryIdentity(directory)
-                    != expectedDirectory)
+                || !observedDirectories.Add(relativeDirectory))
             {
                 throw new IOException("The candidate directory identity changed.");
             }
+
+            RebindDirectory(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootPath,
+                relativeDirectory,
+                directories);
 
             foreach (var path in Directory.EnumerateFileSystemEntries(directory)
                          .Order(StringComparer.Ordinal))
@@ -226,12 +281,17 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                     : relativeDirectory + "/" + Path.GetFileName(path);
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
+                    if (!directories.ContainsKey(relative))
+                    {
+                        throw new IOException("The candidate directory set changed.");
+                    }
+
                     pending.Push((path, relative));
                     continue;
                 }
 
                 if (!files.TryGetValue(relative, out var expectedFile)
-                    || !observed.Add(relative))
+                    || !observedFiles.Add(relative))
                 {
                     throw new IOException("The candidate file set changed.");
                 }
@@ -243,17 +303,74 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                     Leaf(relative),
                     expectedFile.Identity,
                     cancellationToken);
-                if (!read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan()))
+                var confirmed = DocumentationPatchCandidateFileSystem.ReadOwnedRegularFile(
+                    PhysicalPath(rootPath, parent),
+                    directories[parent],
+                    Leaf(relative),
+                    expectedFile.Identity,
+                    cancellationToken);
+                if (!read.Bytes.AsSpan().SequenceEqual(confirmed.Bytes)
+                    || (requireExpectedBytes
+                        && !read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan())))
                 {
                     throw new IOException("The candidate file bytes changed.");
                 }
+
+                captured.Add(new CandidateWorkspaceFile(
+                    relative,
+                    ImmutableArray.CreateRange(read.Bytes),
+                    read.Identity));
             }
+
+            RebindDirectory(
+                parentPath,
+                parentIdentity,
+                rootName,
+                rootPath,
+                relativeDirectory,
+                directories);
         }
 
-        if (observed.Count != files.Count)
+        if (observedFiles.Count != files.Count
+            || observedDirectories.Count != directories.Count)
         {
             throw new IOException("The candidate file set is incomplete.");
         }
+
+        _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
+            parentPath,
+            parentIdentity,
+            rootName,
+            rootIdentity);
+        return captured
+            .OrderBy(file => file.RepositoryPath, StringComparer.Ordinal)
+            .ToImmutableArray();
+    }
+
+    private static void RebindDirectory(
+        string parentPath,
+        CandidateIdentity parentIdentity,
+        string rootName,
+        string rootPath,
+        string relativeDirectory,
+        IReadOnlyDictionary<string, CandidateIdentity> directories)
+    {
+        if (string.IsNullOrEmpty(relativeDirectory))
+        {
+            _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
+                parentPath,
+                parentIdentity,
+                rootName,
+                directories[string.Empty]);
+            return;
+        }
+
+        var parent = Parent(relativeDirectory);
+        _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
+            PhysicalPath(rootPath, parent),
+            directories[parent],
+            Leaf(relativeDirectory),
+            directories[relativeDirectory]);
     }
 
     private static string ValidateRepositoryPath(string path)
@@ -319,6 +436,39 @@ internal sealed class CandidateWorkspaceLease
     public string RootName { get; }
 
     public string RootPath { get; }
+
+    public DocumentationPatchCandidateCaptureResult Capture(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var captured = DocumentationPatchCandidateWorkspaceBuilder.CaptureCandidate(
+                ParentPath,
+                ParentIdentity,
+                RootName,
+                RootPath,
+                directories,
+                files,
+                requireExpectedBytes: false,
+                cancellationToken);
+            return new DocumentationPatchCandidateCaptureResult(
+                DocumentationPatchCandidateCaptureStatus.Captured,
+                captured);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            return new DocumentationPatchCandidateCaptureResult(
+                DocumentationPatchCandidateCaptureStatus.Mismatch,
+                []);
+        }
+    }
 
     public void Cleanup()
     {
@@ -387,6 +537,16 @@ internal sealed record CandidateWorkspaceFile(
     ImmutableArray<byte> Bytes,
     CandidateIdentity Identity);
 
+internal enum DocumentationPatchCandidateCaptureStatus
+{
+    Captured,
+    Mismatch,
+}
+
+internal sealed record DocumentationPatchCandidateCaptureResult(
+    DocumentationPatchCandidateCaptureStatus Status,
+    ImmutableArray<CandidateWorkspaceFile> Files);
+
 public sealed class DocumentationPatchCandidateHandle : IDisposable
 {
     private readonly object gate = new();
@@ -453,6 +613,7 @@ public sealed class DocumentationPatchCandidateHandle : IDisposable
 internal sealed class DocumentationPatchCandidateConsumption : IDisposable
 {
     private readonly CandidateWorkspaceLease lease;
+    private int captureAttempted;
     private int disposed;
 
     internal DocumentationPatchCandidateConsumption(
@@ -470,6 +631,21 @@ internal sealed class DocumentationPatchCandidateConsumption : IDisposable
     internal ImmutableArray<CandidateWorkspaceFile> Files { get; }
 
     internal string RootPath => lease.RootPath;
+
+    internal DocumentationPatchCandidateCaptureResult CaptureCandidateForValidation(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Volatile.Read(ref disposed) != 0
+            || Interlocked.Exchange(ref captureAttempted, 1) != 0)
+        {
+            return new DocumentationPatchCandidateCaptureResult(
+                DocumentationPatchCandidateCaptureStatus.Mismatch,
+                []);
+        }
+
+        return lease.Capture(cancellationToken);
+    }
 
     public void Dispose()
     {

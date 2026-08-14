@@ -49,6 +49,8 @@ The renderer owns:
 
 The initial product inserts or replaces complete documentation blocks. It does not apply arbitrary textual edits from the model.
 
+An intrinsically valid replacement that would reproduce the original bytes is rejected as `patch.rejected.no-effective-change`; other unsafe rendering shapes remain `patch.rejected.unsafe-change`.
+
 ## Safety invariants
 
 A publishable patch must prove:
@@ -86,7 +88,11 @@ M2 must cover:
 
 ## Candidate workspace
 
-E1 renders into a fresh request-local candidate workspace outside and physically distinct from the original checkout. Every governed file is created anew: selected source files receive deterministic rendered bytes and all other governed files retain their baseline bytes. Candidate entries are sealed only after complete readback and a final original-baseline rebind. Construction failure or cancellation returns no usable handle; disposal invalidates the opaque handle and performs identity-bound best-effort cleanup without following changed topology.
+E1 renders into a fresh request-local candidate workspace outside and physically distinct from the original checkout. Before creating any entry, the loader-owned baseline authority validates the proposed root location and binds the staging parent identity; the candidate builder then creates every directory and regular file relative to an identity-checked parent without following links. Every governed file is created anew: selected source files receive deterministic rendered bytes and all other governed files retain their baseline bytes. Candidate entries are sealed only after complete readback and a final original-baseline rebind. Construction failure or cancellation returns no usable handle; disposal invalidates the opaque handle and performs identity-bound best-effort cleanup without following changed topology.
+
+Candidate mutation currently requires Linux handle-relative filesystem operations, as provided by the required GitHub-hosted Ubuntu x64 execution lane. Native Windows execution still provides read-only loader and renderer feedback but fails closed before candidate-root creation; adding Windows candidate mutation requires an explicit handle-relative implementation rather than path-based managed writes.
+
+Consumption transfers cleanup ownership exactly once. The internal #93 handoff can perform one identity-bound disk capture that rebinds the staging parent, root, every directory, and every regular file, rejects extra, missing, linked, or replaced entries, and returns the current bounded bytes. A second capture, a disposed consumer, or any identity/topology mismatch returns no candidate capture.
 
 The E1 result is complete but unaccepted. Its public handle exposes no staging path or arbitrary writer, and no E1 status is a Patch Validation Result outcome. Issue #93 consumes the internal correlated candidate, revalidates it, and constructs the Patch Validation Result, which records:
 

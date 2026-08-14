@@ -198,12 +198,14 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         }
     }
 
-    internal void SealDocumentationPatchRepositoryPolicyForTests()
+    internal void SealDocumentationPatchRepositoryPolicyForTests(
+        IEnumerable<string>? allowedOutputRoots = null)
     {
         SealDocumentationPatchRepositoryPolicy(
             DocumentationPatchRepositoryPolicy.CreateForTests(
                 PhysicalRepositoryRoot,
-                Projects));
+                Projects,
+                allowedOutputRoots));
     }
 
     internal bool IsDocumentationPatchAuthorityAvailable(
