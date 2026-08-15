@@ -1,10 +1,10 @@
 # Scribe context and prompt economics
 
-> **Status:** M3 candidate design record. Its privacy, repository-authority, bounded-tool, and cache-not-correctness boundaries remain guidance; concrete provider names, manifest and identity shapes, prompt-prefix rules, budget fields, storage, and routing mechanisms are not frozen requirements before M3 refinement and executable evaluation.
+> **Status:** The M3-X1 deterministic context-bootstrap decision in this document is accepted and executable. Provider transport, model/tool-loop behavior, durable manifests or snapshots, prompt-prefix construction, campaign scheduling, persistence, and economic evaluation remain candidate design until their owning M3 or M4 work accepts them.
 
 ## Decision
 
-ContractScribe uses one model-assisted agent role: the Documentation Scribe. Project-context bootstrap, context identity, snapshot storage, target grouping, and campaign scheduling are deterministic runtime responsibilities, not separate agents.
+ContractScribe uses one model-assisted agent role: the Documentation Scribe. The accepted M3-X1 bootstrap and content identity are deterministic runtime responsibilities, not separate agents. Snapshot storage, target grouping, and campaign scheduling are later candidate responsibilities rather than products or contracts introduced by M3-X1.
 
 A Scribe run may use bounded read-only tools to follow repository-defined context routes before it submits a documentation proposal. Multiple Scribe runs share immutable repository and scope context snapshots. They do not share hidden reasoning, mutable conversation history, or provider-owned session state.
 
@@ -12,7 +12,29 @@ The initial provider transport is constrained to an OpenAI-compatible request an
 
 Prompt-prefix reuse and bounded uncached input are required architecture properties. Provider caching remains an optimization rather than a correctness dependency: a cache miss may make a run more expensive, but it must not change the selected evidence, proposal semantics, validation result, or campaign state transition.
 
-The exact request endpoint, SDK or HTTP client, model identifiers, `Microsoft.Extensions.AI` usage, provisional contract shapes, and calibrated budget values remain M3 implementation decisions. They must preserve the boundaries in this document.
+The exact request endpoint, SDK or HTTP client, model identifiers, `Microsoft.Extensions.AI` usage, provider-visible contract shapes, and calibrated model-run budget values remain later M3 implementation decisions. They must preserve the accepted bootstrap boundary below.
+
+### Accepted M3-X1 context-bootstrap decision
+
+M3-X1 consumes one exact, current `ClassifiedRepositorySession` produced by M1 and creates one immutable, in-memory `DocumentationScribeLoadedContext`. It does not create a durable repository snapshot, context manifest, cache, ledger, resume identity, migration reader, compatibility alias, provider request, or provider-visible operation.
+
+The producer order is fixed:
+
+1. caller selection supplies only the repository/session correlation, selected classified symbol and declaration anchor, optional configured entrypoint, and bounded bootstrap limits;
+2. deterministic bootstrap validates the complete loaded/classified-session correlation before any file open or read;
+3. bootstrap resolves one permitted declaration directory, performs confined stable reads, and publishes typed instruction, project, route, omission, and source-evidence facts plus a private session-local cursor capability;
+4. later M3-X2 and M3-X3 producers may add evidence through the accepted M3-R1 typed ports;
+5. one final Documentation Scribe request is assembled and bound back to the complete required X1 instruction set without another repository read.
+
+The bootstrap accepts an explicitly configured repository-relative agent entrypoint as the sole root entrypoint. Root `AGENTS.md` is considered only when configuration supplies no alternative. Applicable nested `AGENTS.md` files are then loaded in deterministic root-to-leaf order along the one accepted declaration scope. A configured-entrypoint failure never falls back to root `AGENTS.md`.
+
+Scope acceptance is based on uniqueness, not on a declaration category. All authoritative repository declaration references for the selected symbol are normalized. They are accepted when they resolve to exactly one permitted repository directory and the caller's selected path/span is an exact declaration anchor. Partial, linked, generated, mixed, aliasing, or multi-declaration inputs that produce zero or multiple permitted scopes fail closed; no project root, first declaration, or lexical directory is selected heuristically.
+
+Before and after bounded reads, M3-X1 checks repository confinement, directory and file physical identity, link count, replacement, and publication state. It opens regular files without following links, decodes strict UTF-8, enforces file/count/depth/total-byte/elapsed limits, and distinguishes terminal correlation, unsafe-object, stale, encoding, identity-collision, cancellation, timeout, and budget outcomes from an accepted incomplete result. Caller cancellation is terminal and never publishes partial facts or a cursor.
+
+Core owns inert facts and validation only. Content-bearing facts are explicitly role- and authority-labeled and source-committed. Provider observation is telemetry, never evidence authority. Deterministic content and evidence identities exclude the repository session token and cursor; a separate correlation value binds facts to the exact loaded session. The Roslyn runtime privately owns the HMAC cursor key and loaded-session capability. A cursor binds the tool kind, normalized request, repository and compilation session, selected symbol, ordering, page size, next position, and source commitments, and is rejected after tampering, cross-query/tool reuse, or a fresh bootstrap even when repository bytes are unchanged.
+
+Diagnostics, failures, exceptions, logs, and object dumps expose stable product codes and bounded counts or repository-relative identities only. Authorized instruction or evidence content is available only through successful typed payload fields and is not copied into those diagnostic channels. Unknown exceptions map to one bounded internal-failure code.
 
 ## Goals
 
@@ -40,9 +62,9 @@ The bootstrapper is deterministic and does not call a model. For a repository sn
 - orders instructions from broadest to nearest scope;
 - canonicalizes repository-relative paths;
 - rejects symlink, junction, reparse-point, or traversal escapes;
-- computes content identities and records source revision;
+- computes deterministic source commitments, instruction/evidence identities, and one semantic content identity distinct from session correlation;
 - enforces initial file-count, byte, and depth bounds;
-- creates the initial context manifest.
+- creates one immutable in-memory loaded-session context.
 
 The nearest applicable repository instruction may refine a broader repository instruction within its repository-controlled scope. It cannot override ContractScribe's system policy, tool registry, output contract, budgets, provider selection, or security boundary.
 
@@ -50,18 +72,9 @@ The bootstrapper handles applicability that can be derived from paths and explic
 
 ### Project-context session
 
-A project-context session is a runtime-owned view over one immutable repository snapshot. It contains:
+The accepted M3-X1 context is a sealed runtime capability over the exact loaded/classified session. Its public surface contains immutable Core facts; it grants no ambient filesystem, shell, network, service-locator, writer, provider, Git, GitHub, persistence, or campaign authority. The Roslyn-owned capability retains the current session binding and private cursor authority needed by later typed ports. Disposal or session substitution makes request binding and cursor use stale.
 
-- the repository context manifest;
-- applicable scope overlays;
-- visited-file and route-edge records;
-- evidence IDs and content hashes;
-- remaining context and tool budgets;
-- access to the repository-confined reader and Roslyn semantic ports;
-- stable prompt-prefix identities;
-- bounded usage and cache observations.
-
-The session is not a provider conversation and is not durable GitHub ledger content. Repository document text may remain in memory or be reconstructed from the pinned repository snapshot. Platform-neutral campaign state may retain hashes, identities, counts, and bounded outcomes, but not complete prompts, tool transcripts, or source excerpts.
+This context is not a provider conversation and is not durable GitHub ledger content. Any future reconstructible snapshot, campaign state, prompt-prefix identity, usage observation, or cache artifact requires its own accepted consumer and contract.
 
 ### Documentation Scribe
 
@@ -82,7 +95,9 @@ The campaign runner groups targets by compatible context identity, constructs re
 
 Context is divided by reuse and authority rather than concatenated into one unlabeled prompt.
 
-### Repository context snapshot
+### Candidate later repository context snapshot
+
+This subsection describes possible later prompt/campaign reuse. It is not an M3-X1 data product or durable format.
 
 Repository context is common to targets across the repository and may contain:
 
@@ -104,7 +119,7 @@ repository identity
 + repository-context policy
 ```
 
-### Scope context overlay
+### Candidate later scope context overlay
 
 A scope overlay applies to targets governed by the same directory-specific instructions or project context. It may contain:
 
@@ -116,7 +131,7 @@ A scope overlay applies to targets governed by the same directory-specific instr
 
 Targets may share an overlay only when their applicable instruction stack and included document identities are equal. A repository with several projects or nested instruction files normally produces several context groups.
 
-### Target evidence pack
+### Candidate later target evidence pack
 
 Target evidence is specific to one symbol or a deliberately small batch sharing the same containing-type context. It contains:
 
@@ -128,7 +143,7 @@ Target evidence is specific to one symbol or a deliberately small batch sharing 
 
 Target evidence never becomes part of the repository-wide reusable prefix merely because one Scribe run requested it. Repeated evidence may be promoted only through an explicit, deterministic context-policy change.
 
-### Discovery reuse and snapshot promotion
+### Candidate later discovery reuse and snapshot promotion
 
 The initial bootstrap may be sufficient to build the complete repository or scope context. When an entrypoint contains a semantic route, the first Scribe run in a context scope may need to select and read an additional procedure or project document.
 
@@ -213,7 +228,9 @@ These tools are implemented directly in C# through repository-confined services.
 
 Roslyn semantic tools remain preferred for C# symbols, relationships, usages, and tests. Text tools exist for context routing, maintained documentation, configuration, examples, and non-Roslyn artifacts.
 
-## Shared context without shared conversation
+## Candidate shared context without shared conversation
+
+The following request-sharing model belongs to later prompt and campaign composition. M3-X1 establishes only the deterministic facts and semantic content identity that such work may consume.
 
 Independent Scribe runs share immutable context artifacts and tool backends:
 
@@ -237,7 +254,7 @@ This is logically similar to forking from a common context, but the fork is impl
 
 A single ever-growing Scribe conversation is not the default because it serializes unrelated targets, prevents safe parallelism, expands the prompt with prior target history, complicates retry and resume, and risks cross-target contamination.
 
-## Cacheable prompt layout
+## Candidate cacheable prompt layout
 
 Every compatible request is assembled in this order:
 
@@ -346,7 +363,9 @@ Provider cache hits are not guaranteed and must not be a hard success condition.
 
 Pricing is time-dependent provider configuration, not a hard-coded product constant. A run records the provider/model, applicable pricing or cost-policy identity, and observed usage. Caller-owned scheduling may target an advantageous window, but the product does not promise a particular wall-clock price.
 
-## Resume and invalidation
+## Candidate resume and invalidation
+
+Resume and durable invalidation are M4 concerns. The text below is retained as design direction and is not implemented or frozen by M3-X1.
 
 Campaign resume reconstructs context from deterministic state and the pinned repository snapshot. It does not restore a complete provider conversation.
 
@@ -364,7 +383,9 @@ On the same commit, an incomplete campaign may reuse the same local context iden
 
 ## Failure behavior
 
-At minimum, context and economic failures distinguish:
+The accepted M3-X1 bootstrap distinguishes exact-session correlation, ambiguous scope, unsafe repository objects, stale commitments or publication state, invalid encoding, identity collision, caller cancellation, operation timeout, and bootstrap budget exhaustion. It publishes no context on those terminal outcomes; a missing optional root entrypoint may instead produce an immutable incomplete context with an omission fact.
+
+Later context routing and economic work is expected to distinguish:
 
 - missing or unsupported entrypoint;
 - invalid or escaped context path;
@@ -381,7 +402,9 @@ Missing cache telemetry does not invalidate a documentation proposal. Missing re
 
 ## Validation
 
-M3 must include deterministic tests for:
+M3-X1 includes deterministic executable coverage for exact pre-read correlation, configured-entrypoint exclusivity, root-to-leaf nested instructions, unique partial-declaration scope, stable no-follow reads, invalid encoding, changed bytes, bounded omissions and budgets, cancellation at every bootstrap stage, content/evidence collision rules, final request binding, session-local cursor tampering/replay, safe diagnostic surfaces, and ordered semantic facts across fresh processes.
+
+Later M3 work must include deterministic tests for:
 
 - nested `AGENTS.md` applicability and nearest-scope precedence;
 - explicit entrypoint behavior;
