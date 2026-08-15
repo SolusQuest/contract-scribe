@@ -74,16 +74,16 @@
         "claimCategoryId": "claim.behavior",
         "completeEvidenceRequired": true,
         "allowedAuthorities": [
-          "authority.public-contract",
-          "authority.source-declaration"
+          "authority.source-declaration",
+          "authority.public-contract"
         ]
       },
       {
         "claimCategoryId": "claim.purpose",
         "completeEvidenceRequired": false,
         "allowedAuthorities": [
-          "authority.repository-documentation",
-          "authority.source-declaration"
+          "authority.source-declaration",
+          "authority.repository-documentation"
         ]
       }
     ],
@@ -190,6 +190,7 @@
   "evidenceConflicts": [],
   "toolPolicyId": "tool-policy.read-only.v1",
   "limits": {
+    "maximumAttempts": 3,
     "maximumContextReferences": 8,
     "maximumContextUtf8Bytes": 65536,
     "maximumEvidenceReferences": 32,
@@ -198,6 +199,7 @@
     "maximumToolRounds": 4,
     "maximumToolCalls": 16,
     "maximumInputTokens": 65536,
+    "maximumUncachedInputTokens": 32768,
     "maximumOutputTokens": 8192,
     "maximumCostMicrounits": 5000000,
     "maximumElapsedMilliseconds": 120000

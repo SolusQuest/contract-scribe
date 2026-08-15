@@ -93,6 +93,11 @@ public static class DocumentationScribeContract
     public const int MaximumContentUnits = 256;
     public const int MaximumReferences = 512;
     public const int MaximumDiagnostics = 64;
+    public const int MaximumAttempts = 1_000_000;
+    public const int MaximumObservedInputTokens = 16_777_216;
+    public const int MaximumObservedOutputTokens = 1_048_576;
+    public const long MaximumObservedCostMicrounits = 1_000_000_000_000;
+    public const int MaximumObservedElapsedMilliseconds = 86_400_000;
 }
 
 public static class DocumentationScribeVocabulary
@@ -493,7 +498,9 @@ public sealed record DocumentationScribeRunLimits
         int maximumProviderRequests,
         int maximumToolRounds,
         int maximumToolCalls,
+        int maximumAttempts,
         int maximumInputTokens,
+        int maximumUncachedInputTokens,
         int maximumOutputTokens,
         long maximumCostMicrounits,
         int maximumElapsedMilliseconds)
@@ -505,7 +512,9 @@ public sealed record DocumentationScribeRunLimits
         MaximumProviderRequests = maximumProviderRequests;
         MaximumToolRounds = maximumToolRounds;
         MaximumToolCalls = maximumToolCalls;
+        MaximumAttempts = maximumAttempts;
         MaximumInputTokens = maximumInputTokens;
+        MaximumUncachedInputTokens = maximumUncachedInputTokens;
         MaximumOutputTokens = maximumOutputTokens;
         MaximumCostMicrounits = maximumCostMicrounits;
         MaximumElapsedMilliseconds = maximumElapsedMilliseconds;
@@ -525,7 +534,11 @@ public sealed record DocumentationScribeRunLimits
 
     public int MaximumToolCalls { get; }
 
+    public int MaximumAttempts { get; }
+
     public int MaximumInputTokens { get; }
+
+    public int MaximumUncachedInputTokens { get; }
 
     public int MaximumOutputTokens { get; }
 
@@ -702,11 +715,13 @@ public sealed record DocumentationScribeUsageObservation
         int? inputTokens,
         int? outputTokens,
         int? cachedInputTokens,
+        int? uncachedInputTokens,
         int? reasoningTokens)
     {
         InputTokens = inputTokens;
         OutputTokens = outputTokens;
         CachedInputTokens = cachedInputTokens;
+        UncachedInputTokens = uncachedInputTokens;
         ReasoningTokens = reasoningTokens;
     }
 
@@ -715,6 +730,8 @@ public sealed record DocumentationScribeUsageObservation
     public int? OutputTokens { get; }
 
     public int? CachedInputTokens { get; }
+
+    public int? UncachedInputTokens { get; }
 
     public int? ReasoningTokens { get; }
 }
@@ -759,6 +776,7 @@ public sealed record DocumentationScribeUsageObservationInput(
     int? InputTokens,
     int? OutputTokens,
     int? CachedInputTokens,
+    int? UncachedInputTokens,
     int? ReasoningTokens);
 
 public sealed record DocumentationScribeCostObservationInput(

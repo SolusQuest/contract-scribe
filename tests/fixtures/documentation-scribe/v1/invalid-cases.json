@@ -20,6 +20,34 @@
       "path": "invalid/unsupported-version.json",
       "expectedCode": "scribe.request.unsupported-version",
       "expectedPointer": "/scribeRequestVersion"
+    },
+    {
+      "caseId": "duplicate-result-property",
+      "artifact": "runResult",
+      "path": "invalid/duplicate-result-property.json",
+      "expectedCode": "scribe.result.duplicate-property",
+      "expectedPointer": "/scribeRunResultVersion"
+    },
+    {
+      "caseId": "unknown-result-field",
+      "artifact": "runResult",
+      "path": "invalid/unknown-result-field.json",
+      "expectedCode": "scribe.result.unknown-field",
+      "expectedPointer": "/unexpected"
+    },
+    {
+      "caseId": "unsupported-result-version",
+      "artifact": "runResult",
+      "path": "invalid/unsupported-result-version.json",
+      "expectedCode": "scribe.result.unsupported-version",
+      "expectedPointer": "/scribeRunResultVersion"
+    },
+    {
+      "caseId": "wrong-attempt-result",
+      "artifact": "runResult",
+      "path": "invalid/wrong-attempt-result.json",
+      "expectedCode": "scribe.result.invalid-correlation",
+      "expectedPointer": "/attemptId"
     }
   ]
 }

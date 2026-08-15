@@ -66,8 +66,19 @@
     "componentIdentity": {
       "type": "string",
       "minLength": 1,
+      "maxLength": 128
+    },
+    "compilationContextRef": {
+      "type": "string",
+      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[a-z][a-z0-9./-]*[a-z0-9]$|^[a-z]$"
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "documentationCommentId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 1024,
+      "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$"
     },
     "sha256": {
       "type": "string",
@@ -80,8 +91,8 @@
     "repositoryPath": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 1024,
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:]).+$"
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
     },
     "symbolRef": {
       "type": "object",
@@ -92,13 +103,10 @@
       ],
       "properties": {
         "compilationContextRef": {
-          "$ref": "#/$defs/identifier"
+          "$ref": "#/$defs/compilationContextRef"
         },
         "documentationCommentId": {
-          "type": "string",
-          "minLength": 3,
-          "maxLength": 512,
-          "pattern": "^[A-Z]:.+$"
+          "$ref": "#/$defs/documentationCommentId"
         }
       }
     },
@@ -117,7 +125,7 @@
         },
         "end": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 2147483647
         }
       }
@@ -164,12 +172,10 @@
               ],
               "properties": {
                 "assemblyIdentity": {
-                  "$ref": "#/$defs/identifier"
+                  "$ref": "#/$defs/compilationContextRef"
                 },
                 "documentationCommentId": {
-                  "type": "string",
-                  "minLength": 3,
-                  "maxLength": 512
+                  "$ref": "#/$defs/documentationCommentId"
                 }
               }
             }
@@ -199,10 +205,10 @@
                   ]
                 },
                 "producerId": {
-                  "$ref": "#/$defs/identifier"
+                  "type": "string"
                 },
                 "outputId": {
-                  "$ref": "#/$defs/identifier"
+                  "type": "string"
                 },
                 "sourceSha256": {
                   "$ref": "#/$defs/sha256"
@@ -210,7 +216,47 @@
                 "span": {
                   "$ref": "#/$defs/span"
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "source-generator"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^sgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^sgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "tool-generated"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^tgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^tgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         },
@@ -251,7 +297,14 @@
           "$ref": "#/$defs/repositoryContextRef"
         },
         "inputIdentity": {
-          "$ref": "#/$defs/repositoryPath"
+          "allOf": [
+            {
+              "$ref": "#/$defs/repositoryPath"
+            },
+            {
+              "pattern": "(?:\\.[sS][lL][nN][xX]?|\\.[cC][sS][pP][rR][oO][jJ])$"
+            }
+          ]
         },
         "targetProfile": {
           "enum": [
@@ -280,18 +333,37 @@
           ],
           "properties": {
             "kind": {
-              "enum": [
-                "parameter",
-                "typeParameter"
-              ]
+              "const": "typeParameter"
             },
             "identity": {
-              "$ref": "#/$defs/componentIdentity"
+              "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$"
             },
             "name": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 128
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "const": "parameter"
+            },
+            "identity": {
+              "pattern": "^parameter/(?:0|[1-9][0-9]*)$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
             }
           }
         },
@@ -304,13 +376,26 @@
           ],
           "properties": {
             "kind": {
-              "enum": [
-                "return",
-                "value"
-              ]
+              "const": "return"
             },
             "identity": {
-              "$ref": "#/$defs/componentIdentity"
+              "const": "return"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity"
+          ],
+          "properties": {
+            "kind": {
+              "const": "value"
+            },
+            "identity": {
+              "const": "value"
             }
           }
         }
@@ -731,6 +816,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "maximumAttempts",
         "maximumContextReferences",
         "maximumContextUtf8Bytes",
         "maximumEvidenceReferences",
@@ -739,11 +825,17 @@
         "maximumToolRounds",
         "maximumToolCalls",
         "maximumInputTokens",
+        "maximumUncachedInputTokens",
         "maximumOutputTokens",
         "maximumCostMicrounits",
         "maximumElapsedMilliseconds"
       ],
       "properties": {
+        "maximumAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
         "maximumContextReferences": {
           "type": "integer",
           "minimum": 0,
@@ -782,6 +874,11 @@
         "maximumInputTokens": {
           "type": "integer",
           "minimum": 1,
+          "maximum": 16777216
+        },
+        "maximumUncachedInputTokens": {
+          "type": "integer",
+          "minimum": 0,
           "maximum": 16777216
         },
         "maximumOutputTokens": {

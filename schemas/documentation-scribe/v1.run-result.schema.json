@@ -38,8 +38,19 @@
     "componentIdentity": {
       "type": "string",
       "minLength": 1,
+      "maxLength": 128
+    },
+    "compilationContextRef": {
+      "type": "string",
+      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[a-z][a-z0-9./-]*[a-z0-9]$|^[a-z]$"
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "documentationCommentId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 1024,
+      "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$"
     },
     "sha256": {
       "type": "string",
@@ -56,8 +67,8 @@
     "repositoryPath": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 1024,
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:]).+$"
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
     },
     "span": {
       "type": "object",
@@ -74,7 +85,7 @@
         },
         "end": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 2147483647
         }
       }
@@ -121,12 +132,10 @@
               ],
               "properties": {
                 "assemblyIdentity": {
-                  "$ref": "#/$defs/identifier"
+                  "$ref": "#/$defs/compilationContextRef"
                 },
                 "documentationCommentId": {
-                  "type": "string",
-                  "minLength": 3,
-                  "maxLength": 512
+                  "$ref": "#/$defs/documentationCommentId"
                 }
               }
             }
@@ -156,10 +165,10 @@
                   ]
                 },
                 "producerId": {
-                  "$ref": "#/$defs/identifier"
+                  "type": "string"
                 },
                 "outputId": {
-                  "$ref": "#/$defs/identifier"
+                  "type": "string"
                 },
                 "sourceSha256": {
                   "$ref": "#/$defs/sha256"
@@ -167,7 +176,47 @@
                 "span": {
                   "$ref": "#/$defs/span"
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "source-generator"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^sgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^sgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "tool-generated"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^tgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^tgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         },
@@ -203,13 +252,10 @@
       ],
       "properties": {
         "compilationContextRef": {
-          "$ref": "#/$defs/identifier"
+          "$ref": "#/$defs/compilationContextRef"
         },
         "documentationCommentId": {
-          "type": "string",
-          "minLength": 3,
-          "maxLength": 512,
-          "pattern": "^[A-Z]:.+$"
+          "$ref": "#/$defs/documentationCommentId"
         }
       }
     },
@@ -253,7 +299,7 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 16384
+        "maxLength": 2048
       }
     },
     "evidenceReferenceIds": {
@@ -316,7 +362,7 @@
         "name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256
+          "maxLength": 128
         },
         "lines": {
           "$ref": "#/$defs/contentLines"
@@ -327,7 +373,41 @@
         "evidenceReferenceIds": {
           "$ref": "#/$defs/evidenceReferenceIds"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content.type-parameter"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "componentIdentity": {
+                "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content.parameter"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "componentIdentity": {
+                "pattern": "^parameter/(?:0|[1-9][0-9]*)$"
+              }
+            }
+          }
+        }
+      ]
     },
     "componentUnit": {
       "type": "object",
@@ -358,7 +438,41 @@
         "evidenceReferenceIds": {
           "$ref": "#/$defs/evidenceReferenceIds"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content.return"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "componentIdentity": {
+                "const": "return"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content.value"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "componentIdentity": {
+                "const": "value"
+              }
+            }
+          }
+        }
+      ]
     },
     "exceptionUnit": {
       "type": "object",
@@ -377,8 +491,8 @@
         "typeDocumentationId": {
           "type": "string",
           "minLength": 3,
-          "maxLength": 512,
-          "pattern": "^T:.+$"
+          "maxLength": 1024,
+          "pattern": "^T:[^\\s\\u0000-\\u001F\\u007F-\\u009F<>&\\\"']+$"
         },
         "lines": {
           "$ref": "#/$defs/contentLines"
@@ -553,19 +667,28 @@
       "properties": {
         "inputTokens": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 16777216
         },
         "outputTokens": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 1048576
         },
         "cachedInputTokens": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "uncachedInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
         },
         "reasoningTokens": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 1048576
         }
       }
     },
@@ -582,7 +705,8 @@
         },
         "amountMicrounits": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 1000000000000
         }
       }
     },
@@ -704,7 +828,8 @@
         },
         "attemptNumber": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 1000000
         },
         "providerRequestCount": {
           "type": "integer",
@@ -720,7 +845,8 @@
         },
         "elapsedMilliseconds": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 86400000
         },
         "usage": {
           "$ref": "#/$defs/usage"

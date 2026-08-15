@@ -58,6 +58,43 @@ public sealed class DocumentationScribeContractTests
                 .Select(DocumentationScribeVocabulary.GetId)
                 .Order(StringComparer.Ordinal),
             registry["contentUnitKinds"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            Enum.GetValues<DocumentationScribeEvidenceAuthority>()
+                .Select(DocumentationScribeVocabulary.GetId),
+            registry["evidenceAuthoritiesInAscendingOrder"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            Enum.GetValues<DocumentationScribeSkipReason>()
+                .Select(DocumentationScribeVocabulary.GetId)
+                .Order(StringComparer.Ordinal),
+            registry["skipReasons"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            Enum.GetValues<DocumentationScribeFailureCode>()
+                .Select(DocumentationScribeVocabulary.GetId)
+                .Order(StringComparer.Ordinal),
+            registry["failureCodes"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            Enum.GetValues<DocumentationScribeCancellationCode>()
+                .Select(DocumentationScribeVocabulary.GetId)
+                .Order(StringComparer.Ordinal),
+            registry["cancellationCodes"]!.AsArray().Select(node => node!.GetValue<string>()));
+        var toolOutcomeIds = typeof(DocumentationScribeToolOutcome)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(property => property.PropertyType == typeof(DocumentationScribeToolOutcome))
+            .Select(property => ((DocumentationScribeToolOutcome)property.GetValue(null)!).Id)
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(
+            toolOutcomeIds,
+            registry["toolOutcomes"]!.AsArray().Select(node => node!.GetValue<string>()));
+        var schemaText = Encoding.UTF8.GetString(ReadContractFile("v1.request.schema.json"))
+            + Encoding.UTF8.GetString(ReadContractFile("v1.run-result.schema.json"));
+        foreach (var registeredValue in registry
+            .Where(pair => pair.Key is not (
+                "documentationScribeRegistryVersion" or "requestSchema" or "runResultSchema" or "toolOutcomes"))
+            .SelectMany(pair => pair.Value!.AsArray())
+            .Select(node => node!.GetValue<string>()))
+        {
+            Assert.Contains(registeredValue, schemaText, StringComparison.Ordinal);
+        }
         AssertLocalReferences(JsonNode.Parse(ReadContractFile("v1.request.schema.json"))!);
         AssertLocalReferences(JsonNode.Parse(ReadContractFile("v1.run-result.schema.json"))!);
     }
@@ -65,14 +102,30 @@ public sealed class DocumentationScribeContractTests
     [Fact]
     public void Invalid_fixture_manifest_has_stable_codes_and_pointers()
     {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         using var manifest = JsonDocument.Parse(ReadFixture("invalid-cases.json"));
         foreach (var invalidCase in manifest.RootElement.GetProperty("invalidCases").EnumerateArray())
         {
             var path = invalidCase.GetProperty("path").GetString()!.Split('/');
-            var parsed = DocumentationScribeValidation.ParseRequest(ReadFixture(path));
-            Assert.Null(parsed.Request);
-            Assert.Equal(invalidCase.GetProperty("expectedCode").GetString(), parsed.Failure?.Code);
-            Assert.Equal(invalidCase.GetProperty("expectedPointer").GetString(), parsed.Failure?.Pointer);
+            var artifact = invalidCase.GetProperty("artifact").GetString();
+            var expectedCode = invalidCase.GetProperty("expectedCode").GetString();
+            var expectedPointer = invalidCase.GetProperty("expectedPointer").GetString();
+            if (artifact == "request")
+            {
+                var parsed = DocumentationScribeValidation.ParseRequest(ReadFixture(path));
+                Assert.Null(parsed.Request);
+                Assert.Equal(expectedCode, parsed.Failure?.Code);
+                Assert.Equal(expectedPointer, parsed.Failure?.Pointer);
+            }
+            else
+            {
+                Assert.Equal("runResult", artifact);
+                var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, ReadFixture(path));
+                Assert.Null(parsed.Result);
+                Assert.Equal(expectedCode, parsed.Failure?.Code);
+                Assert.Equal(expectedPointer, parsed.Failure?.Pointer);
+            }
         }
     }
 
@@ -126,6 +179,151 @@ public sealed class DocumentationScribeContractTests
             root => root["context"]!["inputIdentity"] = "samples/Bad\u0001.csproj",
             "scribe.request.invalid-vocabulary",
             "/context/inputIdentity");
+    }
+
+    [Fact]
+    public void Reused_m1_m2_identity_locator_and_component_domains_are_exact()
+    {
+        var compatible = ParseObject(ReadFixture("valid", "request.json"));
+        compatible["context"]!["inputIdentity"] = "samples/Synthetic.SLNX";
+        compatible["contextReferences"]![0]!["path"] = "docs/contracts:v1.md";
+        compatible["target"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
+        compatible["evidenceReferences"]![0]!["subject"]!["parentSymbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
+        compatible["evidenceReferences"]![1]!["subject"]!["parentSymbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
+        compatible["evidenceReferences"]![2]!["subject"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
+        Assert.NotNull(ParseValidRequest(Serialize(compatible)));
+
+        AssertRequestMutationFails(
+            root => root["context"]!["inputIdentity"] = "samples/Synthetic.txt",
+            "scribe.request.invalid-vocabulary",
+            "/context/inputIdentity");
+        AssertRequestMutationFails(
+            root => root["target"]!["symbolRef"]!["compilationContextRef"] = "_synthetic",
+            "scribe.request.invalid-vocabulary",
+            "/target/symbolRef/compilationContextRef");
+        AssertRequestMutationFails(
+            root => root["target"]!["symbolRef"]!["documentationCommentId"] = "X:Synthetic.Widget",
+            "scribe.request.invalid-vocabulary",
+            "/target/symbolRef/documentationCommentId");
+        AssertRequestMutationFails(
+            root => root["target"]!["applicableComponents"]![0]!["identity"] = "parameter/00",
+            "scribe.request.invalid-vocabulary",
+            "/target/applicableComponents/0/identity");
+        AssertRequestMutationFails(
+            root => root["target"]!["applicableComponents"]!.AsArray().Insert(1, new JsonObject
+            {
+                ["kind"] = "parameter",
+                ["identity"] = "parameter/1",
+                ["name"] = "value",
+            }),
+            "scribe.request.invalid-order",
+            "/target/applicableComponents/1/identity");
+        AssertRequestMutationFails(
+            root => root["target"]!["applicableComponents"]!.AsArray().Add(new JsonObject
+            {
+                ["kind"] = "value",
+                ["identity"] = "value",
+            }),
+            "scribe.request.invalid-component",
+            "/target/applicableComponents/2");
+
+        var generated = ParseObject(ReadFixture("valid", "request.json"));
+        generated["target"]!["sourceCommitment"]!["locator"] = new JsonObject
+        {
+            ["generatedOutput"] = new JsonObject
+            {
+                ["producerKind"] = "source-generator",
+                ["producerId"] = "sgp." + new string('a', 64),
+                ["outputId"] = "sgo." + new string('b', 64),
+                ["sourceSha256"] = new string('c', 64),
+                ["span"] = new JsonObject
+                {
+                    ["start"] = 0,
+                    ["end"] = 0,
+                },
+            },
+        };
+        var generatedBytes = Serialize(generated);
+        AssertSchemaValid(RequestSchema.Value, generatedBytes, "generated-locator");
+        Assert.NotNull(ParseValidRequest(generatedBytes));
+        generated["target"]!["sourceCommitment"]!["locator"]!["generatedOutput"]!["producerId"] =
+            "tgp." + new string('a', 64);
+        Assert.False(Evaluate(RequestSchema.Value, Serialize(generated)));
+        var generatedFailure = DocumentationScribeValidation.ParseRequest(Serialize(generated)).Failure;
+        Assert.Equal("scribe.request.invalid-vocabulary", generatedFailure?.Code);
+        Assert.Equal("/target/sourceCommitment/locator/generatedOutput/producerId", generatedFailure?.Pointer);
+    }
+
+    [Fact]
+    public void Structured_proposals_are_complete_m2_safe_blocks()
+    {
+        AssertResultMutationFails(
+            request => request["styleProfile"]!["summary"]!["disposition"] = "optional",
+            result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(0),
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            request => request["styleProfile"]!["componentPolicies"]![1]!["disposition"] = "optional",
+            result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(2),
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            null,
+            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Uses <see cref=\"T:System.String\"/>.",
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            null,
+            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Uses &amp; escaping.",
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            null,
+            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = new string('a', 2_049),
+            "scribe.result.invalid-vocabulary");
+
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+        var parsed = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            ReadFixture("valid", "proposal-result.json"));
+        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
+        var patch = ParseObject(ReadRepositoryFixture("documentation-patch", "v1", "valid", "repository-request.json"));
+        var block = patch["blocks"]![0]!;
+        block["applicableComponents"] = new JsonArray(request.Target.ApplicableComponents
+            .Select(component =>
+            {
+                var node = new JsonObject
+                {
+                    ["kind"] = component.Kind switch
+                    {
+                        DocumentationPatchComponentKind.TypeParameter => "typeParameter",
+                        DocumentationPatchComponentKind.Parameter => "parameter",
+                        DocumentationPatchComponentKind.Return => "return",
+                        DocumentationPatchComponentKind.Value => "value",
+                        _ => throw new InvalidOperationException(),
+                    },
+                    ["identity"] = component.Identity,
+                };
+                if (component.Name is not null)
+                {
+                    node["name"] = component.Name;
+                }
+
+                return (JsonNode)node;
+            })
+            .ToArray());
+        var projected = Assert.IsType<DocumentationPatchStructuredContent>(proposal.PatchContent);
+        var webJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        block["content"] = new JsonObject
+        {
+            ["kind"] = "structured",
+            ["summaryLines"] = JsonSerializer.SerializeToNode(projected.SummaryLines, webJson),
+            ["typeParameters"] = JsonSerializer.SerializeToNode(projected.TypeParameters, webJson),
+            ["parameters"] = JsonSerializer.SerializeToNode(projected.Parameters, webJson),
+            ["return"] = JsonSerializer.SerializeToNode(projected.Return, webJson),
+            ["value"] = JsonSerializer.SerializeToNode(projected.Value, webJson),
+            ["exceptions"] = JsonSerializer.SerializeToNode(projected.Exceptions, webJson),
+            ["remarksLines"] = JsonSerializer.SerializeToNode(projected.RemarksLines, webJson),
+        };
+        Assert.True(DocumentationPatchValidator.ParseRequest(Serialize(patch)).IsValid);
     }
 
     [Fact]
@@ -275,7 +473,23 @@ public sealed class DocumentationScribeContractTests
         AssertResultMutationFails(
             null,
             result => result["scribeRequestSha256"] = new string('0', 64),
-            "scribe.result.invalid-correlation");
+            "scribe.result.invalid-correlation",
+            "/scribeRequestSha256");
+        AssertResultMutationFails(
+            null,
+            result => result["attemptId"] = "scribe-attempt.ffffffffffffffffffffffffffffffff",
+            "scribe.result.invalid-correlation",
+            "/attemptId");
+        AssertResultMutationFails(
+            null,
+            result => result["runEnvelope"]!["scribeRequestSha256"] = new string('0', 64),
+            "scribe.result.invalid-correlation",
+            "/runEnvelope/scribeRequestSha256");
+        AssertResultMutationFails(
+            null,
+            result => result["runEnvelope"]!["attemptId"] = "scribe-attempt.ffffffffffffffffffffffffffffffff",
+            "scribe.result.invalid-correlation",
+            "/runEnvelope/attemptId");
         AssertResultMutationFails(
             null,
             result => result["terminal"]!["target"]!["symbolRef"]!["documentationCommentId"] = "M:Synthetic.Other.Run",
@@ -306,6 +520,113 @@ public sealed class DocumentationScribeContractTests
             null,
             result => result["runEnvelope"]!["styleProfileId"] = "style.other.v1",
             "scribe.result.invalid-correlation");
+    }
+
+    [Fact]
+    public void Inherit_doc_zero_ceilings_and_authority_strength_order_are_enforced()
+    {
+        AssertRequestMutationFails(
+            request => Reverse(request["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"]!.AsArray()),
+            "scribe.request.invalid-order",
+            "/styleProfile/claimPolicies/0/allowedAuthorities/1");
+        AssertRequestMutationFails(
+            request =>
+            {
+                var style = request["styleProfile"]!;
+                foreach (var policyName in new[] { "summary", "remarks", "exceptions" })
+                {
+                    style[policyName]!["disposition"] = "forbidden";
+                    style[policyName]!["maximumScalars"] = policyName == "summary" ? 1 : 0;
+                }
+
+                foreach (var policy in style["componentPolicies"]!.AsArray())
+                {
+                    policy!["disposition"] = "forbidden";
+                    policy["maximumScalars"] = 0;
+                }
+
+                style["inheritDocDisposition"] = "required";
+            },
+            "scribe.request.invalid-style",
+            "/styleProfile/inheritDocDisposition");
+    }
+
+    [Fact]
+    public void Attempts_and_truthful_terminal_observations_use_separate_safety_bounds()
+    {
+        AssertResultMutationFails(
+            null,
+            result => result["runEnvelope"]!["attemptNumber"] = 4,
+            "scribe.result.over-budget",
+            "/runEnvelope/attemptNumber");
+        AssertResultMutationFails(
+            null,
+            result => result["runEnvelope"]!["usage"]!["uncachedInputTokens"] = 32_769,
+            "scribe.result.over-budget",
+            "/runEnvelope/usage/uncachedInputTokens");
+        AssertResultMutationFails(
+            null,
+            result => result["runEnvelope"]!["elapsedMilliseconds"] = 120_001,
+            "scribe.result.over-budget",
+            "/runEnvelope/elapsedMilliseconds");
+
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+        var budgetEnvelope = CreateEnvelope(request) with
+        {
+            Usage = new DocumentationScribeUsageObservationInput(
+                request.Limits.MaximumInputTokens + 1,
+                request.Limits.MaximumOutputTokens + 1,
+                request.Limits.MaximumInputTokens + 1,
+                request.Limits.MaximumUncachedInputTokens + 1,
+                request.Limits.MaximumOutputTokens + 1),
+            Cost = new DocumentationScribeCostObservationInput(
+                "currency.usd",
+                request.Limits.MaximumCostMicrounits + 1),
+        };
+        var budget = DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Budget,
+            budgetEnvelope);
+        Assert.Equal(request.Limits.MaximumUncachedInputTokens + 1, budget.RunEnvelope.Usage?.UncachedInputTokens);
+
+        var timeout = DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Timeout,
+            CreateEnvelope(request) with
+            {
+                ElapsedMilliseconds = request.Limits.MaximumElapsedMilliseconds + 1,
+            });
+        Assert.Equal(request.Limits.MaximumElapsedMilliseconds + 1, timeout.RunEnvelope.ElapsedMilliseconds);
+
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Internal,
+            budgetEnvelope));
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Budget,
+            CreateEnvelope(request) with
+            {
+                AttemptNumber = request.Limits.MaximumAttempts + 1,
+            }));
+
+        var rawBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
+        rawBudget["terminal"]!["code"] = "scribe.failure.budget";
+        rawBudget["runEnvelope"]!["usage"] = new JsonObject
+        {
+            ["uncachedInputTokens"] = request.Limits.MaximumUncachedInputTokens + 1,
+        };
+        rawBudget["runEnvelope"]!["cost"] = new JsonObject
+        {
+            ["currencyId"] = "currency.usd",
+            ["amountMicrounits"] = request.Limits.MaximumCostMicrounits + 1,
+        };
+        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(rawBudget)).IsValid);
     }
 
     [Fact]
@@ -422,7 +743,8 @@ public sealed class DocumentationScribeContractTests
     private static void AssertResultMutationFails(
         Action<JsonObject>? requestMutation,
         Action<JsonObject>? resultMutation,
-        string expectedCode)
+        string expectedCode,
+        string? expectedPointer = null)
     {
         var requestNode = ParseObject(ReadFixture("valid", "request.json"));
         requestMutation?.Invoke(requestNode);
@@ -431,18 +753,23 @@ public sealed class DocumentationScribeContractTests
         var resultNode = ParseObject(ReadFixture("valid", "proposal-result.json"));
         Correlate(resultNode, request.ArtifactSha256);
         resultMutation?.Invoke(resultNode);
-        AssertResultFails(request, resultNode, expectedCode);
+        AssertResultFails(request, resultNode, expectedCode, expectedPointer);
     }
 
     private static void AssertResultFails(
         DocumentationScribeRequest request,
         JsonObject result,
-        string expectedCode)
+        string expectedCode,
+        string? expectedPointer = null)
     {
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(result));
         Assert.Null(parsed.Result);
         Assert.Equal(expectedCode, parsed.Failure?.Code);
+        if (expectedPointer is not null)
+        {
+            Assert.Equal(expectedPointer, parsed.Failure?.Pointer);
+        }
     }
 
     private static DocumentationScribeRequest ParseValidRequest(byte[] bytes)
@@ -457,6 +784,20 @@ public sealed class DocumentationScribeContractTests
         result["scribeRequestSha256"] = requestSha256;
         result["runEnvelope"]!["scribeRequestSha256"] = requestSha256;
     }
+
+    private static DocumentationScribeRunEnvelopeInput CreateEnvelope(DocumentationScribeRequest request) => new(
+        "provider.synthetic.v1",
+        "model.synthetic.v1",
+        "scribe-protocol.v1",
+        1,
+        0,
+        0,
+        0,
+        Math.Min(5, request.Limits.MaximumElapsedMilliseconds),
+        null,
+        null,
+        null,
+        ImmutableArray<DocumentationScribeDiagnosticInput>.Empty);
 
     private static void Reverse(JsonArray array)
     {
@@ -491,6 +832,9 @@ public sealed class DocumentationScribeContractTests
 
     private static byte[] ReadContractFile(string name) => File.ReadAllBytes(Path.Combine(
         FindRepositoryRoot(), "schemas", "documentation-scribe", name));
+
+    private static byte[] ReadRepositoryFixture(params string[] relativeParts) => File.ReadAllBytes(Path.Combine(
+        new[] { FindRepositoryRoot(), "tests", "fixtures" }.Concat(relativeParts).ToArray()));
 
     private static void AssertLocalReferences(JsonNode node)
     {

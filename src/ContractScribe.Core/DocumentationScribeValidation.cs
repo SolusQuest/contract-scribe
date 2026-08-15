@@ -161,10 +161,14 @@ public static class DocumentationScribeValidation
 
                 var requestSha256 = ReadSha256(root, "scribeRequestSha256", string.Empty);
                 var attemptId = ParseAttemptId(ReadString(root, "attemptId", string.Empty, 64), "/attemptId");
-                if (!string.Equals(requestSha256, request.ArtifactSha256, StringComparison.Ordinal)
-                    || attemptId != expectedAttemptId)
+                if (!string.Equals(requestSha256, request.ArtifactSha256, StringComparison.Ordinal))
                 {
                     throw Fail("invalid-correlation", "/scribeRequestSha256");
+                }
+
+                if (attemptId != expectedAttemptId)
+                {
+                    throw Fail("invalid-correlation", "/attemptId");
                 }
 
                 var terminal = ParseTerminal(root.GetProperty("terminal"), "/terminal", request);
@@ -172,7 +176,8 @@ public static class DocumentationScribeValidation
                     root.GetProperty("runEnvelope"),
                     "/runEnvelope",
                     request,
-                    expectedAttemptId);
+                    expectedAttemptId,
+                    terminal);
 
                 return new DocumentationScribeResultParseResult(
                     new DocumentationScribeRunResult(requestSha256, attemptId, terminal, envelope),
@@ -269,19 +274,23 @@ public static class DocumentationScribeValidation
             throw new ArgumentException("A validated attempt identity is required.", nameof(attemptId));
         }
 
-        var envelope = CreateRunEnvelope(request, attemptId, input);
+        var envelope = CreateRunEnvelope(request, attemptId, input, terminal);
         return new DocumentationScribeRunResult(request.ArtifactSha256, attemptId, terminal, envelope);
     }
 
     private static DocumentationScribeRunEnvelope CreateRunEnvelope(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
-        DocumentationScribeRunEnvelopeInput input)
+        DocumentationScribeRunEnvelopeInput input,
+        DocumentationScribeTerminal terminal)
     {
+        var allowBudgetOverrun = AllowsBudgetObservationOverrun(terminal);
+        var allowElapsedOverrun = AllowsElapsedObservationOverrun(terminal);
         if (!IsIdentifier(input.ProviderConfigurationId, allowSlash: false)
             || !IsIdentifier(input.ModelConfigurationId, allowSlash: false)
             || !IsIdentifier(input.ScribeProtocolId, allowSlash: false)
             || input.AttemptNumber < 1
+            || input.AttemptNumber > request.Limits.MaximumAttempts
             || input.ProviderRequestCount < 0
             || input.ProviderRequestCount > request.Limits.MaximumProviderRequests
             || input.ToolRoundCount < 0
@@ -289,7 +298,8 @@ public static class DocumentationScribeValidation
             || input.ToolCallCount < 0
             || input.ToolCallCount > request.Limits.MaximumToolCalls
             || input.ElapsedMilliseconds < 0
-            || input.ElapsedMilliseconds > request.Limits.MaximumElapsedMilliseconds)
+            || input.ElapsedMilliseconds > DocumentationScribeContract.MaximumObservedElapsedMilliseconds
+            || !allowElapsedOverrun && input.ElapsedMilliseconds > request.Limits.MaximumElapsedMilliseconds)
         {
             throw new ArgumentException("The run envelope input is outside the parsed request boundary.", nameof(input));
         }
@@ -300,19 +310,47 @@ public static class DocumentationScribeValidation
             if (input.Usage.InputTokens is null
                 && input.Usage.OutputTokens is null
                 && input.Usage.CachedInputTokens is null
+                && input.Usage.UncachedInputTokens is null
                 && input.Usage.ReasoningTokens is null)
             {
                 throw new ArgumentException("A usage observation must contain at least one field.", nameof(input));
             }
 
-            ValidateOptionalObservation(input.Usage.InputTokens, request.Limits.MaximumInputTokens, nameof(input));
-            ValidateOptionalObservation(input.Usage.OutputTokens, request.Limits.MaximumOutputTokens, nameof(input));
-            ValidateOptionalObservation(input.Usage.CachedInputTokens, request.Limits.MaximumInputTokens, nameof(input));
-            ValidateOptionalObservation(input.Usage.ReasoningTokens, request.Limits.MaximumOutputTokens, nameof(input));
+            ValidateOptionalObservation(
+                input.Usage.InputTokens,
+                request.Limits.MaximumInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowBudgetOverrun,
+                nameof(input));
+            ValidateOptionalObservation(
+                input.Usage.OutputTokens,
+                request.Limits.MaximumOutputTokens,
+                DocumentationScribeContract.MaximumObservedOutputTokens,
+                allowBudgetOverrun,
+                nameof(input));
+            ValidateOptionalObservation(
+                input.Usage.CachedInputTokens,
+                request.Limits.MaximumInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowBudgetOverrun,
+                nameof(input));
+            ValidateOptionalObservation(
+                input.Usage.UncachedInputTokens,
+                request.Limits.MaximumUncachedInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowBudgetOverrun,
+                nameof(input));
+            ValidateOptionalObservation(
+                input.Usage.ReasoningTokens,
+                request.Limits.MaximumOutputTokens,
+                DocumentationScribeContract.MaximumObservedOutputTokens,
+                allowBudgetOverrun,
+                nameof(input));
             usage = new DocumentationScribeUsageObservation(
                 input.Usage.InputTokens,
                 input.Usage.OutputTokens,
                 input.Usage.CachedInputTokens,
+                input.Usage.UncachedInputTokens,
                 input.Usage.ReasoningTokens);
         }
 
@@ -321,7 +359,8 @@ public static class DocumentationScribeValidation
         {
             if (!IsIdentifier(input.Cost.CurrencyId, allowSlash: false)
                 || input.Cost.AmountMicrounits < 0
-                || input.Cost.AmountMicrounits > request.Limits.MaximumCostMicrounits)
+                || input.Cost.AmountMicrounits > DocumentationScribeContract.MaximumObservedCostMicrounits
+                || !allowBudgetOverrun && input.Cost.AmountMicrounits > request.Limits.MaximumCostMicrounits)
             {
                 throw new ArgumentException("The cost observation is outside the parsed request boundary.", nameof(input));
             }
@@ -411,13 +450,34 @@ public static class DocumentationScribeValidation
         };
     }
 
-    private static void ValidateOptionalObservation(int? value, int maximum, string parameterName)
+    private static void ValidateOptionalObservation(
+        int? value,
+        int configuredMaximum,
+        int artifactMaximum,
+        bool allowConfiguredOverrun,
+        string parameterName)
     {
-        if (value is < 0 || value > maximum)
+        if (value is < 0
+            || value > artifactMaximum
+            || !allowConfiguredOverrun && value > configuredMaximum)
         {
             throw new ArgumentException("An observation is outside the parsed request boundary.", parameterName);
         }
     }
+
+    private static bool AllowsBudgetObservationOverrun(DocumentationScribeTerminal terminal) => terminal switch
+    {
+        DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => true,
+        DocumentationScribeCancelledTerminal => true,
+        _ => false,
+    };
+
+    private static bool AllowsElapsedObservationOverrun(DocumentationScribeTerminal terminal) => terminal switch
+    {
+        DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => true,
+        DocumentationScribeCancelledTerminal => true,
+        _ => false,
+    };
 
     private static bool IsStrictlyIncreasing(ImmutableArray<string> values)
     {
@@ -449,6 +509,10 @@ public static class DocumentationScribeValidation
         }
 
         var inputIdentity = ReadRepositoryRelativePath(element, "inputIdentity", pointer);
+        if (!IsSupportedInputIdentity(inputIdentity))
+        {
+            throw Fail("invalid-vocabulary", pointer + "/inputIdentity");
+        }
         var targetProfile = ReadString(element, "targetProfile", pointer, 64) switch
         {
             "profile.external-api" => TargetProfile.ExternalApi,
@@ -486,7 +550,10 @@ public static class DocumentationScribeValidation
     {
         ExpectArray(element, pointer, 0, 128);
         var builder = ImmutableArray.CreateBuilder<DocumentationPatchApplicableComponent>();
-        string? priorIdentity = null;
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var hasReturn = false;
+        var hasValue = false;
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
@@ -500,22 +567,41 @@ public static class DocumentationScribeValidation
                 "value" => DocumentationPatchComponentKind.Value,
                 _ => throw Fail("invalid-vocabulary", itemPointer + "/kind"),
             };
-            var identity = ReadIdentifier(item, "identity", itemPointer, allowSlash: true);
+            var identity = ReadString(item, "identity", itemPointer, 128);
             var name = item.TryGetProperty("name", out _)
-                ? ReadString(item, "name", itemPointer, 256)
+                ? ReadString(item, "name", itemPointer, 128)
                 : null;
             if ((kind is DocumentationPatchComponentKind.Parameter or DocumentationPatchComponentKind.TypeParameter) != (name is not null))
             {
                 throw Fail("invalid-shape", itemPointer + "/name");
             }
 
-            if (priorIdentity is not null && string.CompareOrdinal(priorIdentity, identity) >= 0)
+            if (!IsPatchComponentIdentity(kind, identity))
+            {
+                throw Fail("invalid-vocabulary", itemPointer + "/identity");
+            }
+
+            if (name is not null && !IsPatchName(name))
+            {
+                throw Fail("invalid-vocabulary", itemPointer + "/name");
+            }
+
+            var component = new DocumentationPatchApplicableComponent(kind, identity, name);
+            if (!identities.Add(identity)
+                || name is not null && !names.Add(kind + "\0" + name)
+                || builder.Count > 0 && ComparePatchComponents(builder[^1], component) >= 0)
             {
                 throw Fail("invalid-order", itemPointer + "/identity");
             }
 
-            priorIdentity = identity;
-            builder.Add(new DocumentationPatchApplicableComponent(kind, identity, name));
+            hasReturn |= kind == DocumentationPatchComponentKind.Return;
+            hasValue |= kind == DocumentationPatchComponentKind.Value;
+            if (hasReturn && hasValue)
+            {
+                throw Fail("invalid-component", itemPointer);
+            }
+
+            builder.Add(component);
             index++;
         }
 
@@ -594,9 +680,14 @@ public static class DocumentationScribeValidation
 
         if (inheritDocDisposition == DocumentationScribeInheritDocDisposition.Required
             && (summary.Disposition != DocumentationScribePolicyDisposition.Forbidden
+                || summary.MaximumScalars != 0
                 || remarks.Disposition != DocumentationScribePolicyDisposition.Forbidden
+                || remarks.MaximumScalars != 0
                 || exceptions.Disposition != DocumentationScribePolicyDisposition.Forbidden
-                || componentPolicies.Any(policy => policy.Disposition != DocumentationScribePolicyDisposition.Forbidden)))
+                || exceptions.MaximumScalars != 0
+                || componentPolicies.Any(policy =>
+                    policy.Disposition != DocumentationScribePolicyDisposition.Forbidden
+                    || policy.MaximumScalars != 0)))
         {
             throw Fail("invalid-style", pointer + "/inheritDocDisposition");
         }
@@ -696,19 +787,20 @@ public static class DocumentationScribeValidation
             var authoritiesElement = item.GetProperty("allowedAuthorities");
             ExpectArray(authoritiesElement, itemPointer + "/allowedAuthorities", 1, 16);
             var authorities = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceAuthority>();
-            string? priorAuthority = null;
+            DocumentationScribeEvidenceAuthority? priorAuthority = null;
             var authorityIndex = 0;
             foreach (var authorityElement in authoritiesElement.EnumerateArray())
             {
                 var authorityPointer = $"{itemPointer}/allowedAuthorities/{authorityIndex}";
                 var rawAuthority = ReadStringValue(authorityElement, authorityPointer, 64);
-                if (priorAuthority is not null && string.CompareOrdinal(priorAuthority, rawAuthority) >= 0)
+                var authority = ParseAuthority(rawAuthority, authorityPointer);
+                if (priorAuthority is not null && priorAuthority.Value >= authority)
                 {
                     throw Fail("invalid-order", authorityPointer);
                 }
 
-                priorAuthority = rawAuthority;
-                authorities.Add(ParseAuthority(rawAuthority, authorityPointer));
+                priorAuthority = authority;
+                authorities.Add(authority);
                 authorityIndex++;
             }
 
@@ -917,7 +1009,9 @@ public static class DocumentationScribeValidation
                 "maximumProviderRequests",
                 "maximumToolRounds",
                 "maximumToolCalls",
+                "maximumAttempts",
                 "maximumInputTokens",
+                "maximumUncachedInputTokens",
                 "maximumOutputTokens",
                 "maximumCostMicrounits",
                 "maximumElapsedMilliseconds",
@@ -930,10 +1024,37 @@ public static class DocumentationScribeValidation
             ReadBoundedInt(element, "maximumProviderRequests", pointer, 1, 128),
             ReadBoundedInt(element, "maximumToolRounds", pointer, 0, 128),
             ReadBoundedInt(element, "maximumToolCalls", pointer, 0, 1_024),
-            ReadBoundedInt(element, "maximumInputTokens", pointer, 1, 16_777_216),
-            ReadBoundedInt(element, "maximumOutputTokens", pointer, 1, 1_048_576),
-            ReadBoundedLong(element, "maximumCostMicrounits", pointer, 0, 1_000_000_000_000),
-            ReadBoundedInt(element, "maximumElapsedMilliseconds", pointer, 1, 86_400_000));
+            ReadBoundedInt(element, "maximumAttempts", pointer, 1, DocumentationScribeContract.MaximumAttempts),
+            ReadBoundedInt(
+                element,
+                "maximumInputTokens",
+                pointer,
+                1,
+                DocumentationScribeContract.MaximumObservedInputTokens),
+            ReadBoundedInt(
+                element,
+                "maximumUncachedInputTokens",
+                pointer,
+                0,
+                DocumentationScribeContract.MaximumObservedInputTokens),
+            ReadBoundedInt(
+                element,
+                "maximumOutputTokens",
+                pointer,
+                1,
+                DocumentationScribeContract.MaximumObservedOutputTokens),
+            ReadBoundedLong(
+                element,
+                "maximumCostMicrounits",
+                pointer,
+                0,
+                DocumentationScribeContract.MaximumObservedCostMicrounits),
+            ReadBoundedInt(
+                element,
+                "maximumElapsedMilliseconds",
+                pointer,
+                1,
+                DocumentationScribeContract.MaximumObservedElapsedMilliseconds));
     }
 
     private static DocumentationScribeTerminal ParseTerminal(
@@ -1064,6 +1185,7 @@ public static class DocumentationScribeValidation
         var builder = ImmutableArray.CreateBuilder<DocumentationScribeContentUnit>();
         var observedComponentIds = new HashSet<string>(StringComparer.Ordinal);
         var observedKinds = new HashSet<DocumentationScribeContentUnitKind>();
+        var patchScalarTotal = 0;
         string? priorSortKey = null;
         var index = 0;
         foreach (var item in element.EnumerateArray())
@@ -1076,15 +1198,23 @@ public static class DocumentationScribeValidation
                 ["componentIdentity", "name", "typeDocumentationId"]);
             var kind = ParseContentKind(ReadString(item, "kind", itemPointer, 32), itemPointer + "/kind");
             var componentIdentity = item.TryGetProperty("componentIdentity", out _)
-                ? ReadIdentifier(item, "componentIdentity", itemPointer, allowSlash: true)
+                ? ReadString(item, "componentIdentity", itemPointer, 128)
                 : null;
             var name = item.TryGetProperty("name", out _)
-                ? ReadString(item, "name", itemPointer, 256)
+                ? ReadString(item, "name", itemPointer, 128)
                 : null;
             var typeDocumentationId = item.TryGetProperty("typeDocumentationId", out _)
-                ? ReadString(item, "typeDocumentationId", itemPointer, 512)
+                ? ReadString(item, "typeDocumentationId", itemPointer, 1_024)
                 : null;
             var lines = ParseLines(item.GetProperty("lines"), itemPointer + "/lines", kind == DocumentationScribeContentUnitKind.InheritDoc);
+            foreach (var line in lines)
+            {
+                patchScalarTotal = checked(patchScalarTotal + CountScalars(line));
+                if (patchScalarTotal > DocumentationPatchValidator.MaximumBlockTextScalars)
+                {
+                    throw Fail("over-budget", itemPointer + "/lines");
+                }
+            }
             var claimCategoryId = ReadIdentifier(item, "claimCategoryId", itemPointer);
             if (!claimPolicies.TryGetValue(claimCategoryId, out var claimPolicy))
             {
@@ -1215,6 +1345,14 @@ public static class DocumentationScribeValidation
                     throw Fail("invalid-style", pointer);
                 }
             }
+
+            if (!observedKinds.Contains(DocumentationScribeContentUnitKind.Summary)
+                || observedComponentIds.Count != request.Target.ApplicableComponents.Length
+                || request.Target.ApplicableComponents.Any(component =>
+                    !observedComponentIds.Contains(component.Identity)))
+            {
+                throw Fail("invalid-content", pointer);
+            }
         }
 
         return builder.ToImmutable();
@@ -1260,7 +1398,8 @@ public static class DocumentationScribeValidation
         JsonElement element,
         string pointer,
         DocumentationScribeRequest request,
-        DocumentationScribeAttemptId expectedAttemptId)
+        DocumentationScribeAttemptId expectedAttemptId,
+        DocumentationScribeTerminal terminal)
     {
         ExpectProperties(
             element,
@@ -1284,10 +1423,14 @@ public static class DocumentationScribeValidation
 
         var requestSha = ReadSha256(element, "scribeRequestSha256", pointer);
         var attemptId = ParseAttemptId(ReadString(element, "attemptId", pointer, 64), pointer + "/attemptId");
-        if (!string.Equals(requestSha, request.ArtifactSha256, StringComparison.Ordinal)
-            || attemptId != expectedAttemptId)
+        if (!string.Equals(requestSha, request.ArtifactSha256, StringComparison.Ordinal))
         {
             throw Fail("invalid-correlation", pointer + "/scribeRequestSha256");
+        }
+
+        if (attemptId != expectedAttemptId)
+        {
+            throw Fail("invalid-correlation", pointer + "/attemptId");
         }
 
         var providerId = ReadIdentifier(element, "providerConfigurationId", pointer);
@@ -1295,13 +1438,22 @@ public static class DocumentationScribeValidation
         var protocolId = ReadIdentifier(element, "scribeProtocolId", pointer);
         var toolPolicyId = ReadIdentifier(element, "toolPolicyId", pointer);
         var styleProfileId = ReadIdentifier(element, "styleProfileId", pointer);
-        if (!string.Equals(toolPolicyId, request.ToolPolicyId, StringComparison.Ordinal)
-            || !string.Equals(styleProfileId, request.StyleProfile.StyleProfileId, StringComparison.Ordinal))
+        if (!string.Equals(toolPolicyId, request.ToolPolicyId, StringComparison.Ordinal))
         {
             throw Fail("invalid-correlation", pointer + "/toolPolicyId");
         }
 
-        var attemptNumber = ReadBoundedInt(element, "attemptNumber", pointer, 1, 1_000_000);
+        if (!string.Equals(styleProfileId, request.StyleProfile.StyleProfileId, StringComparison.Ordinal))
+        {
+            throw Fail("invalid-correlation", pointer + "/styleProfileId");
+        }
+
+        var attemptNumber = ReadBoundedInt(
+            element,
+            "attemptNumber",
+            pointer,
+            1,
+            request.Limits.MaximumAttempts);
         var providerRequestCount = ReadBoundedInt(
             element,
             "providerRequestCount",
@@ -1325,9 +1477,16 @@ public static class DocumentationScribeValidation
             "elapsedMilliseconds",
             pointer,
             0,
-            request.Limits.MaximumElapsedMilliseconds);
+            DocumentationScribeContract.MaximumObservedElapsedMilliseconds);
+        if (!AllowsElapsedObservationOverrun(terminal)
+            && elapsed > request.Limits.MaximumElapsedMilliseconds)
+        {
+            throw Fail("over-budget", pointer + "/elapsedMilliseconds");
+        }
+
+        var allowBudgetOverrun = AllowsBudgetObservationOverrun(terminal);
         var usage = element.TryGetProperty("usage", out var usageElement)
-            ? ParseUsage(usageElement, pointer + "/usage", request.Limits)
+            ? ParseUsage(usageElement, pointer + "/usage", request.Limits, allowBudgetOverrun)
             : null;
         DocumentationScribeCacheObservation? cache = null;
         if (element.TryGetProperty("cacheObservation", out var cacheElement))
@@ -1343,7 +1502,7 @@ public static class DocumentationScribeValidation
         }
 
         var cost = element.TryGetProperty("cost", out var costElement)
-            ? ParseCost(costElement, pointer + "/cost", request.Limits)
+            ? ParseCost(costElement, pointer + "/cost", request.Limits, allowBudgetOverrun)
             : null;
         var diagnostics = ParseDiagnostics(element.GetProperty("diagnostics"), pointer + "/diagnostics");
 
@@ -1369,34 +1528,78 @@ public static class DocumentationScribeValidation
     private static DocumentationScribeUsageObservation ParseUsage(
         JsonElement element,
         string pointer,
-        DocumentationScribeRunLimits limits)
+        DocumentationScribeRunLimits limits,
+        bool allowConfiguredOverrun)
     {
         ExpectProperties(
             element,
             pointer,
             [],
-            ["inputTokens", "outputTokens", "cachedInputTokens", "reasoningTokens"]);
+            ["inputTokens", "outputTokens", "cachedInputTokens", "uncachedInputTokens", "reasoningTokens"]);
         if (!element.EnumerateObject().Any())
         {
             throw Fail("invalid-shape", pointer);
         }
 
         return new DocumentationScribeUsageObservation(
-            ReadOptionalBoundedInt(element, "inputTokens", pointer, limits.MaximumInputTokens),
-            ReadOptionalBoundedInt(element, "outputTokens", pointer, limits.MaximumOutputTokens),
-            ReadOptionalBoundedInt(element, "cachedInputTokens", pointer, limits.MaximumInputTokens),
-            ReadOptionalBoundedInt(element, "reasoningTokens", pointer, limits.MaximumOutputTokens));
+            ReadOptionalObservation(
+                element,
+                "inputTokens",
+                pointer,
+                limits.MaximumInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowConfiguredOverrun),
+            ReadOptionalObservation(
+                element,
+                "outputTokens",
+                pointer,
+                limits.MaximumOutputTokens,
+                DocumentationScribeContract.MaximumObservedOutputTokens,
+                allowConfiguredOverrun),
+            ReadOptionalObservation(
+                element,
+                "cachedInputTokens",
+                pointer,
+                limits.MaximumInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowConfiguredOverrun),
+            ReadOptionalObservation(
+                element,
+                "uncachedInputTokens",
+                pointer,
+                limits.MaximumUncachedInputTokens,
+                DocumentationScribeContract.MaximumObservedInputTokens,
+                allowConfiguredOverrun),
+            ReadOptionalObservation(
+                element,
+                "reasoningTokens",
+                pointer,
+                limits.MaximumOutputTokens,
+                DocumentationScribeContract.MaximumObservedOutputTokens,
+                allowConfiguredOverrun));
     }
 
     private static DocumentationScribeCostObservation ParseCost(
         JsonElement element,
         string pointer,
-        DocumentationScribeRunLimits limits)
+        DocumentationScribeRunLimits limits,
+        bool allowConfiguredOverrun)
     {
         ExpectProperties(element, pointer, ["currencyId", "amountMicrounits"]);
+        var amount = ReadBoundedLong(
+            element,
+            "amountMicrounits",
+            pointer,
+            0,
+            DocumentationScribeContract.MaximumObservedCostMicrounits);
+        if (!allowConfiguredOverrun && amount > limits.MaximumCostMicrounits)
+        {
+            throw Fail("over-budget", pointer + "/amountMicrounits");
+        }
+
         return new DocumentationScribeCostObservation(
             ReadIdentifier(element, "currencyId", pointer),
-            ReadBoundedLong(element, "amountMicrounits", pointer, 0, limits.MaximumCostMicrounits));
+            amount);
     }
 
     private static ImmutableArray<DocumentationScribeDiagnostic> ParseDiagnostics(
@@ -1449,12 +1652,14 @@ public static class DocumentationScribeValidation
     private static SymbolRef ParseSymbolRef(JsonElement element, string pointer)
     {
         ExpectProperties(element, pointer, ["compilationContextRef", "documentationCommentId"]);
-        var compilationRef = ReadIdentifier(element, "compilationContextRef", pointer);
-        var documentationId = ReadString(element, "documentationCommentId", pointer, 512);
-        if (documentationId.Length < 3
-            || documentationId[0] is < 'A' or > 'Z'
-            || documentationId[1] != ':'
-            || HasInvalidScalar(documentationId))
+        var compilationRef = ReadString(element, "compilationContextRef", pointer, 128);
+        if (!IsCompilationContextRef(compilationRef))
+        {
+            throw Fail("invalid-vocabulary", pointer + "/compilationContextRef");
+        }
+
+        var documentationId = ReadString(element, "documentationCommentId", pointer, 1_024);
+        if (!IsDocumentationCommentId(documentationId))
         {
             throw Fail("invalid-vocabulary", pointer + "/documentationCommentId");
         }
@@ -1516,9 +1721,25 @@ public static class DocumentationScribeValidation
         if (element.TryGetProperty("metadata", out var metadata))
         {
             ExpectProperties(metadata, pointer + "/metadata", ["assemblyIdentity", "documentationCommentId"]);
+            var assemblyIdentity = ReadString(metadata, "assemblyIdentity", pointer + "/metadata", 128);
+            if (!IsCompilationContextRef(assemblyIdentity))
+            {
+                throw Fail("invalid-vocabulary", pointer + "/metadata/assemblyIdentity");
+            }
+
+            var documentationId = ReadString(
+                metadata,
+                "documentationCommentId",
+                pointer + "/metadata",
+                1_024);
+            if (!IsDocumentationCommentId(documentationId))
+            {
+                throw Fail("invalid-vocabulary", pointer + "/metadata/documentationCommentId");
+            }
+
             return new MetadataEvidenceLocator(
-                ReadIdentifier(metadata, "assemblyIdentity", pointer + "/metadata"),
-                ReadString(metadata, "documentationCommentId", pointer + "/metadata", 512));
+                assemblyIdentity,
+                documentationId);
         }
 
         if (element.TryGetProperty("generatedOutput", out var generated))
@@ -1534,25 +1755,45 @@ public static class DocumentationScribeValidation
                 "tool-generated" => GeneratedOutputKind.ToolGenerated,
                 _ => throw Fail("invalid-vocabulary", pointer + "/generatedOutput/producerKind"),
             };
+            var producerId = ReadString(generated, "producerId", pointer + "/generatedOutput", 68);
+            var outputId = ReadString(generated, "outputId", pointer + "/generatedOutput", 68);
+            var expectedProducerPrefix = kind == GeneratedOutputKind.SourceGenerator ? "sgp." : "tgp.";
+            var expectedOutputPrefix = kind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.";
+            if (!IsPrefixedSha256(producerId, expectedProducerPrefix))
+            {
+                throw Fail("invalid-vocabulary", pointer + "/generatedOutput/producerId");
+            }
+
+            if (!IsPrefixedSha256(outputId, expectedOutputPrefix))
+            {
+                throw Fail("invalid-vocabulary", pointer + "/generatedOutput/outputId");
+            }
+
             return new GeneratedOutputEvidenceLocator(
                 kind,
-                ReadIdentifier(generated, "producerId", pointer + "/generatedOutput"),
-                ReadIdentifier(generated, "outputId", pointer + "/generatedOutput"),
+                producerId,
+                outputId,
                 ReadSha256(generated, "sourceSha256", pointer + "/generatedOutput"),
                 generated.TryGetProperty("span", out var span) ? ParseSpan(span, pointer + "/generatedOutput/span") : null);
         }
 
         var synthetic = element.GetProperty("synthetic");
         ExpectProperties(synthetic, pointer + "/synthetic", ["fixtureId"]);
-        return new SyntheticEvidenceLocator(ReadIdentifier(synthetic, "fixtureId", pointer + "/synthetic"));
+        var fixtureId = ReadString(synthetic, "fixtureId", pointer + "/synthetic", 128);
+        if (!IsCompilationContextRef(fixtureId))
+        {
+            throw Fail("invalid-vocabulary", pointer + "/synthetic/fixtureId");
+        }
+
+        return new SyntheticEvidenceLocator(fixtureId);
     }
 
     private static Utf16Span ParseSpan(JsonElement element, string pointer)
     {
         ExpectProperties(element, pointer, ["start", "end"]);
         var start = ReadBoundedInt(element, "start", pointer, 0, int.MaxValue);
-        var end = ReadBoundedInt(element, "end", pointer, 1, int.MaxValue);
-        if (start >= end)
+        var end = ReadBoundedInt(element, "end", pointer, 0, int.MaxValue);
+        if (start > end)
         {
             throw Fail("invalid-vocabulary", pointer);
         }
@@ -1581,11 +1822,11 @@ public static class DocumentationScribeValidation
         foreach (var item in element.EnumerateArray())
         {
             var itemPointer = $"{pointer}/{index}";
-            var value = ReadStringValue(item, itemPointer, DocumentationScribeContract.MaximumTextScalars);
+            var value = ReadStringValue(item, itemPointer, DocumentationPatchValidator.MaximumLogicalLineScalars);
             if (value.Length == 0
-                || value.Contains('\r')
-                || value.Contains('\n')
-                || HasInvalidScalar(value)
+                || value.AsSpan().IndexOfAny("\r\n\u0085\u2028\u2029") >= 0
+                || !TryCountXmlScalars(value, out var scalarCount)
+                || scalarCount > DocumentationPatchValidator.MaximumLogicalLineScalars
                 || ContainsRawDocumentationSyntax(value))
             {
                 throw Fail("invalid-content", itemPointer);
@@ -1898,15 +2139,26 @@ public static class DocumentationScribeValidation
         return value;
     }
 
-    private static int? ReadOptionalBoundedInt(
+    private static int? ReadOptionalObservation(
         JsonElement parent,
         string property,
         string pointer,
-        int maximum)
+        int configuredMaximum,
+        int artifactMaximum,
+        bool allowConfiguredOverrun)
     {
-        return parent.TryGetProperty(property, out _)
-            ? ReadBoundedInt(parent, property, pointer, 0, maximum)
-            : null;
+        if (!parent.TryGetProperty(property, out _))
+        {
+            return null;
+        }
+
+        var value = ReadBoundedInt(parent, property, pointer, 0, artifactMaximum);
+        if (!allowConfiguredOverrun && value > configuredMaximum)
+        {
+            throw Fail("over-budget", pointer + "/" + property);
+        }
+
+        return value;
     }
 
     private static long ReadBoundedLong(
@@ -1947,12 +2199,16 @@ public static class DocumentationScribeValidation
 
     private static string ReadRepositoryRelativePath(JsonElement parent, string property, string pointer)
     {
-        var value = ReadString(parent, property, pointer, 1_024);
+        var value = ReadString(parent, property, pointer, 512);
+        var driveLike = value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':';
         if (value.Length == 0
             || value.Contains('\\')
             || value.StartsWith('/')
-            || value.Contains(':')
-            || value.Split('/').Any(segment => segment is "" or "." or ".."))
+            || value.Contains('\0')
+            || driveLike
+            || value.Split('/').Any(segment => segment is "" or "." or "..")
+            || !TryCountScalars(value, out var scalarCount)
+            || scalarCount > 512)
         {
             throw Fail("invalid-vocabulary", pointer + "/" + property);
         }
@@ -2034,14 +2290,29 @@ public static class DocumentationScribeValidation
         var valid = kind switch
         {
             DocumentationScribeContentUnitKind.TypeParameter or DocumentationScribeContentUnitKind.Parameter =>
-                componentIdentity is not null && name is not null && typeDocumentationId is null,
+                componentIdentity is not null
+                && IsPatchComponentIdentity(
+                    kind == DocumentationScribeContentUnitKind.TypeParameter
+                        ? DocumentationPatchComponentKind.TypeParameter
+                        : DocumentationPatchComponentKind.Parameter,
+                    componentIdentity)
+                && name is not null
+                && IsPatchName(name)
+                && typeDocumentationId is null,
             DocumentationScribeContentUnitKind.Return or DocumentationScribeContentUnitKind.Value =>
-                componentIdentity is not null && name is null && typeDocumentationId is null,
+                componentIdentity is not null
+                && IsPatchComponentIdentity(
+                    kind == DocumentationScribeContentUnitKind.Return
+                        ? DocumentationPatchComponentKind.Return
+                        : DocumentationPatchComponentKind.Value,
+                    componentIdentity)
+                && name is null
+                && typeDocumentationId is null,
             DocumentationScribeContentUnitKind.Exception =>
                 componentIdentity is null
                 && name is null
-                && typeDocumentationId is { Length: > 2 }
-                && typeDocumentationId.StartsWith("T:", StringComparison.Ordinal),
+                && typeDocumentationId is not null
+                && IsExceptionDocumentationId(typeDocumentationId),
             _ => componentIdentity is null && name is null && typeDocumentationId is null,
         };
         if (!valid)
@@ -2267,16 +2538,194 @@ public static class DocumentationScribeValidation
             && value[^1] is not ('.' or '-' or '/');
     }
 
-    private static int CountScalars(string value) => value.EnumerateRunes().Count();
+    private static bool IsSupportedInputIdentity(string value) =>
+        value.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+        || value.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+        || value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
 
-    private static bool HasInvalidScalar(string value) => value.EnumerateRunes().Any(rune =>
-        Rune.IsControl(rune) && rune.Value is not ('\t' or '\n' or '\r'));
+    private static bool IsCompilationContextRef(string value)
+    {
+        if (value.Length is 0 or > 128 || !IsLowerAlphaNumeric(value[0]))
+        {
+            return false;
+        }
 
-    private static bool ContainsRawDocumentationSyntax(string value) =>
-        value.Contains("///", StringComparison.Ordinal)
-        || value.Contains("<summary", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("<inheritdoc", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("</", StringComparison.Ordinal);
+        return value.All(character =>
+            IsLowerAlphaNumeric(character) || character is '.' or '_' or '-');
+    }
+
+    private static bool IsDocumentationCommentId(string value)
+    {
+        if (value.Length is < 3 or > 1_024
+            || value[0] is not ('T' or 'M' or 'P' or 'F' or 'E' or 'N')
+            || value[1] != ':'
+            || !TryCountXmlScalars(value, out _))
+        {
+            return false;
+        }
+
+        return !value.EnumerateRunes().Any(Rune.IsControl);
+    }
+
+    private static bool IsPatchComponentIdentity(
+        DocumentationPatchComponentKind kind,
+        string identity) => kind switch
+        {
+            DocumentationPatchComponentKind.TypeParameter =>
+                IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
+            DocumentationPatchComponentKind.Parameter =>
+                IsCanonicalOrdinalIdentity(identity, "parameter/"),
+            DocumentationPatchComponentKind.Return => identity == "return",
+            DocumentationPatchComponentKind.Value => identity == "value",
+            _ => false,
+        };
+
+    private static bool IsCanonicalOrdinalIdentity(string value, string prefix)
+    {
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ordinal = value.AsSpan(prefix.Length);
+        return ordinal.Length > 0
+            && ordinal.IndexOfAnyExceptInRange('0', '9') < 0
+            && (ordinal.Length == 1 || ordinal[0] != '0');
+    }
+
+    private static bool IsPatchName(string value) =>
+        value.Length > 0
+        && TryCountXmlScalars(value, out var scalarCount)
+        && scalarCount <= 128;
+
+    private static int ComparePatchComponents(
+        DocumentationPatchApplicableComponent left,
+        DocumentationPatchApplicableComponent right)
+    {
+        var comparison = left.Kind.CompareTo(right.Kind);
+        return comparison != 0
+            ? comparison
+            : string.CompareOrdinal(left.Identity, right.Identity);
+    }
+
+    private static bool IsPrefixedSha256(string value, string prefix) =>
+        value.Length == prefix.Length + 64
+        && value.StartsWith(prefix, StringComparison.Ordinal)
+        && value.AsSpan(prefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
+
+    private static bool IsLowerAlphaNumeric(char value) =>
+        value is >= 'a' and <= 'z' or >= '0' and <= '9';
+
+    private static bool IsExceptionDocumentationId(string value)
+    {
+        if (value.Length is < 3 or > 1_024
+            || !value.StartsWith("T:", StringComparison.Ordinal)
+            || !TryCountXmlScalars(value, out _))
+        {
+            return false;
+        }
+
+        foreach (var rune in value.AsSpan(2).EnumerateRunes())
+        {
+            if (Rune.IsWhiteSpace(rune)
+                || Rune.IsControl(rune)
+                || rune.Value is '<' or '>' or '&' or '"' or '\'')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static int CountScalars(string value) =>
+        TryCountScalars(value, out var count) ? count : int.MaxValue;
+
+    private static bool HasInvalidScalar(string value) =>
+        !TryCountScalars(value, out _)
+        || value.EnumerateRunes().Any(rune =>
+            Rune.IsControl(rune) && rune.Value is not ('\t' or '\n' or '\r'));
+
+    private static bool TryCountXmlScalars(string value, out int count)
+    {
+        if (!TryCountScalars(value, out count))
+        {
+            return false;
+        }
+
+        foreach (var rune in value.EnumerateRunes())
+        {
+            var scalar = rune.Value;
+            if (scalar != 0x09
+                && scalar is not (>= 0x20 and <= 0xd7ff)
+                && scalar is not (>= 0xe000 and <= 0xfffd)
+                && scalar is not (>= 0x10000 and <= 0x10ffff))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryCountScalars(string value, out int count)
+    {
+        count = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (char.IsHighSurrogate(character))
+            {
+                if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
+                {
+                    return false;
+                }
+
+                index++;
+            }
+            else if (char.IsLowSurrogate(character))
+            {
+                return false;
+            }
+
+            count++;
+        }
+
+        return true;
+    }
+
+    private static bool ContainsRawDocumentationSyntax(string value)
+    {
+        if (value.Contains("///", StringComparison.Ordinal)
+            || value.Contains("]]>", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] == '<' && index + 1 < value.Length)
+            {
+                var next = value[index + 1];
+                if (next is '/' or '!' or '?' or '_' or ':' || char.IsAsciiLetter(next))
+                {
+                    return true;
+                }
+            }
+
+            if (value[index] == '&' && index + 1 < value.Length)
+            {
+                var next = value[index + 1];
+                if ((next == '#' || char.IsAsciiLetter(next))
+                    && value.IndexOf(';', index + 2) >= 0)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     private static bool HasPrefix(ReadOnlySpan<byte> bytes, params byte[] prefix) =>
         bytes.Length >= prefix.Length && bytes[..prefix.Length].SequenceEqual(prefix);

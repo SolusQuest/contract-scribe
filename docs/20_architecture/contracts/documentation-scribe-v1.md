@@ -42,6 +42,8 @@ Model-produced proposal/skip payloads enter through that raw validated parse bou
 - `targetProfile`: the current M1 `profile.external-api` or `profile.assembly-visible` value;
 - `auditOutcome`: the current M1 audit outcome copied for the selected target.
 
+`inputIdentity` follows the current CLI input domain exactly: its final extension is `.sln`, `.slnx`, or `.csproj`, compared ASCII case-insensitively. Repository-relative paths follow the current M1/M2 rules: at most 512 Unicode scalars, forward slash separators, no root, backslash, NUL, empty, `.` or `..` segment, and no drive-like `A:` prefix. Other colon characters are not rejected merely for being colons.
+
 The request deliberately omits `AuditReason`. M1 owns the outcome/reason matrix, and the later composition path revalidates the copied outcome against the exact current Audit Result row and loaded session before invoking the Scribe. The Scribe cannot reinterpret classification.
 
 ### One selected target
@@ -53,6 +55,8 @@ The request deliberately omits `AuditReason`. M1 owns the outcome/reason matrix,
 - the ordered applicable-component set using the current M2 `typeParameter`, `parameter`, `return`, and `value` component semantics.
 
 Applicable-component identities are unique and strictly ordinally increasing. Named parameter and type-parameter components carry their exact name; return and value components do not. The source commitment is data used for later freshness validation. It is not an M2 patch locator, edit kind, write handle, or rendering instruction.
+
+The reused M1/M2 identity domains are exact rather than Scribe-local aliases. Compilation or assembly references are 1–128 lowercase ASCII alphanumeric, dot, underscore, or hyphen characters and begin with a lowercase alphanumeric character. Documentation comment IDs are 3–1024 XML-valid scalars, begin with one of `T:`, `M:`, `P:`, `F:`, `E:`, or `N:`, and contain no control scalar. Source-generator locator IDs are `sgp.`/`sgo.` plus lowercase SHA-256; tool-generated IDs are `tgp.`/`tgo.` plus lowercase SHA-256. Type-parameter and parameter identities are exactly `type-parameter/<canonical ordinal>` and `parameter/<canonical ordinal>`; return/value identities are exactly `return` and `value`. Names are non-empty XML-valid text of at most 128 scalars. The set cannot contain both return and value, duplicate identities, or duplicate names within one named kind.
 
 ### Style Profile
 
@@ -109,7 +113,7 @@ Every evidence authority must agree with its existing evidence kind: implementat
 
 `toolPolicyId` identifies the closed tool policy selected by the caller. It does not grant an operation or carry a provider tool schema.
 
-`limits` contains independent ceilings for context references and included bytes, evidence references and included bytes, provider requests, tool rounds, tool calls, input/output tokens, cost microunits, and elapsed milliseconds. Request arrays and accepted run observations cannot exceed them. Values are non-negative or positive as their schemas specify and must fit the published numeric bounds. No token decomposition equality, cache dependency, price lookup, or cost derivation is defined here.
+`limits` contains independent ceilings for attempts, context references and included bytes, evidence references and included bytes, provider requests, tool rounds, tool calls, input tokens, uncached input tokens, output tokens, cost microunits, and elapsed milliseconds. Request arrays and normal successful run observations cannot exceed them. Values are non-negative or positive as their schemas specify and must fit the published numeric bounds. Attempt numbers are positive and cannot exceed `maximumAttempts`. No token decomposition equality, cache dependency, price lookup, or cost derivation is defined here.
 
 The request contains no M4 work-plan, campaign, branch, issue, pull-request, provider conversation, fallback, cursor, checkpoint, or publication identity.
 
@@ -131,6 +135,8 @@ A `proposal` repeats the selected repository context, `SymbolRef`, and complete 
 8. `content.inherit-doc` as the sole unit when selected.
 
 Every unit owns exactly one request-declared claim category and its own non-empty, strictly ordered request-visible evidence-ID list. Component units repeat the exact applicable-component identity; named units also repeat its exact name. Exception units carry a type documentation ID. Structured units carry ordered plain-text line arrays. Inherit-doc carries an empty line array.
+
+A structured proposal contains exactly one summary plus exactly one unit for every applicable component and no extra component unit. Logical lines are non-empty XML 1.0 text, contain no line-separator scalar, are at most 2,048 scalars each, and total at most 32,768 scalars across the projected block. Exception IDs follow the current M2 safe `T:` subset: 3–1,024 scalars with no whitespace, control, or XML markup punctuation. Raw documentation syntax includes XML tags, comments, processing instructions, CDATA terminators, entity references, and `///`; it is never accepted as plain content.
 
 The validator rejects a unit when any evidence reference is missing, duplicated, dangling, stale, for the wrong subject, outside the evidence row's claim-category allowlist, outside the Style Profile authority allowlist, truncated when the claim requires complete evidence, or named as the lower row of an explicit accepted conflict. Exact forbidden literals are compared ordinally against actual unit text. Raw `///` or XML-documentation syntax is not content text.
 
@@ -166,12 +172,14 @@ The envelope repeats the exact request SHA-256 and attempt identity and records 
 
 - provider and model configuration identities;
 - Scribe protocol, tool-policy, and Style Profile identities;
-- positive attempt number;
+- positive attempt number bounded by the request's `maximumAttempts`;
 - provider-request, tool-round, tool-call, and elapsed-time counts;
 - independently optional usage, cache, and cost observations;
 - a bounded ordered diagnostic list.
 
-Tool-policy and Style Profile identities must exactly equal the request. Counts and observations cannot exceed request limits. Optional usage fields are independent non-negative observations; no equality between token fields is asserted. Cache is one of hit, miss, mixed, or not reported. Cost is a currency configuration identity plus non-negative microunits. Provider mapping is owned by the transport issue, and configured cost calculation is owned by evaluation work.
+Tool-policy and Style Profile identities must exactly equal the request. Provider/tool counts cannot exceed request limits. Optional usage fields independently observe input, cached input, uncached input, output, and reasoning tokens; no equality between token fields is asserted. Cache is one of hit, miss, mixed, or not reported. Cost is a currency configuration identity plus non-negative microunits. Provider mapping is owned by the transport issue, and configured cost calculation is owned by evaluation work.
+
+The request ceilings are execution controls, while the result schema's larger published maxima are artifact-safety bounds. A proposal or skip must remain within configured token, cost, and elapsed ceilings. A budget failure may truthfully report token or cost observations that crossed a configured ceiling; a timeout failure may truthfully report an elapsed observation that crossed it; cancellation may report either kind of already-incurred observation. Those observations must still remain within the artifact-safety maxima. This terminal-aware allowance preserves the fact that the overrun caused termination without granting permission for another attempt.
 
 Diagnostics are stable code plus code-specific allowlisted metadata:
 
