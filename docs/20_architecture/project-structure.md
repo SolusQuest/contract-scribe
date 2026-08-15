@@ -156,7 +156,7 @@ Issue #103 establishes `ContractScribe.Agent` as the owner of the narrow Scribe 
 - structured proposal submission and validation;
 - deterministic prompting and a hermetic scripted fake exchange.
 
-Agent's only production dependency is `ContractScribe.Core`; it adds no package dependency. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Concrete context assembly, concrete X2/X3 tools, the real provider transport, and CLI composition remain owned by issues #104 through #108.
+Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; any provider package later selected by #107 is confined to `Providers/**` and must remain unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Concrete context assembly, concrete X2/X3 tools, the real provider transport, and CLI composition remain owned by issues #104 through #108.
 
 It must not reference:
 
@@ -166,7 +166,7 @@ It must not reference:
 - GitHub tokens or APIs;
 - shell or general-purpose edit runtimes.
 
-The implemented project/reference and API boundaries prevent the Scribe runtime from receiving concrete mutation, state-storage, or publication capabilities. The future CLI composition root may inject only the selected closed read-only tool registry and model exchange. Fast architecture tests pin the Core-only graph, narrow public constructors, forbidden capability surface, and hermetic fake so the boundary is executable rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
+The implemented project/reference and API boundaries prevent the Scribe runtime from receiving concrete mutation, state-storage, or publication capabilities. Core, Roslyn, Patching, and a future GitHub project may not reference Agent; the CLI composition root may reference Agent and inject only the selected closed read-only tool registry and model exchange. Fast architecture tests pin Agent's Core-only production project edge, the Runtime/Prompting-reachable public surface, forbidden ambient capabilities, and the hermetic fake while allowing #107-owned provider metadata and the #108-owned CLI composition edge. The boundary is executable rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
 
 Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. Later M3 issues place them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 

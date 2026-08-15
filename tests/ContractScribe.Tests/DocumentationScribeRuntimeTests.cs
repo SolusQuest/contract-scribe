@@ -394,6 +394,74 @@ public sealed class DocumentationScribeRuntimeTests
         extra["unexpected"] = true;
         Assert.False(schema.Evaluate(JsonDocument.Parse(extra.ToJsonString()).RootElement).IsValid);
 
+        static bool IsValid(JsonSchema candidateSchema, JsonNode value)
+        {
+            using var document = JsonDocument.Parse(value.ToJsonString());
+            return candidateSchema.Evaluate(document.RootElement).IsValid;
+        }
+
+        var emptySkip = JsonNode.Parse(ReadTerminal("skip-result.json"))!.AsObject();
+        emptySkip["evidenceReferenceIds"] = new JsonArray();
+        Assert.True(IsValid(schema, emptySkip));
+        var emptySkipResult = await CreateRuntime(
+            Script(TerminalResponse(Encoding.UTF8.GetBytes(emptySkip.ToJsonString()))),
+            EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        Assert.Empty(Assert.IsType<DocumentationScribeSkipTerminal>(emptySkipResult.Terminal)
+            .EvidenceReferenceIds);
+
+        var pathBoundary = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        var repository = pathBoundary["target"]!["sourceCommitment"]!["locator"]!["repository"]!;
+        repository["path"] = new string('a', 512);
+        Assert.True(IsValid(schema, pathBoundary));
+        repository["path"] = new string('a', 513);
+        Assert.False(IsValid(schema, pathBoundary));
+
+        var symbolBoundary = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        var symbol = symbolBoundary["target"]!["symbolRef"]!;
+        symbol["compilationContextRef"] = "synthetic.v1";
+        symbol["documentationCommentId"] = "T:Synthetic.Widget";
+        Assert.True(IsValid(schema, symbolBoundary));
+        symbol["compilationContextRef"] = "Synthetic.Invalid";
+        Assert.False(IsValid(schema, symbolBoundary));
+        symbol["compilationContextRef"] = "synthetic.v1";
+        symbol["documentationCommentId"] = "Q:Synthetic.Widget";
+        Assert.False(IsValid(schema, symbolBoundary));
+
+        var generated = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        generated["target"]!["sourceCommitment"]!["locator"] = new JsonObject
+        {
+            ["generatedOutput"] = new JsonObject
+            {
+                ["producerKind"] = "source-generator",
+                ["producerId"] = "sgp." + new string('a', 64),
+                ["outputId"] = "sgo." + new string('b', 64),
+                ["sourceSha256"] = new string('c', 64),
+            },
+        };
+        Assert.True(IsValid(schema, generated));
+        generated["target"]!["sourceCommitment"]!["locator"]!["generatedOutput"]!["producerId"] =
+            "tgp." + new string('a', 64);
+        Assert.False(IsValid(schema, generated));
+
+        var synthetic = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        synthetic["target"]!["sourceCommitment"]!["locator"] = new JsonObject
+        {
+            ["synthetic"] = new JsonObject { ["fixtureId"] = "synthetic.v1" },
+        };
+        Assert.True(IsValid(schema, synthetic));
+        synthetic["target"]!["sourceCommitment"]!["locator"]!["synthetic"]!["fixtureId"] =
+            "Synthetic.Invalid";
+        Assert.False(IsValid(schema, synthetic));
+
+        var duplicateEvidence = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        duplicateEvidence["contentUnits"]![0]!["evidenceReferenceIds"] =
+            new JsonArray("evidence.summary", "evidence.summary");
+        Assert.False(IsValid(schema, duplicateEvidence));
+
+        var mismatchedComponent = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        mismatchedComponent["contentUnits"]![1]!["componentIdentity"] = "type-parameter/0";
+        Assert.False(IsValid(schema, mismatchedComponent));
+
         var builder = new DocumentationScribeToolRegistryBuilder(ToolPolicyId);
         Assert.Throws<ArgumentException>(() => builder.Add(
             new SyntheticDescriptor("scribe.submit-terminal"),
@@ -653,6 +721,86 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
+    public void Terminal_validation_precedes_one_fresh_final_priority_and_elapsed_sample()
+    {
+        var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        using var cancellation = new CancellationTokenSource();
+        var cancellationClock = new SequencedTimeProvider(read =>
+        {
+            if (read == 3)
+            {
+                cancellation.Cancel();
+            }
+
+            return 0;
+        });
+        var cancelled = new DocumentationScribeTerminalReducer().CommitTerminal(
+            State(request, cancellationClock),
+            cancellation.Token,
+            ReadTerminal("proposal-result.json"));
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
+
+        var deadlineClock = new SequencedTimeProvider(read => read >= 3 ? 50 : 0);
+        var timedOut = new DocumentationScribeTerminalReducer().CommitTerminal(
+            State(request, deadlineClock),
+            CancellationToken.None,
+            ReadTerminal("proposal-result.json"));
+        Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(timedOut));
+        Assert.Equal(50, timedOut.RunEnvelope.ElapsedMilliseconds);
+
+        var elapsedClock = new SequencedTimeProvider(read => read >= 3 ? 17 : 0);
+        var reducer = new DocumentationScribeTerminalReducer();
+        var elapsedState = State(request, elapsedClock);
+        var proposal = reducer.CommitTerminal(
+            elapsedState,
+            CancellationToken.None,
+            ReadTerminal("proposal-result.json"));
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, proposal.Terminal.Kind);
+        Assert.Equal(17, proposal.RunEnvelope.ElapsedMilliseconds);
+        var otherRequest = Request(root => root["context"]!["inputIdentity"] = "samples/Other.csproj");
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeValidation.CreateResultFromValidatedTerminal(
+                otherRequest,
+                Attempt(),
+                proposal,
+                null!));
+        Assert.True(DocumentationScribeAttemptId.TryParse(
+            "scribe-attempt.11111111111111111111111111111111",
+            out var otherAttempt));
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeValidation.CreateResultFromValidatedTerminal(
+                request,
+                otherAttempt,
+                proposal,
+                null!));
+        using var lateCancellation = new CancellationTokenSource();
+        lateCancellation.Cancel();
+        Assert.Same(proposal, reducer.CommitCancelled(elapsedState, lateCancellation.Token));
+    }
+
+    [Fact]
+    public async Task Completed_faults_losing_to_cancellation_or_timeout_are_observed_and_content_free()
+    {
+        const string marker = "provider-secret-marker";
+        using var cancellation = new CancellationTokenSource();
+        var cancelledExchange = new SynchronousFaultExchange(() => cancellation.Cancel(), marker);
+        var cancelled = await CreateRuntime(cancelledExchange, EmptyRegistry()).RunAsync(
+            Request(), Attempt(), Prompt(), cancellation.Token);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
+
+        var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        var clock = new ManualTimeProvider();
+        var timeoutExchange = new SynchronousFaultExchange(() => clock.AdvanceMilliseconds(50), marker);
+        var timedOut = await CreateRuntime(timeoutExchange, EmptyRegistry(), clock).RunAsync(
+            request, Attempt(), Prompt(request));
+        Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(timedOut));
+
+        await DocumentationScribeRuntime.ObserveLateAsync(Task.FromException(new InvalidOperationException(marker)));
+        var publicText = JsonSerializer.Serialize(cancelled) + JsonSerializer.Serialize(timedOut);
+        Assert.DoesNotContain(marker, publicText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Prompt_reference_mismatch_is_rejected_before_model_exchange()
     {
         var request = Request();
@@ -771,7 +919,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "ffb58b2bdcbf283b83e304dddb1053af13a5ab50495eb63bb5b20548a43d8a2f",
+                "270042d8347383613ad85e7262b66b891a373b76f8790d0ba6ffb675d7f7f55f",
                 digest);
         }
         finally
@@ -813,9 +961,11 @@ public sealed class DocumentationScribeRuntimeTests
 
     private static DocumentationScribeRuntime CreateRuntime(
         IDocumentationScribeModelExchange exchange,
-        DocumentationScribeToolRegistry registry) =>
+        DocumentationScribeToolRegistry registry,
+        TimeProvider? timeProvider = null) =>
         new(exchange, registry, new DocumentationScribeRuntimeOptions(
-            "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
+            "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"),
+            timeProvider ?? TimeProvider.System);
 
     private static DocumentationScribeToolRegistry EmptyRegistry() =>
         new DocumentationScribeToolRegistryBuilder(ToolPolicyId).Build();
@@ -1095,6 +1245,19 @@ public sealed class DocumentationScribeRuntimeTests
             CancellationToken cancellationToken) => throw new InvalidOperationException(marker);
     }
 
+    private sealed class SynchronousFaultExchange(Action beforeFault, string marker) :
+        IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            beforeFault();
+            return ValueTask.FromException<DocumentationScribeModelResponse>(
+                new InvalidOperationException(marker));
+        }
+    }
+
     private sealed class ManualTimeProvider : TimeProvider
     {
         private long timestamp;
@@ -1104,5 +1267,14 @@ public sealed class DocumentationScribeRuntimeTests
         public override long GetTimestamp() => timestamp;
 
         internal void AdvanceMilliseconds(long milliseconds) => timestamp = checked(timestamp + milliseconds);
+    }
+
+    private sealed class SequencedTimeProvider(Func<int, long> timestampForRead) : TimeProvider
+    {
+        private int reads;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() => timestampForRead(Interlocked.Increment(ref reads));
     }
 }

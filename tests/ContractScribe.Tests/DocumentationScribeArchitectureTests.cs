@@ -11,7 +11,7 @@ namespace ContractScribe.Tests;
 public sealed class DocumentationScribeArchitectureTests
 {
     [Fact]
-    public void Agent_project_has_one_core_reference_and_no_package_dependency()
+    public void Agent_project_keeps_the_core_only_project_edge_and_confines_provider_packages()
     {
         var root = FindRepositoryRoot();
         var projectPath = Path.Join(root, "src", "ContractScribe.Agent", "ContractScribe.Agent.csproj");
@@ -23,7 +23,12 @@ public sealed class DocumentationScribeArchitectureTests
             .ToArray();
 
         Assert.Equal(new[] { "../ContractScribe.Core/ContractScribe.Core.csproj" }, references);
-        Assert.Empty(project.Descendants("PackageReference"));
+        var providerRoot = Path.Join(root, "src", "ContractScribe.Agent", "Providers");
+        if (!Directory.Exists(providerRoot)
+            || !Directory.EnumerateFiles(providerRoot, "*.cs", SearchOption.AllDirectories).Any())
+        {
+            Assert.Empty(project.Descendants("PackageReference"));
+        }
 
         var solution = File.ReadAllText(Path.Join(root, "ContractScribe.slnx"));
         Assert.Contains("src/ContractScribe.Agent/ContractScribe.Agent.csproj", solution, StringComparison.Ordinal);
@@ -45,7 +50,11 @@ public sealed class DocumentationScribeArchitectureTests
             SearchOption.AllDirectories).Where(path => !string.Equals(
                 path,
                 projectPath,
-                StringComparison.OrdinalIgnoreCase)))
+                StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(
+                    Path.GetFileNameWithoutExtension(path),
+                    "ContractScribe.Cli",
+                    StringComparison.Ordinal)))
         {
             Assert.DoesNotContain(
                 XDocument.Load(productProject).Descendants("ProjectReference"),
@@ -59,7 +68,10 @@ public sealed class DocumentationScribeArchitectureTests
     public void Public_agent_api_exposes_only_typed_closed_capabilities()
     {
         var assembly = typeof(DocumentationScribeRuntime).Assembly;
-        var publicTypes = assembly.GetExportedTypes();
+        var publicTypes = ReachableAgentApiTypes(assembly.GetExportedTypes()
+            .Where(type => type.Namespace is "ContractScribe.Agent.Runtime"
+                or "ContractScribe.Agent.Prompting")
+            .ToArray(), assembly).ToArray();
         var forbiddenNames = new[]
         {
             "endpoint", "header", "credential", "environment", "workspace", "root",
@@ -98,6 +110,11 @@ public sealed class DocumentationScribeArchitectureTests
     [InlineData("public delegate string RuntimeFactory();")]
     [InlineData("class Bad { List<List<Stream>> Values { get; } = []; }")]
     [InlineData("class Bad { HttpClient Client { get; } = new(); }")]
+    [InlineData("using E = System.Environment; class Bad { string? Read() => E.GetEnvironmentVariable(\"CONTRACTSCRIBE_SECRET\"); }")]
+    [InlineData("class Bad { DateTime Observe() => DateTime.UtcNow; }")]
+    [InlineData("class Bad { DateTimeOffset Observe() => DateTimeOffset.Now; }")]
+    [InlineData("class Bad { TimeZoneInfo Observe() => TimeZoneInfo.Local; }")]
+    [InlineData("using System.Globalization; class Bad { string Observe() => Helper(); string Helper() => CultureInfo.CurrentCulture.Name; }")]
     public void Capability_scan_rejects_semantic_negative_examples(string hostile)
     {
         var violations = FindForbiddenCapabilities(new Dictionary<string, string>
@@ -136,7 +153,7 @@ public sealed class DocumentationScribeArchitectureTests
             FindRepositoryRoot(), "docs", "20_architecture", "project-structure.md"));
         Assert.Contains("### `ContractScribe.Agent`", document, StringComparison.Ordinal);
         Assert.Contains("Issue #103", document, StringComparison.Ordinal);
-        Assert.Contains("Agent's only production dependency is `ContractScribe.Core`", document, StringComparison.Ordinal);
+        Assert.Contains("Agent's only production project dependency is `ContractScribe.Core`", document, StringComparison.Ordinal);
         Assert.DoesNotContain("### Candidate `ContractScribe.Agent`", document, StringComparison.Ordinal);
     }
 
@@ -172,11 +189,34 @@ public sealed class DocumentationScribeArchitectureTests
             yield return field.FieldType;
         }
 
-        foreach (var eventInfo in type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        foreach (var eventType in type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
+            .Select(eventInfo => eventInfo.EventHandlerType)
+            .Where(eventType => eventType is not null))
         {
-            if (eventInfo.EventHandlerType is { } eventType)
+            yield return eventType!;
+        }
+    }
+
+    private static IEnumerable<Type> ReachableAgentApiTypes(
+        IEnumerable<Type> roots,
+        Assembly agentAssembly)
+    {
+        var pending = new Queue<Type>(roots);
+        var seen = new HashSet<Type>();
+        while (pending.TryDequeue(out var type))
+        {
+            if (!seen.Add(type))
             {
-                yield return eventType;
+                continue;
+            }
+
+            yield return type;
+            foreach (var reachable in PublicSignatureTypes(type)
+                .SelectMany(ExpandType)
+                .Where(candidate => candidate.Assembly == agentAssembly
+                    && (candidate.IsPublic || candidate.IsNestedPublic)))
+            {
+                pending.Enqueue(reachable);
             }
         }
     }
@@ -229,6 +269,7 @@ public sealed class DocumentationScribeArchitectureTests
         const string globalUsings = """
             global using System;
             global using System.Collections.Generic;
+            global using System.Globalization;
             global using System.IO;
             global using System.Linq;
             global using System.Net.Http;
@@ -262,6 +303,13 @@ public sealed class DocumentationScribeArchitectureTests
             foreach (var node in tree.GetRoot().DescendantNodesAndSelf())
             {
                 var symbol = model.GetDeclaredSymbol(node) ?? model.GetSymbolInfo(node).Symbol;
+                if (IsForbiddenMember(symbol))
+                {
+                    var memberLine = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                    findings.Add($"{tree.FilePath}:{memberLine}:{symbol!.ToDisplayString()}");
+                    continue;
+                }
+
                 var types = SymbolTypes(symbol)
                     .Append(model.GetTypeInfo(node).Type)
                     .Where(type => type is not null)
@@ -322,7 +370,7 @@ public sealed class DocumentationScribeArchitectureTests
         {
             var name = named.OriginalDefinition.ToDisplayString();
             if (rejectDelegate && named.TypeKind == TypeKind.Delegate
-                || name is "System.IServiceProvider" or "System.Uri"
+                || name is "System.IServiceProvider" or "System.Uri" or "System.Environment"
                 || name.StartsWith("System.IO.", StringComparison.Ordinal)
                 || name.StartsWith("System.Net.", StringComparison.Ordinal)
                 || name.StartsWith("System.Diagnostics.", StringComparison.Ordinal)
@@ -343,6 +391,24 @@ public sealed class DocumentationScribeArchitectureTests
         }
 
         return false;
+    }
+
+    private static bool IsForbiddenMember(ISymbol? symbol)
+    {
+        if (symbol is not IPropertySymbol property)
+        {
+            return false;
+        }
+
+        var containingType = property.ContainingType.ToDisplayString();
+        return containingType is "System.DateTime" or "System.DateTimeOffset"
+                && property.Name is "Now" or "UtcNow"
+            || containingType == "System.TimeZoneInfo" && property.Name == "Local"
+            || containingType == "System.Globalization.CultureInfo"
+                && property.Name is "CurrentCulture" or "CurrentUICulture"
+                    or "DefaultThreadCurrentCulture" or "DefaultThreadCurrentUICulture"
+            || containingType == "System.Threading.Thread"
+                && property.Name is "CurrentCulture" or "CurrentUICulture";
     }
 
     private static string FindRepositoryRoot()

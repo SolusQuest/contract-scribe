@@ -233,6 +233,12 @@ public sealed class DocumentationScribeRuntime
                 continue;
             }
 
+            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
+            if (checkpoint is not null)
+            {
+                return checkpoint;
+            }
+
             return reducer.CommitTerminal(
                 state,
                 cancellationToken,
@@ -482,10 +488,7 @@ public sealed class DocumentationScribeRuntime
         if (cancellationToken.IsCancellationRequested)
         {
             operationCancellation.Cancel();
-            if (!task.IsCompleted)
-            {
-                ObserveLate(task);
-            }
+            ObserveLate(task);
 
             return OperationCompletion<T>.Cancelled();
         }
@@ -493,10 +496,7 @@ public sealed class DocumentationScribeRuntime
         if (state.RemainingMilliseconds <= 0 || winner == timeoutTask)
         {
             operationCancellation.Cancel();
-            if (!task.IsCompleted)
-            {
-                ObserveLate(task);
-            }
+            ObserveLate(task);
 
             return OperationCompletion<T>.TimedOut();
         }
@@ -558,7 +558,7 @@ public sealed class DocumentationScribeRuntime
 
     private static void ObserveLate(Task task) => _ = ObserveLateAsync(task);
 
-    private static async Task ObserveLateAsync(Task task)
+    internal static async Task ObserveLateAsync(Task task)
     {
         try
         {
@@ -640,6 +640,35 @@ internal sealed class DocumentationScribeTerminalReducer
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> terminalUtf8Json)
     {
+        DocumentationScribeResultParseResult? candidate = null;
+        string? validationCode = null;
+        try
+        {
+            var validationElapsed = state.ElapsedMilliseconds;
+            var validationEnvelope = state.CreateEnvelope(
+                ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+                validationElapsed);
+            var validationBytes = DocumentationScribeRunResultWriter.Write(
+                state.Request,
+                state.AttemptId,
+                terminalUtf8Json,
+                validationEnvelope);
+            candidate = DocumentationScribeValidation.ParseRunResult(
+                state.Request,
+                state.AttemptId,
+                validationBytes.AsMemory());
+            if (candidate.Result is null
+                || candidate.Result.Terminal.Kind is not (DocumentationScribeTerminalKind.Proposal
+                    or DocumentationScribeTerminalKind.Skip))
+            {
+                validationCode = candidate.Failure?.Code ?? "scribe.result.invalid-terminal";
+            }
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            validationCode = "scribe.result.invalid-terminal";
+        }
+
         lock (gate)
         {
             if (committed is not null)
@@ -654,32 +683,17 @@ internal sealed class DocumentationScribeTerminalReducer
                 return committed;
             }
 
-            try
-            {
-                var envelope = state.CreateEnvelope(
-                    ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+            committed = validationCode is null && candidate?.Result is { } validated
+                ? DocumentationScribeValidation.CreateResultFromValidatedTerminal(
+                    state.Request,
+                    state.AttemptId,
+                    validated,
+                    state.CreateEnvelope(
+                        ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+                        elapsed))
+                : state.CreateValidationFailure(
+                    validationCode ?? "scribe.result.invalid-terminal",
                     elapsed);
-                var bytes = DocumentationScribeRunResultWriter.Write(
-                    state.Request,
-                    state.AttemptId,
-                    terminalUtf8Json,
-                    envelope);
-                var parsed = DocumentationScribeValidation.ParseRunResult(
-                    state.Request,
-                    state.AttemptId,
-                    bytes.AsMemory());
-                committed = parsed.Result is not null
-                    && parsed.Result.Terminal.Kind is DocumentationScribeTerminalKind.Proposal
-                        or DocumentationScribeTerminalKind.Skip
-                    ? parsed.Result
-                    : state.CreateValidationFailure(
-                        parsed.Failure?.Code ?? "scribe.result.invalid-terminal",
-                        elapsed);
-            }
-            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-            {
-                committed = state.CreateValidationFailure("scribe.result.invalid-terminal", elapsed);
-            }
 
             return committed;
         }

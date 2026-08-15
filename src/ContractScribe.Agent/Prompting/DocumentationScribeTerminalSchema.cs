@@ -15,13 +15,36 @@ internal static class DocumentationScribeTerminalSchema
               "maxLength": 128,
               "pattern": "^[a-z][a-z0-9.-]*[a-z0-9]$|^[a-z]$"
             },
+            "componentIdentity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "compilationContextRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "documentationCommentId": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024,
+              "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+            },
+            "repositoryPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
+            },
             "symbolRef": {
               "type": "object",
               "additionalProperties": false,
               "required": ["compilationContextRef", "documentationCommentId"],
               "properties": {
-                "compilationContextRef": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 }
+                "compilationContextRef": { "$ref": "#/$defs/compilationContextRef" },
+                "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" }
               }
             },
             "span": {
@@ -45,7 +68,7 @@ internal static class DocumentationScribeTerminalSchema
                       "additionalProperties": false,
                       "required": ["path"],
                       "properties": {
-                        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                        "path": { "$ref": "#/$defs/repositoryPath" },
                         "span": { "$ref": "#/$defs/span" }
                       }
                     }
@@ -61,8 +84,8 @@ internal static class DocumentationScribeTerminalSchema
                       "additionalProperties": false,
                       "required": ["assemblyIdentity", "documentationCommentId"],
                       "properties": {
-                        "assemblyIdentity": { "type": "string", "minLength": 1, "maxLength": 128 },
-                        "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 }
+                        "assemblyIdentity": { "$ref": "#/$defs/compilationContextRef" },
+                        "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" }
                       }
                     }
                   }
@@ -78,11 +101,31 @@ internal static class DocumentationScribeTerminalSchema
                       "required": ["producerKind", "producerId", "outputId", "sourceSha256"],
                       "properties": {
                         "producerKind": { "enum": ["source-generator", "tool-generated"] },
-                        "producerId": { "type": "string", "minLength": 68, "maxLength": 68 },
-                        "outputId": { "type": "string", "minLength": 68, "maxLength": 68 },
+                        "producerId": { "type": "string" },
+                        "outputId": { "type": "string" },
                         "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                         "span": { "$ref": "#/$defs/span" }
-                      }
+                      },
+                      "allOf": [
+                        {
+                          "if": { "properties": { "producerKind": { "const": "source-generator" } } },
+                          "then": {
+                            "properties": {
+                              "producerId": { "pattern": "^sgp\\.[0-9a-f]{64}$" },
+                              "outputId": { "pattern": "^sgo\\.[0-9a-f]{64}$" }
+                            }
+                          }
+                        },
+                        {
+                          "if": { "properties": { "producerKind": { "const": "tool-generated" } } },
+                          "then": {
+                            "properties": {
+                              "producerId": { "pattern": "^tgp\\.[0-9a-f]{64}$" },
+                              "outputId": { "pattern": "^tgo\\.[0-9a-f]{64}$" }
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 },
@@ -96,7 +139,7 @@ internal static class DocumentationScribeTerminalSchema
                       "additionalProperties": false,
                       "required": ["fixtureId"],
                       "properties": {
-                        "fixtureId": { "type": "string", "minLength": 1, "maxLength": 128 }
+                        "fixtureId": { "$ref": "#/$defs/compilationContextRef" }
                       }
                     }
                   }
@@ -133,6 +176,7 @@ internal static class DocumentationScribeTerminalSchema
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 512,
+                "uniqueItems": true,
                 "items": { "$ref": "#/$defs/identifier" }
               }
             },
@@ -153,12 +197,22 @@ internal static class DocumentationScribeTerminalSchema
               "required": ["kind", "componentIdentity", "name", "lines", "claimCategoryId", "evidenceReferenceIds"],
               "properties": {
                 "kind": { "enum": ["content.type-parameter", "content.parameter"] },
-                "componentIdentity": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "componentIdentity": { "$ref": "#/$defs/componentIdentity" },
                 "name": { "type": "string", "minLength": 1, "maxLength": 128 },
                 "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
                 "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
                 "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
-              }
+              },
+              "allOf": [
+                {
+                  "if": { "properties": { "kind": { "const": "content.type-parameter" } } },
+                  "then": { "properties": { "componentIdentity": { "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$" } } }
+                },
+                {
+                  "if": { "properties": { "kind": { "const": "content.parameter" } } },
+                  "then": { "properties": { "componentIdentity": { "pattern": "^parameter/(?:0|[1-9][0-9]*)$" } } }
+                }
+              ]
             },
             "componentUnit": {
               "type": "object",
@@ -166,11 +220,21 @@ internal static class DocumentationScribeTerminalSchema
               "required": ["kind", "componentIdentity", "lines", "claimCategoryId", "evidenceReferenceIds"],
               "properties": {
                 "kind": { "enum": ["content.return", "content.value"] },
-                "componentIdentity": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "componentIdentity": { "$ref": "#/$defs/componentIdentity" },
                 "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
                 "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
                 "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
-              }
+              },
+              "allOf": [
+                {
+                  "if": { "properties": { "kind": { "const": "content.return" } } },
+                  "then": { "properties": { "componentIdentity": { "const": "return" } } }
+                },
+                {
+                  "if": { "properties": { "kind": { "const": "content.value" } } },
+                  "then": { "properties": { "componentIdentity": { "const": "value" } } }
+                }
+              ]
             },
             "exceptionUnit": {
               "type": "object",
@@ -178,7 +242,12 @@ internal static class DocumentationScribeTerminalSchema
               "required": ["kind", "typeDocumentationId", "lines", "claimCategoryId", "evidenceReferenceIds"],
               "properties": {
                 "kind": { "const": "content.exception" },
-                "typeDocumentationId": { "type": "string", "minLength": 3, "maxLength": 1024 },
+                "typeDocumentationId": {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 1024,
+                  "pattern": "^T:[^\\s\\u0000-\\u001F\\u007F-\\u009F<>&\\\"']+$"
+                },
                 "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
                 "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
                 "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
@@ -235,8 +304,8 @@ internal static class DocumentationScribeTerminalSchema
                 },
                 "evidenceReferenceIds": {
                   "type": "array",
-                  "minItems": 1,
                   "maxItems": 512,
+                  "uniqueItems": true,
                   "items": { "$ref": "#/$defs/identifier" }
                 }
               }

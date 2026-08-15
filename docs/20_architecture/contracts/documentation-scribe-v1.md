@@ -27,7 +27,7 @@ The request and run result are UTF-8 JSON objects with no BOM. They use JSON Sch
 
 The run result, every terminal variant, and the run envelope repeat that exact request SHA-256 and the validated attempt identity. The attempt identity has the lexical form `scribe-attempt.` followed by 32 lowercase hexadecimal characters. A result is never valid without the parsed request and expected attempt supplied to `ParseRunResult`.
 
-Model-produced proposal/skip payloads enter through that raw validated parse boundary. Runtime-owned skip, failure, and cancellation results may instead use the public Core factories; those factories require the parsed request and validated attempt, derive both correlation fields, copy tool/style identities from the request, bound every observation against its limits, and admit only the same code-specific diagnostic shapes.
+Model-produced proposal/skip payloads enter through that raw validated parse boundary. After that parse succeeds, the runtime may re-envelope the immutable validated proposal/skip at its final reducer checkpoint through `CreateResultFromValidatedTerminal`; the factory rejects a result correlated to any other request or attempt. Runtime-owned skip, failure, and cancellation results may instead use the other public Core factories. All factories require the parsed request and validated attempt, derive or verify both correlation fields, copy tool/style identities from the request, bound every observation against its limits, and admit only the same code-specific diagnostic shapes.
 
 ## Scribe Request
 
