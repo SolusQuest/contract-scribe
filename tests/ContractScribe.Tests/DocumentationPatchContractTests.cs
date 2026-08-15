@@ -38,6 +38,8 @@ public sealed class DocumentationPatchContractTests
             ("same-file-request.json", "same-file-accepted-result.json"),
             ("repository-request.json", "stale-result.json"),
             ("repository-request.json", "rejected-no-op-result.json"),
+            ("repository-request.json", "repository-state-result.json"),
+            ("repository-request.json", "candidate-state-result.json"),
         })
         {
             var request = ParseRequest(ReadFixture("valid", requestName));
@@ -870,6 +872,69 @@ public sealed class DocumentationPatchContractTests
             root["targets"]![0]!["status"] = "not-evaluated";
         }));
         Assert.True(DocumentationPatchValidator.ValidateResult(structuredRequest, rootStale).IsValid);
+    }
+
+    [Fact]
+    public void RootExecutionResults_RequireClosedTargetAndInvariantSemantics()
+    {
+        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var repositoryState = ReadFixture("valid", "repository-state-result.json");
+        var candidateState = ReadFixture("valid", "candidate-state-result.json");
+
+        Assert.True(DocumentationPatchValidator.ValidateResult(
+            request,
+            ParseResult(repositoryState)).IsValid);
+        Assert.True(DocumentationPatchValidator.ValidateResult(
+            request,
+            ParseResult(candidateState)).IsValid);
+
+        var repositoryWithValidTarget = ParseResult(Mutate(repositoryState, root =>
+            root["targets"]![0]!["status"] = "valid"));
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
+            request,
+            repositoryWithValidTarget).Code);
+
+        var candidateWithNotEvaluatedTarget = ParseResult(Mutate(candidateState, root =>
+            root["targets"]![0]!["status"] = "not-evaluated"));
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
+            request,
+            candidateWithNotEvaluatedTarget).Code);
+
+        var repositoryWithPointer = ParseResult(Mutate(repositoryState, root =>
+            root["diagnostics"]![0]!["pointer"] = "/blocks/0"));
+        Assert.Equal("patch.result.invalid-correlation", DocumentationPatchValidator.ValidateResult(
+            request,
+            repositoryWithPointer).Code);
+
+        var candidateWithPassedInvariant = ParseResult(Mutate(candidateState, root =>
+            root["invariants"]![0]!["status"] = "passed"));
+        Assert.Equal("patch.result.invalid-outcome", DocumentationPatchValidator.ValidateResult(
+            request,
+            candidateWithPassedInvariant).Code);
+    }
+
+    [Fact]
+    public void ResultFactory_ConstructsOnlyAValidatorAcceptedResult()
+    {
+        var request = ParseRequest(ReadFixture("valid", "repository-request.json"));
+        var fixture = ParseResult(ReadFixture("valid", "candidate-state-result.json"));
+
+        var result = DocumentationPatchValidator.CreateResult(
+            request,
+            DocumentationPatchOutcome.Rejected,
+            [DocumentationPatchTargetStatus.Valid],
+            [],
+            fixture.Invariants,
+            fixture.Diagnostics);
+
+        Assert.True(DocumentationPatchValidator.ValidateResult(request, result).IsValid);
+        Assert.Throws<ArgumentException>(() => DocumentationPatchValidator.CreateResult(
+            request,
+            DocumentationPatchOutcome.Rejected,
+            [DocumentationPatchTargetStatus.NotEvaluated],
+            [],
+            fixture.Invariants,
+            fixture.Diagnostics));
     }
 
     [Fact]

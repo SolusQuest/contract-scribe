@@ -58,7 +58,7 @@ See [Documentation Scribe](documentation-scribe.md) and [Scribe context and prom
 
 ### Patch engine
 
-The patch engine receives a validated structured proposal, resolves the exact selected declaration through Roslyn, renders XML documentation, applies it to a candidate workspace, and proves that no forbidden change occurred.
+The implemented patch engine receives a validated Patch Request and its matching classified repository session, resolves the exact selected declaration through Roslyn, renders XML documentation, applies it to an isolated candidate workspace, then rereads and validates the complete candidate before returning a Patch Validation Result. Acceptance is linearized only after a final original-root rebind and terminal candidate capture; only an accepted result carries an immutable in-process candidate capability, and no staging path or writer crosses the public boundary.
 
 The model never owns a source diff. Source writes happen only through the patch engine after the target, source revision, documentation structure, and patch invariants are validated.
 
@@ -97,11 +97,11 @@ The Documentation Scribe must not receive source-write, state-persistence, or pu
 
 ## Current implementation status
 
-M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, atomic `ProductionAuditHost`, and production CLI path, and #75 removed the retired validation and experiment machinery. Completed #41 and #30 remain revision-bound implementation and validation evidence; #42 is the only remaining executable M1 step before #33 closure. The patch engine, Documentation Scribe, campaign state, GitHub adapter, and consumable Action remain later-milestone work.
+M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, atomic `ProductionAuditHost`, and production CLI path, and #75 removed the retired validation and experiment machinery. Completed #41 and #30 remain revision-bound implementation and validation evidence; #42 is the only remaining executable M1 step before #33 closure. M2 has implemented the `ContractScribe.Patching` boundary, exact resolution and rendering, complete isolated candidate materialization, session-bound Roslyn and generator validation, root-state fail-closed results, and immutable accepted-candidate handoff. This implementation status does not close M2 or authorize later milestones; the Documentation Scribe, campaign state, GitHub adapter, and consumable Action remain later work.
 
 M0 experiment questions, conditions, results, limitations, and exact revisions remain historical evidence. PR #77 removed their preservation tests and historical Roslyn experiment project from ordinary test and solution authority. Issue #75 removed the remaining current-tree runners, manifests, and compatibility paths; concrete production regressions and reusable semantic fixtures live under their current production owners.
 
-The current candidate M5 graph separates `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`. Existing project boundaries are authoritative; future projects are added only when their implementing milestone demonstrates a real dependency or authority boundary. M1 does not create empty projects for later work.
+The current candidate M5 graph separates `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`. `Core`, `Roslyn`, `Patching`, and `Cli` now exist because their implemented authority boundaries require them; future projects are added only when their implementing milestone demonstrates a real dependency or authority boundary.
 
 ## Contract lifecycle
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
 using System.Text;
 
@@ -8,6 +9,23 @@ namespace ContractScribe.TestGenerator;
 [Generator]
 public sealed class FixtureGenerator : IIncrementalGenerator
 {
+#pragma warning disable RS2008 // Test-only diagnostic fixtures.
+    private static readonly DiagnosticDescriptor StableWarning = new(
+        "CSG0001",
+        "Stable fixture warning",
+        "Stable fixture warning",
+        "ContractScribe.TestGenerator",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+    private static readonly DiagnosticDescriptor DocumentationError = new(
+        "CSG0002",
+        "Documentation fixture error",
+        "Documentation fixture error",
+        "ContractScribe.TestGenerator",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+#pragma warning restore RS2008
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(output =>
@@ -191,6 +209,40 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     $$"""public static class FixtureDynamicAdditional { public const string Value = "{{value}}"; }""",
                     Encoding.UTF8)));
 
+        var additionalDocumentationSensitiveEnabled =
+            context.AnalyzerConfigOptionsProvider.Select(
+                static (options, _) =>
+                    options.GlobalOptions.TryGetValue(
+                        "build_property.ContractScribeTestGeneratorAdditionalDocumentationSensitive",
+                        out var enabled)
+                    && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        var documentationAdditionalFiles = context.AdditionalTextsProvider
+            .Where(static text => Path.GetFileName(text.Path) is var fileName
+                && (string.Equals(fileName, "App.cs", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(
+                        fileName,
+                        "Target.cs",
+                        StringComparison.OrdinalIgnoreCase)))
+            .Collect();
+        context.RegisterSourceOutput(
+            documentationAdditionalFiles.Combine(additionalDocumentationSensitiveEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right)
+                {
+                    return;
+                }
+
+                var count = input.Left.Sum(text => CountOccurrences(
+                    text.GetText(output.CancellationToken)?.ToString() ?? string.Empty,
+                    "///"));
+                output.AddSource(
+                    "Fixture.AdditionalDocumentationSensitive.g.cs",
+                    SourceText.From(
+                        $"public static class FixtureAdditionalDocumentationSensitive {{ public const int Count = {count}; }}",
+                        Encoding.UTF8));
+            });
+
         var dynamicAnalyzerConfigValues = context.AnalyzerConfigOptionsProvider.Select(
             static (options, _) =>
                 options.GlobalOptions.TryGetValue(
@@ -211,6 +263,106 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     $$"""public static class FixtureDynamicAnalyzerConfig { public const string Value = "{{value}}"; }""",
                     Encoding.UTF8));
         });
+
+        var stableDiagnosticEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorStableDiagnostic",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(stableDiagnosticEnabled, static (output, enabled) =>
+        {
+            if (enabled)
+            {
+                output.ReportDiagnostic(Diagnostic.Create(StableWarning, Location.None));
+            }
+        });
+
+        var documentationErrorEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorDocumentationError",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(documentationErrorEnabled),
+            static (output, input) =>
+            {
+                if (input.Right && CountDocumentationTrivia(input.Left) != 0)
+                {
+                    output.ReportDiagnostic(Diagnostic.Create(DocumentationError, Location.None));
+                }
+            });
+
+        var documentationSensitiveEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorDocumentationSensitive",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(documentationSensitiveEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right)
+                {
+                    return;
+                }
+
+                var documentationTriviaCount = CountDocumentationTrivia(input.Left);
+                output.AddSource(
+                    "Fixture.DocumentationSensitive.g.cs",
+                    SourceText.From(
+                        $"public static class FixtureDocumentationSensitive {{ public const int Count = {documentationTriviaCount}; }}",
+                        Encoding.UTF8));
+            });
+
+        var noOutputToOutputEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorNoOutputToOutput",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(noOutputToOutputEnabled),
+            static (output, input) =>
+            {
+                if (!input.Right
+                    || !input.Left.SyntaxTrees.Any(tree => tree.GetRoot()
+                        .DescendantTrivia(descendIntoTrivia: true)
+                        .Any(trivia => trivia.IsKind(
+                                SyntaxKind.SingleLineDocumentationCommentTrivia)
+                            || trivia.IsKind(
+                                SyntaxKind.MultiLineDocumentationCommentTrivia))))
+                {
+                    return;
+                }
+
+                output.AddSource(
+                    "Fixture.NoOutputToOutput.g.cs",
+                    SourceText.From(
+                        "public static class FixtureNoOutputToOutput { }",
+                    Encoding.UTF8));
+            });
+    }
+
+    private static int CountDocumentationTrivia(Compilation compilation) =>
+        compilation.SyntaxTrees
+            .SelectMany(tree => tree.GetRoot().DescendantTrivia(descendIntoTrivia: true))
+            .Count(trivia => trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
+                || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
+
+    private static int CountOccurrences(string value, string pattern)
+    {
+        var count = 0;
+        var start = 0;
+        while ((start = value.IndexOf(pattern, start, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            start += pattern.Length;
+        }
+
+        return count;
     }
 }
 
