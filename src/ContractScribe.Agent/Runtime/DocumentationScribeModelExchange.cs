@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Immutable;
+using System.Text.Json;
 using ContractScribe.Core;
 
 namespace ContractScribe.Agent.Runtime;
@@ -191,7 +193,7 @@ public sealed class DocumentationScribeModelToolCall
         }
 
         ResponseIndex = responseIndex;
-        CallId = DocumentationScribeBoundary.ValidateIdentifier(callId, nameof(callId));
+        CallId = DocumentationScribeBoundary.ValidateCorrelationId(callId, nameof(callId));
         OperationId = DocumentationScribeBoundary.ValidateIdentifier(operationId, nameof(operationId));
         ArgumentsUtf8JsonStorage = DocumentationScribeBoundary.ValidateJson(
             argumentsUtf8Json,
@@ -379,17 +381,17 @@ public sealed class DocumentationScribeModelResponse
             throw new ArgumentOutOfRangeException(nameof(cache));
         }
 
-        long totalBytes = 0;
+        long payloadBytes = 0;
         try
         {
             foreach (var call in toolCalls)
             {
-                totalBytes = checked(totalBytes + call.ArgumentsUtf8Json.Length);
+                payloadBytes = checked(payloadBytes + call.ArgumentsUtf8Json.Length);
             }
 
             foreach (var terminal in terminalSubmissions)
             {
-                totalBytes = checked(totalBytes + terminal.TerminalUtf8Json.Length);
+                payloadBytes = checked(payloadBytes + terminal.TerminalUtf8Json.Length);
             }
         }
         catch (OverflowException)
@@ -397,7 +399,14 @@ public sealed class DocumentationScribeModelResponse
             throw new ArgumentException("The normalized response is outside the product boundary.");
         }
 
-        if (totalBytes > DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes)
+        if (payloadBytes > DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes
+            || MeasureNormalizedResponse(
+                toolCalls,
+                terminalSubmissions,
+                failure,
+                usage,
+                cache,
+                cost) > DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes)
         {
             throw new ArgumentException("The normalized response is outside the product boundary.");
         }
@@ -423,4 +432,91 @@ public sealed class DocumentationScribeModelResponse
     public DocumentationScribeModelCost? Cost { get; }
 
     public override string ToString() => nameof(DocumentationScribeModelResponse);
+
+    internal static int MeasureNormalizedResponse(
+        ImmutableArray<DocumentationScribeModelToolCall> toolCalls,
+        ImmutableArray<DocumentationScribeModelTerminalSubmission> terminalSubmissions,
+        DocumentationScribeModelFailure? failure,
+        DocumentationScribeModelUsage? usage,
+        DocumentationScribeCacheObservation? cache,
+        DocumentationScribeModelCost? cost)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("toolCalls");
+            writer.WriteStartArray();
+            foreach (var call in toolCalls)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("responseIndex", call.ResponseIndex);
+                writer.WriteString("callId", call.CallId);
+                writer.WriteString("operationId", call.OperationId);
+                writer.WritePropertyName("arguments");
+                writer.WriteRawValue(call.ArgumentsUtf8Json.Span, skipInputValidation: true);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WritePropertyName("terminalSubmissions");
+            writer.WriteStartArray();
+            foreach (var terminal in terminalSubmissions)
+            {
+                writer.WriteRawValue(terminal.TerminalUtf8Json.Span, skipInputValidation: true);
+            }
+
+            writer.WriteEndArray();
+            if (failure is not null)
+            {
+                writer.WritePropertyName("failure");
+                writer.WriteStartObject();
+                writer.WriteString("code", failure.Code.ToString());
+                if (failure.RetryAfterMilliseconds is { } retryAfter)
+                {
+                    writer.WriteNumber("retryAfterMilliseconds", retryAfter);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            if (usage is not null)
+            {
+                writer.WritePropertyName("usage");
+                writer.WriteStartObject();
+                WriteNullable(writer, "inputTokens", usage.InputTokens);
+                WriteNullable(writer, "outputTokens", usage.OutputTokens);
+                WriteNullable(writer, "cachedInputTokens", usage.CachedInputTokens);
+                WriteNullable(writer, "uncachedInputTokens", usage.UncachedInputTokens);
+                WriteNullable(writer, "reasoningTokens", usage.ReasoningTokens);
+                writer.WriteEndObject();
+            }
+
+            if (cache is { } cacheValue)
+            {
+                writer.WriteString("cache", DocumentationScribeVocabulary.GetId(cacheValue));
+            }
+
+            if (cost is not null)
+            {
+                writer.WritePropertyName("cost");
+                writer.WriteStartObject();
+                writer.WriteString("currencyId", cost.CurrencyId);
+                writer.WriteNumber("amountMicrounits", cost.AmountMicrounits);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return buffer.WrittenCount;
+    }
+
+    private static void WriteNullable(Utf8JsonWriter writer, string propertyName, int? value)
+    {
+        if (value is { } present)
+        {
+            writer.WriteNumber(propertyName, present);
+        }
+    }
 }

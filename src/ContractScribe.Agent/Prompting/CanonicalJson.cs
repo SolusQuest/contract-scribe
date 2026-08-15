@@ -12,7 +12,25 @@ internal static class CanonicalJson
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters =
+        {
+            new RepositoryContextRefJsonConverter(),
+            new DocumentationScribeTargetJsonConverter(),
+            new EvidenceSubjectJsonConverter(),
+            new EvidenceLocatorJsonConverter(),
+            new ProductEnumJsonConverter<TargetProfile>(),
+            new ProductEnumJsonConverter<AuditOutcome>(),
+            new ProductEnumJsonConverter<ComponentKind>(),
+            new ProductEnumJsonConverter<DocumentationPatchComponentKind>(),
+            new ProductEnumJsonConverter<EvidenceKind>(),
+            new ProductEnumJsonConverter<EvidenceRelation>(),
+            new ProductEnumJsonConverter<GeneratedOutputKind>(),
+            new ProductEnumJsonConverter<DocumentationScribePolicyDisposition>(),
+            new ProductEnumJsonConverter<DocumentationScribeInheritDocDisposition>(),
+            new ProductEnumJsonConverter<DocumentationScribeEvidenceAuthority>(),
+            new ProductEnumJsonConverter<DocumentationScribeContextReferenceKind>(),
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
+        },
     };
 
     internal static ImmutableArray<byte> Serialize<T>(T value)

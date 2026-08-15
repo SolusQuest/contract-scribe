@@ -87,7 +87,7 @@ public sealed class DocumentationScribeRuntime
         if (!string.Equals(registry.ToolPolicyId, request.ToolPolicyId, StringComparison.Ordinal)
             || !DocumentationScribePromptBuilder.IsPromptInputValid(request, promptInput))
         {
-            return reducer.Commit(state.CreateValidationFailure("scribe.prompt.invalid"));
+            return reducer.CommitValidation(state, cancellationToken, "scribe.prompt.invalid");
         }
 
         while (true)
@@ -100,7 +100,12 @@ public sealed class DocumentationScribeRuntime
 
             if (state.ProviderRequestCount >= request.Limits.MaximumProviderRequests)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
+            }
+
+            if (state.ProviderRequestCount > 0 && !state.CanStartAdditionalModelWork)
+            {
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
             DocumentationScribeModelRequest modelRequest;
@@ -114,15 +119,16 @@ public sealed class DocumentationScribeRuntime
                     state.AttemptNumber,
                     state.ProviderRequestCount + 1,
                     state.ToolCallCount,
+                    state.RemainingOutputTokens,
                     state.CompletedToolExchanges);
             }
             catch (PromptBoundaryException)
             {
-                return reducer.Commit(state.CreateValidationFailure("scribe.prompt.over-budget"));
+                return reducer.CommitValidation(state, cancellationToken, "scribe.prompt.over-budget");
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
 
             state.ProviderRequestCount++;
@@ -136,22 +142,22 @@ public sealed class DocumentationScribeRuntime
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
 
             if (completion.Kind == OperationCompletionKind.Cancelled)
             {
-                return reducer.Commit(state.CreateCancelled());
+                return reducer.CommitCancelled(state, cancellationToken);
             }
 
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Timeout));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
             }
 
             if (completion.Kind == OperationCompletionKind.Faulted || completion.Value is null)
             {
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
 
             var response = completion.Value;
@@ -164,7 +170,7 @@ public sealed class DocumentationScribeRuntime
 
             if (observationProtocolFailure)
             {
-                return reducer.Commit(state.CreateToolProtocolFailure("provider-response.invalid"));
+                return reducer.CommitToolProtocol(state, cancellationToken, "provider-response.invalid");
             }
 
             var hasCalls = response.ToolCalls.Length > 0;
@@ -173,7 +179,7 @@ public sealed class DocumentationScribeRuntime
             if (Convert.ToInt32(hasCalls) + Convert.ToInt32(hasTerminals) + Convert.ToInt32(hasFailure) != 1
                 || hasTerminals && response.TerminalSubmissions.Length != 1)
             {
-                return reducer.Commit(state.CreateToolProtocolFailure("provider-response.conflict"));
+                return reducer.CommitToolProtocol(state, cancellationToken, "provider-response.conflict");
             }
 
             if (hasFailure)
@@ -181,12 +187,13 @@ public sealed class DocumentationScribeRuntime
                 var failure = response.Failure!;
                 if (!failure.IsTransient || state.AttemptNumber >= request.Limits.MaximumAttempts)
                 {
-                    return reducer.Commit(state.CreateProviderFailure());
+                    return reducer.CommitProvider(state, cancellationToken);
                 }
 
-                if (state.ProviderRequestCount >= request.Limits.MaximumProviderRequests)
+                if (state.ProviderRequestCount >= request.Limits.MaximumProviderRequests
+                    || !state.CanStartAdditionalModelWork)
                 {
-                    return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                    return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
                 }
 
                 if (failure.RetryAfterMilliseconds is { } retryAfter)
@@ -197,12 +204,12 @@ public sealed class DocumentationScribeRuntime
                         cancellationToken).ConfigureAwait(false);
                     if (delay == OperationCompletionKind.Cancelled)
                     {
-                        return reducer.Commit(state.CreateCancelled());
+                        return reducer.CommitCancelled(state, cancellationToken);
                     }
 
                     if (delay == OperationCompletionKind.TimedOut)
                     {
-                        return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Timeout));
+                        return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
                     }
                 }
 
@@ -226,36 +233,10 @@ public sealed class DocumentationScribeRuntime
                 continue;
             }
 
-            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
-            if (checkpoint is not null)
-            {
-                return checkpoint;
-            }
-
-            try
-            {
-                var envelope = state.CreateEnvelope(ImmutableArray<DocumentationScribeDiagnosticInput>.Empty);
-                var bytes = DocumentationScribeRunResultWriter.Write(
-                    request,
-                    attemptId,
-                    response.TerminalSubmissions[0].TerminalUtf8Json,
-                    envelope);
-                var parsed = DocumentationScribeValidation.ParseRunResult(request, attemptId, bytes.AsMemory());
-                if (parsed.Result is null
-                    || parsed.Result.Terminal.Kind is not (
-                        DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip))
-                {
-                    return reducer.Commit(state.CreateValidationFailure(
-                        parsed.Failure?.Code ?? "scribe.result.invalid-terminal"));
-                }
-
-                checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
-                return checkpoint ?? reducer.Commit(parsed.Result);
-            }
-            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-            {
-                return reducer.Commit(state.CreateValidationFailure("scribe.result.invalid-terminal"));
-            }
+            return reducer.CommitTerminal(
+                state,
+                cancellationToken,
+                response.TerminalSubmissions[0].TerminalUtf8Json);
         }
     }
 
@@ -268,7 +249,7 @@ public sealed class DocumentationScribeRuntime
         if (calls.Length > state.Request.Limits.MaximumToolCalls - state.ToolCallCount
             || state.ToolRoundCount >= state.Request.Limits.MaximumToolRounds)
         {
-            return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+            return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
         }
 
         var seenIds = new HashSet<string>(StringComparer.Ordinal);
@@ -279,20 +260,20 @@ public sealed class DocumentationScribeRuntime
             var call = calls[index];
             if (call.ResponseIndex != index || !seenIds.Add(call.CallId))
             {
-                return reducer.Commit(state.CreateToolProtocolFailure("tool-call.rejected"));
+                return reducer.CommitToolProtocol(state, cancellationToken, "tool-call.rejected");
             }
 
             var registrationIndex = registry.FindRegistrationIndex(call.OperationId);
             if (registrationIndex < 0)
             {
-                return reducer.Commit(state.CreateToolProtocolFailure("tool-call.rejected"));
+                return reducer.CommitToolProtocol(state, cancellationToken, "tool-call.rejected");
             }
 
             roundCounts[registrationIndex]++;
             if (state.PerOperationToolCalls[registrationIndex] + roundCounts[registrationIndex]
                 > registry.Registrations[registrationIndex].MaximumCallsPerRun)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
             try
@@ -301,11 +282,11 @@ public sealed class DocumentationScribeRuntime
             }
             catch (ToolProtocolException exception)
             {
-                return reducer.Commit(state.CreateToolProtocolFailure(exception.ReferenceId));
+                return reducer.CommitToolProtocol(state, cancellationToken, exception.ReferenceId);
             }
             catch (ToolBoundaryInternalException)
             {
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
         }
 
@@ -331,27 +312,27 @@ public sealed class DocumentationScribeRuntime
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
 
             if (completion.Kind == OperationCompletionKind.Cancelled)
             {
-                return reducer.Commit(state.CreateCancelled());
+                return reducer.CommitCancelled(state, cancellationToken);
             }
 
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Timeout));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
             }
 
             if (completion.Kind == OperationCompletionKind.Faulted)
             {
                 if (completion.Error is ToolProtocolException protocol)
                 {
-                    return reducer.Commit(state.CreateToolProtocolFailure(protocol.ReferenceId));
+                    return reducer.CommitToolProtocol(state, cancellationToken, protocol.ReferenceId);
                 }
 
-                return reducer.Commit(state.CreateInternalFailure());
+                return reducer.CommitInternal(state, cancellationToken);
             }
 
             var invocation = completion.Value;
@@ -363,24 +344,24 @@ public sealed class DocumentationScribeRuntime
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.BudgetExhausted)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.TimedOut)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Timeout));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
             }
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.Cancelled)
             {
-                return reducer.Commit(cancellationToken.IsCancellationRequested
-                    ? state.CreateCancelled()
-                    : state.CreateToolProtocolFailure(toolCall.Call.CallId));
+                return cancellationToken.IsCancellationRequested
+                    ? reducer.CommitCancelled(state, cancellationToken)
+                    : reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
             }
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.Failure)
             {
-                return reducer.Commit(state.CreateToolProtocolFailure(toolCall.Call.CallId));
+                return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
             }
 
             try
@@ -398,13 +379,13 @@ public sealed class DocumentationScribeRuntime
             }
             catch (OverflowException)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
             if (prospectiveEvidenceItems > state.Request.Limits.MaximumEvidenceReferences
                 || prospectiveEvidenceBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes)
             {
-                return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
             buffered.Add(new DocumentationScribeCompletedToolExchange(
@@ -572,25 +553,8 @@ public sealed class DocumentationScribeRuntime
     private static DocumentationScribeRunResult? CommitCheckpoint(
         RunState state,
         DocumentationScribeTerminalReducer reducer,
-        CancellationToken cancellationToken)
-    {
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return reducer.Commit(state.CreateCancelled());
-        }
-
-        if (state.RemainingMilliseconds <= 0)
-        {
-            return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Timeout));
-        }
-
-        if (state.IsObservedBudgetExceeded)
-        {
-            return reducer.Commit(state.CreateFailure(DocumentationScribeFailureCode.Budget));
-        }
-
-        return null;
-    }
+        CancellationToken cancellationToken) =>
+        reducer.TryCommitPriority(state, cancellationToken);
 
     private static void ObserveLate(Task task) => _ = ObserveLateAsync(task);
 
@@ -613,13 +577,169 @@ internal sealed class DocumentationScribeTerminalReducer
     private readonly object gate = new();
     private DocumentationScribeRunResult? committed;
 
-    internal DocumentationScribeRunResult Commit(DocumentationScribeRunResult candidate)
+    internal DocumentationScribeRunResult? TryCommitPriority(
+        RunState state,
+        CancellationToken cancellationToken)
     {
         lock (gate)
         {
-            committed ??= candidate;
+            if (committed is not null)
+            {
+                return committed;
+            }
+
+            var elapsed = state.ElapsedMilliseconds;
+            committed = CreatePriorityResult(state, cancellationToken, elapsed);
             return committed;
         }
+    }
+
+    internal DocumentationScribeRunResult CommitCancelled(
+        RunState state,
+        CancellationToken cancellationToken) =>
+        CommitFailureCore(state, cancellationToken, DocumentationScribeFailureCode.Internal, cancelled: true);
+
+    internal DocumentationScribeRunResult CommitFailure(
+        RunState state,
+        CancellationToken cancellationToken,
+        DocumentationScribeFailureCode code) =>
+        CommitFailureCore(state, cancellationToken, code);
+
+    internal DocumentationScribeRunResult CommitProvider(
+        RunState state,
+        CancellationToken cancellationToken) =>
+        CommitFailureCore(state, cancellationToken, DocumentationScribeFailureCode.Provider);
+
+    internal DocumentationScribeRunResult CommitToolProtocol(
+        RunState state,
+        CancellationToken cancellationToken,
+        string referenceId) =>
+        CommitFailureCore(
+            state,
+            cancellationToken,
+            DocumentationScribeFailureCode.ToolProtocol,
+            detail: referenceId);
+
+    internal DocumentationScribeRunResult CommitValidation(
+        RunState state,
+        CancellationToken cancellationToken,
+        string validationCode) =>
+        CommitFailureCore(
+            state,
+            cancellationToken,
+            DocumentationScribeFailureCode.Validation,
+            detail: validationCode);
+
+    internal DocumentationScribeRunResult CommitInternal(
+        RunState state,
+        CancellationToken cancellationToken) =>
+        CommitFailureCore(state, cancellationToken, DocumentationScribeFailureCode.Internal);
+
+    internal DocumentationScribeRunResult CommitTerminal(
+        RunState state,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> terminalUtf8Json)
+    {
+        lock (gate)
+        {
+            if (committed is not null)
+            {
+                return committed;
+            }
+
+            var elapsed = state.ElapsedMilliseconds;
+            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            if (committed is not null)
+            {
+                return committed;
+            }
+
+            try
+            {
+                var envelope = state.CreateEnvelope(
+                    ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+                    elapsed);
+                var bytes = DocumentationScribeRunResultWriter.Write(
+                    state.Request,
+                    state.AttemptId,
+                    terminalUtf8Json,
+                    envelope);
+                var parsed = DocumentationScribeValidation.ParseRunResult(
+                    state.Request,
+                    state.AttemptId,
+                    bytes.AsMemory());
+                committed = parsed.Result is not null
+                    && parsed.Result.Terminal.Kind is DocumentationScribeTerminalKind.Proposal
+                        or DocumentationScribeTerminalKind.Skip
+                    ? parsed.Result
+                    : state.CreateValidationFailure(
+                        parsed.Failure?.Code ?? "scribe.result.invalid-terminal",
+                        elapsed);
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            {
+                committed = state.CreateValidationFailure("scribe.result.invalid-terminal", elapsed);
+            }
+
+            return committed;
+        }
+    }
+
+    private DocumentationScribeRunResult CommitFailureCore(
+        RunState state,
+        CancellationToken cancellationToken,
+        DocumentationScribeFailureCode code,
+        string? detail = null,
+        bool cancelled = false)
+    {
+        lock (gate)
+        {
+            if (committed is not null)
+            {
+                return committed;
+            }
+
+            var elapsed = state.ElapsedMilliseconds;
+            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            if (committed is not null)
+            {
+                return committed;
+            }
+
+            committed = cancelled
+                ? state.CreateCancelled(elapsed)
+                : code switch
+                {
+                    DocumentationScribeFailureCode.Provider => state.CreateProviderFailure(elapsed),
+                    DocumentationScribeFailureCode.ToolProtocol =>
+                        state.CreateToolProtocolFailure(detail ?? "tool", elapsed),
+                    DocumentationScribeFailureCode.Validation =>
+                        state.CreateValidationFailure(detail ?? "scribe.result.invalid-terminal", elapsed),
+                    DocumentationScribeFailureCode.Internal => state.CreateInternalFailure(elapsed),
+                    _ => state.CreateFailure(code, elapsed),
+                };
+            return committed;
+        }
+    }
+
+    private static DocumentationScribeRunResult? CreatePriorityResult(
+        RunState state,
+        CancellationToken cancellationToken,
+        int elapsedMilliseconds)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return state.CreateCancelled(elapsedMilliseconds);
+        }
+
+        if (elapsedMilliseconds >= state.Request.Limits.MaximumElapsedMilliseconds)
+        {
+            return state.CreateFailure(DocumentationScribeFailureCode.Timeout, elapsedMilliseconds);
+        }
+
+        return state.IsObservedBudgetExceeded
+            ? state.CreateFailure(DocumentationScribeFailureCode.Budget, elapsedMilliseconds)
+            : null;
     }
 }
 
@@ -702,6 +822,7 @@ internal sealed class RunState
         Request.Limits.MaximumElapsedMilliseconds - ElapsedMilliseconds);
 
     internal bool IsObservedBudgetExceeded => arithmeticOverflow
+        || HasUnrepresentableObservation
         || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
         || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
         || inputTokens > Request.Limits.MaximumInputTokens
@@ -710,6 +831,26 @@ internal sealed class RunState
         || uncachedInputTokens > Request.Limits.MaximumUncachedInputTokens
         || reasoningTokens > Request.Limits.MaximumOutputTokens
         || costMicrounits > Request.Limits.MaximumCostMicrounits;
+
+    internal bool CanStartAdditionalModelWork => !arithmeticOverflow
+        && !HasUnrepresentableObservation
+        && (inputTokens is null || inputTokens < Request.Limits.MaximumInputTokens)
+        && (outputTokens is null || outputTokens < Request.Limits.MaximumOutputTokens)
+        && (cachedInputTokens is null || cachedInputTokens < Request.Limits.MaximumInputTokens)
+        && (uncachedInputTokens is null || uncachedInputTokens < Request.Limits.MaximumUncachedInputTokens)
+        && (reasoningTokens is null || reasoningTokens < Request.Limits.MaximumOutputTokens)
+        && (costMicrounits is null || costMicrounits < Request.Limits.MaximumCostMicrounits);
+
+    internal int RemainingOutputTokens => outputTokens is null
+        ? Request.Limits.MaximumOutputTokens
+        : (int)Math.Max(0, Request.Limits.MaximumOutputTokens - outputTokens.Value);
+
+    private bool HasUnrepresentableObservation => inputTokens > DocumentationScribeContract.MaximumObservedInputTokens
+        || outputTokens > DocumentationScribeContract.MaximumObservedOutputTokens
+        || cachedInputTokens > DocumentationScribeContract.MaximumObservedInputTokens
+        || uncachedInputTokens > DocumentationScribeContract.MaximumObservedInputTokens
+        || reasoningTokens > DocumentationScribeContract.MaximumObservedOutputTokens
+        || costMicrounits > DocumentationScribeContract.MaximumObservedCostMicrounits;
 
     internal bool TryApplyObservations(DocumentationScribeModelResponse response)
     {
@@ -752,31 +893,40 @@ internal sealed class RunState
         }
     }
 
-    internal DocumentationScribeRunResult CreateCancelled() => DocumentationScribeValidation.CreateCancelledResult(
+    internal DocumentationScribeRunResult CreateCancelled(int elapsedMilliseconds) => DocumentationScribeValidation.CreateCancelledResult(
         Request,
         AttemptId,
         DocumentationScribeCancellationCode.Caller,
-        CreateEnvelope(ImmutableArray<DocumentationScribeDiagnosticInput>.Empty, allowObservedOverrun: false));
+        CreateEnvelope(
+            ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+            elapsedMilliseconds,
+            allowObservedOverrun: true));
 
-    internal DocumentationScribeRunResult CreateFailure(DocumentationScribeFailureCode code) =>
+    internal DocumentationScribeRunResult CreateFailure(
+        DocumentationScribeFailureCode code,
+        int elapsedMilliseconds) =>
         DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
             code,
             CreateEnvelope(
                 ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
+                elapsedMilliseconds,
                 allowObservedOverrun: code is DocumentationScribeFailureCode.Budget
                     or DocumentationScribeFailureCode.Timeout));
 
-    internal DocumentationScribeRunResult CreateProviderFailure() => DocumentationScribeValidation.CreateFailureResult(
+    internal DocumentationScribeRunResult CreateProviderFailure(int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
         Request,
         AttemptId,
         DocumentationScribeFailureCode.Provider,
         CreateEnvelope(
             [new DocumentationScribeDiagnosticInput("scribe.diagnostic.provider-failure", "provider")],
+            elapsedMilliseconds,
             allowObservedOverrun: false));
 
-    internal DocumentationScribeRunResult CreateToolProtocolFailure(string referenceId) =>
+    internal DocumentationScribeRunResult CreateToolProtocolFailure(
+        string referenceId,
+        int elapsedMilliseconds) =>
         DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
@@ -786,9 +936,12 @@ internal sealed class RunState
                     "scribe.diagnostic.tool-failure",
                     "tool",
                     DocumentationScribeBoundary.ValidateIdentifier(referenceId, nameof(referenceId)))],
+                elapsedMilliseconds,
                 allowObservedOverrun: false));
 
-    internal DocumentationScribeRunResult CreateValidationFailure(string validationCode) =>
+    internal DocumentationScribeRunResult CreateValidationFailure(
+        string validationCode,
+        int elapsedMilliseconds) =>
         DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
@@ -800,18 +953,21 @@ internal sealed class RunState
                     ValidationCode: DocumentationScribeBoundary.ValidateIdentifier(
                         validationCode,
                         nameof(validationCode)))],
+                elapsedMilliseconds,
                 allowObservedOverrun: false));
 
-    internal DocumentationScribeRunResult CreateInternalFailure() => DocumentationScribeValidation.CreateFailureResult(
+    internal DocumentationScribeRunResult CreateInternalFailure(int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
         Request,
         AttemptId,
         DocumentationScribeFailureCode.Internal,
         CreateEnvelope(
             [new DocumentationScribeDiagnosticInput("scribe.diagnostic.runtime-failure", "runtime")],
+            elapsedMilliseconds,
             allowObservedOverrun: false));
 
     internal DocumentationScribeRunEnvelopeInput CreateEnvelope(
         ImmutableArray<DocumentationScribeDiagnosticInput> diagnostics,
+        int elapsedMilliseconds,
         bool allowObservedOverrun = false)
     {
         var usage = CreateUsage(allowObservedOverrun);
@@ -824,7 +980,7 @@ internal sealed class RunState
             ProviderRequestCount,
             ToolRoundCount,
             ToolCallCount,
-            ElapsedMilliseconds,
+            elapsedMilliseconds,
             usage,
             cache,
             cost,
@@ -851,17 +1007,30 @@ internal sealed class RunState
             return null;
         }
 
-        return new DocumentationScribeUsageObservationInput(
-            Bounded(inputTokens, DocumentationScribeContract.MaximumObservedInputTokens),
-            Bounded(outputTokens, DocumentationScribeContract.MaximumObservedOutputTokens),
-            Bounded(cachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens),
-            Bounded(uncachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens),
-            Bounded(reasoningTokens, DocumentationScribeContract.MaximumObservedOutputTokens));
+        var representableInput = Representable(inputTokens, DocumentationScribeContract.MaximumObservedInputTokens);
+        var representableOutput = Representable(outputTokens, DocumentationScribeContract.MaximumObservedOutputTokens);
+        var representableCached = Representable(cachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens);
+        var representableUncached = Representable(uncachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens);
+        var representableReasoning = Representable(reasoningTokens, DocumentationScribeContract.MaximumObservedOutputTokens);
+        return representableInput is null
+            && representableOutput is null
+            && representableCached is null
+            && representableUncached is null
+            && representableReasoning is null
+                ? null
+                : new DocumentationScribeUsageObservationInput(
+                    representableInput,
+                    representableOutput,
+                    representableCached,
+                    representableUncached,
+                    representableReasoning);
     }
 
     private DocumentationScribeCostObservationInput? CreateCost(bool allowObservedOverrun)
     {
-        if (currencyId is null || costMicrounits is null)
+        if (currencyId is null
+            || costMicrounits is null
+            || costMicrounits > DocumentationScribeContract.MaximumObservedCostMicrounits)
         {
             return null;
         }
@@ -873,7 +1042,7 @@ internal sealed class RunState
 
         return new DocumentationScribeCostObservationInput(
             currencyId,
-            Math.Min(costMicrounits.Value, DocumentationScribeContract.MaximumObservedCostMicrounits));
+            costMicrounits.Value);
     }
 
     private static void Add(ref long? total, int? delta)
@@ -886,9 +1055,9 @@ internal sealed class RunState
 
     private static void Add(ref long? total, long delta) => total = checked((total ?? 0) + delta);
 
-    private static int? Bounded(long? value, int maximum) => value is null
+    private static int? Representable(long? value, int maximum) => value is null || value > maximum
         ? null
-        : (int)Math.Min(value.Value, maximum);
+        : (int)value.Value;
 }
 
 internal enum OperationCompletionKind

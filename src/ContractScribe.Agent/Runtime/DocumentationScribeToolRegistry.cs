@@ -139,12 +139,16 @@ public sealed class DocumentationScribeToolRegistryBuilder
             throw new ArgumentException("The tool descriptor is not valid.", nameof(descriptor));
         }
 
-        if (registrations.Any(registration => string.Equals(
+        if (string.Equals(
+                operationId,
+                DocumentationScribeBoundary.TerminalOperationId,
+                StringComparison.OrdinalIgnoreCase)
+            || registrations.Any(registration => string.Equals(
             registration.OperationId,
             operationId,
             StringComparison.OrdinalIgnoreCase)))
         {
-            throw new ArgumentException("A tool operation is already registered.", nameof(descriptor));
+            throw new ArgumentException("A tool operation is reserved or already registered.", nameof(descriptor));
         }
 
         var normalizedDescription = DocumentationScribeBoundary.NormalizeText(
@@ -304,7 +308,7 @@ internal sealed class TypedToolRegistration<TRequest, TResult> : ToolRegistratio
 
         if (!decoded.IsValid || decoded.Request is null)
         {
-            throw new ToolProtocolException(call.CallId);
+            throw new ToolProtocolException(call.OperationId);
         }
 
         return new TypedPreparedToolCall<TRequest, TResult>(call, decoded.Request, port, codec);
@@ -358,7 +362,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
 
         if (result is null || result.Outcome is null || !DocumentationScribeBoundary.IsKnownOutcome(result.Outcome))
         {
-            throw new ToolProtocolException(Call.CallId);
+            throw new ToolProtocolException(Call.OperationId);
         }
 
         var outcome = result.Outcome;
@@ -382,7 +386,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
 
         if (!encoded.IsValid || encoded.Payload is null)
         {
-            throw new ToolProtocolException(Call.CallId);
+            throw new ToolProtocolException(Call.OperationId);
         }
 
         ImmutableArray<byte> normalized;
@@ -392,7 +396,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            throw new ToolProtocolException(Call.CallId);
+            throw new ToolProtocolException(Call.OperationId);
         }
 
         return new ToolInvocationResult(

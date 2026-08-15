@@ -7,6 +7,7 @@ namespace ContractScribe.Agent.Runtime;
 
 internal static class DocumentationScribeBoundary
 {
+    internal const string TerminalOperationId = "scribe.submit-terminal";
     internal const int MaximumPromptBlockUtf8Bytes = 4_194_304;
     internal const int MaximumLogicalRequestUtf8Bytes = 33_554_432;
     internal const int MaximumNormalizedResponseUtf8Bytes = DocumentationScribeContract.MaximumArtifactUtf8Bytes;
@@ -15,13 +16,27 @@ internal static class DocumentationScribeBoundary
     internal const int MaximumRetryHintMilliseconds = 300_000;
     internal const int MaximumTerminalSubmissions = 8;
     internal const int MaximumToolCallsPerResponse = 1_024;
+    internal const int MaximumCorrelationIdUtf8Bytes = 1_024;
+    private static readonly UTF8Encoding StrictUtf8 = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
 
     internal static string NormalizeText(string value, string parameterName, int maximumUtf8Bytes)
     {
         ArgumentNullException.ThrowIfNull(value, parameterName);
         var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n');
-        if (Encoding.UTF8.GetByteCount(normalized) > maximumUtf8Bytes)
+        int byteCount;
+        try
+        {
+            byteCount = StrictUtf8.GetByteCount(normalized);
+        }
+        catch (EncoderFallbackException)
+        {
+            throw new ArgumentException("The normalized text is outside the product boundary.", parameterName);
+        }
+
+        if (byteCount > maximumUtf8Bytes)
         {
             throw new ArgumentException("The normalized text is outside the product boundary.", parameterName);
         }
@@ -33,10 +48,37 @@ internal static class DocumentationScribeBoundary
     {
         ArgumentNullException.ThrowIfNull(value, parameterName);
         if (value.Length is < 1 or > DocumentationScribeContract.MaximumIdentifierScalars
-            || !IsAsciiIdentifierStart(value[0])
-            || value.Any(character => !IsAsciiIdentifierPart(character)))
+            || value[0] is not (>= 'a' and <= 'z')
+            || value[^1] is '.' or '-'
+            || value.Any(character => character is not (>= 'a' and <= 'z')
+                && character is not (>= '0' and <= '9')
+                && character is not ('.' or '-')))
         {
             throw new ArgumentException("A bounded product identifier is required.", parameterName);
+        }
+
+        return value;
+    }
+
+    internal static string ValidateCorrelationId(string value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        if (value.Length == 0
+            || value.Any(character => char.IsControl(character)))
+        {
+            throw new ArgumentException("A bounded opaque correlation identifier is required.", parameterName);
+        }
+
+        try
+        {
+            if (StrictUtf8.GetByteCount(value) > MaximumCorrelationIdUtf8Bytes)
+            {
+                throw new ArgumentException("A bounded opaque correlation identifier is required.", parameterName);
+            }
+        }
+        catch (EncoderFallbackException)
+        {
+            throw new ArgumentException("A bounded opaque correlation identifier is required.", parameterName);
         }
 
         return value;
@@ -92,12 +134,6 @@ internal static class DocumentationScribeBoundary
         || outcome == DocumentationScribeToolOutcome.Cancelled
         || outcome == DocumentationScribeToolOutcome.TimedOut
         || outcome == DocumentationScribeToolOutcome.BudgetExhausted;
-
-    private static bool IsAsciiIdentifierStart(char value) =>
-        value is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
-
-    private static bool IsAsciiIdentifierPart(char value) =>
-        IsAsciiIdentifierStart(value) || value is '.' or '-' or '_';
 
     private static bool IsLowerHex(char value) => value is >= '0' and <= '9' or >= 'a' and <= 'f';
 }

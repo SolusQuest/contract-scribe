@@ -6,19 +6,6 @@ namespace ContractScribe.Agent.Prompting;
 
 internal static class DocumentationScribePromptBuilder
 {
-    private const string TerminalOperationId = "scribe.submit-terminal";
-    private static readonly ImmutableArray<byte> TerminalSchemaUtf8 = CanonicalJson.Normalize(
-        """
-        {
-          "type": "object",
-          "required": ["kind"],
-          "oneOf": [
-            { "properties": { "kind": { "const": "proposal" } } },
-            { "properties": { "kind": { "const": "skip" } } }
-          ]
-        }
-        """u8.ToArray());
-
     internal static bool IsPromptInputValid(
         DocumentationScribeRequest request,
         DocumentationScribePromptInput promptInput)
@@ -95,6 +82,7 @@ internal static class DocumentationScribePromptBuilder
         int attemptNumber,
         int providerRequestNumber,
         int completedToolCallCount,
+        int remainingOutputTokens,
         ImmutableArray<DocumentationScribeCompletedToolExchange> completedToolExchanges)
     {
         var instructions = promptInput.Context
@@ -161,14 +149,14 @@ internal static class DocumentationScribePromptBuilder
                     content = promptInput.Evidence,
                 }));
         var terminal = new DocumentationScribeTerminalDefinition(
-            TerminalOperationId,
-            CanonicalJson.AsString(TerminalSchemaUtf8));
+            DocumentationScribeBoundary.TerminalOperationId,
+            CanonicalJson.AsString(DocumentationScribeTerminalSchema.Utf8));
         var remainingCalls = Math.Max(0, request.Limits.MaximumToolCalls - completedToolCallCount);
         var outputLimits = new DocumentationScribeModelOutputLimits(
             remainingCalls,
             DocumentationScribeContract.MaximumArtifactUtf8Bytes,
             DocumentationScribeContract.MaximumArtifactUtf8Bytes,
-            request.Limits.MaximumOutputTokens,
+            remainingOutputTokens,
             DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
         var deterministic = CanonicalJson.Serialize(new
         {

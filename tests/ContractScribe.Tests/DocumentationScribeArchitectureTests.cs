@@ -2,35 +2,14 @@ using System.Collections;
 using System.Reflection;
 using System.Xml.Linq;
 using ContractScribe.Agent.Runtime;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.Tests;
 
 public sealed class DocumentationScribeArchitectureTests
 {
-    private static readonly string[] ForbiddenSourceTokens =
-    [
-        "System.IO",
-        "System.Net",
-        "System.Diagnostics",
-        "Microsoft.CodeAnalysis",
-        "ContractScribe.Roslyn",
-        "ContractScribe.Patching",
-        "ContractScribe.Cli",
-        "ContractScribe.GitHub",
-        "IServiceProvider",
-        "HttpClient",
-        "FileInfo",
-        "DirectoryInfo",
-        "TextWriter",
-        "Environment.",
-        "File.",
-        "Directory.",
-        "Process.",
-        "Dictionary<",
-        "Func<",
-        "Action<",
-    ];
-
     [Fact]
     public void Agent_project_has_one_core_reference_and_no_package_dependency()
     {
@@ -59,6 +38,21 @@ public sealed class DocumentationScribeArchitectureTests
             .Select(name => name!)
             .ToArray();
         Assert.Equal(new[] { "ContractScribe.Core" }, productReferences);
+
+        foreach (var productProject in Directory.EnumerateFiles(
+            Path.Join(root, "src"),
+            "*.csproj",
+            SearchOption.AllDirectories).Where(path => !string.Equals(
+                path,
+                projectPath,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            Assert.DoesNotContain(
+                XDocument.Load(productProject).Descendants("ProjectReference"),
+                reference => reference.Attribute("Include")?.Value.Contains(
+                    "ContractScribe.Agent",
+                    StringComparison.Ordinal) == true);
+        }
     }
 
     [Fact]
@@ -66,11 +60,6 @@ public sealed class DocumentationScribeArchitectureTests
     {
         var assembly = typeof(DocumentationScribeRuntime).Assembly;
         var publicTypes = assembly.GetExportedTypes();
-        var forbiddenTypes = new[]
-        {
-            typeof(object), typeof(Delegate), typeof(IServiceProvider), typeof(Stream),
-            typeof(FileInfo), typeof(DirectoryInfo), typeof(TextWriter), typeof(Uri),
-        };
         var forbiddenNames = new[]
         {
             "endpoint", "header", "credential", "environment", "workspace", "root",
@@ -79,29 +68,12 @@ public sealed class DocumentationScribeArchitectureTests
 
         foreach (var type in publicTypes)
         {
-            Assert.False(typeof(IDictionary).IsAssignableFrom(type), type.FullName);
-            foreach (var constructor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
-            {
-                foreach (var parameter in constructor.GetParameters())
-                {
-                    Assert.DoesNotContain(parameter.ParameterType, forbiddenTypes);
+            var signatureTypes = PublicSignatureTypes(type).SelectMany(ExpandType).Distinct().ToArray();
+            Assert.DoesNotContain(signatureTypes, IsForbiddenPublicType);
+            Assert.All(type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+                .SelectMany(constructor => constructor.GetParameters()), parameter =>
                     Assert.DoesNotContain(forbiddenNames, forbidden =>
-                        parameter.Name?.Contains(forbidden, StringComparison.OrdinalIgnoreCase) == true);
-                    Assert.False(IsDictionary(parameter.ParameterType), parameter.ParameterType.FullName);
-                }
-            }
-
-            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
-                .Where(method => method.DeclaringType == type))
-            {
-                Assert.DoesNotContain(method.ReturnType, forbiddenTypes);
-                Assert.False(IsDictionary(method.ReturnType), method.ToString());
-                Assert.All(method.GetParameters(), parameter =>
-                {
-                    Assert.DoesNotContain(parameter.ParameterType, forbiddenTypes);
-                    Assert.False(IsDictionary(parameter.ParameterType), parameter.ParameterType.FullName);
-                });
-            }
+                        parameter.Name?.Contains(forbidden, StringComparison.OrdinalIgnoreCase) == true));
         }
     }
 
@@ -110,33 +82,30 @@ public sealed class DocumentationScribeArchitectureTests
     {
         var root = FindRepositoryRoot();
         var agentRoot = Path.Join(root, "src", "ContractScribe.Agent");
-        var violations = new[] { "Runtime", "Prompting", "Properties" }
+        var sources = new[] { "Runtime", "Prompting", "Properties" }
             .SelectMany(directory => Directory.EnumerateFiles(
                 Path.Join(agentRoot, directory), "*.cs", SearchOption.AllDirectories))
-            .SelectMany(path => FindForbiddenCapabilities(File.ReadAllText(path))
-                .Select(token => $"{Path.GetRelativePath(root, path)}: {token}"))
-            .ToArray();
+            .ToDictionary(path => Path.GetRelativePath(root, path), File.ReadAllText, StringComparer.Ordinal);
+        var violations = FindForbiddenCapabilities(sources);
 
-        Assert.Empty(violations);
+        Assert.True(violations.Count == 0, string.Join("\n", violations));
     }
 
-    [Fact]
-    public void Capability_scan_rejects_negative_examples()
+    [Theory]
+    [InlineData("class Bad { Stream Open(string path) => new FileStream(path, FileMode.Open); }")]
+    [InlineData("using Disk = System.IO.File; class Bad { string Read() => Disk.ReadAllText(\"x\"); }")]
+    [InlineData("class Bad { string Read() => Helper(); string Helper() => File.ReadAllText(\"x\"); }")]
+    [InlineData("public delegate string RuntimeFactory();")]
+    [InlineData("class Bad { List<List<Stream>> Values { get; } = []; }")]
+    [InlineData("class Bad { HttpClient Client { get; } = new(); }")]
+    public void Capability_scan_rejects_semantic_negative_examples(string hostile)
     {
-        const string hostile = """
-            using System.IO;
-            using System.Net.Http;
-            public sealed class BadAgent
-            {
-                public BadAgent(IServiceProvider capabilities, Func<string> writer) { }
-            }
-            """;
+        var violations = FindForbiddenCapabilities(new Dictionary<string, string>
+        {
+            ["Hostile.cs"] = hostile,
+        });
 
-        var violations = FindForbiddenCapabilities(hostile);
-        Assert.Contains("System.IO", violations);
-        Assert.Contains("System.Net", violations);
-        Assert.Contains("IServiceProvider", violations);
-        Assert.Contains("Func<", violations);
+        Assert.NotEmpty(violations);
     }
 
     [Fact]
@@ -152,7 +121,10 @@ public sealed class DocumentationScribeArchitectureTests
         var root = FindRepositoryRoot();
         var source = File.ReadAllText(Path.Join(
             root, "src", "ContractScribe.Agent", "Runtime", "ScriptedDocumentationScribeModelExchange.cs"));
-        Assert.Empty(FindForbiddenCapabilities(source));
+        Assert.Empty(FindForbiddenCapabilities(new Dictionary<string, string>
+        {
+            ["ScriptedDocumentationScribeModelExchange.cs"] = source,
+        }));
         Assert.DoesNotContain("secret", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cache", source, StringComparison.OrdinalIgnoreCase);
     }
@@ -168,14 +140,210 @@ public sealed class DocumentationScribeArchitectureTests
         Assert.DoesNotContain("### Candidate `ContractScribe.Agent`", document, StringComparison.Ordinal);
     }
 
-    private static bool IsDictionary(Type type) =>
-        typeof(IDictionary).IsAssignableFrom(type)
-        || type.GetInterfaces().Any(candidate => candidate.IsGenericType
-            && candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+    private static IEnumerable<Type> PublicSignatureTypes(Type type)
+    {
+        yield return type;
+        foreach (var constructor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        {
+            foreach (var parameter in constructor.GetParameters())
+            {
+                yield return parameter.ParameterType;
+            }
+        }
 
-    private static string[] FindForbiddenCapabilities(string source) => ForbiddenSourceTokens
-        .Where(token => source.Contains(token, StringComparison.Ordinal))
-        .ToArray();
+        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
+            .Where(method => method.DeclaringType == type
+                && method.Name is not (nameof(ToString) or nameof(Equals) or nameof(GetHashCode))))
+        {
+            yield return method.ReturnType;
+            foreach (var parameter in method.GetParameters())
+            {
+                yield return parameter.ParameterType;
+            }
+        }
+
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            yield return property.PropertyType;
+        }
+
+        foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            yield return field.FieldType;
+        }
+
+        foreach (var eventInfo in type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            if (eventInfo.EventHandlerType is { } eventType)
+            {
+                yield return eventType;
+            }
+        }
+    }
+
+    private static IEnumerable<Type> ExpandType(Type type)
+    {
+        yield return type;
+        if (type.HasElementType && type.GetElementType() is { } element)
+        {
+            foreach (var nested in ExpandType(element))
+            {
+                yield return nested;
+            }
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            foreach (var nested in ExpandType(argument))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static bool IsForbiddenPublicType(Type type)
+    {
+        var fullName = type.FullName ?? type.Name;
+        return type == typeof(object)
+            || typeof(Delegate).IsAssignableFrom(type)
+            || typeof(IServiceProvider).IsAssignableFrom(type)
+            || typeof(Stream).IsAssignableFrom(type)
+            || typeof(TextWriter).IsAssignableFrom(type)
+            || typeof(FileSystemInfo).IsAssignableFrom(type)
+            || typeof(IDictionary).IsAssignableFrom(type)
+            || type.GetInterfaces().Any(candidate => candidate.IsGenericType
+                && candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+            || type == typeof(Uri)
+            || fullName.StartsWith("System.Net.", StringComparison.Ordinal)
+            || fullName.StartsWith("Microsoft.CodeAnalysis.", StringComparison.Ordinal)
+            || fullName.StartsWith("Microsoft.Build.", StringComparison.Ordinal)
+            || fullName.StartsWith("ContractScribe.Roslyn.", StringComparison.Ordinal)
+            || fullName.StartsWith("ContractScribe.Patching.", StringComparison.Ordinal)
+            || fullName.StartsWith("ContractScribe.Cli.", StringComparison.Ordinal)
+            || fullName.Contains("GitHub", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<string> FindForbiddenCapabilities(
+        IReadOnlyDictionary<string, string> sources)
+    {
+        const string globalUsings = """
+            global using System;
+            global using System.Collections.Generic;
+            global using System.IO;
+            global using System.Linq;
+            global using System.Net.Http;
+            global using System.Threading;
+            global using System.Threading.Tasks;
+            """;
+        var trees = sources.Select(pair => CSharpSyntaxTree.ParseText(
+                pair.Value,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                pair.Key))
+            .Append(CSharpSyntaxTree.ParseText(
+                globalUsings,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                "GlobalUsings.g.cs"))
+            .ToArray();
+        var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(assembly => !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location))
+            .Select(assembly => MetadataReference.CreateFromFile(assembly.Location))
+            .GroupBy(reference => reference.Display, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+        var compilation = CSharpCompilation.Create(
+            "DocumentationScribeCapabilityInspection",
+            trees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var findings = new List<string>();
+        foreach (var tree in trees.Where(tree => tree.FilePath != "GlobalUsings.g.cs"))
+        {
+            var model = compilation.GetSemanticModel(tree, ignoreAccessibility: true);
+            foreach (var node in tree.GetRoot().DescendantNodesAndSelf())
+            {
+                var symbol = model.GetDeclaredSymbol(node) ?? model.GetSymbolInfo(node).Symbol;
+                var types = SymbolTypes(symbol)
+                    .Append(model.GetTypeInfo(node).Type)
+                    .Where(type => type is not null)
+                    .Select(type => type!)
+                    .ToArray();
+                var rejectDelegate = node is TypeSyntax or DelegateDeclarationSyntax;
+                var forbidden = types.FirstOrDefault(type => ContainsForbiddenType(type, rejectDelegate));
+                if (forbidden is null)
+                {
+                    continue;
+                }
+
+                var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                findings.Add($"{tree.FilePath}:{line}:{forbidden.ToDisplayString()}");
+            }
+        }
+
+        return findings.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static IEnumerable<ITypeSymbol?> SymbolTypes(ISymbol? symbol)
+    {
+        switch (symbol)
+        {
+            case IMethodSymbol method:
+                yield return method.ContainingType;
+                yield return method.ReturnType;
+                break;
+            case IPropertySymbol property:
+                yield return property.ContainingType;
+                yield return property.Type;
+                break;
+            case IFieldSymbol field:
+                yield return field.ContainingType;
+                yield return field.Type;
+                break;
+            case IEventSymbol eventSymbol:
+                yield return eventSymbol.ContainingType;
+                yield return eventSymbol.Type;
+                break;
+            case IParameterSymbol parameter:
+                yield return parameter.Type;
+                break;
+            case INamedTypeSymbol named:
+                yield return named;
+                break;
+        }
+    }
+
+    private static bool ContainsForbiddenType(ITypeSymbol type, bool rejectDelegate)
+    {
+        if (type is IArrayTypeSymbol array)
+        {
+            return ContainsForbiddenType(array.ElementType, rejectDelegate);
+        }
+
+        if (type is INamedTypeSymbol named)
+        {
+            var name = named.OriginalDefinition.ToDisplayString();
+            if (rejectDelegate && named.TypeKind == TypeKind.Delegate
+                || name is "System.IServiceProvider" or "System.Uri"
+                || name.StartsWith("System.IO.", StringComparison.Ordinal)
+                || name.StartsWith("System.Net.", StringComparison.Ordinal)
+                || name.StartsWith("System.Diagnostics.", StringComparison.Ordinal)
+                || name.StartsWith("Microsoft.CodeAnalysis.", StringComparison.Ordinal)
+                || name.StartsWith("Microsoft.Build.", StringComparison.Ordinal)
+                || name.StartsWith("ContractScribe.Roslyn.", StringComparison.Ordinal)
+                || name.StartsWith("ContractScribe.Patching.", StringComparison.Ordinal)
+                || name.StartsWith("ContractScribe.Cli.", StringComparison.Ordinal)
+                || name.Contains("GitHub", StringComparison.Ordinal)
+                || name is "System.Collections.IDictionary"
+                    or "System.Collections.Generic.IDictionary<TKey, TValue>"
+                    or "System.Collections.Generic.Dictionary<TKey, TValue>")
+            {
+                return true;
+            }
+
+            return named.TypeArguments.Any(argument => ContainsForbiddenType(argument, rejectDelegate));
+        }
+
+        return false;
+    }
 
     private static string FindRepositoryRoot()
     {
