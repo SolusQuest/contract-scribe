@@ -217,7 +217,7 @@ Operation results add only their bounded typed data. The seam exposes no physica
 
 ## Stable validation categories
 
-Request failures use `scribe.request.<category>` and result failures use `scribe.result.<category>` with an RFC 6901 pointer when a bounded location exists. Current categories cover document size, BOM, UTF-8/JSON, duplicate property, unsupported version, shape, unknown field, vocabulary/identity, order, component, reference, stale/wrong subject, style, evidence, content, diagnostic, correlation, and budget failures.
+Request failures use `scribe.request.<category>` and result failures use `scribe.result.<category>` with an RFC 6901 pointer when a bounded location exists. A property-name segment is retained only when it is a bounded safe lexical name; otherwise the pointer stops at the containing object so rejected source or provider text cannot become diagnostic content. Current categories cover document size, BOM, UTF-8/JSON, duplicate property, unsupported version, shape, unknown field, vocabulary/identity, order, component, reference, stale/wrong subject, style, evidence, content, diagnostic, correlation, and budget failures.
 
 The validator reports deterministic structured facts only. It never includes the rejected source, provider text, exception text, or other arbitrary input in a diagnostic.
 

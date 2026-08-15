@@ -8,6 +8,8 @@ namespace ContractScribe.Core;
 
 public static class DocumentationScribeValidation
 {
+    private const int MaximumDiagnosticPropertyNameLength = 64;
+
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
@@ -1940,7 +1942,7 @@ public static class DocumentationScribeValidation
             return new RawFailure(prefix + ".invalid-json", null);
         }
 
-        var duplicatePointer = FindDuplicateProperty(document.RootElement, string.Empty);
+        var duplicatePointer = FindDuplicateProperty(document.RootElement, string.Empty, canAppendSegments: true);
         if (duplicatePointer is not null)
         {
             document.Dispose();
@@ -1974,20 +1976,29 @@ public static class DocumentationScribeValidation
         return null;
     }
 
-    private static string? FindDuplicateProperty(JsonElement element, string pointer)
+    private static string? FindDuplicateProperty(
+        JsonElement element,
+        string pointer,
+        bool canAppendSegments)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var property in element.EnumerateObject())
             {
-                var propertyPointer = pointer + "/" + EscapePointer(property.Name);
+                var propertyNameIsSafe = canAppendSegments && IsSafeDiagnosticPropertyName(property.Name);
+                var propertyPointer = propertyNameIsSafe
+                    ? pointer + "/" + EscapePointer(property.Name)
+                    : pointer;
                 if (!names.Add(property.Name))
                 {
                     return propertyPointer;
                 }
 
-                var nested = FindDuplicateProperty(property.Value, propertyPointer);
+                var nested = FindDuplicateProperty(
+                    property.Value,
+                    propertyPointer,
+                    propertyNameIsSafe);
                 if (nested is not null)
                 {
                     return nested;
@@ -1999,7 +2010,8 @@ public static class DocumentationScribeValidation
             var index = 0;
             foreach (var item in element.EnumerateArray())
             {
-                var nested = FindDuplicateProperty(item, pointer + "/" + index);
+                var itemPointer = canAppendSegments ? pointer + "/" + index : pointer;
+                var nested = FindDuplicateProperty(item, itemPointer, canAppendSegments);
                 if (nested is not null)
                 {
                     return nested;
@@ -2029,7 +2041,7 @@ public static class DocumentationScribeValidation
         {
             if (!allowed.Contains(property.Name))
             {
-                throw Fail("unknown-field", pointer + "/" + EscapePointer(property.Name));
+                throw Fail("unknown-field", AppendDiagnosticPropertyPointer(pointer, property.Name));
             }
         }
 
@@ -2779,6 +2791,22 @@ public static class DocumentationScribeValidation
 
     private static bool HasPrefix(ReadOnlySpan<byte> bytes, params byte[] prefix) =>
         bytes.Length >= prefix.Length && bytes[..prefix.Length].SequenceEqual(prefix);
+
+    private static string AppendDiagnosticPropertyPointer(string pointer, string propertyName) =>
+        IsSafeDiagnosticPropertyName(propertyName)
+            ? pointer + "/" + EscapePointer(propertyName)
+            : pointer;
+
+    private static bool IsSafeDiagnosticPropertyName(string value)
+    {
+        if (value.Length is 0 or > MaximumDiagnosticPropertyNameLength)
+        {
+            return false;
+        }
+
+        return value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_');
+    }
 
     private static string EscapePointer(string value) =>
         value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);

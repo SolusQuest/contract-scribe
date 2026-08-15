@@ -897,15 +897,51 @@ public sealed class DocumentationScribeContractTests
     }
 
     [Fact]
-    public void Schema_rejects_unknown_fields_and_mixed_terminal_payloads()
+    public void Schema_and_core_reject_unknown_fields_without_publishing_untrusted_names()
     {
         var request = ParseObject(ReadFixture("valid", "request.json"));
         request["target"]!["sourceText"] = "private source";
-        Assert.False(Evaluate(RequestSchema.Value, Serialize(request)));
+        var requestBytes = Serialize(request);
+        Assert.False(Evaluate(RequestSchema.Value, requestBytes));
+        var requestFailure = DocumentationScribeValidation.ParseRequest(requestBytes).Failure;
+        Assert.Equal("scribe.request.unknown-field", requestFailure?.Code);
+        Assert.Equal("/target/sourceText", requestFailure?.Pointer);
 
         var result = ParseObject(ReadFixture("valid", "failure-result.json"));
         result["terminal"]!["reason"] = "scribe.skip.insufficient-evidence";
         Assert.False(Evaluate(ResultSchema.Value, Serialize(result)));
+
+        var untrustedPropertyName = "private provider content " + new string('x', 900_000);
+        var boundedRequest = ParseObject(ReadFixture("valid", "request.json"));
+        boundedRequest["target"]![untrustedPropertyName] = true;
+        var boundedRequestBytes = Serialize(boundedRequest);
+        Assert.True(boundedRequestBytes.Length < DocumentationScribeContract.MaximumArtifactUtf8Bytes);
+        var boundedRequestFailure = DocumentationScribeValidation.ParseRequest(boundedRequestBytes).Failure;
+        Assert.Equal("scribe.request.unknown-field", boundedRequestFailure?.Code);
+        Assert.Equal("/target", boundedRequestFailure?.Pointer);
+        Assert.DoesNotContain("private provider content", boundedRequestFailure?.Pointer, StringComparison.Ordinal);
+
+        var parsedRequest = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+        var boundedResult = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        Correlate(boundedResult, parsedRequest.ArtifactSha256);
+        boundedResult["runEnvelope"]![untrustedPropertyName] = true;
+        var boundedResultBytes = Serialize(boundedResult);
+        Assert.True(boundedResultBytes.Length < DocumentationScribeContract.MaximumArtifactUtf8Bytes);
+        var boundedResultFailure = DocumentationScribeValidation.ParseRunResult(
+            parsedRequest,
+            attempt,
+            boundedResultBytes).Failure;
+        Assert.Equal("scribe.result.unknown-field", boundedResultFailure?.Code);
+        Assert.Equal("/runEnvelope", boundedResultFailure?.Pointer);
+        Assert.DoesNotContain("private provider content", boundedResultFailure?.Pointer, StringComparison.Ordinal);
+
+        var duplicateName = "private duplicate content " + new string('x', 8_192);
+        var duplicateBytes = Encoding.UTF8.GetBytes(
+            $"{{\"scribeRequestVersion\":1,\"{duplicateName}\":0,\"{duplicateName}\":1}}");
+        var duplicateFailure = DocumentationScribeValidation.ParseRequest(duplicateBytes).Failure;
+        Assert.Equal("scribe.request.duplicate-property", duplicateFailure?.Code);
+        Assert.Equal(string.Empty, duplicateFailure?.Pointer);
     }
 
     private static void AssertRequestMutationFails(
