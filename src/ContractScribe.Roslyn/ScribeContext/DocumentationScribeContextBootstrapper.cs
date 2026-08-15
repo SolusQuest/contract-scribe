@@ -75,19 +75,22 @@ public sealed class DocumentationScribeLoadedContext
     private readonly DocumentationScribeContextBootstrapSelection selection;
     private readonly DocumentationScribeContextCursorAuthority cursorAuthority;
     private readonly DocumentationScribeContextFreshnessGuard freshnessGuard;
+    private readonly Action? cursorPublicationObserver;
 
     internal DocumentationScribeLoadedContext(
         ClassifiedRepositorySession classifiedSession,
         DocumentationScribeContextBootstrapSelection selection,
         DocumentationScribeContextFacts facts,
         DocumentationScribeContextCursorAuthority cursorAuthority,
-        DocumentationScribeContextFreshnessGuard freshnessGuard)
+        DocumentationScribeContextFreshnessGuard freshnessGuard,
+        Action? cursorPublicationObserver)
     {
         this.classifiedSession = classifiedSession;
         this.selection = selection;
         Facts = facts;
         this.cursorAuthority = cursorAuthority;
         this.freshnessGuard = freshnessGuard;
+        this.cursorPublicationObserver = cursorPublicationObserver;
     }
 
     public DocumentationScribeContextFacts Facts { get; }
@@ -99,6 +102,19 @@ public sealed class DocumentationScribeLoadedContext
         && !classifiedSession.RepositorySession.IsDisposed
         && freshnessGuard.HasNotFailed
         && classifiedSession.RepositorySession.RepositoryContextRef == Facts.RepositoryContextRef;
+
+    internal bool VerifyFreshness(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsCurrent)
+        {
+            return false;
+        }
+
+        return freshnessGuard.TryExecuteIfFresh(
+            cancellationToken,
+            () => IsCurrent);
+    }
 
     public DocumentationScribeContextRequestBindingResult ValidateRequestBinding(
         DocumentationScribeRequest request)
@@ -122,7 +138,7 @@ public sealed class DocumentationScribeLoadedContext
         var expectedInstructions = Facts.Instructions
             .Select(instruction => new InstructionBinding(
                 Facts.RepositoryContextRef,
-                instruction.Commitment.Path,
+                instruction.Commitment.RepositoryPath!,
                 instruction.Commitment.ContentSha256,
                 instruction.Commitment.OriginalUtf8ByteCount,
                 instruction.Commitment.IncludedUtf8ByteCount,
@@ -155,15 +171,10 @@ public sealed class DocumentationScribeLoadedContext
         DocumentationScribeContextCursorScope scope,
         DocumentationScribeContextCursor? currentCursor,
         int returnedItemCount,
-        bool hasMore)
+        bool hasMore,
+        CancellationToken cancellationToken = default)
     {
-        if (!IsCurrent
-            || !ScopeMatchesContext(scope)
-            || !freshnessGuard.TryVerify())
-        {
-            throw new InvalidOperationException("context.cursor.stale-session");
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
         if (returnedItemCount < 0
             || returnedItemCount > scope.PageSize
             || hasMore && returnedItemCount != scope.PageSize)
@@ -171,31 +182,81 @@ public sealed class DocumentationScribeLoadedContext
             throw new ArgumentOutOfRangeException(nameof(returnedItemCount));
         }
 
-        var currentPosition = 0;
-        if (currentCursor is { } cursor
-            && !cursorAuthority.TryValidate(cursor, scope, out currentPosition))
+        try
         {
-            throw new InvalidOperationException("context.cursor.invalid");
-        }
+            return freshnessGuard.ExecuteIfFresh<DocumentationScribeContextCursor?>(
+                cancellationToken,
+                () =>
+                {
+                    if (!IsCurrent || !ScopeMatchesContext(scope))
+                    {
+                        throw new InvalidOperationException("context.cursor.stale-session");
+                    }
 
-        if (!hasMore)
+                    var currentPosition = 0;
+                    if (currentCursor is { } cursor
+                        && !cursorAuthority.TryValidate(cursor, scope, out currentPosition))
+                    {
+                        throw new InvalidOperationException("context.cursor.invalid");
+                    }
+
+                    cursorPublicationObserver?.Invoke();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!hasMore)
+                    {
+                        return null;
+                    }
+
+                    var issued = cursorAuthority.Issue(
+                        scope,
+                        checked(currentPosition + returnedItemCount));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return issued;
+                });
+        }
+        catch (DocumentationScribeContextReadException exception)
         {
-            return null;
+            throw new InvalidOperationException("context.cursor.stale-session", exception);
         }
-
-        return cursorAuthority.Issue(scope, checked(currentPosition + returnedItemCount));
     }
 
     internal bool TryValidateCursor(
         DocumentationScribeContextCursor cursor,
         DocumentationScribeContextCursorScope scope,
-        out int nextPosition)
+        out int nextPosition,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         nextPosition = 0;
-        return IsCurrent
-            && ScopeMatchesContext(scope)
-            && freshnessGuard.TryVerify()
-            && cursorAuthority.TryValidate(cursor, scope, out nextPosition);
+        if (!IsCurrent || !ScopeMatchesContext(scope))
+        {
+            return false;
+        }
+
+        var candidatePosition = 0;
+        var isValid = freshnessGuard.TryExecuteIfFresh(
+            cancellationToken,
+            () =>
+            {
+                if (!IsCurrent || !ScopeMatchesContext(scope))
+                {
+                    return false;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = cursorAuthority.TryValidate(
+                    cursor,
+                    scope,
+                    out candidatePosition);
+                cancellationToken.ThrowIfCancellationRequested();
+                return result;
+            });
+        if (isValid)
+        {
+            nextPosition = candidatePosition;
+        }
+
+        return isValid;
     }
 
     public override string ToString() =>
@@ -275,6 +336,8 @@ internal sealed class DocumentationScribeContextFreshnessGuard
     private readonly ImmutableArray<DocumentationScribeContextAcceptedFileObservation> observations;
     private readonly ClassifiedRepositorySession classifiedSession;
     private readonly RepositoryContextRef repositoryContextRef;
+    private readonly Action? verificationCheckpoint;
+    private readonly SemaphoreSlim verificationGate = new(1, 1);
     private int failed;
 
     internal DocumentationScribeContextFreshnessGuard(
@@ -283,7 +346,8 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         IEnumerable<string> absentPaths,
         IEnumerable<DocumentationScribeContextAcceptedFileObservation> observations,
         ClassifiedRepositorySession classifiedSession,
-        RepositoryContextRef repositoryContextRef)
+        RepositoryContextRef repositoryContextRef,
+        Action? verificationCheckpoint = null)
     {
         this.root = root;
         this.rootIdentity = rootIdentity;
@@ -291,6 +355,7 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         this.observations = observations.ToImmutableArray();
         this.classifiedSession = classifiedSession;
         this.repositoryContextRef = repositoryContextRef;
+        this.verificationCheckpoint = verificationCheckpoint;
     }
 
     internal bool HasNotFailed => Volatile.Read(ref failed) == 0;
@@ -299,76 +364,125 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         CancellationToken cancellationToken = default,
         Action? checkpoint = null)
     {
-        if (!HasNotFailed)
-        {
-            throw Stale();
-        }
+        ExecuteIfFresh(cancellationToken, static () => true, checkpoint);
+    }
 
+    internal T ExecuteIfFresh<T>(
+        CancellationToken cancellationToken,
+        Func<T> operation,
+        Action? checkpoint = null)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        verificationGate.Wait(cancellationToken);
         try
         {
-            checkpoint?.Invoke();
-            if (!classifiedSession.IsBoundToClassificationSession
-                || classifiedSession.RepositorySession.IsDisposed
-                || classifiedSession.RepositorySession.RepositoryContextRef != repositoryContextRef
-                || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
-                    != rootIdentity
-                || absentPaths.Any(
-                    DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow))
+            if (!HasNotFailed)
             {
                 throw Stale();
             }
 
-            foreach (var observation in observations)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                checkpoint?.Invoke();
-                var directoryChain = DocumentationScribeContextDirectoryChain.Read(
-                    root,
-                    Path.GetDirectoryName(observation.FullPath)!);
-                if (!directoryChain.SequenceEqual(observation.DirectoryChain))
-                {
-                    throw Stale();
-                }
-
-                var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
-                    observation.FullPath,
-                    observation.MaximumBytes,
-                    cancellationToken,
-                    checkpoint);
-                var directoryChainAfter = DocumentationScribeContextDirectoryChain.Read(
-                    root,
-                    Path.GetDirectoryName(observation.FullPath)!);
-                if (read.Identity != observation.Identity
-                    || !directoryChainAfter.SequenceEqual(observation.DirectoryChain)
-                    || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
-                        != rootIdentity
-                    || !string.Equals(
-                        Sha256(read.Bytes),
-                        observation.ContentSha256,
-                        StringComparison.Ordinal))
-                {
-                    throw Stale();
-                }
+                VerifyState(cancellationToken, checkpoint);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                Interlocked.Exchange(ref failed, 1);
+                throw;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return operation();
         }
-        catch
+        finally
         {
-            Interlocked.Exchange(ref failed, 1);
-            throw;
+            verificationGate.Release();
         }
     }
 
-    internal bool TryVerify()
+    internal bool TryExecuteIfFresh(
+        CancellationToken cancellationToken,
+        Func<bool> operation)
     {
         try
         {
-            VerifyOrThrow();
-            return true;
+            return ExecuteIfFresh(cancellationToken, operation);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {
             return false;
         }
+    }
+
+    private void VerifyState(
+        CancellationToken cancellationToken,
+        Action? checkpoint)
+    {
+        Checkpoint(cancellationToken, checkpoint);
+        if (!classifiedSession.IsBoundToClassificationSession
+            || classifiedSession.RepositorySession.IsDisposed
+            || classifiedSession.RepositorySession.RepositoryContextRef != repositoryContextRef
+            || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
+                != rootIdentity
+            || absentPaths.Any(
+                DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow))
+        {
+            throw Stale();
+        }
+
+        foreach (var observation in observations)
+        {
+            Checkpoint(cancellationToken, checkpoint);
+            var directoryChain = DocumentationScribeContextDirectoryChain.Read(
+                root,
+                Path.GetDirectoryName(observation.FullPath)!);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!directoryChain.SequenceEqual(observation.DirectoryChain))
+            {
+                throw Stale();
+            }
+
+            var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
+                observation.FullPath,
+                observation.MaximumBytes,
+                cancellationToken,
+                () => Checkpoint(cancellationToken, checkpoint));
+            cancellationToken.ThrowIfCancellationRequested();
+            var directoryChainAfter = DocumentationScribeContextDirectoryChain.Read(
+                root,
+                Path.GetDirectoryName(observation.FullPath)!);
+            cancellationToken.ThrowIfCancellationRequested();
+            var contentSha256 = Sha256(read.Bytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (read.Identity != observation.Identity
+                || !directoryChainAfter.SequenceEqual(observation.DirectoryChain)
+                || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
+                    != rootIdentity
+                || !string.Equals(
+                    contentSha256,
+                    observation.ContentSha256,
+                    StringComparison.Ordinal))
+            {
+                throw Stale();
+            }
+        }
+    }
+
+    private void Checkpoint(
+        CancellationToken cancellationToken,
+        Action? checkpoint)
+    {
+        verificationCheckpoint?.Invoke();
+        checkpoint?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static string Sha256(byte[] bytes) =>
@@ -386,6 +500,8 @@ public sealed class DocumentationScribeContextBootstrapper
     private readonly Action<DocumentationScribeContextBootstrapStage>? observer;
     private readonly Func<long> clock;
     private readonly Func<int, byte[]> randomBytes;
+    private readonly Action? freshnessCheckpoint;
+    private readonly Action? cursorPublicationObserver;
 
     public DocumentationScribeContextBootstrapper()
         : this(null, () => Environment.TickCount64, RandomNumberGenerator.GetBytes)
@@ -395,11 +511,15 @@ public sealed class DocumentationScribeContextBootstrapper
     internal DocumentationScribeContextBootstrapper(
         Action<DocumentationScribeContextBootstrapStage>? observer,
         Func<long>? clock = null,
-        Func<int, byte[]>? randomBytes = null)
+        Func<int, byte[]>? randomBytes = null,
+        Action? freshnessCheckpoint = null,
+        Action? cursorPublicationObserver = null)
     {
         this.observer = observer;
         this.clock = clock ?? (() => Environment.TickCount64);
         this.randomBytes = randomBytes ?? RandomNumberGenerator.GetBytes;
+        this.freshnessCheckpoint = freshnessCheckpoint;
+        this.cursorPublicationObserver = cursorPublicationObserver;
     }
 
     public DocumentationScribeContextBootstrapResult Bootstrap(
@@ -525,8 +645,8 @@ public sealed class DocumentationScribeContextBootstrapper
             var includedSourceBytes = StrictUtf8.GetByteCount(sourceContent)
                 + (includedHasUtf8Bom ? 3 : 0);
 
-            var sourceCommitment = DocumentationScribeContextValidation.CreateSourceCommitment(
-                repositoryLocator.Path,
+            var sourceCommitment = DocumentationScribeContextValidation.CreateEvidenceSourceCommitment(
+                selection.SourceLocator,
                 selectedSource.Sha256,
                 selectedSource.Bytes.Length,
                 includedSourceBytes,
@@ -573,7 +693,8 @@ public sealed class DocumentationScribeContextBootstrapper
                 discovery.AbsentPaths,
                 observations,
                 classifiedSession,
-                selection.RepositoryContextRef);
+                selection.RepositoryContextRef,
+                freshnessCheckpoint);
             Observe(
                 DocumentationScribeContextBootstrapStage.Cursor,
                 selection,
@@ -594,7 +715,8 @@ public sealed class DocumentationScribeContextBootstrapper
                 selection,
                 facts,
                 cursorAuthority,
-                freshnessGuard);
+                freshnessGuard,
+                cursorPublicationObserver);
             return DocumentationScribeContextBootstrapResult.Accepted(
                 omissions.IsEmpty
                     ? DocumentationScribeContextBootstrapStatus.Succeeded
@@ -1064,7 +1186,7 @@ public sealed class DocumentationScribeContextBootstrapper
             var destination = instructions[index];
             routes.Add(DocumentationScribeContextValidation.CreateInstructionRoute(
                 instructions[index - 1].InstructionId,
-                destination.Commitment.Path,
+                destination.Commitment.RepositoryPath!,
                 destination.Role,
                 DocumentationScribeContextRouteSelection.DeterministicBootstrap,
                 destination.Depth,
@@ -1073,7 +1195,7 @@ public sealed class DocumentationScribeContextBootstrapper
 
         var omissions = selection.ConfiguredAgentEntrypoint is null
             && instructions.All(instruction => !string.Equals(
-                instruction.Commitment.Path,
+                instruction.Commitment.RepositoryPath!,
                 "AGENTS.md",
                 StringComparison.Ordinal))
             ? ImmutableArray.Create(DocumentationScribeContextValidation.CreateOmission(

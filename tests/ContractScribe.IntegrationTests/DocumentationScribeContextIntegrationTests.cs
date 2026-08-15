@@ -32,7 +32,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         var context = Assert.IsType<DocumentationScribeLoadedContext>(result.Context);
         Assert.Equal(
             ["custom-agent.md", "src/AGENTS.md", "src/App/AGENTS.md"],
-            context.Facts.Instructions.Select(item => item.Commitment.Path));
+            context.Facts.Instructions.Select(item => item.Commitment.RepositoryPath));
         Assert.DoesNotContain(
             context.Facts.Instructions,
             item => item.Content.Contains("root-default-marker", StringComparison.Ordinal));
@@ -85,9 +85,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal(
             1,
             context.Facts.Instructions.Count(item =>
-                item.Commitment.Path == "src/App/AGENTS.md"));
+                item.Commitment.RepositoryPath == "src/App/AGENTS.md"));
         Assert.DoesNotContain(context.Facts.Instructions, item =>
-            item.Commitment.Path == "AGENTS.md");
+            item.Commitment.RepositoryPath == "AGENTS.md");
     }
 
     [Theory]
@@ -872,6 +872,181 @@ public sealed class DocumentationScribeContextIntegrationTests
     }
 
     [Fact]
+    public void GeneralFreshnessGateProtectsNonPagedDownstreamOperations()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root-instruction-a\n");
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+
+        Assert.True(loaded.VerifyFreshness());
+
+        fixture.WriteText("AGENTS.md", "root-instruction-b\n");
+
+        Assert.False(loaded.VerifyFreshness());
+        Assert.False(loaded.IsCurrent);
+    }
+
+    [Fact]
+    public async Task ConcurrentFreshnessVerificationCannotSucceedAfterDetectedDrift()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root-instruction-a\n");
+        using var enteredRead = new ManualResetEventSlim();
+        using var releaseRead = new ManualResetEventSlim();
+        var armed = 0;
+        var checkpoints = 0;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            freshnessCheckpoint: () =>
+            {
+                if (Volatile.Read(ref armed) == 1
+                    && Interlocked.Increment(ref checkpoints) == 3)
+                {
+                    enteredRead.Set();
+                    if (!releaseRead.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("Freshness verification was not released.");
+                    }
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        var scope = CreateCursorScope(loaded.Facts, "tool.repository.search", "request-a");
+        Volatile.Write(ref armed, 1);
+
+        var first = Task.Run(() => loaded.VerifyFreshness());
+        Assert.True(enteredRead.Wait(TimeSpan.FromSeconds(10)));
+        fixture.WriteText("AGENTS.md", "root-instruction-b\n");
+        var second = Task.Run(() => loaded.VerifyFreshness());
+        releaseRead.Set();
+
+        Assert.False(await first);
+        Assert.False(await second);
+        Assert.False(loaded.IsCurrent);
+        Assert.Throws<InvalidOperationException>(() =>
+            loaded.IssueCursor(scope, null, 20, hasMore: true));
+    }
+
+    [Fact]
+    public void CancellationDuringFreshnessReadDoesNotStaleTheCapability()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root instruction\n");
+        using var cancellation = new CancellationTokenSource();
+        var armed = 0;
+        var checkpoints = 0;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            freshnessCheckpoint: () =>
+            {
+                if (Volatile.Read(ref armed) == 1
+                    && Interlocked.Increment(ref checkpoints) == 3)
+                {
+                    cancellation.Cancel();
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        var scope = CreateCursorScope(loaded.Facts, "tool.repository.search", "request-a");
+        Volatile.Write(ref armed, 1);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            loaded.IssueCursor(scope, null, 20, hasMore: true, cancellation.Token));
+
+        Volatile.Write(ref armed, 0);
+        Assert.True(loaded.IsCurrent);
+        Assert.True(loaded.VerifyFreshness());
+        Assert.NotNull(loaded.IssueCursor(scope, null, 20, hasMore: true));
+    }
+
+    [Fact]
+    public void CursorPublicationHonorsCancellationBeforeHmacAndNoMoreResult()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root instruction\n");
+        CancellationTokenSource? activeCancellation = null;
+        var armed = 0;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            cursorPublicationObserver: () =>
+            {
+                if (Volatile.Read(ref armed) == 1)
+                {
+                    activeCancellation!.Cancel();
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        var scope = CreateCursorScope(loaded.Facts, "tool.repository.search", "request-a");
+
+        using (var beforeHmac = new CancellationTokenSource())
+        {
+            activeCancellation = beforeHmac;
+            Volatile.Write(ref armed, 1);
+            Assert.Throws<OperationCanceledException>(() =>
+                loaded.IssueCursor(scope, null, 20, hasMore: true, beforeHmac.Token));
+        }
+
+        Volatile.Write(ref armed, 0);
+        Assert.True(loaded.IsCurrent);
+        var issued = Assert.IsType<DocumentationScribeContextCursor>(
+            loaded.IssueCursor(scope, null, 20, hasMore: true));
+        using (var validationCancellation = new CancellationTokenSource())
+        {
+            validationCancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                loaded.TryValidateCursor(
+                    issued,
+                    scope,
+                    out _,
+                    validationCancellation.Token));
+        }
+
+        using var finalPage = new CancellationTokenSource();
+        activeCancellation = finalPage;
+        Volatile.Write(ref armed, 1);
+        Assert.Throws<OperationCanceledException>(() =>
+            loaded.IssueCursor(scope, null, 7, hasMore: false, finalPage.Token));
+        Volatile.Write(ref armed, 0);
+        Assert.True(loaded.VerifyFreshness());
+    }
+
+    [Fact]
+    public void CancellationConcurrentWithDriftDoesNotMaskLaterStaleDetection()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root-instruction-a\n");
+        using var cancellation = new CancellationTokenSource();
+        var armed = 0;
+        var checkpoints = 0;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            freshnessCheckpoint: () =>
+            {
+                if (Volatile.Read(ref armed) == 1
+                    && Interlocked.Increment(ref checkpoints) == 3)
+                {
+                    fixture.WriteText("AGENTS.md", "root-instruction-b\n");
+                    cancellation.Cancel();
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        var scope = CreateCursorScope(loaded.Facts, "tool.repository.search", "request-a");
+        Volatile.Write(ref armed, 1);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            loaded.IssueCursor(scope, null, 20, hasMore: true, cancellation.Token));
+
+        Volatile.Write(ref armed, 0);
+        Assert.True(loaded.IsCurrent);
+        Assert.False(loaded.VerifyFreshness());
+        Assert.False(loaded.IsCurrent);
+        Assert.Throws<InvalidOperationException>(() =>
+            loaded.IssueCursor(scope, null, 20, hasMore: true));
+    }
+
+    [Fact]
     public void LoadedContextExportsFactsAndBindingButNoConstructibleReaderOrCursorKey()
     {
         var type = typeof(DocumentationScribeLoadedContext);
@@ -1106,7 +1281,7 @@ public sealed class DocumentationScribeContextIntegrationTests
                 ["contextReferenceId"] = $"context.x1.{pair.index + 1:D4}",
                 ["kind"] = "context.project-instruction",
                 ["repositoryContextRef"] = loaded.Facts.RepositoryContextRef.ToString(),
-                ["path"] = commitment.Path,
+                ["path"] = commitment.RepositoryPath,
                 ["contentSha256"] = commitment.ContentSha256,
                 ["originalUtf8ByteCount"] = commitment.OriginalUtf8ByteCount,
                 ["includedUtf8ByteCount"] = commitment.IncludedUtf8ByteCount,

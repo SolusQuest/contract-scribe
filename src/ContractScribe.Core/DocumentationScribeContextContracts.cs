@@ -231,7 +231,7 @@ public sealed record DocumentationScribeContextBootstrapSelection
 public sealed record DocumentationScribeContextSourceCommitment
 {
     internal DocumentationScribeContextSourceCommitment(
-        string path,
+        EvidenceLocator locator,
         string contentSha256,
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
@@ -239,7 +239,7 @@ public sealed record DocumentationScribeContextSourceCommitment
         bool hasUtf8Bom,
         bool includedHasUtf8Bom)
     {
-        Path = path;
+        Locator = locator;
         ContentSha256 = contentSha256;
         OriginalUtf8ByteCount = originalUtf8ByteCount;
         IncludedUtf8ByteCount = includedUtf8ByteCount;
@@ -248,7 +248,10 @@ public sealed record DocumentationScribeContextSourceCommitment
         IncludedHasUtf8Bom = includedHasUtf8Bom;
     }
 
-    public string Path { get; }
+    public EvidenceLocator Locator { get; }
+
+    public string? RepositoryPath =>
+        (Locator as RepositoryEvidenceLocator)?.Path;
 
     public string ContentSha256 { get; }
 

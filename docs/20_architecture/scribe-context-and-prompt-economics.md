@@ -20,7 +20,7 @@ M3-X1 consumes one exact, current `ClassifiedRepositorySession` produced by M1 a
 
 The producer order is fixed:
 
-1. caller selection supplies only the repository/session correlation, selected classified symbol, the exact accepted `EvidenceLocator` union member and source commitment from the parsed request, optional configured entrypoint, and bounded bootstrap limits;
+1. caller selection supplies only the repository/session correlation, a caller-owned and independently accepted current M1 target selection (selected classified symbol, exact accepted `EvidenceLocator` union member, and source commitment), optional configured entrypoint, and bounded bootstrap limits;
 2. deterministic bootstrap validates the complete loaded/classified-session correlation before any file open or read;
 3. bootstrap resolves one permitted declaration directory, performs confined stable reads, and publishes typed instruction, project, route, omission, and source-evidence facts plus a private session-local cursor capability;
 4. later M3-X2 and M3-X3 producers may add evidence through the accepted M3-R1 typed ports;

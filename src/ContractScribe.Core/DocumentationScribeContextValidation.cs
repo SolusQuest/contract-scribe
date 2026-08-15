@@ -229,7 +229,39 @@ public static class DocumentationScribeContextValidation
         bool includedHasUtf8Bom = false)
     {
         var normalizedPath = NormalizeRepositoryPath(path);
+        return CreateEvidenceSourceCommitment(
+            new RepositoryEvidenceLocator(normalizedPath, null),
+            contentSha256,
+            originalUtf8ByteCount,
+            includedUtf8ByteCount,
+            isTruncated,
+            hasUtf8Bom,
+            includedHasUtf8Bom);
+    }
+
+    public static DocumentationScribeContextSourceCommitment CreateEvidenceSourceCommitment(
+        EvidenceLocator locator,
+        string contentSha256,
+        int originalUtf8ByteCount,
+        int includedUtf8ByteCount,
+        bool isTruncated,
+        bool hasUtf8Bom,
+        bool includedHasUtf8Bom = false)
+    {
+        ArgumentNullException.ThrowIfNull(locator);
+        var normalizedLocator = ValidateEvidenceLocator(locator);
         ValidateSha256(contentSha256, nameof(contentSha256));
+        if (normalizedLocator is GeneratedOutputEvidenceLocator generated
+            && !string.Equals(
+                generated.SourceSha256,
+                contentSha256,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "A generated locator must commit to the same source bytes.",
+                nameof(locator));
+        }
+
         if (originalUtf8ByteCount < 0
             || includedUtf8ByteCount < 0
             || includedUtf8ByteCount > originalUtf8ByteCount
@@ -242,7 +274,7 @@ public static class DocumentationScribeContextValidation
         }
 
         return new DocumentationScribeContextSourceCommitment(
-            normalizedPath,
+            normalizedLocator,
             contentSha256,
             originalUtf8ByteCount,
             includedUtf8ByteCount,
@@ -267,12 +299,13 @@ public static class DocumentationScribeContextValidation
             throw new ArgumentOutOfRangeException(nameof(role));
         }
 
+        var repositoryPath = RequireRepositoryCommitment(commitment);
         ValidateContent(commitment, content);
         var instructionId = Identity(
             "contract-scribe.documentation-scribe-context.instruction",
             DocumentationScribeContextVocabulary.GetId(role),
             depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            commitment.Path,
+            repositoryPath,
             commitment.ContentSha256,
             commitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -386,12 +419,15 @@ public static class DocumentationScribeContextValidation
 
             includedRange = new Utf16Span(includedStart, includedEnd);
         }
-        var evidenceId = "ctxevidence-" + Identity(
+        var evidenceFields = new List<string>
+        {
             "contract-scribe.documentation-scribe-context.evidence",
             DocumentationScribeContextVocabulary.GetId(authority),
             subjectId,
             kindId,
-            commitment.Path,
+        };
+        evidenceFields.AddRange(LocatorIdentityFields(commitment.Locator));
+        evidenceFields.AddRange([
             commitment.ContentSha256,
             commitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -402,7 +438,9 @@ public static class DocumentationScribeContextValidation
             rangeEnd?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             includedRangeStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             includedRangeEnd?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            DocumentationScribeContextVocabulary.GetId(role));
+            DocumentationScribeContextVocabulary.GetId(role),
+        ]);
+        var evidenceId = "ctxevidence-" + Identity(evidenceFields[0], evidenceFields.Skip(1));
         return new DocumentationScribeEvidenceContextFact(
             evidenceId,
             authority,
@@ -426,6 +464,7 @@ public static class DocumentationScribeContextValidation
         ValidateClosedId(originInstructionId, nameof(originInstructionId));
         ArgumentNullException.ThrowIfNull(sourceCommitment);
         var normalizedDestination = NormalizeRepositoryPath(destinationPath);
+        var sourcePath = RequireRepositoryCommitment(sourceCommitment);
         var deterministicInstruction =
             selection == DocumentationScribeContextRouteSelection.DeterministicBootstrap
             && role == DocumentationScribeContextRole.ScopedInstruction;
@@ -441,7 +480,7 @@ public static class DocumentationScribeContextValidation
             || depth <= 0
             || !string.Equals(
                 normalizedDestination,
-                sourceCommitment.Path,
+                sourcePath,
                 StringComparison.Ordinal))
         {
             throw new ArgumentException("Instruction route provenance is invalid.");
@@ -530,7 +569,7 @@ public static class DocumentationScribeContextValidation
             InstructionEquivalent,
             "context.identity-collision")
             .OrderBy(item => item.Depth)
-            .ThenBy(item => item.Commitment.Path, StringComparer.Ordinal)
+            .ThenBy(item => RequireRepositoryCommitment(item.Commitment), StringComparer.Ordinal)
             .ThenBy(item => item.InstructionId, StringComparer.Ordinal)
             .ToImmutableArray();
         var normalizedProjects = NormalizeByIdentity(
@@ -549,7 +588,7 @@ public static class DocumentationScribeContextValidation
             .OrderBy(item => DocumentationScribeContextVocabulary.GetId(item.Authority), StringComparer.Ordinal)
             .ThenBy(item => item.SubjectId, StringComparer.Ordinal)
             .ThenBy(item => item.KindId, StringComparer.Ordinal)
-            .ThenBy(item => item.Commitment.Path, StringComparer.Ordinal)
+            .ThenBy(item => LocatorSortKey(item.Commitment.Locator), StringComparer.Ordinal)
             .ThenBy(item => item.EvidenceId, StringComparer.Ordinal)
             .ToImmutableArray();
         var normalizedRoutes = NormalizeByIdentity(
@@ -658,11 +697,11 @@ public static class DocumentationScribeContextValidation
     {
         ArgumentNullException.ThrowIfNull(commitments);
         var fields = commitments
-            .OrderBy(item => item.Path, StringComparer.Ordinal)
+            .OrderBy(item => LocatorSortKey(item.Locator), StringComparer.Ordinal)
             .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
             .SelectMany(item => new[]
             {
-                item.Path,
+                LocatorSortKey(item.Locator),
                 item.ContentSha256,
                 item.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 item.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -767,7 +806,9 @@ public static class DocumentationScribeContextValidation
         ImmutableArray<DocumentationScribeInstructionRouteFact> routes)
     {
         var byId = instructions.ToDictionary(item => item.InstructionId, StringComparer.Ordinal);
-        var byPath = instructions.ToDictionary(item => item.Commitment.Path, StringComparer.Ordinal);
+        var byPath = instructions.ToDictionary(
+            item => RequireRepositoryCommitment(item.Commitment),
+            StringComparer.Ordinal);
         foreach (var route in routes)
         {
             if (!byId.TryGetValue(route.OriginInstructionId, out var origin)
@@ -928,6 +969,65 @@ public static class DocumentationScribeContextValidation
         SyntheticEvidenceLocator synthetic when IsCompilationContextRef(synthetic.FixtureId) =>
             new SyntheticEvidenceLocator(synthetic.FixtureId),
         _ => throw new ArgumentException("A valid evidence locator is required.", nameof(locator)),
+    };
+
+    private static string RequireRepositoryCommitment(
+        DocumentationScribeContextSourceCommitment commitment)
+    {
+        if (commitment.Locator is not RepositoryEvidenceLocator
+            {
+                Span: null,
+            } repository)
+        {
+            throw new ArgumentException(
+                "Instruction and route commitments require a repository path without a span.",
+                nameof(commitment));
+        }
+
+        return repository.Path;
+    }
+
+    private static string LocatorSortKey(EvidenceLocator locator) =>
+        Identity(
+            "contract-scribe.documentation-scribe-context.locator",
+            LocatorIdentityFields(locator));
+
+    private static IEnumerable<string> LocatorIdentityFields(EvidenceLocator locator) => locator switch
+    {
+        RepositoryEvidenceLocator repository =>
+        [
+            "repository",
+            repository.Path,
+            repository.Span?.Start.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? string.Empty,
+            repository.Span?.End.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? string.Empty,
+        ],
+        MetadataEvidenceLocator metadata =>
+        [
+            "metadata",
+            metadata.AssemblyIdentity,
+            metadata.DocumentationCommentId,
+        ],
+        GeneratedOutputEvidenceLocator generated =>
+        [
+            generated.ProducerKind == GeneratedOutputKind.SourceGenerator
+                ? "generated.source-generator"
+                : "generated.tool-generated",
+            generated.ProducerId,
+            generated.OutputId,
+            generated.SourceSha256,
+            generated.Span?.Start.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? string.Empty,
+            generated.Span?.End.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? string.Empty,
+        ],
+        SyntheticEvidenceLocator synthetic =>
+        [
+            "synthetic",
+            synthetic.FixtureId,
+        ],
+        _ => throw new ArgumentException("Unknown evidence locator.", nameof(locator)),
     };
 
     private static bool IsCompilationContextRef(string value) =>
