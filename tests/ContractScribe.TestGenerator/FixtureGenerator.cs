@@ -9,13 +9,20 @@ namespace ContractScribe.TestGenerator;
 [Generator]
 public sealed class FixtureGenerator : IIncrementalGenerator
 {
-#pragma warning disable RS2008 // Test-only stable diagnostic fixture.
+#pragma warning disable RS2008 // Test-only diagnostic fixtures.
     private static readonly DiagnosticDescriptor StableWarning = new(
         "CSG0001",
         "Stable fixture warning",
         "Stable fixture warning",
         "ContractScribe.TestGenerator",
         DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+    private static readonly DiagnosticDescriptor DocumentationError = new(
+        "CSG0002",
+        "Documentation fixture error",
+        "Documentation fixture error",
+        "ContractScribe.TestGenerator",
+        DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 #pragma warning restore RS2008
 
@@ -271,6 +278,22 @@ public sealed class FixtureGenerator : IIncrementalGenerator
             }
         });
 
+        var documentationErrorEnabled = context.AnalyzerConfigOptionsProvider.Select(
+            static (options, _) =>
+                options.GlobalOptions.TryGetValue(
+                    "build_property.ContractScribeTestGeneratorDocumentationError",
+                    out var enabled)
+                && string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase));
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(documentationErrorEnabled),
+            static (output, input) =>
+            {
+                if (input.Right && CountDocumentationTrivia(input.Left) != 0)
+                {
+                    output.ReportDiagnostic(Diagnostic.Create(DocumentationError, Location.None));
+                }
+            });
+
         var documentationSensitiveEnabled = context.AnalyzerConfigOptionsProvider.Select(
             static (options, _) =>
                 options.GlobalOptions.TryGetValue(
@@ -286,11 +309,7 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     return;
                 }
 
-                var documentationTriviaCount = input.Left.SyntaxTrees
-                    .SelectMany(tree => tree.GetRoot().DescendantTrivia(descendIntoTrivia: true))
-                    .Count(trivia => trivia.IsKind(
-                            SyntaxKind.SingleLineDocumentationCommentTrivia)
-                        || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
+                var documentationTriviaCount = CountDocumentationTrivia(input.Left);
                 output.AddSource(
                     "Fixture.DocumentationSensitive.g.cs",
                     SourceText.From(
@@ -326,6 +345,12 @@ public sealed class FixtureGenerator : IIncrementalGenerator
                     Encoding.UTF8));
             });
     }
+
+    private static int CountDocumentationTrivia(Compilation compilation) =>
+        compilation.SyntaxTrees
+            .SelectMany(tree => tree.GetRoot().DescendantTrivia(descendIntoTrivia: true))
+            .Count(trivia => trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
+                || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
 
     private static int CountOccurrences(string value, string pattern)
     {

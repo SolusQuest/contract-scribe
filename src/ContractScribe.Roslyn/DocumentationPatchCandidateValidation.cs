@@ -491,8 +491,11 @@ public static class DocumentationPatchCandidateValidation
                     loaded,
                     cancellationToken,
                     out var finalCompilation,
-                    out var generatedTrees);
-                if (!GeneratorFactsEqual(
+                    out var generatedTrees,
+                    out var generatorDiagnostics);
+                if (generatorDiagnostics.Any(diagnostic =>
+                        diagnostic.Severity == DiagnosticSeverity.Error)
+                    || !GeneratorFactsEqual(
                     session.RepositorySession.GeneratedSources.Where(fact =>
                         string.Equals(
                             fact.CompilationContextRef,
@@ -858,7 +861,8 @@ public static class DocumentationPatchCandidateValidation
         LoadedProject loaded,
         CancellationToken cancellationToken,
         out Compilation outputCompilation,
-        out ImmutableArray<GeneratedTreeFact> trees)
+        out ImmutableArray<GeneratedTreeFact> trees,
+        out ImmutableArray<Diagnostic> diagnostics)
     {
         var generators = project.AnalyzerReferences
             .SelectMany(reference => reference.GetGenerators(LanguageNames.CSharp))
@@ -867,6 +871,7 @@ public static class DocumentationPatchCandidateValidation
         {
             outputCompilation = cleanCompilation;
             trees = [];
+            diagnostics = [];
             return [];
         }
 
@@ -880,7 +885,7 @@ public static class DocumentationPatchCandidateValidation
         driver = driver.RunGeneratorsAndUpdateCompilation(
             cleanCompilation,
             out outputCompilation,
-            out _,
+            out diagnostics,
             cancellationToken);
         var identities = new GeneratedIdentityHasher(memory => SHA256.HashData(memory.Span));
         var facts = ImmutableArray.CreateBuilder<GeneratedSourceFact>();

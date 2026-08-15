@@ -146,6 +146,34 @@ public sealed class DocumentationPatchEndToEndTests
     }
 
     [Fact]
+    public async Task NewGeneratorErrorWithoutGeneratedSourceChangeFailsClosed()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await RealLoaderEngineFixture.CreateAsync(
+            enableDocumentationSensitiveGenerator: false,
+            enableNoOutputToOutputGenerator: false,
+            enableStableGeneratorDiagnostic: true,
+            enableDocumentationErrorGenerator: true);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        Assert.Equal(DocumentationPatchExecutionStatus.Result, outcome.Status);
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.All(result.Targets, target =>
+            Assert.Equal(DocumentationPatchTargetStatus.Invalid, target.Status));
+        Assert.Equal("patch.rejected.unsafe-change", Assert.Single(result.Diagnostics).Code);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
     public async Task RequestWideGeneratorFailureMarksEveryResolvedTargetInvalid()
     {
         if (!OperatingSystem.IsLinux())
@@ -1608,7 +1636,8 @@ public sealed class DocumentationPatchEndToEndTests
             bool multiTarget = false,
             bool enableAdditionalDocumentationSensitiveGenerator = false,
             bool enableSelfObservingGenerator = false,
-            bool enableStableGeneratorDiagnostic = false)
+            bool enableStableGeneratorDiagnostic = false,
+            bool enableDocumentationErrorGenerator = false)
         {
             var generatorProperties = new StringBuilder();
             var compilerVisibleProperties = new StringBuilder();
@@ -1642,6 +1671,14 @@ public sealed class DocumentationPatchEndToEndTests
                     "    <ContractScribeTestGeneratorStableDiagnostic>true</ContractScribeTestGeneratorStableDiagnostic>");
                 compilerVisibleProperties.AppendLine(
                     "    <CompilerVisibleProperty Include=\"ContractScribeTestGeneratorStableDiagnostic\" />");
+            }
+
+            if (enableDocumentationErrorGenerator)
+            {
+                generatorProperties.AppendLine(
+                    "    <ContractScribeTestGeneratorDocumentationError>true</ContractScribeTestGeneratorDocumentationError>");
+                compilerVisibleProperties.AppendLine(
+                    "    <CompilerVisibleProperty Include=\"ContractScribeTestGeneratorDocumentationError\" />");
             }
 
             var appProject = $$"""
