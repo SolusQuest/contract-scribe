@@ -58,6 +58,21 @@ internal static class DocumentationPatchCandidateValidator
             }
 
             var plans = BuildPlans(request, resolution, baseline, cancellationToken);
+            foreach (var plan in plans.Values.OrderBy(
+                         plan => plan.RepositoryPath,
+                         StringComparer.Ordinal))
+            {
+                foreach (var edit in plan.Edits)
+                {
+                    if (edit.End > edit.Start
+                        && CountDocumentationLines(
+                            plan.OriginalText.AsSpan(edit.Start, edit.End - edit.Start)) == 0)
+                    {
+                        return Rejected("patch.rejected.unsafe-change", edit.BlockId);
+                    }
+                }
+            }
+
             var changedPaths = plans.Keys.ToHashSet(PathComparer);
             foreach (var entry in baseline.Entries)
             {

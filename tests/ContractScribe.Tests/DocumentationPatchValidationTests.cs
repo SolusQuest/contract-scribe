@@ -128,6 +128,31 @@ public sealed class DocumentationPatchValidationTests
         Assert.Equal(2, changed.CandidateDocumentationLineCount);
     }
 
+    [Theory]
+    [InlineData("/** <summary>Existing documentation.</summary> */")]
+    [InlineData("/**\n     *   \n     */")]
+    public void DelimitedDocumentationReplacementFailsClosedBeforeAcceptedObservations(
+        string documentation)
+    {
+        var source =
+            $"namespace N;\npublic class C\n{{\n    {documentation}\n    public void M() {{ }}\n}}\n";
+        using var fixture = ValidationFixture.Create(
+            source,
+            DocumentationPatchRepositoryEncoding.Utf8,
+            DocumentationPatchEditKind.Replace);
+        var candidate = source.Replace(
+            $"    {documentation}",
+            "    /// <inheritdoc/>",
+            StringComparison.Ordinal);
+
+        var decision = fixture.ValidateCaptured(candidate);
+
+        Assert.False(decision.IsAccepted);
+        Assert.Equal("patch.rejected.unsafe-change", decision.FailureCode);
+        Assert.Equal("block-1", decision.FailureBlockId);
+        Assert.Empty(decision.ChangedFiles);
+    }
+
     [Fact]
     public void PartialMultiTargetApplicationFailsAtomically()
     {

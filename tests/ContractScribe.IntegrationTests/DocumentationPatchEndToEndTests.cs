@@ -364,6 +364,45 @@ public sealed class DocumentationPatchEndToEndTests
     }
 
     [Theory]
+    [InlineData("/** <summary>Existing documentation.</summary> */")]
+    [InlineData("/**\n     *   \n     */")]
+    public void FinalEngineRejectsDelimitedDocumentationWithoutEscapingTheResultBoundary(
+        string documentation)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var source =
+            $"namespace N;\npublic class C\n{{\n    {documentation}\n    public void M() {{ }}\n}}\n";
+        using var fixture = EngineFixture.Create(
+            source,
+            [new EngineTarget(
+                "M:N.C.M",
+                EditKind: DocumentationPatchEditKind.Replace)]);
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        Assert.Equal(DocumentationPatchExecutionStatus.Result, outcome.Status);
+        var result = Assert.IsType<DocumentationPatchValidationResult>(outcome.Result);
+        Assert.Equal(DocumentationPatchOutcome.Rejected, result.Outcome);
+        Assert.Equal(
+            DocumentationPatchTargetStatus.Invalid,
+            Assert.Single(result.Targets).Status);
+        Assert.Empty(result.ChangedFiles);
+        Assert.Equal(0, result.ChangedDocumentationBlockCount);
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("patch.rejected.unsafe-change", diagnostic.Code);
+        Assert.Equal("block-1", diagnostic.BlockId);
+        Assert.Equal("Sample.cs", diagnostic.Path);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
     [InlineData((int)LoadedSourceKind.ToolGenerated)]
     [InlineData((int)LoadedSourceKind.SourceGenerator)]
     public void FinalEngineRejectsGeneratedTargetsWithoutCapability(int sourceKindValue)
@@ -562,6 +601,124 @@ public sealed class DocumentationPatchEndToEndTests
             DocumentationPatchOutcome.Rejected,
             DocumentationPatchTargetStatus.Valid,
             "patch.rejected.candidate-state");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task ProtectedInputDriftBeforeE1BaselineUsesRepositoryStateForEveryInputClass()
+    {
+        await using var fixture = await RealLoaderEngineFixture.CreateAsync(
+            enableDocumentationSensitiveGenerator: false,
+            enableNoOutputToOutputGenerator: false);
+        var targetProject = Assert.Single(fixture.Repository.Projects, project =>
+            project.ProjectIdentity == "App/App.csproj");
+        Assert.Contains(targetProject.Project.Documents, document =>
+            Path.GetFileName(document.FilePath) == "Target.cs");
+        Assert.Contains(targetProject.Project.AnalyzerConfigDocuments, document =>
+            Path.GetFileName(document.FilePath) == "Target.cs");
+        var generatorInput = Assert.Single(
+            Directory.EnumerateFiles(Path.Join(fixture.Root, "Analyzers")));
+        List<string> protectedInputs =
+        [
+            Path.Join(fixture.Root, "App", "Target.cs"),
+            Path.Join(fixture.Root, "App", "App.cs"),
+            Path.Join(fixture.Root, "App", "App.csproj"),
+            Path.Join(fixture.Root, "Directory.Build.props"),
+        ];
+        if (!OperatingSystem.IsWindows())
+        {
+            protectedInputs.Add(generatorInput);
+        }
+
+        foreach (var path in protectedInputs)
+        {
+            var originalLength = new FileInfo(path).Length;
+            try
+            {
+                await using (var stream = new FileStream(
+                                 path,
+                                 FileMode.Open,
+                                 FileAccess.Write,
+                                 FileShare.ReadWrite | FileShare.Delete,
+                                 bufferSize: 1,
+                                 FileOptions.Asynchronous))
+                {
+                    _ = stream.Seek(0, SeekOrigin.End);
+                    await stream.WriteAsync(new byte[] { (byte)' ' });
+                }
+
+                var outcome = new DocumentationPatchEngine(
+                    () => fixture.StagingParent,
+                    null,
+                    null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+                AssertRootExecution(
+                    outcome,
+                    DocumentationPatchOutcome.Stale,
+                    DocumentationPatchTargetStatus.NotEvaluated,
+                    "patch.stale.repository-state");
+                Assert.Null(outcome.AcceptedCandidate);
+            }
+            finally
+            {
+                await using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 1,
+                    FileOptions.Asynchronous);
+                stream.SetLength(originalLength);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("repository-context", "patch.stale.repository-context")]
+    [InlineData("input-identity", "patch.stale.input-identity")]
+    [InlineData("target-profile", "patch.stale.target-profile")]
+    public void RequestSubstitutionRetainsTheExistingRootStaleCode(
+        string substitution,
+        string expectedCode)
+    {
+        using var fixture = EngineFixture.Create();
+        var context = fixture.Request.Context;
+        var repositoryContextRef = context.RepositoryContextRef;
+        var inputIdentity = context.InputIdentity;
+        var targetProfile = context.TargetProfile;
+        if (substitution == "repository-context")
+        {
+            Assert.True(RepositoryContextRef.TryParse(
+                "repoctx-fedcba9876543210fedcba9876543210",
+                out repositoryContextRef));
+        }
+        else if (substitution == "input-identity")
+        {
+            inputIdentity = "Wrong.csproj";
+        }
+        else
+        {
+            targetProfile = TargetProfile.AssemblyVisible;
+        }
+
+        var request = new DocumentationPatchRequest(
+            fixture.Request.ArtifactSha256,
+            new DocumentationPatchContext(
+                repositoryContextRef,
+                inputIdentity,
+                targetProfile),
+            fixture.Request.ProvenanceCatalog,
+            fixture.Request.Blocks);
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            null,
+            null).Execute(fixture.ClassifiedSession, request);
+
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Stale,
+            DocumentationPatchTargetStatus.NotEvaluated,
+            expectedCode);
         Assert.Null(outcome.AcceptedCandidate);
     }
 
@@ -1025,7 +1182,8 @@ public sealed class DocumentationPatchEndToEndTests
         int DeclarationReferenceIndex = 0,
         bool RequireSupported = true,
         bool UseRelationSource = false,
-        bool HydrateComponents = true);
+        bool HydrateComponents = true,
+        DocumentationPatchEditKind EditKind = DocumentationPatchEditKind.Insert);
 
     private sealed class EngineFixture : IDisposable
     {
@@ -1170,7 +1328,8 @@ public sealed class DocumentationPatchEndToEndTests
                 return (SymbolRef: symbolRef,
                     Reference: references[requested.DeclarationReferenceIndex],
                     BlockId: $"block-{index + 1}",
-                    requested.HydrateComponents);
+                    requested.HydrateComponents,
+                    requested.EditKind);
             }).ToArray();
             var provisionalRequest = new DocumentationPatchRequest(
                 new string('0', 64),
@@ -1189,7 +1348,7 @@ public sealed class DocumentationPatchEndToEndTests
                             DocumentationObservationInput.Span(
                                 item.Reference.Span.Start,
                                 item.Reference.Span.End)),
-                        DocumentationPatchEditKind.Insert,
+                        item.EditKind,
                         [],
                         new DocumentationPatchInheritDocContent(),
                         []))
@@ -1414,6 +1573,8 @@ public sealed class DocumentationPatchEndToEndTests
 
         public LoadedRepositorySession Repository { get; }
 
+        public string Root => loaderFixture.Root;
+
         public string StagingParent { get; }
 
         public ClassifiedRepositorySession ClassifiedSession { get; }
@@ -1495,6 +1656,10 @@ public sealed class DocumentationPatchEndToEndTests
                 selfObservingGenerator: enableSelfObservingGenerator);
             try
             {
+                await File.WriteAllTextAsync(
+                    Path.Join(loaderFixture.Root, "Directory.Build.props"),
+                    "<Project />\n",
+                    new UTF8Encoding(false));
                 var source = multiTarget
                     ? "namespace N;\npublic class RealApi\n{\n    public void A() { }\n    public void B() { }\n}\n"
                     : "namespace N;\npublic class RealApi\n{\n    public void M() { }\n}\n";

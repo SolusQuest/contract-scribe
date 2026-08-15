@@ -268,6 +268,13 @@ public sealed class DocumentationPatchEngine
         DocumentationPatchApplicationStage? lastStage,
         CancellationToken cancellationToken)
     {
+        if (lastStage is null
+            && application.Status is DocumentationPatchApplicationStatus.Stale
+                or DocumentationPatchApplicationStatus.Rejected)
+        {
+            return Result(RepositoryState(request));
+        }
+
         if (lastStage == DocumentationPatchApplicationStage.BeforeOriginalRebind
             && application.Status is DocumentationPatchApplicationStatus.Stale
                 or DocumentationPatchApplicationStatus.Rejected)
