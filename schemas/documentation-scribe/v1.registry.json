@@ -1,0 +1,60 @@
+{
+  "documentationScribeRegistryVersion": 1,
+  "requestSchema": "v1.request.schema.json",
+  "runResultSchema": "v1.run-result.schema.json",
+  "terminalKinds": [
+    "cancelled",
+    "failure",
+    "proposal",
+    "skip"
+  ],
+  "contentUnitKinds": [
+    "content.exception",
+    "content.inherit-doc",
+    "content.parameter",
+    "content.remarks",
+    "content.return",
+    "content.summary",
+    "content.type-parameter",
+    "content.value"
+  ],
+  "evidenceAuthoritiesInAscendingOrder": [
+    "authority.source-implementation",
+    "authority.source-declaration",
+    "authority.existing-documentation",
+    "authority.test",
+    "authority.repository-documentation",
+    "authority.public-contract"
+  ],
+  "skipReasons": [
+    "scribe.skip.insufficient-evidence",
+    "scribe.skip.unsupported-current-m3-domain"
+  ],
+  "failureCodes": [
+    "scribe.failure.budget",
+    "scribe.failure.internal",
+    "scribe.failure.provider",
+    "scribe.failure.timeout",
+    "scribe.failure.tool-protocol",
+    "scribe.failure.validation"
+  ],
+  "cancellationCodes": [
+    "scribe.cancelled.caller",
+    "scribe.cancelled.shutdown"
+  ],
+  "diagnosticCodes": [
+    "scribe.diagnostic.provider-failure",
+    "scribe.diagnostic.result-rejected",
+    "scribe.diagnostic.runtime-failure",
+    "scribe.diagnostic.tool-failure"
+  ],
+  "toolOutcomes": [
+    "tool.outcome.budget-exhausted",
+    "tool.outcome.cancelled",
+    "tool.outcome.complete",
+    "tool.outcome.failure",
+    "tool.outcome.incomplete",
+    "tool.outcome.timed-out",
+    "tool.outcome.unavailable"
+  ]
+}

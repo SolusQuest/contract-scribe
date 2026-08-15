@@ -1,0 +1,27 @@
+{
+  "scribeRunResultVersion": 1,
+  "scribeRequestSha256": "4d979374222f70dfb783d5b111bbeb77facad283c275bc61f42ec3ee0b625ae4",
+  "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
+  "terminal": {
+    "kind": "skip",
+    "reason": "scribe.skip.insufficient-evidence",
+    "evidenceReferenceIds": [
+      "evidence.summary"
+    ]
+  },
+  "runEnvelope": {
+    "scribeRequestSha256": "4d979374222f70dfb783d5b111bbeb77facad283c275bc61f42ec3ee0b625ae4",
+    "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
+    "providerConfigurationId": "provider.synthetic.v1",
+    "modelConfigurationId": "model.synthetic.v1",
+    "scribeProtocolId": "scribe-protocol.v1",
+    "toolPolicyId": "tool-policy.read-only.v1",
+    "styleProfileId": "style.public-api.v1",
+    "attemptNumber": 1,
+    "providerRequestCount": 1,
+    "toolRoundCount": 0,
+    "toolCallCount": 0,
+    "elapsedMilliseconds": 900,
+    "diagnostics": []
+  }
+}

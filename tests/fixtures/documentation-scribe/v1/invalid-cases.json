@@ -1,0 +1,25 @@
+{
+  "invalidCases": [
+    {
+      "caseId": "duplicate-property",
+      "artifact": "request",
+      "path": "invalid/duplicate-property.json",
+      "expectedCode": "scribe.request.duplicate-property",
+      "expectedPointer": "/scribeRequestVersion"
+    },
+    {
+      "caseId": "unknown-field",
+      "artifact": "request",
+      "path": "invalid/unknown-field.json",
+      "expectedCode": "scribe.request.unknown-field",
+      "expectedPointer": "/unexpected"
+    },
+    {
+      "caseId": "unsupported-version",
+      "artifact": "request",
+      "path": "invalid/unsupported-version.json",
+      "expectedCode": "scribe.request.unsupported-version",
+      "expectedPointer": "/scribeRequestVersion"
+    }
+  ]
+}
