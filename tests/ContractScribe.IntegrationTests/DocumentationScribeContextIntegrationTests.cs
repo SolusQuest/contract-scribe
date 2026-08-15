@@ -189,22 +189,163 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Read, observed);
     }
 
+    [Theory]
+    [InlineData(
+        "M:Fixture.Widget.Run",
+        "namespace Fixture; public partial class Widget { public partial void Run(); }\n",
+        "namespace Fixture; public partial class Widget { public partial void Run() { } }\n")]
+    [InlineData(
+        "P:Fixture.Widget.Value",
+        "namespace Fixture; public partial class Widget { public partial int Value { get; } }\n",
+        "namespace Fixture; public partial class Widget { public partial int Value { get => 42; } }\n")]
+    public void PartialMembersWithinOneScopeUseDefinitionAndImplementationDeclarations(
+        string documentationId,
+        string definition,
+        string implementation)
+    {
+        using var fixture = ContextFixture.CreateForTarget(
+            documentationId,
+            new SourceInput("src/App/Widget.Definition.cs", definition),
+            new SourceInput("src/App/Widget.Implementation.cs", implementation));
+        fixture.WriteText("AGENTS.md", "root instruction\n");
+
+        var result = fixture.Bootstrap(selectionPath: "src/App/Widget.Definition.cs");
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Context);
+    }
+
+    [Fact]
+    public void PartialMethodAcrossScopesIsRejectedBeforeReadingFiles()
+    {
+        using var fixture = ContextFixture.CreateForTarget(
+            "M:Fixture.Widget.Run",
+            new SourceInput(
+                "src/A/Widget.Definition.cs",
+                "namespace Fixture; public partial class Widget { public partial void Run(); }\n"),
+            new SourceInput(
+                "src/B/Widget.Implementation.cs",
+                "namespace Fixture; public partial class Widget { public partial void Run() { } }\n"));
+        var observed = new List<DocumentationScribeContextBootstrapStage>();
+
+        var result = new DocumentationScribeContextBootstrapper(observed.Add).Bootstrap(
+            fixture.ClassifiedSession,
+            fixture.CreateSelection(sourcePath: "src/A/Widget.Definition.cs"));
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Unavailable, result.Status);
+        Assert.Equal("context.scope.not-unique", result.Failure?.Code);
+        Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Open, observed);
+    }
+
+    [Fact]
+    public void LongDocumentationIdPublishesADigestSubjectWithoutInternalFailure()
+    {
+        var name = new string('A', 1_014);
+        var documentationId = "T:Fixture." + name;
+        Assert.Equal(1_024, documentationId.Length);
+        using var fixture = ContextFixture.CreateForTarget(
+            documentationId,
+            new SourceInput(
+                "src/App/LongWidget.cs",
+                "namespace Fixture; public class " + name + " { }\n"));
+
+        var result = fixture.Bootstrap();
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Incomplete, result.Status);
+        var evidence = Assert.Single(
+            Assert.IsType<DocumentationScribeLoadedContext>(result.Context).Facts.Evidence);
+        Assert.StartsWith("symbol.", evidence.SubjectId, StringComparison.Ordinal);
+        Assert.Equal("symbol.".Length + 64, evidence.SubjectId.Length);
+    }
+
+    [Fact]
+    public void DeclarationReferenceAndInspectedByteBudgetsFailBeforeFileReads()
+    {
+        using var fixture = ContextFixture.Create(
+            new SourceInput(
+                "src/App/Widget.Part1.cs",
+                "namespace Fixture; public partial class Widget { }\n"),
+            new SourceInput(
+                "src/App/Widget.Part2.cs",
+                "namespace Fixture; public partial class Widget { }\n"));
+        foreach (var boundary in new[] { "references", "files", "inspected-bytes" })
+        {
+            var observed = new List<DocumentationScribeContextBootstrapStage>();
+            var limits = ScopeLimits(
+                maximumDeclarationReferences: boundary == "references" ? 1 : 64,
+                maximumDeclarationFiles: boundary == "files" ? 1 : 16,
+                maximumInspectedSourceUtf8Bytes: boundary == "inspected-bytes" ? 1 : 4096);
+
+            var result = new DocumentationScribeContextBootstrapper(observed.Add).Bootstrap(
+                fixture.ClassifiedSession,
+                fixture.CreateSelection(
+                    sourcePath: "src/App/Widget.Part1.cs",
+                    limits: limits));
+
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.BudgetExhausted, result.Status);
+            Assert.Equal(
+                boundary == "references"
+                    ? "context.budget.declaration-references"
+                    : boundary == "files"
+                        ? "context.budget.declaration-files"
+                    : "context.budget.inspected-source-bytes",
+                result.Failure?.Code);
+            Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Open, observed);
+        }
+    }
+
+    [Fact]
+    public void ScopeResolutionHonorsTheElapsedDeadlineInsideEnumeration()
+    {
+        using var fixture = ContextFixture.Create(
+            new SourceInput(
+                "src/App/Widget.Part1.cs",
+                "namespace Fixture; public partial class Widget { }\n"),
+            new SourceInput(
+                "src/App/Widget.Part2.cs",
+                "namespace Fixture; public partial class Widget { }\n"));
+        var scopeEntered = false;
+        var scopeChecks = 0;
+        var observed = new List<DocumentationScribeContextBootstrapStage>();
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            stage =>
+            {
+                observed.Add(stage);
+                scopeEntered |= stage == DocumentationScribeContextBootstrapStage.ScopeResolution;
+            },
+            clock: () => scopeEntered && ++scopeChecks >= 3 ? 2 : 0);
+        var limits = DocumentationScribeContextValidation.CreateLimits(
+            maximumInstructionFiles: 8,
+            maximumInstructionDepth: 8,
+            maximumInstructionFileUtf8Bytes: 1024,
+            maximumDeclarationReferences: 64,
+            maximumDeclarationFiles: 16,
+            maximumInspectedSourceUtf8Bytes: 4096,
+            maximumSourceFileUtf8Bytes: 4096,
+            maximumIncludedSourceUtf8Bytes: 1024,
+            maximumTotalContextUtf8Bytes: 4096,
+            maximumElapsedMilliseconds: 1);
+
+        var result = bootstrapper.Bootstrap(
+            fixture.ClassifiedSession,
+            fixture.CreateSelection(
+                sourcePath: "src/App/Widget.Part1.cs",
+                limits: limits));
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.TimedOut, result.Status);
+        Assert.Equal("context.timeout.operation", result.Failure?.Code);
+        Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Open, observed);
+    }
+
     [Fact]
     public void GeneratedTargetWithoutRepositoryBackedScopeDoesNotUseAProjectFallback()
     {
         using var fixture = ContextFixture.CreateGeneratedTarget();
         var observed = new List<DocumentationScribeContextBootstrapStage>();
         var bootstrapper = new DocumentationScribeContextBootstrapper(observed.Add);
-        const string fallbackPath = "src/App/Fallback.cs";
-        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
-            fixture.RepositoryContextRef,
-            ProjectIdentity,
-            TargetProfile.ExternalApi,
-            fixture.SymbolRef,
-            fallbackPath,
-            0,
-            1,
-            Sha256(File.ReadAllBytes(fixture.FullPath(fallbackPath))));
+        var selection = fixture.CreateGeneratedSelection();
+
+        Assert.IsType<GeneratedOutputEvidenceLocator>(selection.SourceLocator);
 
         var result = bootstrapper.Bootstrap(fixture.ClassifiedSession, selection);
 
@@ -212,6 +353,23 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal("context.scope.not-unique", result.Failure?.Code);
         Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Open, observed);
         Assert.DoesNotContain(DocumentationScribeContextBootstrapStage.Read, observed);
+    }
+
+    [Fact]
+    public void RepositoryRootContainmentAlsoWorksForAFileSystemRoot()
+    {
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+        var repositoryPath = Path.GetRelativePath(root, Path.Join(Path.GetTempPath(), "context-probe"))
+            .Replace(Path.DirectorySeparatorChar, '/');
+        var method = typeof(DocumentationScribeContextBootstrapper).GetMethod(
+            "FullPath",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var result = Assert.IsType<string>(method!.Invoke(null, [root, repositoryPath]));
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Join(root, repositoryPath.Replace('/', Path.DirectorySeparatorChar))),
+            result);
     }
 
     [Fact]
@@ -264,6 +422,95 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Null(result.Context);
     }
 
+    [Theory]
+    [InlineData((int)DocumentationScribeContextBootstrapStage.Normalize)]
+    [InlineData((int)DocumentationScribeContextBootstrapStage.Publish)]
+    public void SameLengthInstructionMutationBeforePublicationIsRejected(int stageValue)
+    {
+        var stage = (DocumentationScribeContextBootstrapStage)stageValue;
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root-instruction-a\n");
+        var bootstrapper = new DocumentationScribeContextBootstrapper(current =>
+        {
+            if (current == stage)
+            {
+                fixture.WriteText("AGENTS.md", "root-instruction-b\n");
+            }
+        });
+
+        var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+        Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+        Assert.Equal("context.stale.publication", result.Failure?.Code);
+        Assert.Null(result.Context);
+    }
+
+    [Fact]
+    public void ParentLinkSubstitutionBeforePublicationIsRejectedWhenSupported()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root instruction\n");
+        var parent = Path.GetDirectoryName(fixture.FullPath("src/App/Widget.cs"))!;
+        var backup = parent + ".real";
+        var substituted = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(stage =>
+        {
+            if (stage != DocumentationScribeContextBootstrapStage.Publish)
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Move(parent, backup);
+                Directory.CreateSymbolicLink(parent, backup);
+                substituted = true;
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException
+                or PlatformNotSupportedException
+                or IOException)
+            {
+                if (!Directory.Exists(parent) && Directory.Exists(backup))
+                {
+                    Directory.Move(backup, parent);
+                }
+            }
+        });
+
+        var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+        if (!substituted)
+        {
+            return;
+        }
+
+        Directory.Delete(parent);
+        Directory.Move(backup, parent);
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+        Assert.Null(result.Context);
+    }
+
+    [Fact]
+    public void SessionDisposalAtFinalPublicationCheckpointPublishesNoCapability()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root instruction\n");
+        var bootstrapper = new DocumentationScribeContextBootstrapper(stage =>
+        {
+            if (stage == DocumentationScribeContextBootstrapStage.Publish)
+            {
+                fixture.DisposeSession();
+            }
+        });
+
+        var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+        Assert.Equal("context.stale.publication", result.Failure?.Code);
+        Assert.Null(result.Context);
+    }
+
     [Fact]
     public void InstructionFileBudgetExhaustionIsTerminalAndPublishesNoContext()
     {
@@ -273,6 +520,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             maximumInstructionFiles: 1,
             maximumInstructionDepth: 16,
             maximumInstructionFileUtf8Bytes: 1024,
+            maximumDeclarationReferences: 64,
+            maximumDeclarationFiles: 16,
+            maximumInspectedSourceUtf8Bytes: 4096,
             maximumSourceFileUtf8Bytes: 4096,
             maximumIncludedSourceUtf8Bytes: 1024,
             maximumTotalContextUtf8Bytes: 4096,
@@ -292,11 +542,15 @@ public sealed class DocumentationScribeContextIntegrationTests
     {
         using var fixture = ContextFixture.Create(new SourceInput(
             "src/App/Widget.cs",
-            "namespace Fixture; public class Widget { public string Value => \"alpha-😀-omega\"; }\n"));
+            "// prefix-marker-that-must-not-replace-the-target-window-😀-alpha-omega\n"
+                + "namespace Fixture; public class Widget { }\n"));
         var limits = DocumentationScribeContextValidation.CreateLimits(
             maximumInstructionFiles: 4,
             maximumInstructionDepth: 8,
             maximumInstructionFileUtf8Bytes: 1024,
+            maximumDeclarationReferences: 64,
+            maximumDeclarationFiles: 16,
+            maximumInspectedSourceUtf8Bytes: 4096,
             maximumSourceFileUtf8Bytes: 4096,
             maximumIncludedSourceUtf8Bytes: 64,
             maximumTotalContextUtf8Bytes: 4096,
@@ -309,6 +563,13 @@ public sealed class DocumentationScribeContextIntegrationTests
         var evidence = Assert.Single(context.Facts.Evidence);
         Assert.True(evidence.Commitment.IsTruncated);
         Assert.True(evidence.Commitment.IncludedUtf8ByteCount <= 64);
+        Assert.Equal(evidence.Range, evidence.IncludedRange);
+        Assert.Contains("class Widget", evidence.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("prefix-marker", evidence.Content, StringComparison.Ordinal);
+        Assert.Contains(
+            context.Facts.Omissions,
+            omission => omission.Role == DocumentationScribeContextRole.SourceDeclaration
+                && omission.Reason == DocumentationScribeContextOmissionReason.ByteLimit);
         _ = new UTF8Encoding(false, true).GetBytes(evidence.Content);
     }
 
@@ -325,6 +586,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             maximumInstructionFiles: 8,
             maximumInstructionDepth: boundary == "depth" ? 1 : 8,
             maximumInstructionFileUtf8Bytes: boundary == "file-bytes" ? 8 : 1024,
+            maximumDeclarationReferences: 64,
+            maximumDeclarationFiles: 16,
+            maximumInspectedSourceUtf8Bytes: 4096,
             maximumSourceFileUtf8Bytes: 4096,
             maximumIncludedSourceUtf8Bytes: 1024,
             maximumTotalContextUtf8Bytes: 4096,
@@ -354,7 +618,10 @@ public sealed class DocumentationScribeContextIntegrationTests
         var evidence = Assert.Single(
             Assert.IsType<DocumentationScribeLoadedContext>(result.Context).Facts.Evidence);
         Assert.True(evidence.Commitment.HasUtf8Bom);
+        Assert.True(evidence.Commitment.IncludedHasUtf8Bom);
         Assert.Equal(original.Length + 3, evidence.Commitment.OriginalUtf8ByteCount);
+        Assert.Equal(original.Length + 3, evidence.Commitment.IncludedUtf8ByteCount);
+        Assert.False(evidence.Commitment.IsTruncated);
         Assert.False(evidence.Content.StartsWith('\ufeff'));
     }
 
@@ -370,6 +637,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             maximumInstructionFiles: 4,
             maximumInstructionDepth: 8,
             maximumInstructionFileUtf8Bytes: 1024,
+            maximumDeclarationReferences: 64,
+            maximumDeclarationFiles: 16,
+            maximumInspectedSourceUtf8Bytes: 4096,
             maximumSourceFileUtf8Bytes: 4096,
             maximumIncludedSourceUtf8Bytes: 1024,
             maximumTotalContextUtf8Bytes: 4096,
@@ -512,10 +782,29 @@ public sealed class DocumentationScribeContextIntegrationTests
                     randomBytes: length => Enumerable.Repeat((byte)0x11, length).ToArray()))
                 .Context);
         var scope = CreateCursorScope(first.Facts, "tool.repository.search", "request-a");
-        var cursor = first.IssueCursor(scope, 17);
+        var issued = first.IssueCursor(scope, null, 20, hasMore: true);
+        Assert.True(issued.HasValue);
+        var cursor = issued.Value;
 
         Assert.True(first.TryValidateCursor(cursor, scope, out var next));
-        Assert.Equal(17, next);
+        Assert.Equal(20, next);
+        var secondPage = first.IssueCursor(scope, cursor, 20, hasMore: true);
+        Assert.True(secondPage.HasValue);
+        Assert.True(first.TryValidateCursor(secondPage.Value, scope, out var secondNext));
+        Assert.Equal(40, secondNext);
+        Assert.Null(first.IssueCursor(scope, secondPage, 7, hasMore: false));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            first.IssueCursor(scope, null, 19, hasMore: true));
+        Assert.False(first.TryValidateCursor(default, scope, out _));
+        var substitutedCommitments = DocumentationScribeContextValidation.CreateCursorScope(
+            scope.ToolKindId,
+            scope.NormalizedRequestSha256,
+            scope.RepositoryContextRef,
+            scope.SymbolRef,
+            scope.OrderingId,
+            scope.PageSize,
+            Sha256(Encoding.UTF8.GetBytes("substituted-commitments")));
+        Assert.False(first.TryValidateCursor(cursor, substitutedCommitments, out _));
         var otherScope = CreateCursorScope(first.Facts, "tool.repository.read", "request-a");
         Assert.False(first.TryValidateCursor(cursor, otherScope, out _));
         var tamperedValue = cursor.Value[..^1]
@@ -527,7 +816,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         {
             Assert.True(first.TryValidateCursor(cursor, scope, out parallelPositions[index]));
         });
-        Assert.All(parallelPositions, position => Assert.Equal(17, position));
+        Assert.All(parallelPositions, position => Assert.Equal(20, position));
 
         using var secondFixture = ContextFixture.Create(BasicSource());
         secondFixture.WriteText("AGENTS.md", "root instruction\n");
@@ -542,6 +831,44 @@ public sealed class DocumentationScribeContextIntegrationTests
             "tool.repository.search",
             "request-a");
         Assert.False(second.TryValidateCursor(cursor, equivalentScope, out _));
+    }
+
+    [Fact]
+    public void CursorEncodingUsesABoundedSymbolDigestForMaximumLengthDocumentationIds()
+    {
+        var documentationId = "T:" + string.Concat(Enumerable.Repeat("😀", 1_022));
+        var scope = DocumentationScribeContextValidation.CreateCursorScope(
+            "tool.repository.search",
+            Sha256(Encoding.UTF8.GetBytes("request")),
+            ParseRepositoryContext('7'),
+            new SymbolRef("fixture.net10.0", documentationId),
+            "order.path",
+            20,
+            Sha256(Encoding.UTF8.GetBytes("commitments")));
+        var authority = new DocumentationScribeContextCursorAuthority(
+            Enumerable.Repeat((byte)0x44, 32).ToArray());
+
+        var cursor = authority.Issue(scope, 20);
+
+        Assert.InRange(cursor.Value.Length, 32, 4096);
+        Assert.True(authority.TryValidate(cursor, scope, out var next));
+        Assert.Equal(20, next);
+        Assert.False(authority.TryValidate(default, scope, out _));
+    }
+
+    [Fact]
+    public void CursorOperationsFailClosedAfterAcceptedBytesDrift()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("AGENTS.md", "root-instruction-a\n");
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+        var scope = CreateCursorScope(loaded.Facts, "tool.repository.search", "request-a");
+        fixture.WriteText("AGENTS.md", "root-instruction-b\n");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            loaded.IssueCursor(scope, null, 20, hasMore: true));
+        Assert.False(loaded.TryValidateCursor(default, scope, out _));
+        Assert.False(loaded.IsCurrent);
     }
 
     [Fact]
@@ -589,6 +916,12 @@ public sealed class DocumentationScribeContextIntegrationTests
 
         Assert.True(accepted.IsValid, accepted.FailureCode);
         Assert.Equal(readsBeforeBinding, readsAfterBinding);
+        var withLaterContext = ParseBoundRequest(
+            loaded,
+            selection,
+            loaded.Facts.Instructions,
+            includeNonInstructionContext: true);
+        Assert.True(loaded.ValidateRequestBinding(withLaterContext).IsValid);
         var missing = ParseBoundRequest(
             loaded,
             selection,
@@ -596,6 +929,64 @@ public sealed class DocumentationScribeContextIntegrationTests
         var rejected = loaded.ValidateRequestBinding(missing);
         Assert.False(rejected.IsValid);
         Assert.Equal("context.binding.instruction-set-mismatch", rejected.FailureCode);
+
+        var extraText = "extra instruction\n";
+        var extraBytes = Encoding.UTF8.GetBytes(extraText);
+        var extraCommitment = DocumentationScribeContextValidation.CreateSourceCommitment(
+            "extra/AGENTS.md",
+            Sha256(extraBytes),
+            extraBytes.Length,
+            extraBytes.Length,
+            false,
+            false);
+        var extra = DocumentationScribeContextValidation.CreateInstructionFact(
+            DocumentationScribeContextRole.ScopedInstruction,
+            1,
+            extraCommitment,
+            extraText);
+        var variants = new[]
+        {
+            loaded.Facts.Instructions.Add(extra),
+            loaded.Facts.Instructions.Add(loaded.Facts.Instructions[0]),
+            loaded.Facts.Instructions.SetItem(0, extra),
+        };
+        Assert.All(variants, variant =>
+        {
+            var invalid = loaded.ValidateRequestBinding(
+                ParseBoundRequest(loaded, selection, variant));
+            Assert.False(invalid.IsValid);
+            Assert.Equal("context.binding.instruction-set-mismatch", invalid.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void BomInstructionCountsRemainValidForTheFinalParsedRequest()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        var instructionText = "root instruction\n";
+        fixture.WriteBytes(
+            "AGENTS.md",
+            new byte[] { 0xef, 0xbb, 0xbf }
+                .Concat(Encoding.UTF8.GetBytes(instructionText))
+                .ToArray());
+        var selection = fixture.CreateSelection();
+        var observed = new List<DocumentationScribeContextBootstrapStage>();
+        var result = new DocumentationScribeContextBootstrapper(observed.Add)
+            .Bootstrap(fixture.ClassifiedSession, selection);
+        Assert.True(
+            result.Context is not null,
+            result.Status + "|" + result.Failure?.Category + "|" + result.Failure?.Code
+                + "|" + string.Join(',', observed));
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(result.Context);
+        var instruction = Assert.Single(loaded.Facts.Instructions);
+
+        Assert.True(instruction.Commitment.IncludedHasUtf8Bom);
+        Assert.False(instruction.Commitment.IsTruncated);
+        var request = ParseBoundRequest(
+            loaded,
+            selection,
+            loaded.Facts.Instructions);
+        Assert.True(loaded.ValidateRequestBinding(request).IsValid);
     }
 
     [Fact]
@@ -627,6 +1018,7 @@ public sealed class DocumentationScribeContextIntegrationTests
                     item.SubjectId,
                     item.KindId,
                     item.Range,
+                    item.IncludedRange,
                     item.Commitment,
                 }),
                 Routes = childContext.Facts.Routes,
@@ -673,7 +1065,8 @@ public sealed class DocumentationScribeContextIntegrationTests
     private static DocumentationScribeRequest ParseBoundRequest(
         DocumentationScribeLoadedContext loaded,
         DocumentationScribeContextBootstrapSelection selection,
-        ImmutableArray<DocumentationScribeInstructionContextFact> instructions)
+        ImmutableArray<DocumentationScribeInstructionContextFact> instructions,
+        bool includeNonInstructionContext = false)
     {
         var fixturePath = Path.Join(
             FindRepositoryRoot(),
@@ -695,11 +1088,12 @@ public sealed class DocumentationScribeContextIntegrationTests
         var sourceCommitment = target["sourceCommitment"]!.AsObject();
         sourceCommitment["contentSha256"] = selection.SourceSha256;
         var repository = sourceCommitment["locator"]!["repository"]!.AsObject();
-        repository["path"] = selection.SourceLocator.Path;
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(selection.SourceLocator);
+        repository["path"] = locator.Path;
         repository["span"] = new JsonObject
         {
-            ["start"] = selection.SourceLocator.Span!.Value.Start,
-            ["end"] = selection.SourceLocator.Span.Value.End,
+            ["start"] = locator.Span!.Value.Start,
+            ["end"] = locator.Span.Value.End,
         };
         target["applicableComponents"] = new JsonArray();
         root["styleProfile"]!["componentPolicies"] = new JsonArray();
@@ -717,6 +1111,21 @@ public sealed class DocumentationScribeContextIntegrationTests
                 ["originalUtf8ByteCount"] = commitment.OriginalUtf8ByteCount,
                 ["includedUtf8ByteCount"] = commitment.IncludedUtf8ByteCount,
                 ["isTruncated"] = commitment.IsTruncated,
+            });
+        }
+
+        if (includeNonInstructionContext)
+        {
+            contextReferences.Add(new JsonObject
+            {
+                ["contextReferenceId"] = "context.x2.0001",
+                ["kind"] = "context.repository-documentation",
+                ["repositoryContextRef"] = loaded.Facts.RepositoryContextRef.ToString(),
+                ["path"] = "docs/context.md",
+                ["contentSha256"] = Sha256(Encoding.UTF8.GetBytes("later-context")),
+                ["originalUtf8ByteCount"] = 13,
+                ["includedUtf8ByteCount"] = 13,
+                ["isTruncated"] = false,
             });
         }
 
@@ -739,7 +1148,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             facts.SymbolRef,
             "order.path-ordinal",
             20,
-            Sha256(Encoding.UTF8.GetBytes(facts.ContentIdentity)));
+            DocumentationScribeContextValidation.ComputeCommitmentsSha256(
+                facts.Instructions.Select(item => item.Commitment)
+                    .Concat(facts.Evidence.Select(item => item.Commitment))));
 
     private static async Task RunFreshProcessProbeAsync(
         string outputPath,
@@ -814,6 +1225,22 @@ public sealed class DocumentationScribeContextIntegrationTests
 
     private static string Sha256(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static DocumentationScribeContextBootstrapLimits ScopeLimits(
+        int maximumDeclarationReferences = 64,
+        int maximumDeclarationFiles = 16,
+        int maximumInspectedSourceUtf8Bytes = 4096) =>
+        DocumentationScribeContextValidation.CreateLimits(
+            maximumInstructionFiles: 8,
+            maximumInstructionDepth: 8,
+            maximumInstructionFileUtf8Bytes: 1024,
+            maximumDeclarationReferences: maximumDeclarationReferences,
+            maximumDeclarationFiles: maximumDeclarationFiles,
+            maximumInspectedSourceUtf8Bytes: maximumInspectedSourceUtf8Bytes,
+            maximumSourceFileUtf8Bytes: 4096,
+            maximumIncludedSourceUtf8Bytes: 1024,
+            maximumTotalContextUtf8Bytes: 4096,
+            maximumElapsedMilliseconds: 30_000);
 
     private static string BasicFixtureRoot() => Path.Join(
         FindRepositoryRoot(),
@@ -900,6 +1327,11 @@ public sealed class DocumentationScribeContextIntegrationTests
 
         public static ContextFixture CreateWithDependency(params SourceInput[] sources) =>
             CreateCore(includeDependencyProject: true, TargetDocumentationId, sources);
+
+        public static ContextFixture CreateForTarget(
+            string targetDocumentationId,
+            params SourceInput[] sources) =>
+            CreateCore(includeDependencyProject: false, targetDocumentationId, sources);
 
         public static ContextFixture CreateGeneratedTarget()
         {
@@ -1103,6 +1535,38 @@ public sealed class DocumentationScribeContextIntegrationTests
                 Sha256(File.ReadAllBytes(FullPath(sourcePath))),
                 configuredAgentEntrypoint,
                 limits);
+        }
+
+        public DocumentationScribeContextBootstrapSelection CreateGeneratedSelection()
+        {
+            var project = Assert.Single(repositorySession.Projects, candidate =>
+                string.Equals(
+                    candidate.CompilationContextRef,
+                    SymbolRef.CompilationContextRef,
+                    StringComparison.Ordinal));
+            var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+                SymbolRef.DocumentationCommentId,
+                project.Compilation));
+            var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
+            var source = project.SourceTrees[reference.SyntaxTree];
+            var generated = Assert.IsType<GeneratedSourceFact>(source.GeneratedSource);
+            var kind = source.Kind == LoadedSourceKind.SourceGenerator
+                ? GeneratedOutputKind.SourceGenerator
+                : GeneratedOutputKind.ToolGenerated;
+            var locator = EvidenceInput.GeneratedOutputLocator(
+                kind,
+                generated.ProducerId,
+                generated.OutputId,
+                generated.SourceSha256,
+                reference.Span.Start,
+                reference.Span.End);
+            return DocumentationScribeContextValidation.CreateBootstrapSelection(
+                repositorySession.RepositoryContextRef,
+                repositorySession.InputIdentity,
+                TargetProfile.ExternalApi,
+                SymbolRef,
+                locator,
+                generated.SourceSha256);
         }
 
         public void PopulateBasicInstructions()

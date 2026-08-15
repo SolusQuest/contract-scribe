@@ -53,6 +53,11 @@ internal sealed class DocumentationScribeContextCursorAuthority
     {
         ArgumentNullException.ThrowIfNull(expectedScope);
         nextPosition = 0;
+        if (string.IsNullOrEmpty(cursor.Value))
+        {
+            return false;
+        }
+
         try
         {
             var parts = cursor.Value.Split('.');
@@ -101,8 +106,9 @@ internal sealed class DocumentationScribeContextCursorAuthority
         WriteString(stream, scope.ToolKindId);
         WriteString(stream, scope.NormalizedRequestSha256);
         WriteString(stream, scope.RepositoryContextRef.ToString());
-        WriteString(stream, scope.SymbolRef.CompilationContextRef);
-        WriteString(stream, scope.SymbolRef.DocumentationCommentId);
+        WriteString(
+            stream,
+            DocumentationScribeContextValidation.ComputeSymbolRefSha256(scope.SymbolRef));
         WriteString(stream, scope.OrderingId);
         WriteInt32(stream, scope.PageSize);
         WriteInt32(stream, nextPosition);
@@ -122,8 +128,7 @@ internal sealed class DocumentationScribeContextCursorAuthority
             || !TryReadString(payload, ref offset, out var toolKind)
             || !TryReadString(payload, ref offset, out var requestSha)
             || !TryReadString(payload, ref offset, out var repositoryContext)
-            || !TryReadString(payload, ref offset, out var compilationContext)
-            || !TryReadString(payload, ref offset, out var documentationId)
+            || !TryReadString(payload, ref offset, out var symbolRefSha)
             || !TryReadString(payload, ref offset, out var ordering)
             || !TryReadInt32(payload, ref offset, out var pageSize)
             || !TryReadInt32(payload, ref offset, out nextPosition)
@@ -143,12 +148,9 @@ internal sealed class DocumentationScribeContextCursorAuthority
                 StringComparison.Ordinal)
             && contextRef == expectedScope.RepositoryContextRef
             && string.Equals(
-                compilationContext,
-                expectedScope.SymbolRef.CompilationContextRef,
-                StringComparison.Ordinal)
-            && string.Equals(
-                documentationId,
-                expectedScope.SymbolRef.DocumentationCommentId,
+                symbolRefSha,
+                DocumentationScribeContextValidation.ComputeSymbolRefSha256(
+                    expectedScope.SymbolRef),
                 StringComparison.Ordinal)
             && string.Equals(ordering, expectedScope.OrderingId, StringComparison.Ordinal)
             && pageSize == expectedScope.PageSize

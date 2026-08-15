@@ -8,7 +8,11 @@ internal sealed record DocumentationScribeContextPhysicalIdentity(
     ulong FileId,
     long Length,
     ulong LinkCount,
-    bool IsDirectory);
+    bool IsDirectory,
+    long ModificationTimeSeconds,
+    ulong ModificationTimeNanoseconds,
+    long ChangeTimeSeconds,
+    ulong ChangeTimeNanoseconds);
 
 internal sealed record DocumentationScribeContextStableRead(
     byte[] Bytes,
@@ -88,9 +92,11 @@ internal static class DocumentationScribeContextStableFileReader
     internal static DocumentationScribeContextStableRead ReadRegularFile(
         string path,
         int maximumBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? checkpoint = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        checkpoint?.Invoke();
         using var stream = OpenRegularFile(path);
         var before = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
         if (before.Length < 0 || before.Length > maximumBytes || before.Length > int.MaxValue)
@@ -100,11 +106,41 @@ internal static class DocumentationScribeContextStableFileReader
                 "context.budget.file-bytes");
         }
 
-        using var buffer = new MemoryStream(checked((int)before.Length));
+        var bytes = ReadAll(stream, maximumBytes, cancellationToken, checkpoint);
+
+        var after = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
+        if (before != after || before.Length != bytes.LongLength)
+        {
+            throw Stale();
+        }
+
+        stream.Dispose();
+        using var rebound = OpenRegularFile(path);
+        var reboundBefore = ReadIdentity(rebound.SafeFileHandle, expectDirectory: false);
+        var reboundBytes = ReadAll(rebound, maximumBytes, cancellationToken, checkpoint);
+        var reboundAfter = ReadIdentity(rebound.SafeFileHandle, expectDirectory: false);
+        if (reboundBefore != before
+            || reboundAfter != before
+            || !bytes.AsSpan().SequenceEqual(reboundBytes))
+        {
+            throw Stale();
+        }
+
+        return new DocumentationScribeContextStableRead(bytes, before);
+    }
+
+    private static byte[] ReadAll(
+        FileStream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken,
+        Action? checkpoint)
+    {
+        using var buffer = new MemoryStream();
         var chunk = new byte[64 * 1024];
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            checkpoint?.Invoke();
             var read = stream.Read(chunk, 0, chunk.Length);
             if (read == 0)
             {
@@ -121,21 +157,7 @@ internal static class DocumentationScribeContextStableFileReader
             buffer.Write(chunk, 0, read);
         }
 
-        var after = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
-        var bytes = buffer.ToArray();
-        if (before != after || before.Length != bytes.LongLength)
-        {
-            throw Stale();
-        }
-
-        stream.Dispose();
-        using var rebound = OpenRegularFile(path);
-        if (ReadIdentity(rebound.SafeFileHandle, expectDirectory: false) != before)
-        {
-            throw Stale();
-        }
-
-        return new DocumentationScribeContextStableRead(bytes, before);
+        return buffer.ToArray();
     }
 
     internal static DocumentationScribeContextPhysicalIdentity ReadDirectoryIdentity(string path)
@@ -275,7 +297,11 @@ internal static class DocumentationScribeContextStableFileReader
                     ? 0
                     : ((long)information.FileSizeHigh << 32) | information.FileSizeLow,
                 expectDirectory ? 0 : information.NumberOfLinks,
-                expectDirectory);
+                expectDirectory,
+                expectDirectory ? 0 : WindowsFileTime(information.LastWriteTime),
+                0,
+                0,
+                0);
         }
 
         if (OperatingSystem.IsLinux())
@@ -293,11 +319,19 @@ internal static class DocumentationScribeContextStableFileReader
                 information.Inode,
                 expectDirectory ? 0 : information.Size,
                 expectDirectory ? 0 : information.LinkCount,
-                expectDirectory);
+                expectDirectory,
+                expectDirectory ? 0 : information.ModificationTimeSeconds,
+                expectDirectory ? 0 : information.ModificationTimeNanoseconds,
+                expectDirectory ? 0 : information.ChangeTimeSeconds,
+                expectDirectory ? 0 : information.ChangeTimeNanoseconds);
         }
 
         throw Unsafe();
     }
+
+    private static long WindowsFileTime(
+        System.Runtime.InteropServices.ComTypes.FILETIME value) =>
+        unchecked(((long)(uint)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime);
 
     private static void EnsureNoReparseComponents(string path)
     {

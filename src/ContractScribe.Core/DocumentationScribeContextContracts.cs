@@ -143,6 +143,9 @@ public sealed record DocumentationScribeContextBootstrapLimits
         int maximumInstructionFiles,
         int maximumInstructionDepth,
         int maximumInstructionFileUtf8Bytes,
+        int maximumDeclarationReferences,
+        int maximumDeclarationFiles,
+        int maximumInspectedSourceUtf8Bytes,
         int maximumSourceFileUtf8Bytes,
         int maximumIncludedSourceUtf8Bytes,
         int maximumTotalContextUtf8Bytes,
@@ -151,6 +154,9 @@ public sealed record DocumentationScribeContextBootstrapLimits
         MaximumInstructionFiles = maximumInstructionFiles;
         MaximumInstructionDepth = maximumInstructionDepth;
         MaximumInstructionFileUtf8Bytes = maximumInstructionFileUtf8Bytes;
+        MaximumDeclarationReferences = maximumDeclarationReferences;
+        MaximumDeclarationFiles = maximumDeclarationFiles;
+        MaximumInspectedSourceUtf8Bytes = maximumInspectedSourceUtf8Bytes;
         MaximumSourceFileUtf8Bytes = maximumSourceFileUtf8Bytes;
         MaximumIncludedSourceUtf8Bytes = maximumIncludedSourceUtf8Bytes;
         MaximumTotalContextUtf8Bytes = maximumTotalContextUtf8Bytes;
@@ -162,6 +168,12 @@ public sealed record DocumentationScribeContextBootstrapLimits
     public int MaximumInstructionDepth { get; }
 
     public int MaximumInstructionFileUtf8Bytes { get; }
+
+    public int MaximumDeclarationReferences { get; }
+
+    public int MaximumDeclarationFiles { get; }
+
+    public int MaximumInspectedSourceUtf8Bytes { get; }
 
     public int MaximumSourceFileUtf8Bytes { get; }
 
@@ -179,7 +191,7 @@ public sealed record DocumentationScribeContextBootstrapSelection
         string inputIdentity,
         TargetProfile targetProfile,
         SymbolRef symbolRef,
-        RepositoryEvidenceLocator sourceLocator,
+        EvidenceLocator sourceLocator,
         string sourceSha256,
         string? configuredAgentEntrypoint,
         DocumentationScribeContextBootstrapLimits limits)
@@ -204,13 +216,16 @@ public sealed record DocumentationScribeContextBootstrapSelection
 
     public string CompilationContextRef => SymbolRef.CompilationContextRef;
 
-    public RepositoryEvidenceLocator SourceLocator { get; }
+    public EvidenceLocator SourceLocator { get; }
 
     public string SourceSha256 { get; }
 
     public string? ConfiguredAgentEntrypoint { get; }
 
     public DocumentationScribeContextBootstrapLimits Limits { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextBootstrapSelection)} {{ TargetProfile = {TargetProfile}, SourceLocator = <typed-locator>, HasConfiguredEntrypoint = {ConfiguredAgentEntrypoint is not null}, Limits = <bounded> }}";
 }
 
 public sealed record DocumentationScribeContextSourceCommitment
@@ -221,7 +236,8 @@ public sealed record DocumentationScribeContextSourceCommitment
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
         bool isTruncated,
-        bool hasUtf8Bom)
+        bool hasUtf8Bom,
+        bool includedHasUtf8Bom)
     {
         Path = path;
         ContentSha256 = contentSha256;
@@ -229,6 +245,7 @@ public sealed record DocumentationScribeContextSourceCommitment
         IncludedUtf8ByteCount = includedUtf8ByteCount;
         IsTruncated = isTruncated;
         HasUtf8Bom = hasUtf8Bom;
+        IncludedHasUtf8Bom = includedHasUtf8Bom;
     }
 
     public string Path { get; }
@@ -242,6 +259,11 @@ public sealed record DocumentationScribeContextSourceCommitment
     public bool IsTruncated { get; }
 
     public bool HasUtf8Bom { get; }
+
+    public bool IncludedHasUtf8Bom { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextSourceCommitment)} {{ OriginalUtf8ByteCount = {OriginalUtf8ByteCount}, IncludedUtf8ByteCount = {IncludedUtf8ByteCount}, IsTruncated = {IsTruncated}, HasUtf8Bom = {HasUtf8Bom}, IncludedHasUtf8Bom = {IncludedHasUtf8Bom} }}";
 }
 
 public sealed class DocumentationScribeInstructionContextFact
@@ -274,7 +296,7 @@ public sealed class DocumentationScribeInstructionContextFact
     public string Content { get; }
 
     public override string ToString() =>
-        $"{nameof(DocumentationScribeInstructionContextFact)} {{ InstructionId = {InstructionId}, Role = {Role}, Depth = {Depth}, Path = {Commitment.Path}, Content = <authorized-content> }}";
+        $"{nameof(DocumentationScribeInstructionContextFact)} {{ Role = {Role}, Depth = {Depth}, Content = <authorized-content> }}";
 }
 
 public sealed record DocumentationScribeProjectContextFact
@@ -306,6 +328,9 @@ public sealed record DocumentationScribeProjectContextFact
     public ImmutableArray<string> ProjectReferences { get; }
 
     public string ProjectFactId { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeProjectContextFact)} {{ Role = {Role}, ProjectReferences = {ProjectReferences.Length} }}";
 }
 
 public sealed class DocumentationScribeEvidenceContextFact
@@ -317,6 +342,7 @@ public sealed class DocumentationScribeEvidenceContextFact
         string subjectId,
         string kindId,
         Utf16Span? range,
+        Utf16Span? includedRange,
         DocumentationScribeContextSourceCommitment commitment,
         string content)
     {
@@ -326,6 +352,7 @@ public sealed class DocumentationScribeEvidenceContextFact
         SubjectId = subjectId;
         KindId = kindId;
         Range = range;
+        IncludedRange = includedRange;
         Commitment = commitment;
         Content = content;
     }
@@ -342,12 +369,14 @@ public sealed class DocumentationScribeEvidenceContextFact
 
     public Utf16Span? Range { get; }
 
+    public Utf16Span? IncludedRange { get; }
+
     public DocumentationScribeContextSourceCommitment Commitment { get; }
 
     public string Content { get; }
 
     public override string ToString() =>
-        $"{nameof(DocumentationScribeEvidenceContextFact)} {{ EvidenceId = {EvidenceId}, Authority = {Authority}, Role = {Role}, SubjectId = {SubjectId}, KindId = {KindId}, Path = {Commitment.Path}, Content = <authorized-content> }}";
+        $"{nameof(DocumentationScribeEvidenceContextFact)} {{ Authority = {Authority}, Role = {Role}, HasRange = {Range is not null}, HasIncludedRange = {IncludedRange is not null}, Content = <authorized-content> }}";
 }
 
 public sealed record DocumentationScribeInstructionRouteFact
@@ -383,6 +412,9 @@ public sealed record DocumentationScribeInstructionRouteFact
     public int Depth { get; }
 
     public DocumentationScribeContextSourceCommitment SourceCommitment { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeInstructionRouteFact)} {{ Role = {Role}, Selection = {Selection}, Depth = {Depth} }}";
 }
 
 public sealed record DocumentationScribeContextOmissionFact
@@ -402,6 +434,9 @@ public sealed record DocumentationScribeContextOmissionFact
     public string? Path { get; }
 
     public DocumentationScribeContextOmissionReason Reason { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextOmissionFact)} {{ Role = {Role}, Reason = {Reason}, HasPath = {Path is not null} }}";
 }
 
 public sealed record DocumentationScribeContextDiagnostic
@@ -421,6 +456,9 @@ public sealed record DocumentationScribeContextDiagnostic
     public string Code { get; }
 
     public DocumentationScribeContextDiagnosticSeverity Severity { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextDiagnostic)} {{ Stage = {Stage}, Code = {Code}, Severity = {Severity} }}";
 }
 
 public sealed record DocumentationScribeContextFailure
@@ -436,6 +474,9 @@ public sealed record DocumentationScribeContextFailure
     public DocumentationScribeContextFailureCategory Category { get; }
 
     public string Code { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextFailure)} {{ Category = {Category}, Code = {Code} }}";
 }
 
 public sealed class DocumentationScribeContextFacts
@@ -491,7 +532,7 @@ public sealed class DocumentationScribeContextFacts
     public ImmutableArray<DocumentationScribeContextDiagnostic> Diagnostics { get; }
 
     public override string ToString() =>
-        $"{nameof(DocumentationScribeContextFacts)} {{ RepositoryContextRef = {RepositoryContextRef}, InputIdentity = {InputIdentity}, TargetProfile = {TargetProfile}, SymbolRef = {SymbolRef}, ContentIdentity = {ContentIdentity}, Instructions = {Instructions.Length}, Projects = {Projects.Length}, Evidence = {Evidence.Length}, Routes = {Routes.Length}, Omissions = {Omissions.Length}, Diagnostics = {Diagnostics.Length} }}";
+        $"{nameof(DocumentationScribeContextFacts)} {{ TargetProfile = {TargetProfile}, Instructions = {Instructions.Length}, Projects = {Projects.Length}, Evidence = {Evidence.Length}, Routes = {Routes.Length}, Omissions = {Omissions.Length}, Diagnostics = {Diagnostics.Length} }}";
 }
 
 public readonly record struct DocumentationScribeContextCursor
@@ -556,4 +597,7 @@ public sealed record DocumentationScribeContextCursorScope
     public int PageSize { get; }
 
     public string SourceCommitmentsSha256 { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeContextCursorScope)} {{ PageSize = {PageSize}, Scope = <committed> }}";
 }

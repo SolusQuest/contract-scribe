@@ -189,6 +189,7 @@ public sealed class DocumentationScribeContextContractTests
             evidence.SubjectId,
             evidence.KindId,
             evidence.Range,
+            evidence.IncludedRange,
             evidence.Commitment,
             "different-content",
         ]);
@@ -228,7 +229,7 @@ public sealed class DocumentationScribeContextContractTests
             nested.InstructionId,
             root.Commitment.Path,
             DocumentationScribeContextRole.ScopedInstruction,
-            DocumentationScribeContextRouteSelection.ScribeSelected,
+            DocumentationScribeContextRouteSelection.DeterministicBootstrap,
             2,
             root.Commitment);
 
@@ -254,6 +255,30 @@ public sealed class DocumentationScribeContextContractTests
                 [],
                 [],
                 [unknown]));
+
+        var wrongDepth = DocumentationScribeContextValidation.CreateInstructionRoute(
+            root.InstructionId,
+            nested.Commitment.Path,
+            nested.Role,
+            DocumentationScribeContextRouteSelection.DeterministicBootstrap,
+            2,
+            nested.Commitment);
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateFacts(
+                selection,
+                [root, nested],
+                [],
+                [],
+                [wrongDepth]));
+
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateInstructionRoute(
+                root.InstructionId,
+                nested.Commitment.Path,
+                DocumentationScribeContextRole.ScopedInstruction,
+                DocumentationScribeContextRouteSelection.ScribeSelected,
+                1,
+                nested.Commitment));
     }
 
     [Fact]
@@ -385,12 +410,174 @@ public sealed class DocumentationScribeContextContractTests
     [InlineData("src\\AGENTS.md")]
     [InlineData("src//AGENTS.md")]
     [InlineData("./AGENTS.md")]
-    [InlineData("src/AGENTS.md.")]
-    [InlineData("src/AGENTS.md ")]
     public void RepositoryPathsFailClosed(string path)
     {
         Assert.Throws<ArgumentException>(() =>
             DocumentationScribeContextValidation.NormalizeRepositoryPath(path));
+    }
+
+    [Theory]
+    [InlineData("docs/api:v1/reference.md")]
+    [InlineData("src/AGENTS.md.")]
+    [InlineData("src/AGENTS.md ")]
+    [InlineData(" ")]
+    public void RepositoryPathsMatchTheAcceptedRequestDomain(string path) =>
+        Assert.Equal(path, DocumentationScribeContextValidation.NormalizeRepositoryPath(path));
+
+    [Fact]
+    public void RepositoryPathsAndSymbolRefsUseUnicodeScalarBoundsFromTheRequestContract()
+    {
+        var maximumPath = string.Concat(Enumerable.Repeat("😀", 512));
+        Assert.Equal(
+            maximumPath,
+            DocumentationScribeContextValidation.NormalizeRepositoryPath(maximumPath));
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.NormalizeRepositoryPath(maximumPath + "a"));
+
+        var request = ParseRequest();
+        var maximumDocumentationId = "T:" + string.Concat(Enumerable.Repeat("😀", 1_022));
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            Selection(request, '1').RepositoryContextRef,
+            request.Context.InputIdentity,
+            request.Context.TargetProfile,
+            Symbol("fixture.net10.0", maximumDocumentationId),
+            "docs/api:v1/Widget.cs",
+            0,
+            1,
+            Sha("source"));
+
+        Assert.Equal(maximumDocumentationId, selection.SymbolRef.DocumentationCommentId);
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateBootstrapSelection(
+                selection.RepositoryContextRef,
+                selection.InputIdentity,
+                selection.TargetProfile,
+                Symbol("fixture.net10.0", maximumDocumentationId + "a"),
+                "src/Widget.cs",
+                0,
+                1,
+                Sha("source")));
+    }
+
+    [Fact]
+    public void BootstrapSelectionRetainsTheExactAcceptedEvidenceLocatorVariant()
+    {
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-" + new string('1', 32),
+            out var repositoryContextRef));
+        var sourceSha = Sha("generated-source");
+        var locator = EvidenceInput.GeneratedOutputLocator(
+            GeneratedOutputKind.ToolGenerated,
+            "tgp." + new string('a', 64),
+            "tgo." + new string('b', 64),
+            sourceSha,
+            10,
+            20);
+
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            repositoryContextRef,
+            "Fixture.csproj",
+            TargetProfile.ExternalApi,
+            Symbol("fixture.net10.0", "T:Fixture.Widget"),
+            locator,
+            sourceSha);
+
+        Assert.Equal(locator, selection.SourceLocator);
+        Assert.IsType<GeneratedOutputEvidenceLocator>(selection.SourceLocator);
+    }
+
+    [Fact]
+    public void DiagnosticFailureAndRouteFactoriesRejectOpenEndedVocabulary()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateDiagnostic(
+                "custom-stage",
+                "custom-code",
+                DocumentationScribeContextDiagnosticSeverity.Warning));
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateFailure(
+                DocumentationScribeContextFailureCategory.Internal,
+                "context.custom"));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DocumentationScribeContextValidation.CreateOmission(
+                (DocumentationScribeContextRole)999,
+                null,
+                DocumentationScribeContextOmissionReason.ByteLimit));
+    }
+
+    [Fact]
+    public void PublicValueStringsDoNotExposeCorrelationPathsSymbolsOrHashes()
+    {
+        const string marker = "credential-marker-never-log";
+        Assert.True(RepositoryContextRef.TryParse(
+            "repoctx-" + new string('3', 32),
+            out var repositoryContextRef));
+        var commitment = Commitment("src/" + marker + ".cs", marker);
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            repositoryContextRef,
+            marker + ".csproj",
+            TargetProfile.ExternalApi,
+            Symbol("fixture.net10.0", "T:" + marker),
+            commitment.Path,
+            0,
+            marker.Length,
+            commitment.ContentSha256);
+        var instruction = DocumentationScribeContextValidation.CreateInstructionFact(
+            DocumentationScribeContextRole.AgentEntrypoint,
+            0,
+            commitment,
+            marker);
+        var evidence = DocumentationScribeContextValidation.CreateEvidenceFact(
+            DocumentationScribeContextAuthority.Source,
+            DocumentationScribeContextRole.SourceDeclaration,
+            "subject." + marker,
+            "source." + marker,
+            commitment,
+            marker,
+            0,
+            marker.Length);
+        var project = DocumentationScribeContextValidation.CreateProjectFact(
+            marker + ".csproj",
+            "net10.0",
+            "fixture.net10.0",
+            DocumentationScribeContextProjectRole.AuditRoot,
+            ["src/" + marker + ".csproj"]);
+        var omission = DocumentationScribeContextValidation.CreateOmission(
+            DocumentationScribeContextRole.SourceDeclaration,
+            commitment.Path,
+            DocumentationScribeContextOmissionReason.ByteLimit);
+        var facts = DocumentationScribeContextValidation.CreateFacts(
+            selection,
+            [instruction],
+            [project],
+            [evidence],
+            [],
+            [omission]);
+        var scope = DocumentationScribeContextValidation.CreateCursorScope(
+            "tool.repository.read",
+            Sha(marker),
+            repositoryContextRef,
+            selection.SymbolRef,
+            "order.path",
+            1,
+            DocumentationScribeContextValidation.ComputeCommitmentsSha256(
+                [commitment]));
+
+        object[] values =
+        [
+            commitment,
+            selection,
+            instruction,
+            evidence,
+            project,
+            omission,
+            facts,
+            scope,
+        ];
+        Assert.All(values, value =>
+            Assert.DoesNotContain(marker, value.ToString(), StringComparison.Ordinal));
+        Assert.DoesNotContain(commitment.ContentSha256, commitment.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(repositoryContextRef.ToString(), facts.ToString(), StringComparison.Ordinal);
     }
 
     private static DocumentationScribeContextFacts Facts(
@@ -406,15 +593,16 @@ public sealed class DocumentationScribeContextContractTests
             "net10.0",
             selection.CompilationContextRef,
             DocumentationScribeContextProjectRole.AuditRoot);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(selection.SourceLocator);
         var evidence = Evidence(
             DocumentationScribeContextAuthority.Source,
             DocumentationScribeContextRole.SourceDeclaration,
             selection.CompilationContextRef + "|" + selection.SymbolRef.DocumentationCommentId,
             "source.target-declaration",
-            selection.SourceLocator.Path,
+            locator.Path,
             "source content",
-            selection.SourceLocator.Span!.Value.Start,
-            selection.SourceLocator.Span.Value.End);
+            locator.Span!.Value.Start,
+            locator.Span.Value.End);
         return DocumentationScribeContextValidation.CreateFacts(
             selection,
             [instruction],
@@ -489,6 +677,13 @@ public sealed class DocumentationScribeContextContractTests
     private static string Sha(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))
             .ToLowerInvariant();
+
+    private static SymbolRef Symbol(
+        string compilationContextRef,
+        string documentationCommentId) =>
+        EvidenceInput.TargetSubject(
+            compilationContextRef,
+            documentationCommentId).ParentSymbolRef;
 
     private static DocumentationScribeRequest ParseRequest()
     {

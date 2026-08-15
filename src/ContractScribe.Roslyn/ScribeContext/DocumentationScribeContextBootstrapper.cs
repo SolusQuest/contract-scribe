@@ -74,17 +74,20 @@ public sealed class DocumentationScribeLoadedContext
     private readonly ClassifiedRepositorySession classifiedSession;
     private readonly DocumentationScribeContextBootstrapSelection selection;
     private readonly DocumentationScribeContextCursorAuthority cursorAuthority;
+    private readonly DocumentationScribeContextFreshnessGuard freshnessGuard;
 
     internal DocumentationScribeLoadedContext(
         ClassifiedRepositorySession classifiedSession,
         DocumentationScribeContextBootstrapSelection selection,
         DocumentationScribeContextFacts facts,
-        DocumentationScribeContextCursorAuthority cursorAuthority)
+        DocumentationScribeContextCursorAuthority cursorAuthority,
+        DocumentationScribeContextFreshnessGuard freshnessGuard)
     {
         this.classifiedSession = classifiedSession;
         this.selection = selection;
         Facts = facts;
         this.cursorAuthority = cursorAuthority;
+        this.freshnessGuard = freshnessGuard;
     }
 
     public DocumentationScribeContextFacts Facts { get; }
@@ -94,6 +97,7 @@ public sealed class DocumentationScribeLoadedContext
     internal bool IsCurrent =>
         classifiedSession.IsBoundToClassificationSession
         && !classifiedSession.RepositorySession.IsDisposed
+        && freshnessGuard.HasNotFailed
         && classifiedSession.RepositorySession.RepositoryContextRef == Facts.RepositoryContextRef;
 
     public DocumentationScribeContextRequestBindingResult ValidateRequestBinding(
@@ -109,50 +113,77 @@ public sealed class DocumentationScribeLoadedContext
             || !string.Equals(request.Context.InputIdentity, Facts.InputIdentity, StringComparison.Ordinal)
             || request.Context.TargetProfile != Facts.TargetProfile
             || request.Target.SymbolRef != Facts.SymbolRef
-            || request.Target.SourceLocator is not RepositoryEvidenceLocator locator
-            || locator != selection.SourceLocator
+            || request.Target.SourceLocator != selection.SourceLocator
             || !string.Equals(request.Target.SourceSha256, selection.SourceSha256, StringComparison.Ordinal))
         {
             return InvalidBinding("context.binding.request-mismatch");
         }
 
-        foreach (var instruction in Facts.Instructions)
+        var expectedInstructions = Facts.Instructions
+            .Select(instruction => new InstructionBinding(
+                Facts.RepositoryContextRef,
+                instruction.Commitment.Path,
+                instruction.Commitment.ContentSha256,
+                instruction.Commitment.OriginalUtf8ByteCount,
+                instruction.Commitment.IncludedUtf8ByteCount,
+                instruction.Commitment.IsTruncated))
+            .OrderBy(item => item.Path, StringComparer.Ordinal)
+            .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
+            .ToArray();
+        var requestInstructions = request.ContextReferences
+            .Where(reference => reference.Kind
+                == DocumentationScribeContextReferenceKind.ProjectInstruction)
+            .Select(reference => new InstructionBinding(
+                reference.RepositoryContextRef,
+                reference.Path,
+                reference.ContentSha256,
+                reference.OriginalUtf8ByteCount,
+                reference.IncludedUtf8ByteCount,
+                reference.IsTruncated))
+            .OrderBy(item => item.Path, StringComparer.Ordinal)
+            .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
+            .ToArray();
+        if (!expectedInstructions.SequenceEqual(requestInstructions))
         {
-            var matches = request.ContextReferences.Count(reference =>
-                reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction
-                && reference.RepositoryContextRef == Facts.RepositoryContextRef
-                && string.Equals(
-                    reference.Path,
-                    instruction.Commitment.Path,
-                    StringComparison.Ordinal)
-                && string.Equals(
-                    reference.ContentSha256,
-                    instruction.Commitment.ContentSha256,
-                    StringComparison.Ordinal)
-                && reference.OriginalUtf8ByteCount
-                    == instruction.Commitment.OriginalUtf8ByteCount
-                && reference.IncludedUtf8ByteCount
-                    == instruction.Commitment.IncludedUtf8ByteCount
-                && reference.IsTruncated == instruction.Commitment.IsTruncated);
-            if (matches != 1)
-            {
-                return InvalidBinding("context.binding.instruction-set-mismatch");
-            }
+            return InvalidBinding("context.binding.instruction-set-mismatch");
         }
 
         return new DocumentationScribeContextRequestBindingResult(true, null);
     }
 
-    internal DocumentationScribeContextCursor IssueCursor(
+    internal DocumentationScribeContextCursor? IssueCursor(
         DocumentationScribeContextCursorScope scope,
-        int nextPosition)
+        DocumentationScribeContextCursor? currentCursor,
+        int returnedItemCount,
+        bool hasMore)
     {
-        if (!IsCurrent || !ScopeMatchesContext(scope))
+        if (!IsCurrent
+            || !ScopeMatchesContext(scope)
+            || !freshnessGuard.TryVerify())
         {
             throw new InvalidOperationException("context.cursor.stale-session");
         }
 
-        return cursorAuthority.Issue(scope, nextPosition);
+        if (returnedItemCount < 0
+            || returnedItemCount > scope.PageSize
+            || hasMore && returnedItemCount != scope.PageSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(returnedItemCount));
+        }
+
+        var currentPosition = 0;
+        if (currentCursor is { } cursor
+            && !cursorAuthority.TryValidate(cursor, scope, out currentPosition))
+        {
+            throw new InvalidOperationException("context.cursor.invalid");
+        }
+
+        if (!hasMore)
+        {
+            return null;
+        }
+
+        return cursorAuthority.Issue(scope, checked(currentPosition + returnedItemCount));
     }
 
     internal bool TryValidateCursor(
@@ -163,18 +194,190 @@ public sealed class DocumentationScribeLoadedContext
         nextPosition = 0;
         return IsCurrent
             && ScopeMatchesContext(scope)
+            && freshnessGuard.TryVerify()
             && cursorAuthority.TryValidate(cursor, scope, out nextPosition);
     }
 
     public override string ToString() =>
-        $"{nameof(DocumentationScribeLoadedContext)} {{ RepositoryContextRef = {Facts.RepositoryContextRef}, ContentIdentity = {Facts.ContentIdentity}, Instructions = {Facts.Instructions.Length}, Projects = {Facts.Projects.Length}, Evidence = {Facts.Evidence.Length}, CursorKey = <private> }}";
+        $"{nameof(DocumentationScribeLoadedContext)} {{ Instructions = {Facts.Instructions.Length}, Projects = {Facts.Projects.Length}, Evidence = {Facts.Evidence.Length}, CursorKey = <private> }}";
 
     private bool ScopeMatchesContext(DocumentationScribeContextCursorScope scope) =>
         scope.RepositoryContextRef == Facts.RepositoryContextRef
-        && scope.SymbolRef == Facts.SymbolRef;
+        && scope.SymbolRef == Facts.SymbolRef
+        && string.Equals(
+            scope.SourceCommitmentsSha256,
+            DocumentationScribeContextValidation.ComputeCommitmentsSha256(
+                Facts.Instructions.Select(item => item.Commitment)
+                    .Concat(Facts.Evidence.Select(item => item.Commitment))),
+            StringComparison.Ordinal);
 
     private static DocumentationScribeContextRequestBindingResult InvalidBinding(string code) =>
         new(false, code);
+
+    private sealed record InstructionBinding(
+        RepositoryContextRef RepositoryContextRef,
+        string Path,
+        string ContentSha256,
+        int OriginalUtf8ByteCount,
+        int IncludedUtf8ByteCount,
+        bool IsTruncated);
+}
+
+internal sealed record DocumentationScribeContextAcceptedFileObservation(
+    string FullPath,
+    int MaximumBytes,
+    ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain,
+    DocumentationScribeContextPhysicalIdentity Identity,
+    string ContentSha256);
+
+internal sealed record DocumentationScribeContextDirectoryObservation(
+    string FullPath,
+    DocumentationScribeContextPhysicalIdentity Identity);
+
+internal static class DocumentationScribeContextDirectoryChain
+{
+    internal static ImmutableArray<DocumentationScribeContextDirectoryObservation> Read(
+        string root,
+        string directory)
+    {
+        var normalizedRoot = Path.GetFullPath(root);
+        var normalizedDirectory = Path.GetFullPath(directory);
+        var relative = Path.GetRelativePath(normalizedRoot, normalizedDirectory);
+        var chain = ImmutableArray.CreateBuilder<DocumentationScribeContextDirectoryObservation>();
+        chain.Add(new(
+            normalizedRoot,
+            DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(normalizedRoot)));
+        if (relative == ".")
+        {
+            return chain.ToImmutable();
+        }
+
+        var current = normalizedRoot;
+        foreach (var segment in relative.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Join(current, segment);
+            chain.Add(new(
+                current,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(current)));
+        }
+
+        return chain.ToImmutable();
+    }
+}
+
+internal sealed class DocumentationScribeContextFreshnessGuard
+{
+    private readonly string root;
+    private readonly DocumentationScribeContextPhysicalIdentity rootIdentity;
+    private readonly ImmutableArray<string> absentPaths;
+    private readonly ImmutableArray<DocumentationScribeContextAcceptedFileObservation> observations;
+    private readonly ClassifiedRepositorySession classifiedSession;
+    private readonly RepositoryContextRef repositoryContextRef;
+    private int failed;
+
+    internal DocumentationScribeContextFreshnessGuard(
+        string root,
+        DocumentationScribeContextPhysicalIdentity rootIdentity,
+        IEnumerable<string> absentPaths,
+        IEnumerable<DocumentationScribeContextAcceptedFileObservation> observations,
+        ClassifiedRepositorySession classifiedSession,
+        RepositoryContextRef repositoryContextRef)
+    {
+        this.root = root;
+        this.rootIdentity = rootIdentity;
+        this.absentPaths = absentPaths.ToImmutableArray();
+        this.observations = observations.ToImmutableArray();
+        this.classifiedSession = classifiedSession;
+        this.repositoryContextRef = repositoryContextRef;
+    }
+
+    internal bool HasNotFailed => Volatile.Read(ref failed) == 0;
+
+    internal void VerifyOrThrow(
+        CancellationToken cancellationToken = default,
+        Action? checkpoint = null)
+    {
+        if (!HasNotFailed)
+        {
+            throw Stale();
+        }
+
+        try
+        {
+            checkpoint?.Invoke();
+            if (!classifiedSession.IsBoundToClassificationSession
+                || classifiedSession.RepositorySession.IsDisposed
+                || classifiedSession.RepositorySession.RepositoryContextRef != repositoryContextRef
+                || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
+                    != rootIdentity
+                || absentPaths.Any(
+                    DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow))
+            {
+                throw Stale();
+            }
+
+            foreach (var observation in observations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                checkpoint?.Invoke();
+                var directoryChain = DocumentationScribeContextDirectoryChain.Read(
+                    root,
+                    Path.GetDirectoryName(observation.FullPath)!);
+                if (!directoryChain.SequenceEqual(observation.DirectoryChain))
+                {
+                    throw Stale();
+                }
+
+                var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
+                    observation.FullPath,
+                    observation.MaximumBytes,
+                    cancellationToken,
+                    checkpoint);
+                var directoryChainAfter = DocumentationScribeContextDirectoryChain.Read(
+                    root,
+                    Path.GetDirectoryName(observation.FullPath)!);
+                if (read.Identity != observation.Identity
+                    || !directoryChainAfter.SequenceEqual(observation.DirectoryChain)
+                    || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
+                        != rootIdentity
+                    || !string.Equals(
+                        Sha256(read.Bytes),
+                        observation.ContentSha256,
+                        StringComparison.Ordinal))
+                {
+                    throw Stale();
+                }
+            }
+        }
+        catch
+        {
+            Interlocked.Exchange(ref failed, 1);
+            throw;
+        }
+    }
+
+    internal bool TryVerify()
+    {
+        try
+        {
+            VerifyOrThrow();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string Sha256(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static DocumentationScribeContextReadException Stale() =>
+        new(
+            DocumentationScribeContextReadFailure.Stale,
+            "context.stale.publication");
 }
 
 public sealed class DocumentationScribeContextBootstrapper
@@ -229,6 +432,7 @@ public sealed class DocumentationScribeContextBootstrapper
                 classifiedSession.RepositorySession,
                 correlated.Project!,
                 selection,
+                started,
                 cancellationToken);
             if (scope.Failure is { } scopeFailure)
             {
@@ -242,7 +446,7 @@ public sealed class DocumentationScribeContextBootstrapper
             var acceptedIdentities = new Dictionary<
                 (ulong Volume, ulong FileId),
                 string>();
-            var observations = new List<AcceptedFileObservation>();
+            var observations = new List<DocumentationScribeContextAcceptedFileObservation>();
             var selectedSource = ReadAndValidateDeclarationSources(
                 root,
                 rootIdentity,
@@ -281,37 +485,66 @@ public sealed class DocumentationScribeContextBootstrapper
             var includedLimit = Math.Min(
                 selection.Limits.MaximumIncludedSourceUtf8Bytes,
                 remaining);
-            var sourceContent = TruncateUtf8(
-                selectedSource.Text,
-                includedLimit - (selectedSource.HasUtf8Bom ? 3 : 0),
-                cancellationToken);
-            var includedSourceBytes = StrictUtf8.GetByteCount(sourceContent)
-                + (selectedSource.HasUtf8Bom ? 3 : 0);
-            if (includedSourceBytes <= (selectedSource.HasUtf8Bom ? 3 : 0)
-                && selectedSource.Text.Length > 0)
+            var repositoryLocator = (RepositoryEvidenceLocator)selection.SourceLocator;
+            var targetSpan = repositoryLocator.Span!.Value;
+            if (targetSpan.End > selectedSource.Text.Length)
             {
                 throw new DocumentationScribeContextReadException(
-                    DocumentationScribeContextReadFailure.Budget,
-                    "context.budget.total-bytes");
+                    DocumentationScribeContextReadFailure.Stale,
+                    "context.stale.source-text");
             }
 
+            string sourceContent;
+            int? includedRangeStart;
+            int? includedRangeEnd;
+            var includesCompleteSource = selectedSource.Bytes.Length <= includedLimit;
+            if (includesCompleteSource)
+            {
+                sourceContent = selectedSource.Text;
+                includedRangeStart = 0;
+                includedRangeEnd = selectedSource.Text.Length;
+            }
+            else
+            {
+                var declaration = selectedSource.Text[targetSpan.Start..targetSpan.End];
+                if (StrictUtf8.GetByteCount(declaration) <= includedLimit)
+                {
+                    sourceContent = declaration;
+                    includedRangeStart = targetSpan.Start;
+                    includedRangeEnd = targetSpan.End;
+                }
+                else
+                {
+                    sourceContent = string.Empty;
+                    includedRangeStart = null;
+                    includedRangeEnd = null;
+                }
+            }
+
+            var includedHasUtf8Bom = includesCompleteSource && selectedSource.HasUtf8Bom;
+            var includedSourceBytes = StrictUtf8.GetByteCount(sourceContent)
+                + (includedHasUtf8Bom ? 3 : 0);
+
             var sourceCommitment = DocumentationScribeContextValidation.CreateSourceCommitment(
-                selection.SourceLocator.Path,
+                repositoryLocator.Path,
                 selectedSource.Sha256,
                 selectedSource.Bytes.Length,
                 includedSourceBytes,
                 includedSourceBytes < selectedSource.Bytes.Length,
-                selectedSource.HasUtf8Bom);
+                selectedSource.HasUtf8Bom,
+                includedHasUtf8Bom);
             var sourceEvidence = DocumentationScribeContextValidation.CreateEvidenceFact(
                 DocumentationScribeContextAuthority.Source,
                 DocumentationScribeContextRole.SourceDeclaration,
-                selection.SymbolRef.CompilationContextRef
-                    + "|" + selection.SymbolRef.DocumentationCommentId,
+                "symbol." + DocumentationScribeContextValidation.ComputeSymbolRefSha256(
+                    selection.SymbolRef),
                 "source.target-declaration",
                 sourceCommitment,
                 sourceContent,
-                selection.SourceLocator.Span!.Value.Start,
-                selection.SourceLocator.Span.Value.End);
+                targetSpan.Start,
+                targetSpan.End,
+                includedRangeStart,
+                includedRangeEnd);
             var projectFact = DocumentationScribeContextValidation.CreateProjectFact(
                 correlated.Project!.ProjectIdentity,
                 correlated.Project.TargetFramework,
@@ -320,23 +553,27 @@ public sealed class DocumentationScribeContextBootstrapper
                     ? DocumentationScribeContextProjectRole.AuditRoot
                     : DocumentationScribeContextProjectRole.DependencyOnly,
                 correlated.Project.ProjectReferences);
+            var omissions = sourceCommitment.IsTruncated
+                ? discovery.Omissions.Add(
+                    DocumentationScribeContextValidation.CreateOmission(
+                        DocumentationScribeContextRole.SourceDeclaration,
+                        repositoryLocator.Path,
+                        DocumentationScribeContextOmissionReason.ByteLimit))
+                : discovery.Omissions;
             var facts = DocumentationScribeContextValidation.CreateFacts(
                 selection,
                 discovery.Instructions,
                 [projectFact],
                 [sourceEvidence],
                 discovery.Routes,
-                discovery.Omissions);
-
-            VerifyPublicationState(
+                omissions);
+            var freshnessGuard = new DocumentationScribeContextFreshnessGuard(
                 root,
                 rootIdentity,
                 discovery.AbsentPaths,
                 observations,
                 classifiedSession,
-                selection,
-                started,
-                cancellationToken);
+                selection.RepositoryContextRef);
             Observe(
                 DocumentationScribeContextBootstrapStage.Cursor,
                 selection,
@@ -349,13 +586,17 @@ public sealed class DocumentationScribeContextBootstrapper
                 selection,
                 started,
                 cancellationToken);
+            freshnessGuard.VerifyOrThrow(
+                cancellationToken,
+                () => Check(selection, started, cancellationToken));
             var loaded = new DocumentationScribeLoadedContext(
                 classifiedSession,
                 selection,
                 facts,
-                cursorAuthority);
+                cursorAuthority,
+                freshnessGuard);
             return DocumentationScribeContextBootstrapResult.Accepted(
-                discovery.Omissions.IsEmpty
+                omissions.IsEmpty
                     ? DocumentationScribeContextBootstrapStatus.Succeeded
                     : DocumentationScribeContextBootstrapStatus.Incomplete,
                 loaded);
@@ -471,36 +712,68 @@ public sealed class DocumentationScribeContextBootstrapper
         return new CorrelationResult(projects[0], targets[0], null);
     }
 
-    private static ScopeResolution ResolveScope(
+    private ScopeResolution ResolveScope(
         LoadedRepositorySession repository,
         LoadedProject project,
         DocumentationScribeContextBootstrapSelection selection,
+        long started,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(
-                selection.SymbolRef.DocumentationCommentId,
-                project.Compilation)
-            .Select(CanonicalPartialSymbol)
-            .Distinct(SymbolEqualityComparer.Default)
-            .ToArray();
-        if (symbols.Length != 1)
+        Check(selection, started, cancellationToken);
+        var symbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var candidate in DocumentationCommentId.GetSymbolsForDeclarationId(
+                     selection.SymbolRef.DocumentationCommentId,
+                     project.Compilation))
+        {
+            Check(selection, started, cancellationToken);
+            symbols.Add(CanonicalPartialSymbol(candidate));
+            if (symbols.Count > 1)
+            {
+                return ScopeResolution.Rejected("context.scope.symbol-ambiguous");
+            }
+        }
+
+        if (symbols.Count != 1)
         {
             return ScopeResolution.Rejected("context.scope.symbol-ambiguous");
         }
 
-        var references = AuthoritativeReferences(symbols[0])
-            .Distinct(SyntaxReferenceComparer.Instance)
-            .ToArray();
+        var references = new List<SyntaxReference>();
+        var distinctReferences = new HashSet<SyntaxReference>(SyntaxReferenceComparer.Instance);
+        foreach (var reference in AuthoritativeReferences(symbols.Single()))
+        {
+            Check(selection, started, cancellationToken);
+            if (!distinctReferences.Add(reference))
+            {
+                continue;
+            }
+
+            if (references.Count >= selection.Limits.MaximumDeclarationReferences)
+            {
+                throw new DocumentationScribeContextReadException(
+                    DocumentationScribeContextReadFailure.Budget,
+                    "context.budget.declaration-references");
+            }
+
+            references.Add(reference);
+        }
+
         var sources = new List<ResolvedDeclarationSource>();
+        var loadedTexts = new Dictionary<string, string>(StringComparer.Ordinal);
         var scopes = new HashSet<string>(StringComparer.Ordinal);
         var physicalScopes = new Dictionary<string, string>(StringComparer.Ordinal);
         var anchorMatched = false;
+        var inspectedBytes = 0;
         foreach (var reference in references)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source)
-                || source.Kind != LoadedSourceKind.Repository
+            Check(selection, started, cancellationToken);
+            if (!project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source))
+            {
+                continue;
+            }
+
+            anchorMatched |= LocatorMatchesReference(selection.SourceLocator, source, reference);
+            if (source.Kind != LoadedSourceKind.Repository
                 || source.RepositoryPath is not { } repositoryPath
                 || source.PhysicalSourceIdentity is not { } physicalIdentity)
             {
@@ -518,17 +791,41 @@ public sealed class DocumentationScribeContextBootstrapper
             }
 
             physicalScopes[physicalIdentity] = scope;
-            anchorMatched |= string.Equals(
+            if (!loadedTexts.ContainsKey(normalizedPath))
+            {
+                if (loadedTexts.Count >= selection.Limits.MaximumDeclarationFiles)
+                {
+                    throw new DocumentationScribeContextReadException(
+                        DocumentationScribeContextReadFailure.Budget,
+                        "context.budget.declaration-files");
+                }
+
+                var sourceText = reference.SyntaxTree.GetText(cancellationToken);
+                var remainingInspectedBytes = selection.Limits.MaximumInspectedSourceUtf8Bytes
+                    - inspectedBytes;
+                if (sourceText.Length > remainingInspectedBytes)
+                {
+                    throw new DocumentationScribeContextReadException(
+                        DocumentationScribeContextReadFailure.Budget,
+                        "context.budget.inspected-source-bytes");
+                }
+
+                var loadedText = sourceText.ToString();
+                Check(selection, started, cancellationToken);
+                inspectedBytes = checked(inspectedBytes + StrictUtf8.GetByteCount(loadedText));
+                if (inspectedBytes > selection.Limits.MaximumInspectedSourceUtf8Bytes)
+                {
+                    throw new DocumentationScribeContextReadException(
+                        DocumentationScribeContextReadFailure.Budget,
+                        "context.budget.inspected-source-bytes");
+                }
+
+                loadedTexts.Add(normalizedPath, loadedText);
+                sources.Add(new ResolvedDeclarationSource(
                     normalizedPath,
-                    selection.SourceLocator.Path,
-                    StringComparison.Ordinal)
-                && selection.SourceLocator.Span is { } selectedSpan
-                && reference.Span.Start == selectedSpan.Start
-                && reference.Span.End == selectedSpan.End;
-            sources.Add(new ResolvedDeclarationSource(
-                normalizedPath,
-                physicalIdentity,
-                reference.SyntaxTree.GetText(cancellationToken).ToString()));
+                    physicalIdentity,
+                    loadedText));
+            }
         }
 
         if (!anchorMatched || scopes.Count != 1 || sources.Count == 0)
@@ -545,7 +842,7 @@ public sealed class DocumentationScribeContextBootstrapper
         ImmutableArray<ResolvedDeclarationSource> sources,
         DocumentationScribeContextBootstrapSelection selection,
         Dictionary<(ulong Volume, ulong FileId), string> acceptedIdentities,
-        List<AcceptedFileObservation> observations,
+        List<DocumentationScribeContextAcceptedFileObservation> observations,
         long started,
         CancellationToken cancellationToken)
     {
@@ -599,8 +896,12 @@ public sealed class DocumentationScribeContextBootstrapper
                 }
             }
 
-            var sha = Sha256(read.Bytes, cancellationToken);
-            if (string.Equals(path, selection.SourceLocator.Path, StringComparison.Ordinal))
+            var sha = Sha256(
+                read.Bytes,
+                cancellationToken,
+                () => Check(selection, started, cancellationToken));
+            if (selection.SourceLocator is RepositoryEvidenceLocator repositoryLocator
+                && string.Equals(path, repositoryLocator.Path, StringComparison.Ordinal))
             {
                 if (!string.Equals(sha, selection.SourceSha256, StringComparison.Ordinal))
                 {
@@ -624,7 +925,7 @@ public sealed class DocumentationScribeContextBootstrapper
         string repositoryScope,
         DocumentationScribeContextBootstrapSelection selection,
         Dictionary<(ulong Volume, ulong FileId), string> acceptedIdentities,
-        List<AcceptedFileObservation> observations,
+        List<DocumentationScribeContextAcceptedFileObservation> observations,
         long started,
         CancellationToken cancellationToken)
     {
@@ -728,7 +1029,9 @@ public sealed class DocumentationScribeContextBootstrapper
                 started,
                 cancellationToken);
             var text = Decode(read.Bytes, out var hasBom);
-            totalBytes = checked(totalBytes + read.Bytes.Length);
+            var decodedByteCount = StrictUtf8.GetByteCount(text);
+            var includedByteCount = decodedByteCount + (hasBom ? 3 : 0);
+            totalBytes = checked(totalBytes + includedByteCount);
             if (totalBytes > selection.Limits.MaximumTotalContextUtf8Bytes)
             {
                 throw new DocumentationScribeContextReadException(
@@ -738,10 +1041,14 @@ public sealed class DocumentationScribeContextBootstrapper
 
             var commitment = DocumentationScribeContextValidation.CreateSourceCommitment(
                 candidate.RepositoryPath,
-                Sha256(read.Bytes, cancellationToken),
+                Sha256(
+                    read.Bytes,
+                    cancellationToken,
+                    () => Check(selection, started, cancellationToken)),
                 read.Bytes.Length,
-                read.Bytes.Length,
+                includedByteCount,
                 false,
+                hasBom,
                 hasBom);
             facts.Add(DocumentationScribeContextValidation.CreateInstructionFact(
                 candidate.Role,
@@ -787,7 +1094,7 @@ public sealed class DocumentationScribeContextBootstrapper
         string repositoryPath,
         int maximumBytes,
         Dictionary<(ulong Volume, ulong FileId), string> acceptedIdentities,
-        List<AcceptedFileObservation> observations,
+        List<DocumentationScribeContextAcceptedFileObservation> observations,
         DocumentationScribeContextBootstrapSelection selection,
         long started,
         CancellationToken cancellationToken)
@@ -797,8 +1104,7 @@ public sealed class DocumentationScribeContextBootstrapper
             ?? throw new DocumentationScribeContextReadException(
                 DocumentationScribeContextReadFailure.Unsafe,
                 "context.unsafe.repository-object");
-        var beforeParent = DocumentationScribeContextStableFileReader
-            .ReadDirectoryIdentity(parent);
+        var beforeDirectoryChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
         if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root) != rootIdentity)
         {
             throw new DocumentationScribeContextReadException(
@@ -814,15 +1120,15 @@ public sealed class DocumentationScribeContextBootstrapper
         var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
             fullPath,
             maximumBytes,
-            cancellationToken);
+            cancellationToken,
+            () => Check(selection, started, cancellationToken));
         Observe(
             DocumentationScribeContextBootstrapStage.Read,
             selection,
             started,
             cancellationToken);
-        var afterParent = DocumentationScribeContextStableFileReader
-            .ReadDirectoryIdentity(parent);
-        if (beforeParent != afterParent
+        var afterDirectoryChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
+        if (!beforeDirectoryChain.SequenceEqual(afterDirectoryChain)
             || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root) != rootIdentity
             || read.Identity.LinkCount != 1)
         {
@@ -841,47 +1147,16 @@ public sealed class DocumentationScribeContextBootstrapper
         }
 
         acceptedIdentities[identity] = repositoryPath;
-        observations.Add(new AcceptedFileObservation(fullPath, read.Identity));
+        observations.Add(new DocumentationScribeContextAcceptedFileObservation(
+            fullPath,
+            maximumBytes,
+            afterDirectoryChain,
+            read.Identity,
+            Sha256(
+                read.Bytes,
+                cancellationToken,
+                () => Check(selection, started, cancellationToken))));
         return read;
-    }
-
-    private void VerifyPublicationState(
-        string root,
-        DocumentationScribeContextPhysicalIdentity rootIdentity,
-        ImmutableArray<string> absentPaths,
-        IReadOnlyList<AcceptedFileObservation> observations,
-        ClassifiedRepositorySession classifiedSession,
-        DocumentationScribeContextBootstrapSelection selection,
-        long started,
-        CancellationToken cancellationToken)
-    {
-        Check(selection, started, cancellationToken);
-        if (!classifiedSession.IsBoundToClassificationSession
-            || classifiedSession.RepositorySession.IsDisposed
-            || classifiedSession.RepositorySession.RepositoryContextRef
-                != selection.RepositoryContextRef
-            || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
-                != rootIdentity
-            || absentPaths.Any(
-                DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow))
-        {
-            throw new DocumentationScribeContextReadException(
-                DocumentationScribeContextReadFailure.Stale,
-                "context.stale.publication");
-        }
-
-        foreach (var observation in observations)
-        {
-            Check(selection, started, cancellationToken);
-            if (DocumentationScribeContextStableFileReader
-                    .ReadRegularFileIdentity(observation.FullPath)
-                != observation.Identity)
-            {
-                throw new DocumentationScribeContextReadException(
-                    DocumentationScribeContextReadFailure.Stale,
-                    "context.stale.publication");
-            }
-        }
     }
 
     private void Observe(
@@ -916,50 +1191,16 @@ public sealed class DocumentationScribeContextBootstrapper
         return StrictUtf8.GetString(hasBom ? bytes.AsSpan(3) : bytes);
     }
 
-    private static string TruncateUtf8(
-        string value,
-        int maximumUtf8Bytes,
-        CancellationToken cancellationToken)
-    {
-        if (maximumUtf8Bytes <= 0)
-        {
-            return string.Empty;
-        }
-
-        var builder = new StringBuilder(value.Length);
-        var remaining = value.AsSpan();
-        var consumedBytes = 0;
-        while (!remaining.IsEmpty)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var status = Rune.DecodeFromUtf16(
-                remaining,
-                out var rune,
-                out var consumedCharacters);
-            if (status != OperationStatus.Done)
-            {
-                throw new DecoderFallbackException("Invalid UTF-16 content.");
-            }
-
-            if (consumedBytes + rune.Utf8SequenceLength > maximumUtf8Bytes)
-            {
-                break;
-            }
-
-            builder.Append(rune.ToString());
-            consumedBytes += rune.Utf8SequenceLength;
-            remaining = remaining[consumedCharacters..];
-        }
-
-        return builder.ToString();
-    }
-
-    private static string Sha256(byte[] bytes, CancellationToken cancellationToken)
+    private static string Sha256(
+        byte[] bytes,
+        CancellationToken cancellationToken,
+        Action? checkpoint = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         for (var offset = 0; offset < bytes.Length; offset += 64 * 1024)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            checkpoint?.Invoke();
             hash.AppendData(bytes, offset, Math.Min(64 * 1024, bytes.Length - offset));
         }
 
@@ -968,14 +1209,17 @@ public sealed class DocumentationScribeContextBootstrapper
 
     private static string FullPath(string root, string repositoryPath)
     {
+        var normalizedRoot = Path.GetFullPath(root);
         var candidate = Path.GetFullPath(Path.Join(
-            root,
+            normalizedRoot,
             repositoryPath.Replace('/', Path.DirectorySeparatorChar)));
-        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        if (!candidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison))
+        var relative = Path.GetRelativePath(normalizedRoot, candidate);
+        if (Path.IsPathRooted(relative)
+            || string.Equals(relative, "..", comparison)
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, comparison))
         {
             throw new DocumentationScribeContextReadException(
                 DocumentationScribeContextReadFailure.Unsafe,
@@ -993,38 +1237,65 @@ public sealed class DocumentationScribeContextBootstrapper
 
     private static ISymbol CanonicalPartialSymbol(ISymbol symbol) => symbol switch
     {
-        IMethodSymbol method => method.PartialImplementationPart
-            ?? method.PartialDefinitionPart
-            ?? method,
+        IMethodSymbol { PartialDefinitionPart: { } definition } => definition,
+        IPropertySymbol { PartialDefinitionPart: { } definition } => definition,
+        IEventSymbol { PartialDefinitionPart: { } definition } => definition,
         _ => symbol,
     };
 
     private static IEnumerable<SyntaxReference> AuthoritativeReferences(ISymbol symbol)
     {
-        if (symbol is IMethodSymbol method)
+        var definition = CanonicalPartialSymbol(symbol);
+        foreach (var reference in definition.DeclaringSyntaxReferences)
         {
-            var definition = method.PartialDefinitionPart ?? method;
-            foreach (var reference in definition.DeclaringSyntaxReferences)
-            {
-                yield return reference;
-            }
+            yield return reference;
+        }
 
-            if (definition.PartialImplementationPart is { } implementation)
-            {
-                foreach (var reference in implementation.DeclaringSyntaxReferences)
-                {
-                    yield return reference;
-                }
-            }
-
+        ISymbol? implementation = definition switch
+        {
+            IMethodSymbol method => method.PartialImplementationPart,
+            IPropertySymbol property => property.PartialImplementationPart,
+            IEventSymbol @event => @event.PartialImplementationPart,
+            _ => null,
+        };
+        if (implementation is null)
+        {
             yield break;
         }
 
-        foreach (var reference in symbol.DeclaringSyntaxReferences)
+        foreach (var reference in implementation.DeclaringSyntaxReferences)
         {
             yield return reference;
         }
     }
+
+    private static bool LocatorMatchesReference(
+        EvidenceLocator locator,
+        LoadedSourceTree source,
+        SyntaxReference reference) => locator switch
+        {
+            RepositoryEvidenceLocator repository =>
+                source.Kind == LoadedSourceKind.Repository
+                && string.Equals(
+                    source.RepositoryPath,
+                    repository.Path,
+                    StringComparison.Ordinal)
+                && repository.Span is { } span
+                && span.Start == reference.Span.Start
+                && span.End == reference.Span.End,
+            GeneratedOutputEvidenceLocator generated when source.GeneratedSource is { } fact =>
+                (generated.ProducerKind == GeneratedOutputKind.SourceGenerator
+                        && source.Kind == LoadedSourceKind.SourceGenerator
+                    || generated.ProducerKind == GeneratedOutputKind.ToolGenerated
+                        && source.Kind == LoadedSourceKind.ToolGenerated)
+                && string.Equals(fact.ProducerId, generated.ProducerId, StringComparison.Ordinal)
+                && string.Equals(fact.OutputId, generated.OutputId, StringComparison.Ordinal)
+                && string.Equals(fact.SourceSha256, generated.SourceSha256, StringComparison.Ordinal)
+                && generated.Span is { } span
+                && span.Start == reference.Span.Start
+                && span.End == reference.Span.End,
+            _ => false,
+        };
 
     private static DocumentationScribeContextBootstrapResult Reject(
         DocumentationScribeContextBootstrapStatus status,
@@ -1087,10 +1358,6 @@ public sealed class DocumentationScribeContextBootstrapper
         ImmutableArray<DocumentationScribeInstructionRouteFact> Routes,
         ImmutableArray<DocumentationScribeContextOmissionFact> Omissions,
         ImmutableArray<string> AbsentPaths);
-
-    private sealed record AcceptedFileObservation(
-        string FullPath,
-        DocumentationScribeContextPhysicalIdentity Identity);
 
     private sealed class SyntaxReferenceComparer : IEqualityComparer<SyntaxReference>
     {

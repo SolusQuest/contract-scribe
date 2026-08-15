@@ -7,10 +7,12 @@ namespace ContractScribe.Core;
 
 public static class DocumentationScribeContextValidation
 {
-    private const int MaximumPathLength = 1024;
+    private const int MaximumPathScalars = 512;
     private const int MaximumIdLength = 256;
     private const int MaximumConfiguredInstructionFiles = 64;
     private const int MaximumConfiguredInstructionDepth = 64;
+    private const int MaximumConfiguredDeclarationReferences = 4096;
+    private const int MaximumConfiguredDeclarationFiles = 1024;
     private const int MaximumConfiguredFileBytes = 16 * 1024 * 1024;
     private const int MaximumConfiguredTotalBytes = 32 * 1024 * 1024;
     private const int MaximumConfiguredElapsedMilliseconds = 30 * 60 * 1000;
@@ -20,11 +22,68 @@ public static class DocumentationScribeContextValidation
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
 
+    private static readonly IReadOnlyDictionary<string, DocumentationScribeContextFailureCategory>
+        FailureVocabulary = new Dictionary<string, DocumentationScribeContextFailureCategory>(
+            StringComparer.Ordinal)
+        {
+            ["context.correlation.session"] = DocumentationScribeContextFailureCategory.Correlation,
+            ["context.correlation.request"] = DocumentationScribeContextFailureCategory.Correlation,
+            ["context.correlation.compilation"] = DocumentationScribeContextFailureCategory.Correlation,
+            ["context.scope.target-unavailable"] = DocumentationScribeContextFailureCategory.AmbiguousScope,
+            ["context.scope.symbol-ambiguous"] = DocumentationScribeContextFailureCategory.AmbiguousScope,
+            ["context.scope.physical-alias"] = DocumentationScribeContextFailureCategory.AmbiguousScope,
+            ["context.scope.not-unique"] = DocumentationScribeContextFailureCategory.AmbiguousScope,
+            ["context.unsafe.source-alias"] = DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            ["context.unsafe.physical-alias"] = DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            ["context.unsafe.physical-identity"] = DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            ["context.unsafe.repository-object"] = DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            ["context.unsafe.path"] = DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            ["context.stale.source-text"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.stale.source-commitment"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.stale.configured-entrypoint"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.stale.repository-root"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.stale.repository-object"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.stale.publication"] = DocumentationScribeContextFailureCategory.Stale,
+            ["context.invalid-encoding"] = DocumentationScribeContextFailureCategory.InvalidEncoding,
+            ["context.identity-collision"] = DocumentationScribeContextFailureCategory.IdentityCollision,
+            ["context.cursor.invalid"] = DocumentationScribeContextFailureCategory.InvalidCursor,
+            ["context.budget.instruction-depth"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.instruction-files"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.declaration-references"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.declaration-files"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.inspected-source-bytes"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.file-bytes"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.budget.total-bytes"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.timeout.operation"] = DocumentationScribeContextFailureCategory.Internal,
+            ["context.internal-error"] = DocumentationScribeContextFailureCategory.Internal,
+        };
+
+    private static readonly HashSet<string> DiagnosticStages = new(StringComparer.Ordinal)
+    {
+        "bootstrap.correlation",
+        "bootstrap.scope-resolution",
+        "bootstrap.instruction-discovery",
+        "bootstrap.source-context",
+        "bootstrap.cursor",
+        "bootstrap.publication",
+    };
+
+    private static readonly HashSet<string> DiagnosticCodes = new(StringComparer.Ordinal)
+    {
+        "context.optional-absent",
+        "context.source-truncated",
+        "context.route-cycle-omitted",
+        "context.limit-reached",
+    };
+
     public static DocumentationScribeContextBootstrapLimits CreateProductionLimits() =>
         new(
             maximumInstructionFiles: 16,
             maximumInstructionDepth: 16,
             maximumInstructionFileUtf8Bytes: 256 * 1024,
+            maximumDeclarationReferences: 256,
+            maximumDeclarationFiles: 64,
+            maximumInspectedSourceUtf8Bytes: 16 * 1024 * 1024,
             maximumSourceFileUtf8Bytes: 4 * 1024 * 1024,
             maximumIncludedSourceUtf8Bytes: 256 * 1024,
             maximumTotalContextUtf8Bytes: 2 * 1024 * 1024,
@@ -34,6 +93,9 @@ public static class DocumentationScribeContextValidation
         int maximumInstructionFiles,
         int maximumInstructionDepth,
         int maximumInstructionFileUtf8Bytes,
+        int maximumDeclarationReferences,
+        int maximumDeclarationFiles,
+        int maximumInspectedSourceUtf8Bytes,
         int maximumSourceFileUtf8Bytes,
         int maximumIncludedSourceUtf8Bytes,
         int maximumTotalContextUtf8Bytes,
@@ -45,6 +107,12 @@ public static class DocumentationScribeContextValidation
             || maximumInstructionDepth > MaximumConfiguredInstructionDepth
             || maximumInstructionFileUtf8Bytes <= 0
             || maximumInstructionFileUtf8Bytes > MaximumConfiguredFileBytes
+            || maximumDeclarationReferences <= 0
+            || maximumDeclarationReferences > MaximumConfiguredDeclarationReferences
+            || maximumDeclarationFiles <= 0
+            || maximumDeclarationFiles > MaximumConfiguredDeclarationFiles
+            || maximumInspectedSourceUtf8Bytes <= 0
+            || maximumInspectedSourceUtf8Bytes > MaximumConfiguredTotalBytes
             || maximumSourceFileUtf8Bytes <= 0
             || maximumSourceFileUtf8Bytes > MaximumConfiguredFileBytes
             || maximumIncludedSourceUtf8Bytes <= 0
@@ -65,6 +133,9 @@ public static class DocumentationScribeContextValidation
             maximumInstructionFiles,
             maximumInstructionDepth,
             maximumInstructionFileUtf8Bytes,
+            maximumDeclarationReferences,
+            maximumDeclarationFiles,
+            maximumInspectedSourceUtf8Bytes,
             maximumSourceFileUtf8Bytes,
             maximumIncludedSourceUtf8Bytes,
             maximumTotalContextUtf8Bytes,
@@ -83,20 +154,57 @@ public static class DocumentationScribeContextValidation
         string? configuredAgentEntrypoint = null,
         DocumentationScribeContextBootstrapLimits? limits = null)
     {
-        if (repositoryContextRef == default)
-        {
-            throw new ArgumentException("A repository context reference is required.", nameof(repositoryContextRef));
-        }
-
-        var normalizedInput = NormalizeRepositoryPath(inputIdentity);
-        ValidateSymbolRef(symbolRef);
         var normalizedSource = NormalizeRepositoryPath(sourcePath);
         if (sourceSpanStart < 0 || sourceSpanEnd <= sourceSpanStart)
         {
             throw new ArgumentOutOfRangeException(nameof(sourceSpanStart));
         }
 
+        return CreateBootstrapSelection(
+            repositoryContextRef,
+            inputIdentity,
+            targetProfile,
+            symbolRef,
+            new RepositoryEvidenceLocator(
+                normalizedSource,
+                new Utf16Span(sourceSpanStart, sourceSpanEnd)),
+            sourceSha256,
+            configuredAgentEntrypoint,
+            limits);
+    }
+
+    public static DocumentationScribeContextBootstrapSelection CreateBootstrapSelection(
+        RepositoryContextRef repositoryContextRef,
+        string inputIdentity,
+        TargetProfile targetProfile,
+        SymbolRef symbolRef,
+        EvidenceLocator sourceLocator,
+        string sourceSha256,
+        string? configuredAgentEntrypoint = null,
+        DocumentationScribeContextBootstrapLimits? limits = null)
+    {
+        if (repositoryContextRef == default)
+        {
+            throw new ArgumentException("A repository context reference is required.", nameof(repositoryContextRef));
+        }
+
+        var normalizedInput = NormalizeRepositoryPath(inputIdentity);
+        if (!Enum.IsDefined(targetProfile))
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetProfile));
+        }
+
+        ValidateSymbolRef(symbolRef);
+        ArgumentNullException.ThrowIfNull(sourceLocator);
+        var normalizedLocator = ValidateEvidenceLocator(sourceLocator);
         ValidateSha256(sourceSha256, nameof(sourceSha256));
+        if (normalizedLocator is GeneratedOutputEvidenceLocator generated
+            && !string.Equals(generated.SourceSha256, sourceSha256, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Generated source selection hashes must match exactly.",
+                nameof(sourceSha256));
+        }
         var entrypoint = configuredAgentEntrypoint is null
             ? null
             : NormalizeRepositoryPath(configuredAgentEntrypoint);
@@ -105,9 +213,7 @@ public static class DocumentationScribeContextValidation
             normalizedInput,
             targetProfile,
             symbolRef,
-            new RepositoryEvidenceLocator(
-                normalizedSource,
-                new Utf16Span(sourceSpanStart, sourceSpanEnd)),
+            normalizedLocator,
             sourceSha256,
             entrypoint,
             limits ?? CreateProductionLimits());
@@ -119,7 +225,8 @@ public static class DocumentationScribeContextValidation
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
         bool isTruncated,
-        bool hasUtf8Bom)
+        bool hasUtf8Bom,
+        bool includedHasUtf8Bom = false)
     {
         var normalizedPath = NormalizeRepositoryPath(path);
         ValidateSha256(contentSha256, nameof(contentSha256));
@@ -127,7 +234,9 @@ public static class DocumentationScribeContextValidation
             || includedUtf8ByteCount < 0
             || includedUtf8ByteCount > originalUtf8ByteCount
             || isTruncated != (includedUtf8ByteCount < originalUtf8ByteCount)
-            || hasUtf8Bom && (originalUtf8ByteCount < 3 || includedUtf8ByteCount < 3))
+            || hasUtf8Bom && originalUtf8ByteCount < 3
+            || includedHasUtf8Bom && (!hasUtf8Bom || includedUtf8ByteCount < 3)
+            || !isTruncated && hasUtf8Bom != includedHasUtf8Bom)
         {
             throw new ArgumentOutOfRangeException(nameof(originalUtf8ByteCount));
         }
@@ -138,7 +247,8 @@ public static class DocumentationScribeContextValidation
             originalUtf8ByteCount,
             includedUtf8ByteCount,
             isTruncated,
-            hasUtf8Bom);
+            hasUtf8Bom,
+            includedHasUtf8Bom);
     }
 
     public static DocumentationScribeInstructionContextFact CreateInstructionFact(
@@ -151,6 +261,7 @@ public static class DocumentationScribeContextValidation
         ArgumentNullException.ThrowIfNull(content);
         if (role is not DocumentationScribeContextRole.AgentEntrypoint
             and not DocumentationScribeContextRole.ScopedInstruction
+            || !Enum.IsDefined(role)
             || depth < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(role));
@@ -166,7 +277,8 @@ public static class DocumentationScribeContextValidation
             commitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IsTruncated ? "1" : "0",
-            commitment.HasUtf8Bom ? "1" : "0");
+            commitment.HasUtf8Bom ? "1" : "0",
+            commitment.IncludedHasUtf8Bom ? "1" : "0");
         return new DocumentationScribeInstructionContextFact(
             "ctxinst-" + instructionId,
             role,
@@ -184,7 +296,11 @@ public static class DocumentationScribeContextValidation
     {
         var normalizedProject = NormalizeRepositoryPath(projectIdentity);
         ValidateClosedId(targetFramework, nameof(targetFramework));
-        ValidateClosedId(compilationContextRef, nameof(compilationContextRef));
+        if (!IsCompilationContextRef(compilationContextRef)
+            || !Enum.IsDefined(role))
+        {
+            throw new ArgumentException("A valid compilation context and project role are required.");
+        }
         var references = (projectReferences ?? [])
             .Select(NormalizeRepositoryPath)
             .Distinct(StringComparer.Ordinal)
@@ -217,11 +333,15 @@ public static class DocumentationScribeContextValidation
         DocumentationScribeContextSourceCommitment commitment,
         string content,
         int? rangeStart = null,
-        int? rangeEnd = null)
+        int? rangeEnd = null,
+        int? includedRangeStart = null,
+        int? includedRangeEnd = null)
     {
         ArgumentNullException.ThrowIfNull(commitment);
         ArgumentNullException.ThrowIfNull(content);
-        if (authority == DocumentationScribeContextAuthority.ProviderObservation
+        if (!Enum.IsDefined(authority)
+            || !Enum.IsDefined(role)
+            || authority == DocumentationScribeContextAuthority.ProviderObservation
             || role == DocumentationScribeContextRole.ProviderTelemetry
             || !RoleMatchesAuthority(authority, role))
         {
@@ -246,6 +366,26 @@ public static class DocumentationScribeContextValidation
             range = new Utf16Span(start, end);
         }
 
+        Utf16Span? includedRange = null;
+        if (includedRangeStart.HasValue != includedRangeEnd.HasValue
+            || includedRangeStart is < 0
+            || includedRangeEnd <= includedRangeStart)
+        {
+            throw new ArgumentOutOfRangeException(nameof(includedRangeStart));
+        }
+
+        if (includedRangeStart is { } includedStart
+            && includedRangeEnd is { } includedEnd)
+        {
+            if (includedEnd - includedStart != content.Length
+                || range is { } targetRange
+                    && (targetRange.Start < includedStart || targetRange.End > includedEnd))
+            {
+                throw new ArgumentException("Included source range does not contain the target range.");
+            }
+
+            includedRange = new Utf16Span(includedStart, includedEnd);
+        }
         var evidenceId = "ctxevidence-" + Identity(
             "contract-scribe.documentation-scribe-context.evidence",
             DocumentationScribeContextVocabulary.GetId(authority),
@@ -257,8 +397,11 @@ public static class DocumentationScribeContextValidation
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IsTruncated ? "1" : "0",
             commitment.HasUtf8Bom ? "1" : "0",
+            commitment.IncludedHasUtf8Bom ? "1" : "0",
             rangeStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             rangeEnd?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            includedRangeStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            includedRangeEnd?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             DocumentationScribeContextVocabulary.GetId(role));
         return new DocumentationScribeEvidenceContextFact(
             evidenceId,
@@ -267,6 +410,7 @@ public static class DocumentationScribeContextValidation
             subjectId,
             kindId,
             range,
+            includedRange,
             commitment,
             content);
     }
@@ -282,9 +426,18 @@ public static class DocumentationScribeContextValidation
         ValidateClosedId(originInstructionId, nameof(originInstructionId));
         ArgumentNullException.ThrowIfNull(sourceCommitment);
         var normalizedDestination = NormalizeRepositoryPath(destinationPath);
-        if (role is DocumentationScribeContextRole.AgentEntrypoint
-            or DocumentationScribeContextRole.ProjectMetadata
-            or DocumentationScribeContextRole.ProviderTelemetry
+        var deterministicInstruction =
+            selection == DocumentationScribeContextRouteSelection.DeterministicBootstrap
+            && role == DocumentationScribeContextRole.ScopedInstruction;
+        var scribeEvidence = selection == DocumentationScribeContextRouteSelection.ScribeSelected
+            && role is DocumentationScribeContextRole.MaintainedDocumentation
+                or DocumentationScribeContextRole.SourceDeclaration
+                or DocumentationScribeContextRole.TestEvidence
+                or DocumentationScribeContextRole.UsageEvidence
+                or DocumentationScribeContextRole.GeneratedEvidence;
+        if (!Enum.IsDefined(role)
+            || !Enum.IsDefined(selection)
+            || !deterministicInstruction && !scribeEvidence
             || depth <= 0
             || !string.Equals(
                 normalizedDestination,
@@ -305,7 +458,8 @@ public static class DocumentationScribeContextValidation
             sourceCommitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             sourceCommitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             sourceCommitment.IsTruncated ? "1" : "0",
-            sourceCommitment.HasUtf8Bom ? "1" : "0");
+            sourceCommitment.HasUtf8Bom ? "1" : "0",
+            sourceCommitment.IncludedHasUtf8Bom ? "1" : "0");
         return new DocumentationScribeInstructionRouteFact(
             routeId,
             originInstructionId,
@@ -319,16 +473,30 @@ public static class DocumentationScribeContextValidation
     public static DocumentationScribeContextOmissionFact CreateOmission(
         DocumentationScribeContextRole role,
         string? path,
-        DocumentationScribeContextOmissionReason reason) =>
-        new(role, path is null ? null : NormalizeRepositoryPath(path), reason);
+        DocumentationScribeContextOmissionReason reason)
+    {
+        if (!Enum.IsDefined(role)
+            || !Enum.IsDefined(reason)
+            || role == DocumentationScribeContextRole.ProviderTelemetry)
+        {
+            throw new ArgumentOutOfRangeException(nameof(role));
+        }
+
+        return new(role, path is null ? null : NormalizeRepositoryPath(path), reason);
+    }
 
     public static DocumentationScribeContextDiagnostic CreateDiagnostic(
         string stage,
         string code,
         DocumentationScribeContextDiagnosticSeverity severity)
     {
-        ValidateClosedId(stage, nameof(stage));
-        ValidateClosedId(code, nameof(code));
+        if (!DiagnosticStages.Contains(stage)
+            || !DiagnosticCodes.Contains(code)
+            || !Enum.IsDefined(severity))
+        {
+            throw new ArgumentException("Documentation Scribe diagnostics use a closed vocabulary.");
+        }
+
         return new DocumentationScribeContextDiagnostic(stage, code, severity);
     }
 
@@ -336,7 +504,13 @@ public static class DocumentationScribeContextValidation
         DocumentationScribeContextFailureCategory category,
         string code)
     {
-        ValidateClosedId(code, nameof(code));
+        if (!Enum.IsDefined(category)
+            || !FailureVocabulary.TryGetValue(code, out var expectedCategory)
+            || expectedCategory != category)
+        {
+            throw new ArgumentException("Documentation Scribe failures use a closed category/code vocabulary.");
+        }
+
         return new DocumentationScribeContextFailure(category, code);
     }
 
@@ -494,28 +668,40 @@ public static class DocumentationScribeContextValidation
                 item.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 item.IsTruncated ? "1" : "0",
                 item.HasUtf8Bom ? "1" : "0",
+                item.IncludedHasUtf8Bom ? "1" : "0",
             });
         return Identity(
             "contract-scribe.documentation-scribe-context.commitments",
             fields);
     }
 
+    public static string ComputeSymbolRefSha256(SymbolRef symbolRef)
+    {
+        ValidateSymbolRef(symbolRef);
+        return Identity(
+            "contract-scribe.documentation-scribe-context.symbol-ref",
+            symbolRef.CompilationContextRef,
+            symbolRef.DocumentationCommentId);
+    }
+
     public static string NormalizeRepositoryPath(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (path.Length > MaximumPathLength
+        ArgumentNullException.ThrowIfNull(path);
+        var driveLike = path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':';
+        if (path.Length == 0
             || path[0] == '/'
             || path.Contains('\\', StringComparison.Ordinal)
-            || path.Contains(':', StringComparison.Ordinal)
-            || path.Any(char.IsControl))
+            || path.Contains('\0', StringComparison.Ordinal)
+            || driveLike
+            || !TryCountScalars(path, out var scalarCount)
+            || scalarCount > MaximumPathScalars)
         {
             throw new ArgumentException("A normalized repository-relative path is required.", nameof(path));
         }
 
         var segments = path.Split('/');
         if (segments.Any(segment => segment.Length == 0
-            || segment is "." or ".."
-            || segment[^1] is '.' or ' '))
+            || segment is "." or ".."))
         {
             throw new ArgumentException("A normalized repository-relative path is required.", nameof(path));
         }
@@ -547,7 +733,8 @@ public static class DocumentationScribeContextValidation
         int byteCount;
         try
         {
-            byteCount = StrictUtf8.GetByteCount(content) + (commitment.HasUtf8Bom ? 3 : 0);
+            byteCount = StrictUtf8.GetByteCount(content)
+                + (commitment.IncludedHasUtf8Bom ? 3 : 0);
         }
         catch (EncoderFallbackException exception)
         {
@@ -583,14 +770,30 @@ public static class DocumentationScribeContextValidation
         var byPath = instructions.ToDictionary(item => item.Commitment.Path, StringComparer.Ordinal);
         foreach (var route in routes)
         {
-            if (!byId.ContainsKey(route.OriginInstructionId))
+            if (!byId.TryGetValue(route.OriginInstructionId, out var origin)
+                || route.Depth != origin.Depth + 1)
             {
                 throw new ArgumentException("An instruction route must originate from an accepted instruction.");
+            }
+
+            if (route.Selection == DocumentationScribeContextRouteSelection.DeterministicBootstrap)
+            {
+                if (!byPath.TryGetValue(route.DestinationPath, out var destination)
+                    || route.Role != DocumentationScribeContextRole.ScopedInstruction
+                    || destination.Role != DocumentationScribeContextRole.ScopedInstruction
+                    || destination.Depth != route.Depth
+                    || destination.Commitment != route.SourceCommitment)
+                {
+                    throw new ArgumentException(
+                        "A deterministic instruction route must name the exact accepted scoped instruction.");
+                }
             }
         }
 
         var edges = routes
-            .Where(route => byPath.ContainsKey(route.DestinationPath))
+            .Where(route => route.Selection
+                    == DocumentationScribeContextRouteSelection.DeterministicBootstrap
+                && byPath.ContainsKey(route.DestinationPath))
             .GroupBy(route => route.OriginInstructionId, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -681,18 +884,122 @@ public static class DocumentationScribeContextValidation
         && string.Equals(left.SubjectId, right.SubjectId, StringComparison.Ordinal)
         && string.Equals(left.KindId, right.KindId, StringComparison.Ordinal)
         && left.Range == right.Range
+        && left.IncludedRange == right.IncludedRange
         && left.Commitment == right.Commitment
         && string.Equals(left.Content, right.Content, StringComparison.Ordinal);
 
     private static void ValidateSymbolRef(SymbolRef symbolRef)
     {
-        ValidateClosedId(symbolRef.CompilationContextRef, nameof(symbolRef));
-        if (string.IsNullOrWhiteSpace(symbolRef.DocumentationCommentId)
-            || symbolRef.DocumentationCommentId.Length > MaximumIdLength
-            || symbolRef.DocumentationCommentId.Any(char.IsControl))
+        if (!IsCompilationContextRef(symbolRef.CompilationContextRef)
+            || !IsDocumentationCommentId(symbolRef.DocumentationCommentId))
         {
             throw new ArgumentException("A valid SymbolRef is required.", nameof(symbolRef));
         }
+    }
+
+    private static EvidenceLocator ValidateEvidenceLocator(EvidenceLocator locator) => locator switch
+    {
+        RepositoryEvidenceLocator repository when repository.Span is null
+            || repository.Span.Value.Start >= 0
+                && repository.Span.Value.End > repository.Span.Value.Start =>
+            new RepositoryEvidenceLocator(NormalizeRepositoryPath(repository.Path), repository.Span),
+        MetadataEvidenceLocator metadata
+            when IsCompilationContextRef(metadata.AssemblyIdentity)
+                && IsDocumentationCommentId(metadata.DocumentationCommentId) =>
+            new MetadataEvidenceLocator(metadata.AssemblyIdentity, metadata.DocumentationCommentId),
+        GeneratedOutputEvidenceLocator generated
+            when Enum.IsDefined(generated.ProducerKind)
+                && IsPrefixedSha256(
+                    generated.ProducerId,
+                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgp." : "tgp.")
+                && IsPrefixedSha256(
+                    generated.OutputId,
+                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.")
+                && IsSha256(generated.SourceSha256)
+                && (generated.Span is null
+                    || generated.Span.Value.Start >= 0
+                        && generated.Span.Value.End > generated.Span.Value.Start) =>
+            new GeneratedOutputEvidenceLocator(
+                generated.ProducerKind,
+                generated.ProducerId,
+                generated.OutputId,
+                generated.SourceSha256,
+                generated.Span),
+        SyntheticEvidenceLocator synthetic when IsCompilationContextRef(synthetic.FixtureId) =>
+            new SyntheticEvidenceLocator(synthetic.FixtureId),
+        _ => throw new ArgumentException("A valid evidence locator is required.", nameof(locator)),
+    };
+
+    private static bool IsCompilationContextRef(string value) =>
+        value is { Length: >= 1 and <= 128 }
+        && IsLowerAlphaNumeric(value[0])
+        && value.All(character =>
+            IsLowerAlphaNumeric(character) || character is '.' or '_' or '-');
+
+    private static bool IsDocumentationCommentId(string value) =>
+        value.Length >= 3
+        && value[0] is 'T' or 'M' or 'P' or 'F' or 'E' or 'N'
+        && value[1] == ':'
+        && TryCountXmlScalars(value, out var scalarCount)
+        && scalarCount <= 1_024
+        && !value.EnumerateRunes().Any(Rune.IsControl);
+
+    private static bool IsPrefixedSha256(string value, string prefix) =>
+        value.Length == prefix.Length + 64
+        && value.StartsWith(prefix, StringComparison.Ordinal)
+        && value.AsSpan(prefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
+
+    private static bool IsSha256(string value) =>
+        value is { Length: 64 }
+        && value.AsSpan().IndexOfAnyExcept("0123456789abcdef") < 0;
+
+    private static bool IsLowerAlphaNumeric(char value) =>
+        value is >= 'a' and <= 'z' or >= '0' and <= '9';
+
+    private static bool TryCountXmlScalars(string value, out int count)
+    {
+        if (!TryCountScalars(value, out count))
+        {
+            return false;
+        }
+
+        foreach (var rune in value.EnumerateRunes())
+        {
+            var scalar = rune.Value;
+            if (scalar != 0x09
+                && scalar is not (>= 0x20 and <= 0xd7ff)
+                && scalar is not (>= 0xe000 and <= 0xfffd)
+                && scalar is not (>= 0x10000 and <= 0x10ffff))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryCountScalars(string value, out int count)
+    {
+        count = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (char.IsHighSurrogate(character))
+            {
+                if (++index >= value.Length || !char.IsLowSurrogate(value[index]))
+                {
+                    return false;
+                }
+            }
+            else if (char.IsLowSurrogate(character))
+            {
+                return false;
+            }
+
+            count++;
+        }
+
+        return true;
     }
 
     private static void ValidateSha256(string value, string parameterName)
