@@ -1,0 +1,902 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contract-scribe.dev/schemas/documentation-scribe/v1.request.schema.json",
+  "title": "Documentation Scribe Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scribeRequestVersion",
+    "context",
+    "target",
+    "styleProfile",
+    "contextReferences",
+    "evidenceReferences",
+    "evidenceConflicts",
+    "toolPolicyId",
+    "limits"
+  ],
+  "properties": {
+    "scribeRequestVersion": {
+      "const": 1
+    },
+    "context": {
+      "$ref": "#/$defs/context"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "styleProfile": {
+      "$ref": "#/$defs/styleProfile"
+    },
+    "contextReferences": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/contextReference"
+      }
+    },
+    "evidenceReferences": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/evidenceReference"
+      }
+    },
+    "evidenceConflicts": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/evidenceConflict"
+      }
+    },
+    "toolPolicyId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9.-]*[a-z0-9]$|^[a-z]$"
+    },
+    "componentIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "compilationContextRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "documentationCommentId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 1024,
+      "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repositoryContextRef": {
+      "type": "string",
+      "pattern": "^repoctx-[0-9a-f]{32}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
+    },
+    "symbolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilationContextRef",
+        "documentationCommentId"
+      ],
+      "properties": {
+        "compilationContextRef": {
+          "$ref": "#/$defs/compilationContextRef"
+        },
+        "documentationCommentId": {
+          "$ref": "#/$defs/documentationCommentId"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ],
+          "properties": {
+            "repository": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "$ref": "#/$defs/repositoryPath"
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metadata"
+          ],
+          "properties": {
+            "metadata": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assemblyIdentity",
+                "documentationCommentId"
+              ],
+              "properties": {
+                "assemblyIdentity": {
+                  "$ref": "#/$defs/compilationContextRef"
+                },
+                "documentationCommentId": {
+                  "$ref": "#/$defs/documentationCommentId"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generatedOutput"
+          ],
+          "properties": {
+            "generatedOutput": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "producerKind",
+                "producerId",
+                "outputId",
+                "sourceSha256"
+              ],
+              "properties": {
+                "producerKind": {
+                  "enum": [
+                    "source-generator",
+                    "tool-generated"
+                  ]
+                },
+                "producerId": {
+                  "type": "string"
+                },
+                "outputId": {
+                  "type": "string"
+                },
+                "sourceSha256": {
+                  "$ref": "#/$defs/sha256"
+                },
+                "span": {
+                  "$ref": "#/$defs/span"
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "source-generator"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^sgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^sgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "producerKind": {
+                        "const": "tool-generated"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "producerId": {
+                        "pattern": "^tgp\\.[0-9a-f]{64}$"
+                      },
+                      "outputId": {
+                        "pattern": "^tgo\\.[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "synthetic"
+          ],
+          "properties": {
+            "synthetic": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fixtureId"
+              ],
+              "properties": {
+                "fixtureId": {
+                  "$ref": "#/$defs/compilationContextRef"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositoryContextRef",
+        "inputIdentity",
+        "targetProfile",
+        "auditOutcome"
+      ],
+      "properties": {
+        "repositoryContextRef": {
+          "$ref": "#/$defs/repositoryContextRef"
+        },
+        "inputIdentity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/repositoryPath"
+            },
+            {
+              "pattern": "(?:\\.[sS][lL][nN][xX]?|\\.[cC][sS][pP][rR][oO][jJ])$"
+            }
+          ]
+        },
+        "targetProfile": {
+          "enum": [
+            "profile.assembly-visible",
+            "profile.external-api"
+          ]
+        },
+        "auditOutcome": {
+          "enum": [
+            "audit.outcome.compliant",
+            "audit.outcome.skipped",
+            "audit.outcome.violation"
+          ]
+        }
+      }
+    },
+    "applicableComponent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "const": "typeParameter"
+            },
+            "identity": {
+              "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "const": "parameter"
+            },
+            "identity": {
+              "pattern": "^parameter/(?:0|[1-9][0-9]*)$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity"
+          ],
+          "properties": {
+            "kind": {
+              "const": "return"
+            },
+            "identity": {
+              "const": "return"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity"
+          ],
+          "properties": {
+            "kind": {
+              "const": "value"
+            },
+            "identity": {
+              "const": "value"
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbolRef",
+        "sourceCommitment",
+        "applicableComponents"
+      ],
+      "properties": {
+        "symbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "sourceCommitment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "locator",
+            "contentSha256"
+          ],
+          "properties": {
+            "locator": {
+              "$ref": "#/$defs/locator"
+            },
+            "contentSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "applicableComponents": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/applicableComponent"
+          }
+        }
+      }
+    },
+    "textPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "maximumScalars"
+      ],
+      "properties": {
+        "disposition": {
+          "enum": [
+            "forbidden",
+            "optional",
+            "required"
+          ]
+        },
+        "maximumScalars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        }
+      }
+    },
+    "componentPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentIdentity",
+        "disposition",
+        "maximumScalars"
+      ],
+      "properties": {
+        "componentIdentity": {
+          "$ref": "#/$defs/componentIdentity"
+        },
+        "disposition": {
+          "enum": [
+            "forbidden",
+            "optional",
+            "required"
+          ]
+        },
+        "maximumScalars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        }
+      }
+    },
+    "claimPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimCategoryId",
+        "completeEvidenceRequired",
+        "allowedAuthorities"
+      ],
+      "properties": {
+        "claimCategoryId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "completeEvidenceRequired": {
+          "type": "boolean"
+        },
+        "allowedAuthorities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "authority.existing-documentation",
+              "authority.public-contract",
+              "authority.repository-documentation",
+              "authority.source-declaration",
+              "authority.source-implementation",
+              "authority.test"
+            ]
+          }
+        }
+      }
+    },
+    "styleProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "styleProfileId",
+        "outputLanguageId",
+        "summary",
+        "remarks",
+        "exceptions",
+        "componentPolicies",
+        "inheritDocDisposition",
+        "allowedLiterals",
+        "forbiddenLiterals",
+        "claimPolicies",
+        "maximumContentUnits",
+        "maximumEvidenceRefsPerUnit"
+      ],
+      "properties": {
+        "styleProfileId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "outputLanguageId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "summary": {
+          "$ref": "#/$defs/textPolicy"
+        },
+        "remarks": {
+          "$ref": "#/$defs/textPolicy"
+        },
+        "exceptions": {
+          "$ref": "#/$defs/textPolicy"
+        },
+        "componentPolicies": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/componentPolicy"
+          }
+        },
+        "inheritDocDisposition": {
+          "enum": [
+            "allowed",
+            "forbidden",
+            "required"
+          ]
+        },
+        "allowedLiterals": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "forbiddenLiterals": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "claimPolicies": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/claimPolicy"
+          }
+        },
+        "maximumContentUnits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "maximumEvidenceRefsPerUnit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512
+        }
+      }
+    },
+    "byteCounts": {
+      "originalUtf8ByteCount": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4194304
+      },
+      "includedUtf8ByteCount": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4194304
+      },
+      "isTruncated": {
+        "type": "boolean"
+      }
+    },
+    "contextReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contextReferenceId",
+        "kind",
+        "repositoryContextRef",
+        "path",
+        "contentSha256",
+        "originalUtf8ByteCount",
+        "includedUtf8ByteCount",
+        "isTruncated"
+      ],
+      "properties": {
+        "contextReferenceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "enum": [
+            "context.project-instruction",
+            "context.repository-documentation",
+            "context.style-example"
+          ]
+        },
+        "repositoryContextRef": {
+          "$ref": "#/$defs/repositoryContextRef"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "originalUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/originalUtf8ByteCount"
+        },
+        "includedUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/includedUtf8ByteCount"
+        },
+        "isTruncated": {
+          "$ref": "#/$defs/byteCounts/isTruncated"
+        }
+      }
+    },
+    "targetSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbolRef"
+      ],
+      "properties": {
+        "symbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        }
+      }
+    },
+    "componentSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parentSymbolRef",
+        "componentKind",
+        "identity"
+      ],
+      "properties": {
+        "parentSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "componentKind": {
+          "enum": [
+            "component.parameter",
+            "component.return",
+            "component.type-parameter",
+            "component.value"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/componentIdentity"
+        }
+      }
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceReferenceId",
+        "repositoryContextRef",
+        "subject",
+        "kind",
+        "relation",
+        "authority",
+        "locator",
+        "contentSha256",
+        "originalUtf8ByteCount",
+        "includedUtf8ByteCount",
+        "isTruncated",
+        "claimCategoryIds"
+      ],
+      "properties": {
+        "evidenceReferenceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "repositoryContextRef": {
+          "$ref": "#/$defs/repositoryContextRef"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/targetSubject"
+            },
+            {
+              "$ref": "#/$defs/componentSubject"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "evidence.public-contract",
+            "evidence.repository-documentation",
+            "evidence.source.attribute",
+            "evidence.source.declaration",
+            "evidence.source.implementation",
+            "evidence.source.xml-documentation",
+            "evidence.test"
+          ]
+        },
+        "relation": {
+          "enum": [
+            "evidence.constrains",
+            "evidence.declares",
+            "evidence.documents",
+            "evidence.references",
+            "evidence.tests"
+          ]
+        },
+        "authority": {
+          "enum": [
+            "authority.existing-documentation",
+            "authority.public-contract",
+            "authority.repository-documentation",
+            "authority.source-declaration",
+            "authority.source-implementation",
+            "authority.test"
+          ]
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "originalUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/originalUtf8ByteCount"
+        },
+        "includedUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/includedUtf8ByteCount"
+        },
+        "isTruncated": {
+          "$ref": "#/$defs/byteCounts/isTruncated"
+        },
+        "claimCategoryIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        }
+      }
+    },
+    "evidenceConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relation",
+        "higherEvidenceReferenceId",
+        "lowerEvidenceReferenceId"
+      ],
+      "properties": {
+        "relation": {
+          "const": "evidence-conflict.higher-authority-contradicts"
+        },
+        "higherEvidenceReferenceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "lowerEvidenceReferenceId": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumAttempts",
+        "maximumContextReferences",
+        "maximumContextUtf8Bytes",
+        "maximumEvidenceReferences",
+        "maximumEvidenceUtf8Bytes",
+        "maximumProviderRequests",
+        "maximumToolRounds",
+        "maximumToolCalls",
+        "maximumInputTokens",
+        "maximumUncachedInputTokens",
+        "maximumOutputTokens",
+        "maximumCostMicrounits",
+        "maximumElapsedMilliseconds"
+      ],
+      "properties": {
+        "maximumAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maximumContextReferences": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 512
+        },
+        "maximumContextUtf8Bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "maximumEvidenceReferences": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 512
+        },
+        "maximumEvidenceUtf8Bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "maximumProviderRequests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "maximumToolRounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "maximumToolCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "maximumInputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777215
+        },
+        "maximumUncachedInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
+        "maximumOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048575
+        },
+        "maximumCostMicrounits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999999999
+        },
+        "maximumElapsedMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        }
+      }
+    }
+  }
+}

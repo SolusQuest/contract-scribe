@@ -1,0 +1,207 @@
+{
+  "scribeRequestVersion": 1,
+  "context": {
+    "repositoryContextRef": "repoctx-11111111111111111111111111111111",
+    "inputIdentity": "samples/Synthetic.csproj",
+    "targetProfile": "profile.external-api",
+    "auditOutcome": "audit.outcome.violation"
+  },
+  "target": {
+    "symbolRef": {
+      "compilationContextRef": "synthetic.v1",
+      "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
+    },
+    "sourceCommitment": {
+      "locator": {
+        "repository": {
+          "path": "src/Synthetic/Widget.cs",
+          "span": {
+            "start": 100,
+            "end": 200
+          }
+        }
+      },
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "applicableComponents": [
+      {
+        "kind": "parameter",
+        "identity": "parameter/0",
+        "name": "value"
+      },
+      {
+        "kind": "return",
+        "identity": "return"
+      }
+    ]
+  },
+  "styleProfile": {
+    "styleProfileId": "style.public-api.v1",
+    "outputLanguageId": "language.en",
+    "summary": {
+      "disposition": "required",
+      "maximumScalars": 400
+    },
+    "remarks": {
+      "disposition": "optional",
+      "maximumScalars": 800
+    },
+    "exceptions": {
+      "disposition": "optional",
+      "maximumScalars": 400
+    },
+    "componentPolicies": [
+      {
+        "componentIdentity": "parameter/0",
+        "disposition": "required",
+        "maximumScalars": 300
+      },
+      {
+        "componentIdentity": "return",
+        "disposition": "required",
+        "maximumScalars": 300
+      }
+    ],
+    "inheritDocDisposition": "forbidden",
+    "allowedLiterals": [
+      "ContractScribe"
+    ],
+    "forbiddenLiterals": [
+      "guaranteed"
+    ],
+    "claimPolicies": [
+      {
+        "claimCategoryId": "claim.behavior",
+        "completeEvidenceRequired": true,
+        "allowedAuthorities": [
+          "authority.source-declaration",
+          "authority.public-contract"
+        ]
+      },
+      {
+        "claimCategoryId": "claim.purpose",
+        "completeEvidenceRequired": false,
+        "allowedAuthorities": [
+          "authority.source-declaration",
+          "authority.repository-documentation"
+        ]
+      }
+    ],
+    "maximumContentUnits": 16,
+    "maximumEvidenceRefsPerUnit": 8
+  },
+  "contextReferences": [
+    {
+      "contextReferenceId": "context.instructions",
+      "kind": "context.project-instruction",
+      "repositoryContextRef": "repoctx-11111111111111111111111111111111",
+      "path": "AGENTS.md",
+      "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "originalUtf8ByteCount": 200,
+      "includedUtf8ByteCount": 200,
+      "isTruncated": false
+    }
+  ],
+  "evidenceReferences": [
+    {
+      "evidenceReferenceId": "evidence.parameter",
+      "repositoryContextRef": "repoctx-11111111111111111111111111111111",
+      "subject": {
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
+        },
+        "componentKind": "component.parameter",
+        "identity": "parameter/0"
+      },
+      "kind": "evidence.source.declaration",
+      "relation": "evidence.declares",
+      "authority": "authority.source-declaration",
+      "locator": {
+        "repository": {
+          "path": "src/Synthetic/Widget.cs",
+          "span": {
+            "start": 120,
+            "end": 140
+          }
+        }
+      },
+      "contentSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "originalUtf8ByteCount": 20,
+      "includedUtf8ByteCount": 20,
+      "isTruncated": false,
+      "claimCategoryIds": [
+        "claim.behavior"
+      ]
+    },
+    {
+      "evidenceReferenceId": "evidence.return",
+      "repositoryContextRef": "repoctx-11111111111111111111111111111111",
+      "subject": {
+        "parentSymbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
+        },
+        "componentKind": "component.return",
+        "identity": "return"
+      },
+      "kind": "evidence.public-contract",
+      "relation": "evidence.constrains",
+      "authority": "authority.public-contract",
+      "locator": {
+        "repository": {
+          "path": "docs/contract.md"
+        }
+      },
+      "contentSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "originalUtf8ByteCount": 40,
+      "includedUtf8ByteCount": 40,
+      "isTruncated": false,
+      "claimCategoryIds": [
+        "claim.behavior"
+      ]
+    },
+    {
+      "evidenceReferenceId": "evidence.summary",
+      "repositoryContextRef": "repoctx-11111111111111111111111111111111",
+      "subject": {
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
+        }
+      },
+      "kind": "evidence.repository-documentation",
+      "relation": "evidence.documents",
+      "authority": "authority.repository-documentation",
+      "locator": {
+        "repository": {
+          "path": "docs/overview.md"
+        }
+      },
+      "contentSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "originalUtf8ByteCount": 80,
+      "includedUtf8ByteCount": 80,
+      "isTruncated": false,
+      "claimCategoryIds": [
+        "claim.purpose"
+      ]
+    }
+  ],
+  "evidenceConflicts": [],
+  "toolPolicyId": "tool-policy.read-only.v1",
+  "limits": {
+    "maximumAttempts": 3,
+    "maximumContextReferences": 8,
+    "maximumContextUtf8Bytes": 65536,
+    "maximumEvidenceReferences": 32,
+    "maximumEvidenceUtf8Bytes": 65536,
+    "maximumProviderRequests": 8,
+    "maximumToolRounds": 4,
+    "maximumToolCalls": 16,
+    "maximumInputTokens": 65536,
+    "maximumUncachedInputTokens": 32768,
+    "maximumOutputTokens": 8192,
+    "maximumCostMicrounits": 5000000,
+    "maximumElapsedMilliseconds": 120000
+  }
+}
