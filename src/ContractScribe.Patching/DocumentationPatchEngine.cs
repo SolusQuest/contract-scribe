@@ -129,6 +129,21 @@ public sealed class DocumentationPatchEngine
         DocumentationPatchApplicationStage? lastStage = null;
         try
         {
+            var sessionFailureCode = DocumentationPatchCandidateValidation
+                .PreflightSessionAuthority(session, request.Context) switch
+            {
+                DocumentationPatchSessionAuthorityStatus.Available => null,
+                DocumentationPatchSessionAuthorityStatus.InputIdentityMismatch =>
+                    "patch.stale.input-identity",
+                DocumentationPatchSessionAuthorityStatus.TargetProfileMismatch =>
+                    "patch.stale.target-profile",
+                _ => "patch.stale.repository-context",
+            };
+            if (sessionFailureCode is not null)
+            {
+                return Result(RootStale(request, sessionFailureCode));
+            }
+
             var resolver = new DocumentationPatchResolver();
             var application = new CandidatePatchApplicator(
                 resolver,

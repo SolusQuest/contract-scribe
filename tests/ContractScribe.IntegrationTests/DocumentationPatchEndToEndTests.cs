@@ -723,6 +723,27 @@ public sealed class DocumentationPatchEndToEndTests
     }
 
     [Fact]
+    public void DisposedRepositorySessionRetainsRepositoryContextStaleCode()
+    {
+        using var fixture = EngineFixture.Create();
+        fixture.ClassifiedSession.RepositorySession.Dispose();
+        var applicationStageObserved = false;
+
+        var outcome = new DocumentationPatchEngine(
+            () => fixture.StagingParent,
+            (_, _) => applicationStageObserved = true,
+            null).Execute(fixture.ClassifiedSession, fixture.Request);
+
+        Assert.False(applicationStageObserved);
+        AssertRootExecution(
+            outcome,
+            DocumentationPatchOutcome.Stale,
+            DocumentationPatchTargetStatus.NotEvaluated,
+            "patch.stale.repository-context");
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
     public void OriginalMutationBeforeE1SealReturnsRepositoryStateAndCleansCandidate()
     {
         if (!OperatingSystem.IsLinux())

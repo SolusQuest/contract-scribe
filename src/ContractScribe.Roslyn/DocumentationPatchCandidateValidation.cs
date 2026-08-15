@@ -86,6 +86,15 @@ internal enum DocumentationPatchCandidateValidationCorruption
     CompilationContext,
 }
 
+public enum DocumentationPatchSessionAuthorityStatus
+{
+    Available,
+    RepositorySessionUnavailable,
+    RepositoryContextMismatch,
+    InputIdentityMismatch,
+    TargetProfileMismatch,
+}
+
 public static class DocumentationPatchCandidateValidation
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -94,6 +103,40 @@ public static class DocumentationPatchCandidateValidation
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
+
+    public static DocumentationPatchSessionAuthorityStatus PreflightSessionAuthority(
+        ClassifiedRepositorySession session,
+        DocumentationPatchContext context)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (!session.IsBoundToClassificationSession
+            || session.Classification.Status != ClassificationRunStatus.Success
+            || session.Classification.ClassificationSet is not { } classifications
+            || session.RepositorySession.IsDisposed)
+        {
+            return DocumentationPatchSessionAuthorityStatus.RepositorySessionUnavailable;
+        }
+
+        var repository = session.RepositorySession;
+        if (context.RepositoryContextRef != repository.RepositoryContextRef)
+        {
+            return DocumentationPatchSessionAuthorityStatus.RepositoryContextMismatch;
+        }
+
+        if (!string.Equals(
+                context.InputIdentity,
+                repository.InputIdentity,
+                StringComparison.Ordinal))
+        {
+            return DocumentationPatchSessionAuthorityStatus.InputIdentityMismatch;
+        }
+
+        return context.TargetProfile != classifications.TargetProfile
+            ? DocumentationPatchSessionAuthorityStatus.TargetProfileMismatch
+            : DocumentationPatchSessionAuthorityStatus.Available;
+    }
 
     public static DocumentationPatchCandidateValidationResult Validate(
         ClassifiedRepositorySession session,
