@@ -193,6 +193,54 @@ public sealed class DocumentationScribeContractTests
         compatible["evidenceReferences"]![2]!["subject"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
         Assert.NotNull(ParseValidRequest(Serialize(compatible)));
 
+        static JsonObject CreateSyntheticLocator() => new()
+        {
+            ["synthetic"] = new JsonObject
+            {
+                ["fixtureId"] = "0_fixture",
+            },
+        };
+
+        var syntheticRequestNode = ParseObject(ReadFixture("valid", "request.json"));
+        syntheticRequestNode["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
+        var syntheticRequestBytes = Serialize(syntheticRequestNode);
+        AssertSchemaValid(RequestSchema.Value, syntheticRequestBytes, "m1-synthetic-locator");
+        var syntheticRequest = ParseValidRequest(syntheticRequestBytes);
+        var syntheticResult = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        syntheticResult["terminal"]!["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
+        Correlate(syntheticResult, syntheticRequest.ArtifactSha256);
+        var syntheticResultBytes = Serialize(syntheticResult);
+        AssertSchemaValid(ResultSchema.Value, syntheticResultBytes, "m1-synthetic-result-locator");
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var syntheticAttempt));
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            syntheticRequest,
+            syntheticAttempt,
+            syntheticResultBytes).IsValid);
+
+        var supplementaryDocumentationId = "T:" + string.Concat(
+            Enumerable.Repeat(char.ConvertFromUtf32(0x10400), 600));
+        var supplementaryRequestNode = ParseObject(ReadFixture("valid", "request.json"));
+        supplementaryRequestNode["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
+        foreach (var evidence in supplementaryRequestNode["evidenceReferences"]!.AsArray())
+        {
+            var subject = evidence!["subject"]!;
+            var symbol = subject["symbolRef"] ?? subject["parentSymbolRef"]!;
+            symbol!["documentationCommentId"] = supplementaryDocumentationId;
+        }
+
+        var supplementaryRequestBytes = Serialize(supplementaryRequestNode);
+        AssertSchemaValid(RequestSchema.Value, supplementaryRequestBytes, "m1-scalar-bounded-symbol");
+        var supplementaryRequest = ParseValidRequest(supplementaryRequestBytes);
+        var supplementaryResult = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        supplementaryResult["terminal"]!["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
+        Correlate(supplementaryResult, supplementaryRequest.ArtifactSha256);
+        var supplementaryResultBytes = Serialize(supplementaryResult);
+        AssertSchemaValid(ResultSchema.Value, supplementaryResultBytes, "m1-scalar-bounded-result-symbol");
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            supplementaryRequest,
+            syntheticAttempt,
+            supplementaryResultBytes).IsValid);
+
         AssertRequestMutationFails(
             root => root["context"]!["inputIdentity"] = "samples/Synthetic.txt",
             "scribe.request.invalid-vocabulary",
@@ -275,6 +323,14 @@ public sealed class DocumentationScribeContractTests
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
+            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "<é/>",
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            null,
+            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "&é;",
+            "scribe.result.invalid-content");
+        AssertResultMutationFails(
+            null,
             result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = new string('a', 2_049),
             "scribe.result.invalid-vocabulary");
 
@@ -283,6 +339,22 @@ public sealed class DocumentationScribeContractTests
         var ordinaryAmpersand = ParseObject(ReadFixture("valid", "proposal-result.json"));
         ordinaryAmpersand["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Describes the R&D strategy; no entity is present.";
         Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(ordinaryAmpersand)).IsValid);
+        var supplementaryException = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        supplementaryException["terminal"]!["contentUnits"]!.AsArray().Add(new JsonObject
+        {
+            ["kind"] = "content.exception",
+            ["typeDocumentationId"] = "T:" + string.Concat(
+                Enumerable.Repeat(char.ConvertFromUtf32(0x10400), 600)),
+            ["lines"] = new JsonArray("Represents the documented failure."),
+            ["claimCategoryId"] = "claim.purpose",
+            ["evidenceReferenceIds"] = new JsonArray("evidence.summary"),
+        });
+        var supplementaryExceptionBytes = Serialize(supplementaryException);
+        AssertSchemaValid(ResultSchema.Value, supplementaryExceptionBytes, "scalar-bounded-exception-id");
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            supplementaryExceptionBytes).IsValid);
         var parsed = DocumentationScribeValidation.ParseRunResult(
             request,
             attempt,
@@ -630,6 +702,112 @@ public sealed class DocumentationScribeContractTests
             ["amountMicrounits"] = request.Limits.MaximumCostMicrounits + 1,
         };
         Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(rawBudget)).IsValid);
+
+        var boundaryRequestNode = ParseObject(ReadFixture("valid", "request.json"));
+        var boundaryLimits = boundaryRequestNode["limits"]!;
+        boundaryLimits["maximumInputTokens"] = DocumentationScribeContract.MaximumConfiguredInputTokens;
+        boundaryLimits["maximumUncachedInputTokens"] = DocumentationScribeContract.MaximumConfiguredInputTokens;
+        boundaryLimits["maximumOutputTokens"] = DocumentationScribeContract.MaximumConfiguredOutputTokens;
+        boundaryLimits["maximumCostMicrounits"] = DocumentationScribeContract.MaximumConfiguredCostMicrounits;
+        boundaryLimits["maximumElapsedMilliseconds"] = DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds;
+        var boundaryRequestBytes = Serialize(boundaryRequestNode);
+        AssertSchemaValid(RequestSchema.Value, boundaryRequestBytes, "maximum-configured-execution-ceilings");
+        var boundaryRequest = ParseValidRequest(boundaryRequestBytes);
+        var maximumUsage = new DocumentationScribeUsageObservationInput(
+            DocumentationScribeContract.MaximumObservedInputTokens,
+            DocumentationScribeContract.MaximumObservedOutputTokens,
+            DocumentationScribeContract.MaximumObservedInputTokens,
+            DocumentationScribeContract.MaximumObservedInputTokens,
+            DocumentationScribeContract.MaximumObservedOutputTokens);
+        var maximumCost = new DocumentationScribeCostObservationInput(
+            "currency.usd",
+            DocumentationScribeContract.MaximumObservedCostMicrounits);
+
+        var boundaryBudgetEnvelope = CreateEnvelope(boundaryRequest) with
+        {
+            Usage = maximumUsage,
+            Cost = maximumCost,
+        };
+        var boundaryBudget = DocumentationScribeValidation.CreateFailureResult(
+            boundaryRequest,
+            attempt,
+            DocumentationScribeFailureCode.Budget,
+            boundaryBudgetEnvelope);
+        Assert.Equal(DocumentationScribeContract.MaximumObservedInputTokens, boundaryBudget.RunEnvelope.Usage?.InputTokens);
+
+        var rawBoundaryBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
+        Correlate(rawBoundaryBudget, boundaryRequest.ArtifactSha256);
+        rawBoundaryBudget["terminal"]!["code"] = "scribe.failure.budget";
+        rawBoundaryBudget["runEnvelope"]!["usage"] = new JsonObject
+        {
+            ["inputTokens"] = DocumentationScribeContract.MaximumObservedInputTokens,
+        };
+        rawBoundaryBudget["runEnvelope"]!["cost"] = new JsonObject
+        {
+            ["currencyId"] = "currency.usd",
+            ["amountMicrounits"] = DocumentationScribeContract.MaximumObservedCostMicrounits,
+        };
+        var rawBoundaryBudgetBytes = Serialize(rawBoundaryBudget);
+        AssertSchemaValid(ResultSchema.Value, rawBoundaryBudgetBytes, "maximum-bounded-budget-overrun");
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            boundaryRequest,
+            attempt,
+            rawBoundaryBudgetBytes).IsValid);
+
+        var simultaneousTimeoutEnvelope = boundaryBudgetEnvelope with
+        {
+            ElapsedMilliseconds = DocumentationScribeContract.MaximumObservedElapsedMilliseconds,
+        };
+        var simultaneousTimeout = DocumentationScribeValidation.CreateFailureResult(
+            boundaryRequest,
+            attempt,
+            DocumentationScribeFailureCode.Timeout,
+            simultaneousTimeoutEnvelope);
+        Assert.Equal(DocumentationScribeContract.MaximumObservedElapsedMilliseconds, simultaneousTimeout.RunEnvelope.ElapsedMilliseconds);
+        Assert.Equal(DocumentationScribeContract.MaximumObservedCostMicrounits, simultaneousTimeout.RunEnvelope.Cost?.AmountMicrounits);
+
+        var rawSimultaneousTimeout = ParseObject(ReadFixture("valid", "failure-result.json"));
+        Correlate(rawSimultaneousTimeout, boundaryRequest.ArtifactSha256);
+        rawSimultaneousTimeout["terminal"]!["code"] = "scribe.failure.timeout";
+        rawSimultaneousTimeout["runEnvelope"]!["elapsedMilliseconds"] =
+            DocumentationScribeContract.MaximumObservedElapsedMilliseconds;
+        rawSimultaneousTimeout["runEnvelope"]!["usage"] = new JsonObject
+        {
+            ["inputTokens"] = DocumentationScribeContract.MaximumObservedInputTokens,
+        };
+        rawSimultaneousTimeout["runEnvelope"]!["cost"] = new JsonObject
+        {
+            ["currencyId"] = "currency.usd",
+            ["amountMicrounits"] = DocumentationScribeContract.MaximumObservedCostMicrounits,
+        };
+        var rawSimultaneousTimeoutBytes = Serialize(rawSimultaneousTimeout);
+        AssertSchemaValid(ResultSchema.Value, rawSimultaneousTimeoutBytes, "simultaneous-timeout-budget-overrun");
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            boundaryRequest,
+            attempt,
+            rawSimultaneousTimeoutBytes).IsValid);
+
+        rawSimultaneousTimeout["runEnvelope"]!["usage"]!["inputTokens"] =
+            (long)DocumentationScribeContract.MaximumObservedInputTokens + 1;
+        var overArtifactMaximumBytes = Serialize(rawSimultaneousTimeout);
+        Assert.False(Evaluate(ResultSchema.Value, overArtifactMaximumBytes));
+        var overArtifactMaximum = DocumentationScribeValidation.ParseRunResult(
+            boundaryRequest,
+            attempt,
+            overArtifactMaximumBytes);
+        Assert.False(overArtifactMaximum.IsValid);
+        Assert.Equal("/runEnvelope/usage/inputTokens", overArtifactMaximum.Failure?.Pointer);
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            boundaryRequest,
+            attempt,
+            DocumentationScribeFailureCode.Timeout,
+            simultaneousTimeoutEnvelope with
+            {
+                Usage = maximumUsage with
+                {
+                    InputTokens = DocumentationScribeContract.MaximumObservedInputTokens + 1,
+                },
+            }));
     }
 
     [Fact]

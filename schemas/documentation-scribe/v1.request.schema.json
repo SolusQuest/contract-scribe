@@ -275,7 +275,7 @@
               ],
               "properties": {
                 "fixtureId": {
-                  "$ref": "#/$defs/identifier"
+                  "$ref": "#/$defs/compilationContextRef"
                 }
               }
             }
@@ -874,27 +874,27 @@
         "maximumInputTokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16777216
+          "maximum": 16777215
         },
         "maximumUncachedInputTokens": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 16777216
+          "maximum": 16777215
         },
         "maximumOutputTokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 1048576
+          "maximum": 1048575
         },
         "maximumCostMicrounits": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 1000000000000
+          "maximum": 999999999999
         },
         "maximumElapsedMilliseconds": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 86400000
+          "maximum": 86399999
         }
       }
     }

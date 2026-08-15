@@ -98,6 +98,10 @@ public static class DocumentationScribeContract
     public const int MaximumObservedOutputTokens = 1_048_576;
     public const long MaximumObservedCostMicrounits = 1_000_000_000_000;
     public const int MaximumObservedElapsedMilliseconds = 86_400_000;
+    public const int MaximumConfiguredInputTokens = MaximumObservedInputTokens - 1;
+    public const int MaximumConfiguredOutputTokens = MaximumObservedOutputTokens - 1;
+    public const long MaximumConfiguredCostMicrounits = MaximumObservedCostMicrounits - 1;
+    public const int MaximumConfiguredElapsedMilliseconds = MaximumObservedElapsedMilliseconds - 1;
 }
 
 public static class DocumentationScribeVocabulary

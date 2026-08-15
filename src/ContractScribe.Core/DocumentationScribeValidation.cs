@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Xml;
 
 namespace ContractScribe.Core;
 
@@ -468,6 +469,7 @@ public static class DocumentationScribeValidation
     private static bool AllowsBudgetObservationOverrun(DocumentationScribeTerminal terminal) => terminal switch
     {
         DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => true,
+        DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => true,
         DocumentationScribeCancelledTerminal => true,
         _ => false,
     };
@@ -1030,31 +1032,31 @@ public static class DocumentationScribeValidation
                 "maximumInputTokens",
                 pointer,
                 1,
-                DocumentationScribeContract.MaximumObservedInputTokens),
+                DocumentationScribeContract.MaximumConfiguredInputTokens),
             ReadBoundedInt(
                 element,
                 "maximumUncachedInputTokens",
                 pointer,
                 0,
-                DocumentationScribeContract.MaximumObservedInputTokens),
+                DocumentationScribeContract.MaximumConfiguredInputTokens),
             ReadBoundedInt(
                 element,
                 "maximumOutputTokens",
                 pointer,
                 1,
-                DocumentationScribeContract.MaximumObservedOutputTokens),
+                DocumentationScribeContract.MaximumConfiguredOutputTokens),
             ReadBoundedLong(
                 element,
                 "maximumCostMicrounits",
                 pointer,
                 0,
-                DocumentationScribeContract.MaximumObservedCostMicrounits),
+                DocumentationScribeContract.MaximumConfiguredCostMicrounits),
             ReadBoundedInt(
                 element,
                 "maximumElapsedMilliseconds",
                 pointer,
                 1,
-                DocumentationScribeContract.MaximumObservedElapsedMilliseconds));
+                DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds));
     }
 
     private static DocumentationScribeTerminal ParseTerminal(
@@ -2556,10 +2558,11 @@ public static class DocumentationScribeValidation
 
     private static bool IsDocumentationCommentId(string value)
     {
-        if (value.Length is < 3 or > 1_024
+        if (value.Length < 3
             || value[0] is not ('T' or 'M' or 'P' or 'F' or 'E' or 'N')
             || value[1] != ':'
-            || !TryCountXmlScalars(value, out _))
+            || !TryCountXmlScalars(value, out var scalarCount)
+            || scalarCount > 1_024)
         {
             return false;
         }
@@ -2618,9 +2621,10 @@ public static class DocumentationScribeValidation
 
     private static bool IsExceptionDocumentationId(string value)
     {
-        if (value.Length is < 3 or > 1_024
+        if (value.Length < 3
             || !value.StartsWith("T:", StringComparison.Ordinal)
-            || !TryCountXmlScalars(value, out _))
+            || !TryCountXmlScalars(value, out var scalarCount)
+            || scalarCount > 1_024)
         {
             return false;
         }
@@ -2706,9 +2710,10 @@ public static class DocumentationScribeValidation
         {
             if (value[index] == '<' && index + 1 < value.Length)
             {
-                var next = value[index + 1];
-                if ((next is '/' or '!' or '?' or '_' or ':' || char.IsAsciiLetter(next))
-                    && value.IndexOf('>', index + 2) >= 0)
+                var candidate = value.AsSpan(index + 1);
+                if (candidate.IndexOf('>') >= 0
+                    && (candidate[0] is '/' or '!' or '?'
+                        || StartsWithXmlName(candidate)))
                 {
                     return true;
                 }
@@ -2744,13 +2749,32 @@ public static class DocumentationScribeValidation
             return digits.Length > 0 && digits.IndexOfAnyExceptInRange('0', '9') < 0;
         }
 
-        if (!(char.IsAsciiLetter(name[0]) || name[0] is '_' or ':'))
+        return IsXmlName(name);
+    }
+
+    private static bool StartsWithXmlName(ReadOnlySpan<char> value)
+    {
+        var delimiter = value.IndexOfAny(" \t\r\n/>");
+        var name = delimiter >= 0 ? value[..delimiter] : value;
+        return IsXmlName(name);
+    }
+
+    private static bool IsXmlName(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty)
         {
             return false;
         }
 
-        return name[1..].ToArray().All(character =>
-            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_' or ':');
+        try
+        {
+            _ = XmlConvert.VerifyName(value.ToString());
+            return true;
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
     }
 
     private static bool HasPrefix(ReadOnlySpan<byte> bytes, params byte[] prefix) =>
