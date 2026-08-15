@@ -2707,24 +2707,50 @@ public static class DocumentationScribeValidation
             if (value[index] == '<' && index + 1 < value.Length)
             {
                 var next = value[index + 1];
-                if (next is '/' or '!' or '?' or '_' or ':' || char.IsAsciiLetter(next))
+                if ((next is '/' or '!' or '?' or '_' or ':' || char.IsAsciiLetter(next))
+                    && value.IndexOf('>', index + 2) >= 0)
                 {
                     return true;
                 }
             }
 
-            if (value[index] == '&' && index + 1 < value.Length)
+            if (value[index] == '&' && IsEntityReference(value.AsSpan(index)))
             {
-                var next = value[index + 1];
-                if ((next == '#' || char.IsAsciiLetter(next))
-                    && value.IndexOf(';', index + 2) >= 0)
-                {
-                    return true;
-                }
+                return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsEntityReference(ReadOnlySpan<char> value)
+    {
+        var terminator = value.IndexOf(';');
+        if (terminator < 2)
+        {
+            return false;
+        }
+
+        var name = value[1..terminator];
+        if (name[0] == '#')
+        {
+            var digits = name[1..];
+            if (digits.Length > 1 && digits[0] is 'x' or 'X')
+            {
+                return digits[1..].ToArray().All(character =>
+                    character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+            }
+
+            return digits.Length > 0 && digits.IndexOfAnyExceptInRange('0', '9') < 0;
+        }
+
+        if (!(char.IsAsciiLetter(name[0]) || name[0] is '_' or ':'))
+        {
+            return false;
+        }
+
+        return name[1..].ToArray().All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_' or ':');
     }
 
     private static bool HasPrefix(ReadOnlySpan<byte> bytes, params byte[] prefix) =>

@@ -280,6 +280,9 @@ public sealed class DocumentationScribeContractTests
 
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+        var ordinaryAmpersand = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        ordinaryAmpersand["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Describes the R&D strategy; no entity is present.";
+        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(ordinaryAmpersand)).IsValid);
         var parsed = DocumentationScribeValidation.ParseRunResult(
             request,
             attempt,
