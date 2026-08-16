@@ -1,13 +1,13 @@
 {
   "scribeRunResultVersion": 1,
-  "scribeRequestSha256": "e7f5d5ddf511c045b3ca58e8c0d0d3f87dc6a4e3f98cdd5ccc0e3c2fdf9f8b82",
+  "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",
   "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
   "terminal": {
     "kind": "failure",
     "code": "scribe.failure.provider"
   },
   "runEnvelope": {
-    "scribeRequestSha256": "e7f5d5ddf511c045b3ca58e8c0d0d3f87dc6a4e3f98cdd5ccc0e3c2fdf9f8b82",
+    "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",
     "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
     "providerConfigurationId": "provider.synthetic.v1",
     "modelConfigurationId": "model.synthetic.v1",

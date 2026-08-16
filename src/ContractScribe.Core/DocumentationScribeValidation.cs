@@ -265,6 +265,27 @@ public static class DocumentationScribeValidation
             envelope);
     }
 
+    public static DocumentationScribeRunResult CreateResultFromValidatedTerminal(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
+        DocumentationScribeRunResult validatedResult,
+        DocumentationScribeRunEnvelopeInput envelope)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(validatedResult);
+        if (!string.Equals(validatedResult.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+            || validatedResult.AttemptId != attemptId
+            || validatedResult.Terminal.Kind is not (DocumentationScribeTerminalKind.Proposal
+                or DocumentationScribeTerminalKind.Skip))
+        {
+            throw new ArgumentException(
+                "The validated terminal is not correlated to the supplied request and attempt.",
+                nameof(validatedResult));
+        }
+
+        return CreateRuntimeResult(request, attemptId, validatedResult.Terminal, envelope);
+    }
+
     private static DocumentationScribeRunResult CreateRuntimeResult(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,

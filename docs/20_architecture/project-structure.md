@@ -4,7 +4,7 @@
 
 ContractScribe uses project boundaries to enforce dependency and authority boundaries, not to mirror roadmap milestones or create one assembly per feature.
 
-The current graph contains `Core`, `Roslyn`, `Patching`, and `Cli`. `Agent` and `GitHub` remain candidate future splits rather than project contracts:
+The current graph contains `Core`, `Roslyn`, `Patching`, `Agent`, and `Cli`. `GitHub` remains a candidate future split rather than a project contract:
 
 1. `ContractScribe.Core`
 2. `ContractScribe.Roslyn`
@@ -13,7 +13,7 @@ The current graph contains `Core`, `Roslyn`, `Patching`, and `Cli`. `Agent` and 
 5. `ContractScribe.GitHub`
 6. `ContractScribe.Cli`
 
-The existing M1 boundaries and the M2 read-versus-mutation authority boundary are current architecture. The M3-M5 entries are candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing milestone applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
+The existing M1 boundaries, the M2 read-versus-mutation authority boundary, and the M3 read-only Scribe Runtime boundary are current architecture. Later M3 and M5 entries remain candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing issue applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
 
 The normal test graph contains two long-lived projects:
 
@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The `Core` / `Roslyn` / `Patching` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority, and issue #92 added a narrow session-bound immutable repository baseline plus isolated candidate writes under Patching. `Patching -> Core` and `Patching -> Roslyn` are therefore current one-way edges; `Core` and `Roslyn` do not reference Patching, and Roslyn does not grant Patching broad friend access. Future project names and edges remain candidates selected by their implementing milestones.
+The `Core` / `Roslyn` / `Patching` / `Agent` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority, issue #92 added a narrow session-bound immutable repository baseline plus isolated candidate writes under Patching, and issue #103 demonstrated that provider-neutral Scribe orchestration needs a Core-only read boundary. `Patching -> Core`, `Patching -> Roslyn`, and `Agent -> Core` are therefore current one-way edges. `Core` and `Roslyn` do not reference Patching, Roslyn does not grant Patching broad friend access, and Agent receives no mutation, repository-discovery, general-network, provider-credential, or publication capability. Future project names and edges remain candidates selected by their implementing milestones.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
@@ -143,21 +143,20 @@ Issue #92 adds the renderer and the bounded candidate workspace but no validatio
 
 It must not reference a model-provider or GitHub SDK. It accepts only validated structured proposals; it never accepts arbitrary diffs or model-generated source text.
 
-### Candidate `ContractScribe.Agent`
+### `ContractScribe.Agent`
 
-If M3 evidence meets the split thresholds, `ContractScribe.Agent` owns the narrow Scribe Runtime:
+Issue #103 establishes `ContractScribe.Agent` as the owner of the narrow Scribe Runtime:
 
 - context and tool-call orchestration;
-- repository/scope/target context assembly over the minimum M3-selected inputs and injected read ports;
+- a typed, bounded prompt-content seam correlated to the already-validated Core request;
 - provider-neutral model request and response contracts;
 - the closed read-only tool registry;
-- the provider transport and usage normalization selected from M3 executable evidence;
+- normalized provider usage, cost, cache, failure, and retry-hint observations;
 - tool, input/output, cost when observable, attempt, and time budgets;
 - structured proposal submission and validation;
-- deterministic fake runtime;
-- the initial real provider transport unless its dependency footprint justifies a separate adapter project.
+- deterministic prompting and a hermetic scripted fake exchange.
 
-It depends on `ContractScribe.Core`. Semantic tool implementations are injected through the closed public read-only Scribe-port surface; the agent does not need a direct Roslyn dependency.
+Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; any provider package later selected by #107 is confined to `Providers/**` and must remain unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Concrete context assembly, concrete X2/X3 tools, the real provider transport, and CLI composition remain owned by issues #104 through #108.
 
 It must not reference:
 
@@ -167,9 +166,9 @@ It must not reference:
 - GitHub tokens or APIs;
 - shell or general-purpose edit runtimes.
 
-The implemented project/reference and API boundaries must prevent the Scribe runtime from receiving concrete mutation, state-storage, or publication capabilities. The CLI composition root injects only the selected closed read-only tool registry and read ports. M3 chooses the minimum negative compilation, API-surface, or composition tests needed to make this an executable property rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
+The implemented project/reference and API boundaries prevent the Scribe runtime from receiving concrete mutation, state-storage, or publication capabilities. Core, Roslyn, Patching, and a future GitHub project may not reference Agent; the CLI composition root may reference Agent and inject only the selected closed read-only tool registry and model exchange. Fast architecture tests pin Agent's Core-only production project edge, the Runtime/Prompting-reachable public surface, forbidden ambient capabilities, and the hermetic fake while allowing #107-owned provider metadata and the #108-owned CLI composition edge. The boundary is executable rather than a prompt convention. It does not claim that an in-process assembly is an operating-system sandbox.
 
-Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. M3 places them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
+Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. Later M3 issues place them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
 ### Candidate `ContractScribe.GitHub`
 
@@ -204,7 +203,7 @@ The same CLI is the payload invoked locally, from validation workflows, and by a
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn are current. Its candidate-write authority is internal and does not add a reverse edge or package dependency. The CLI-to-Patching composition edge remains a candidate until the patch command is implemented; Agent and GitHub edges likewise remain candidates until their milestones meet the split thresholds.
+Patching's outbound edges to Core and Roslyn and Agent's outbound edge to Core are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no package dependency or Roslyn/Patching edge. The CLI-to-Patching and CLI-to-Agent composition edges remain candidates until their commands are implemented; the GitHub edge likewise remains a candidate until its milestone meets the split thresholds.
 
 ```text
 ContractScribe.Cli
@@ -229,7 +228,7 @@ GitHub -X-> Agent
 Core -X-> any infrastructure project
 ```
 
-Current architecture tests enumerate existing project references and fail when a forbidden edge appears. When a future Scribe, patching, state, or GitHub boundary is implemented, its milestone adds the minimum API-surface, negative-capability, and composition tests needed to prove that the Scribe cannot receive mutation authority. Do not create future assemblies, friend allowlists, or negative fixtures solely to satisfy this candidate graph.
+Current architecture tests enumerate existing project references and fail when a forbidden edge appears. Agent tests also fail when its public API or source gains mutation, discovery, general-network, service-locator, delegate, or capability-bag surfaces. When a future patching, state, provider, or GitHub boundary is implemented, its milestone adds the minimum API-surface, negative-capability, and composition tests needed to prove its authority boundary. Do not create future assemblies, friend allowlists, or negative fixtures solely to satisfy the candidate graph.
 
 ## Milestone evolution
 
@@ -238,12 +237,12 @@ Current architecture tests enumerate existing project references and fail when a
 | M0 | `Core` and `Cli` remain the minimal product skeleton; Roslyn projects remain test-only experiments. |
 | M1 | Add production `ContractScribe.Roslyn`; keep `Core` and `Cli`; add integration tests when real workspace/process behavior requires them. |
 | M2 | Add `ContractScribe.Patching`; issue #91 establishes deterministic resolution, issue #92 adds baseline-bound rendering and isolated unaccepted candidates, and issue #93 owns final validation/results. |
-| M3 | Candidate: add `ContractScribe.Agent` if the read-only Scribe runtime boundary meets the split thresholds. |
+| M3 | Add `ContractScribe.Agent`; issue #103 establishes the Core-only read-only runtime, while #104 through #108 add concrete context, tools, transport, evaluation, and CLI composition without broadening its authority. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
 | M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |
 | M6 | Add the selected Action wrapper and release artifacts; add no C# project without an observed split need. |
 
-This candidate sequence prevents later projects from becoming speculative dependencies of M1; milestone implementation evidence, not this table alone, decides the final placement.
+This sequence prevents later projects from becoming speculative dependencies of earlier milestones; implementation evidence, not this table alone, decides the final placement.
 
 ## Test, fixture, experiment, and evaluation projects
 
