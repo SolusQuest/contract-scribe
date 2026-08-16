@@ -422,6 +422,63 @@ public sealed record DocumentationScribeContextReference
     public bool IsTruncated { get; }
 }
 
+public sealed class DocumentationScribeDynamicEvidenceInput
+{
+    public DocumentationScribeDynamicEvidenceInput(
+        EvidenceSubject subject,
+        EvidenceKind kind,
+        EvidenceRelation relation,
+        DocumentationScribeEvidenceAuthority authority,
+        EvidenceLocator locator,
+        string contentSha256,
+        int originalUtf8ByteCount,
+        int includedUtf8ByteCount,
+        bool isTruncated,
+        ImmutableArray<string> claimCategoryIds)
+    {
+        ArgumentNullException.ThrowIfNull(subject);
+        ArgumentNullException.ThrowIfNull(locator);
+        ArgumentNullException.ThrowIfNull(contentSha256);
+        if (claimCategoryIds.IsDefault || claimCategoryIds.Any(value => value is null))
+        {
+            throw new ArgumentException("Claim categories must be initialized.", nameof(claimCategoryIds));
+        }
+
+        Subject = subject;
+        Kind = kind;
+        Relation = relation;
+        Authority = authority;
+        Locator = locator;
+        ContentSha256 = contentSha256;
+        OriginalUtf8ByteCount = originalUtf8ByteCount;
+        IncludedUtf8ByteCount = includedUtf8ByteCount;
+        IsTruncated = isTruncated;
+        ClaimCategoryIds = claimCategoryIds;
+    }
+
+    public EvidenceSubject Subject { get; }
+
+    public EvidenceKind Kind { get; }
+
+    public EvidenceRelation Relation { get; }
+
+    public DocumentationScribeEvidenceAuthority Authority { get; }
+
+    public EvidenceLocator Locator { get; }
+
+    public string ContentSha256 { get; }
+
+    public int OriginalUtf8ByteCount { get; }
+
+    public int IncludedUtf8ByteCount { get; }
+
+    public bool IsTruncated { get; }
+
+    public ImmutableArray<string> ClaimCategoryIds { get; }
+
+    public override string ToString() => nameof(DocumentationScribeDynamicEvidenceInput);
+}
+
 public sealed record DocumentationScribeEvidenceReference
 {
     internal DocumentationScribeEvidenceReference(
@@ -883,11 +940,13 @@ public sealed record DocumentationScribeRunResult
     internal DocumentationScribeRunResult(
         string scribeRequestSha256,
         DocumentationScribeAttemptId attemptId,
+        ImmutableArray<DocumentationScribeEvidenceReference> dynamicEvidenceReferences,
         DocumentationScribeTerminal terminal,
         DocumentationScribeRunEnvelope runEnvelope)
     {
         ScribeRequestSha256 = scribeRequestSha256;
         AttemptId = attemptId;
+        DynamicEvidenceReferences = dynamicEvidenceReferences;
         Terminal = terminal;
         RunEnvelope = runEnvelope;
     }
@@ -897,6 +956,8 @@ public sealed record DocumentationScribeRunResult
     public string ScribeRequestSha256 { get; }
 
     public DocumentationScribeAttemptId AttemptId { get; }
+
+    public ImmutableArray<DocumentationScribeEvidenceReference> DynamicEvidenceReferences { get; }
 
     public DocumentationScribeTerminal Terminal { get; }
 

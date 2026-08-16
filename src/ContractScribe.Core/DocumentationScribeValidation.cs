@@ -129,12 +129,78 @@ public static class DocumentationScribeValidation
         }
     }
 
+    public static bool TryCreateDynamicEvidenceReference(
+        DocumentationScribeRequest request,
+        DocumentationScribeDynamicEvidenceInput input,
+        out DocumentationScribeEvidenceReference? reference)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
+        reference = null;
+        try
+        {
+            if (!Enum.IsDefined(input.Kind)
+                || !Enum.IsDefined(input.Relation)
+                || !Enum.IsDefined(input.Authority)
+                || !AuthorityMatchesKind(input.Authority, input.Kind)
+                || !IsDynamicEvidenceLocatorValid(input.Locator, input.IsTruncated)
+                || !IsSha256Value(input.ContentSha256)
+                || input.OriginalUtf8ByteCount is < 0 or > 4_194_304
+                || input.IncludedUtf8ByteCount is < 0 or > 4_194_304
+                || input.IncludedUtf8ByteCount > input.OriginalUtf8ByteCount
+                || input.IsTruncated != (input.IncludedUtf8ByteCount < input.OriginalUtf8ByteCount)
+                || input.ClaimCategoryIds.Length is < 1 or > 64
+                || !IsStrictlyIncreasing(input.ClaimCategoryIds))
+            {
+                return false;
+            }
+
+            EnsureSubjectBelongsToTarget(input.Subject, request.Target, "/subject");
+            var claimPolicies = request.StyleProfile.ClaimPolicies
+                .ToDictionary(policy => policy.ClaimCategoryId, StringComparer.Ordinal);
+            if (input.ClaimCategoryIds.Any(category =>
+                    !claimPolicies.TryGetValue(category, out var policy)
+                    || !policy.AllowedAuthorities.Contains(input.Authority)
+                    || input.IsTruncated && policy.CompleteEvidenceRequired))
+            {
+                return false;
+            }
+
+            reference = new DocumentationScribeEvidenceReference(
+                ComputeDynamicEvidenceReferenceId(input),
+                request.Context.RepositoryContextRef,
+                input.Subject,
+                input.Kind,
+                input.Relation,
+                input.Authority,
+                input.Locator,
+                input.ContentSha256,
+                input.OriginalUtf8ByteCount,
+                input.IncludedUtf8ByteCount,
+                input.IsTruncated,
+                input.ClaimCategoryIds);
+            return true;
+        }
+        catch (ContractFailure)
+        {
+            return false;
+        }
+    }
+
     public static DocumentationScribeResultParseResult ParseRunResult(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId expectedAttemptId,
+        ImmutableArray<DocumentationScribeEvidenceReference> expectedDynamicEvidenceReferences,
         ReadOnlyMemory<byte> utf8Json)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (expectedDynamicEvidenceReferences.IsDefault)
+        {
+            throw new ArgumentException(
+                "Expected dynamic evidence must be initialized.",
+                nameof(expectedDynamicEvidenceReferences));
+        }
+
         if (string.IsNullOrEmpty(expectedAttemptId.Value))
         {
             throw new ArgumentException("A validated attempt identity is required.", nameof(expectedAttemptId));
@@ -160,7 +226,14 @@ public static class DocumentationScribeValidation
                 ExpectProperties(
                     root,
                     string.Empty,
-                    ["scribeRunResultVersion", "scribeRequestSha256", "attemptId", "terminal", "runEnvelope"]);
+                    [
+                        "scribeRunResultVersion",
+                        "scribeRequestSha256",
+                        "attemptId",
+                        "dynamicEvidenceReferences",
+                        "terminal",
+                        "runEnvelope",
+                    ]);
 
                 var requestSha256 = ReadSha256(root, "scribeRequestSha256", string.Empty);
                 var attemptId = ParseAttemptId(ReadString(root, "attemptId", string.Empty, 64), "/attemptId");
@@ -174,7 +247,27 @@ public static class DocumentationScribeValidation
                     throw Fail("invalid-correlation", "/attemptId");
                 }
 
-                var terminal = ParseTerminal(root.GetProperty("terminal"), "/terminal", request);
+                var dynamicEvidenceReferences = ParseEvidenceReferences(
+                    root.GetProperty("dynamicEvidenceReferences"),
+                    "/dynamicEvidenceReferences",
+                    request.Context.RepositoryContextRef,
+                    request.Target,
+                    request.StyleProfile);
+                ValidateDynamicEvidenceOverlay(
+                    request,
+                    dynamicEvidenceReferences,
+                    expectedDynamicEvidenceReferences);
+                var effectiveRequest = WithEvidenceReferences(
+                    request,
+                    request.EvidenceReferences.AddRange(dynamicEvidenceReferences));
+                var terminal = ParseTerminal(root.GetProperty("terminal"), "/terminal", effectiveRequest);
+                if (dynamicEvidenceReferences.Length > 0
+                    && terminal.Kind is DocumentationScribeTerminalKind.Failure
+                        or DocumentationScribeTerminalKind.Cancelled)
+                {
+                    throw Fail("invalid-evidence", "/dynamicEvidenceReferences");
+                }
+
                 var envelope = ParseRunEnvelope(
                     root.GetProperty("runEnvelope"),
                     "/runEnvelope",
@@ -183,7 +276,12 @@ public static class DocumentationScribeValidation
                     terminal);
 
                 return new DocumentationScribeResultParseResult(
-                    new DocumentationScribeRunResult(requestSha256, attemptId, terminal, envelope),
+                    new DocumentationScribeRunResult(
+                        requestSha256,
+                        attemptId,
+                        dynamicEvidenceReferences,
+                        terminal,
+                        envelope),
                     null);
             }
             catch (ContractFailure failure)
@@ -212,6 +310,7 @@ public static class DocumentationScribeValidation
         return CreateRuntimeResult(
             request,
             attemptId,
+            [],
             new DocumentationScribeFailureTerminal(code),
             envelope);
     }
@@ -231,6 +330,7 @@ public static class DocumentationScribeValidation
         return CreateRuntimeResult(
             request,
             attemptId,
+            [],
             new DocumentationScribeCancelledTerminal(code),
             envelope);
     }
@@ -261,6 +361,7 @@ public static class DocumentationScribeValidation
         return CreateRuntimeResult(
             request,
             attemptId,
+            [],
             new DocumentationScribeSkipTerminal(reason, ids),
             envelope);
     }
@@ -283,12 +384,18 @@ public static class DocumentationScribeValidation
                 nameof(validatedResult));
         }
 
-        return CreateRuntimeResult(request, attemptId, validatedResult.Terminal, envelope);
+        return CreateRuntimeResult(
+            request,
+            attemptId,
+            validatedResult.DynamicEvidenceReferences,
+            validatedResult.Terminal,
+            envelope);
     }
 
     private static DocumentationScribeRunResult CreateRuntimeResult(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
+        ImmutableArray<DocumentationScribeEvidenceReference> dynamicEvidenceReferences,
         DocumentationScribeTerminal terminal,
         DocumentationScribeRunEnvelopeInput input)
     {
@@ -299,7 +406,12 @@ public static class DocumentationScribeValidation
         }
 
         var envelope = CreateRunEnvelope(request, attemptId, input, terminal);
-        return new DocumentationScribeRunResult(request.ArtifactSha256, attemptId, terminal, envelope);
+        return new DocumentationScribeRunResult(
+            request.ArtifactSha256,
+            attemptId,
+            dynamicEvidenceReferences,
+            terminal,
+            envelope);
     }
 
     private static DocumentationScribeRunEnvelope CreateRunEnvelope(
@@ -979,6 +1091,89 @@ public static class DocumentationScribeValidation
 
         return builder.ToImmutable();
     }
+
+    private static void ValidateDynamicEvidenceOverlay(
+        DocumentationScribeRequest request,
+        ImmutableArray<DocumentationScribeEvidenceReference> actual,
+        ImmutableArray<DocumentationScribeEvidenceReference> expected)
+    {
+        var requestIds = request.EvidenceReferences
+            .Select(item => item.EvidenceReferenceId)
+            .ToHashSet(StringComparer.Ordinal);
+        for (var index = 0; index < actual.Length; index++)
+        {
+            if (requestIds.Contains(actual[index].EvidenceReferenceId))
+            {
+                throw Fail(
+                    "invalid-evidence",
+                    $"/dynamicEvidenceReferences/{index}/evidenceReferenceId");
+            }
+        }
+
+        long includedBytes;
+        try
+        {
+            includedBytes = request.EvidenceReferences.Aggregate(
+                0L,
+                (total, item) => checked(total + item.IncludedUtf8ByteCount));
+            includedBytes = actual.Aggregate(
+                includedBytes,
+                (total, item) => checked(total + item.IncludedUtf8ByteCount));
+        }
+        catch (OverflowException)
+        {
+            throw Fail("over-budget", "/dynamicEvidenceReferences");
+        }
+
+        if (request.EvidenceReferences.Length + actual.Length > request.Limits.MaximumEvidenceReferences
+            || includedBytes > request.Limits.MaximumEvidenceUtf8Bytes)
+        {
+            throw Fail("over-budget", "/dynamicEvidenceReferences");
+        }
+
+        if (actual.Length != expected.Length)
+        {
+            throw Fail("invalid-correlation", "/dynamicEvidenceReferences");
+        }
+
+        for (var index = 0; index < actual.Length; index++)
+        {
+            if (!EvidenceReferenceEquivalent(actual[index], expected[index]))
+            {
+                throw Fail("invalid-correlation", $"/dynamicEvidenceReferences/{index}");
+            }
+        }
+    }
+
+    private static DocumentationScribeRequest WithEvidenceReferences(
+        DocumentationScribeRequest request,
+        ImmutableArray<DocumentationScribeEvidenceReference> evidenceReferences) =>
+        new(
+            request.ArtifactSha256,
+            request.Context,
+            request.Target,
+            request.StyleProfile,
+            request.ContextReferences,
+            evidenceReferences,
+            request.EvidenceConflicts,
+            request.ToolPolicyId,
+            request.Limits);
+
+    internal static bool EvidenceReferenceEquivalent(
+        DocumentationScribeEvidenceReference left,
+        DocumentationScribeEvidenceReference right) =>
+        string.Equals(left.EvidenceReferenceId, right.EvidenceReferenceId, StringComparison.Ordinal)
+        && left.RepositoryContextRef == right.RepositoryContextRef
+        && Equals(left.Subject, right.Subject)
+        && left.Kind == right.Kind
+        && left.Relation == right.Relation
+        && left.Authority == right.Authority
+        && Equals(left.Locator, right.Locator)
+        && string.Equals(left.ContentSha256, right.ContentSha256, StringComparison.Ordinal)
+        && left.OriginalUtf8ByteCount == right.OriginalUtf8ByteCount
+        && left.IncludedUtf8ByteCount == right.IncludedUtf8ByteCount
+        && left.IsTruncated == right.IsTruncated
+        && left.ClaimCategoryIds.SequenceEqual(right.ClaimCategoryIds, StringComparer.Ordinal);
 
     private static ImmutableArray<DocumentationScribeEvidenceConflict> ParseEvidenceConflicts(
         JsonElement element,
@@ -2549,6 +2744,195 @@ public static class DocumentationScribeValidation
         }
 
         prior = current;
+    }
+
+    private static bool IsDynamicEvidenceLocatorValid(EvidenceLocator locator, bool isTruncated)
+    {
+        var valid = locator switch
+        {
+            RepositoryEvidenceLocator { Path: not null } repository =>
+                IsRepositoryRelativePathValue(repository.Path)
+                && IsSpanValueValid(repository.Span),
+            MetadataEvidenceLocator
+            {
+                AssemblyIdentity: not null,
+                DocumentationCommentId: not null,
+            } metadata =>
+                IsCompilationContextRef(metadata.AssemblyIdentity)
+                && IsDocumentationCommentId(metadata.DocumentationCommentId),
+            GeneratedOutputEvidenceLocator
+            {
+                ProducerId: not null,
+                OutputId: not null,
+                SourceSha256: not null,
+            } generated =>
+                Enum.IsDefined(generated.ProducerKind)
+                && IsPrefixedSha256(
+                    generated.ProducerId,
+                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgp." : "tgp.")
+                && IsPrefixedSha256(
+                    generated.OutputId,
+                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.")
+                && IsSha256Value(generated.SourceSha256)
+                && IsSpanValueValid(generated.Span),
+            SyntheticEvidenceLocator { FixtureId: not null } synthetic =>
+                IsCompilationContextRef(synthetic.FixtureId),
+            _ => false,
+        };
+        if (!valid || !isTruncated)
+        {
+            return valid;
+        }
+
+        return locator is RepositoryEvidenceLocator { Span: not null }
+            or GeneratedOutputEvidenceLocator { Span: not null };
+    }
+
+    private static bool IsRepositoryRelativePathValue(string value)
+    {
+        var driveLike = value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':';
+        return value.Length > 0
+            && !value.Contains('\\')
+            && !value.StartsWith('/')
+            && !value.Contains('\0')
+            && !driveLike
+            && !value.Split('/').Any(segment => segment is "" or "." or "..")
+            && TryCountScalars(value, out var scalarCount)
+            && scalarCount <= 512;
+    }
+
+    private static bool IsSpanValueValid(Utf16Span? span) =>
+        span is null || span.Value.Start >= 0 && span.Value.Start <= span.Value.End;
+
+    private static bool IsSha256Value(string value) =>
+        value.Length == 64 && value.AsSpan().IndexOfAnyExcept("0123456789abcdef") < 0;
+
+    private static string ComputeDynamicEvidenceReferenceId(
+        DocumentationScribeDynamicEvidenceInput input)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("domain", "contract-scribe.documentation-scribe.dynamic-evidence.v1");
+            writer.WritePropertyName("subject");
+            WriteDynamicEvidenceSubject(writer, input.Subject);
+            writer.WriteString("kind", EvidenceVocabulary.GetId(input.Kind));
+            writer.WriteString("relation", EvidenceVocabulary.GetId(input.Relation));
+            writer.WriteString("authority", DocumentationScribeVocabulary.GetId(input.Authority));
+            writer.WritePropertyName("locator");
+            WriteDynamicEvidenceLocator(writer, input.Locator);
+            writer.WriteString("contentSha256", input.ContentSha256);
+            writer.WriteNumber("originalUtf8ByteCount", input.OriginalUtf8ByteCount);
+            writer.WriteNumber("includedUtf8ByteCount", input.IncludedUtf8ByteCount);
+            writer.WriteBoolean("isTruncated", input.IsTruncated);
+            writer.WritePropertyName("claimCategoryIds");
+            writer.WriteStartArray();
+            foreach (var claimCategoryId in input.ClaimCategoryIds)
+            {
+                writer.WriteStringValue(claimCategoryId);
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return "evidence.dynamic."
+            + Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
+    }
+
+    private static void WriteDynamicEvidenceSubject(Utf8JsonWriter writer, EvidenceSubject subject)
+    {
+        writer.WriteStartObject();
+        if (subject is ComponentEvidenceSubject component)
+        {
+            writer.WriteString("kind", "component");
+            WriteDynamicSymbolRef(writer, "parentSymbolRef", component.ParentSymbolRef);
+            writer.WriteString("componentKind", component.ComponentKind switch
+            {
+                ComponentKind.TypeParameter => "component.type-parameter",
+                ComponentKind.Parameter => "component.parameter",
+                ComponentKind.Return => "component.return",
+                ComponentKind.Value => "component.value",
+                _ => throw new ArgumentOutOfRangeException(nameof(subject)),
+            });
+            writer.WriteString("identity", component.Identity);
+        }
+        else if (subject is TargetEvidenceSubject target)
+        {
+            writer.WriteString("kind", "target");
+            WriteDynamicSymbolRef(writer, "symbolRef", target.ParentSymbolRef);
+        }
+        else
+        {
+            throw new ArgumentOutOfRangeException(nameof(subject));
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteDynamicSymbolRef(
+        Utf8JsonWriter writer,
+        string propertyName,
+        SymbolRef symbolRef)
+    {
+        writer.WritePropertyName(propertyName);
+        writer.WriteStartObject();
+        writer.WriteString("compilationContextRef", symbolRef.CompilationContextRef);
+        writer.WriteString("documentationCommentId", symbolRef.DocumentationCommentId);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteDynamicEvidenceLocator(Utf8JsonWriter writer, EvidenceLocator locator)
+    {
+        writer.WriteStartObject();
+        switch (locator)
+        {
+            case RepositoryEvidenceLocator repository:
+                writer.WriteString("kind", "repository");
+                writer.WriteString("path", repository.Path);
+                WriteDynamicSpan(writer, repository.Span);
+                break;
+            case MetadataEvidenceLocator metadata:
+                writer.WriteString("kind", "metadata");
+                writer.WriteString("assemblyIdentity", metadata.AssemblyIdentity);
+                writer.WriteString("documentationCommentId", metadata.DocumentationCommentId);
+                break;
+            case GeneratedOutputEvidenceLocator generated:
+                writer.WriteString("kind", "generated-output");
+                writer.WriteString(
+                    "producerKind",
+                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator
+                        ? "source-generator"
+                        : "tool-generated");
+                writer.WriteString("producerId", generated.ProducerId);
+                writer.WriteString("outputId", generated.OutputId);
+                writer.WriteString("sourceSha256", generated.SourceSha256);
+                WriteDynamicSpan(writer, generated.Span);
+                break;
+            case SyntheticEvidenceLocator synthetic:
+                writer.WriteString("kind", "synthetic");
+                writer.WriteString("fixtureId", synthetic.FixtureId);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(locator));
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteDynamicSpan(Utf8JsonWriter writer, Utf16Span? span)
+    {
+        if (span is not { } value)
+        {
+            return;
+        }
+
+        writer.WritePropertyName("span");
+        writer.WriteStartObject();
+        writer.WriteNumber("start", value.Start);
+        writer.WriteNumber("end", value.End);
+        writer.WriteEndObject();
     }
 
     private static bool IsIdentifier(string value, bool allowSlash)
