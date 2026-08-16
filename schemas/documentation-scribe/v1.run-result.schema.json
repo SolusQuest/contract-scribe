@@ -8,6 +8,7 @@
     "scribeRunResultVersion",
     "scribeRequestSha256",
     "attemptId",
+    "dynamicEvidenceReferences",
     "terminal",
     "runEnvelope"
   ],
@@ -20,6 +21,13 @@
     },
     "attemptId": {
       "$ref": "#/$defs/attemptId"
+    },
+    "dynamicEvidenceReferences": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/evidenceReference"
+      }
     },
     "terminal": {
       "$ref": "#/$defs/terminal"
@@ -256,6 +264,148 @@
         },
         "documentationCommentId": {
           "$ref": "#/$defs/documentationCommentId"
+        }
+      }
+    },
+    "byteCounts": {
+      "originalUtf8ByteCount": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4194304
+      },
+      "includedUtf8ByteCount": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4194304
+      },
+      "isTruncated": {
+        "type": "boolean"
+      }
+    },
+    "targetSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbolRef"
+      ],
+      "properties": {
+        "symbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        }
+      }
+    },
+    "componentSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parentSymbolRef",
+        "componentKind",
+        "identity"
+      ],
+      "properties": {
+        "parentSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "componentKind": {
+          "enum": [
+            "component.parameter",
+            "component.return",
+            "component.type-parameter",
+            "component.value"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/componentIdentity"
+        }
+      }
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceReferenceId",
+        "repositoryContextRef",
+        "subject",
+        "kind",
+        "relation",
+        "authority",
+        "locator",
+        "contentSha256",
+        "originalUtf8ByteCount",
+        "includedUtf8ByteCount",
+        "isTruncated",
+        "claimCategoryIds"
+      ],
+      "properties": {
+        "evidenceReferenceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "repositoryContextRef": {
+          "$ref": "#/$defs/repositoryContextRef"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/targetSubject"
+            },
+            {
+              "$ref": "#/$defs/componentSubject"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "evidence.public-contract",
+            "evidence.repository-documentation",
+            "evidence.source.attribute",
+            "evidence.source.declaration",
+            "evidence.source.implementation",
+            "evidence.source.xml-documentation",
+            "evidence.test"
+          ]
+        },
+        "relation": {
+          "enum": [
+            "evidence.constrains",
+            "evidence.declares",
+            "evidence.documents",
+            "evidence.references",
+            "evidence.tests"
+          ]
+        },
+        "authority": {
+          "enum": [
+            "authority.existing-documentation",
+            "authority.public-contract",
+            "authority.repository-documentation",
+            "authority.source-declaration",
+            "authority.source-implementation",
+            "authority.test"
+          ]
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "originalUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/originalUtf8ByteCount"
+        },
+        "includedUtf8ByteCount": {
+          "$ref": "#/$defs/byteCounts/includedUtf8ByteCount"
+        },
+        "isTruncated": {
+          "$ref": "#/$defs/byteCounts/isTruncated"
+        },
+        "claimCategoryIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
         }
       }
     },

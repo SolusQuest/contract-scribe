@@ -2,6 +2,7 @@
   "scribeRunResultVersion": 1,
   "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",
   "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
+  "dynamicEvidenceReferences": [],
   "terminal": {
     "kind": "proposal",
     "target": {

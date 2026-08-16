@@ -31,23 +31,27 @@ public sealed class DocumentationScribeToolResultPayload
 {
     public DocumentationScribeToolResultPayload(
         ReadOnlyMemory<byte> resultUtf8Json,
-        int evidenceItemCount)
+        ImmutableArray<DocumentationScribeDynamicEvidenceInput> dynamicEvidence)
     {
         ResultUtf8JsonStorage = DocumentationScribeBoundary.ValidateJson(
             resultUtf8Json,
             nameof(resultUtf8Json),
             DocumentationScribeContract.MaximumArtifactUtf8Bytes);
-        if (evidenceItemCount is < 0 or > DocumentationScribeContract.MaximumReferences)
+        if (dynamicEvidence.IsDefault
+            || dynamicEvidence.Length > DocumentationScribeContract.MaximumReferences
+            || dynamicEvidence.Any(item => item is null))
         {
-            throw new ArgumentOutOfRangeException(nameof(evidenceItemCount));
+            throw new ArgumentException(
+                "Dynamic evidence must be initialized and bounded.",
+                nameof(dynamicEvidence));
         }
 
-        EvidenceItemCount = evidenceItemCount;
+        DynamicEvidence = dynamicEvidence;
     }
 
     public ReadOnlyMemory<byte> ResultUtf8Json => ResultUtf8JsonStorage.AsMemory();
 
-    public int EvidenceItemCount { get; }
+    public ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence { get; }
 
     internal ImmutableArray<byte> ResultUtf8JsonStorage { get; }
 
@@ -371,7 +375,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
             || outcome == DocumentationScribeToolOutcome.Cancelled
             || outcome == DocumentationScribeToolOutcome.Failure)
         {
-            return new ToolInvocationResult(outcome, default, 0);
+            return new ToolInvocationResult(outcome, default, []);
         }
 
         DocumentationScribeToolEncodeResult encoded;
@@ -402,14 +406,14 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
         return new ToolInvocationResult(
             result.Outcome,
             normalized,
-            encoded.Payload.EvidenceItemCount);
+            encoded.Payload.DynamicEvidence);
     }
 }
 
 internal readonly record struct ToolInvocationResult(
     DocumentationScribeToolOutcome Outcome,
     ImmutableArray<byte> ResultUtf8Json,
-    int EvidenceItemCount);
+    ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence);
 
 internal sealed class ToolProtocolException : Exception
 {

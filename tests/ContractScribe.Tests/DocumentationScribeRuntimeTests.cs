@@ -59,6 +59,123 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(new[] { "tool.alpha", "tool.zeta" }, exchange.Requests[0].Tools.Select(tool => tool.OperationId));
         Assert.Equal(new[] { "call.z", "call.a" }, exchange.Requests[1].CompletedToolExchanges.Select(item => item.CallId));
         Assert.Equal(new[] { "call.z", "call.a", "call.a2" }, exchange.Requests[2].CompletedToolExchanges.Select(item => item.CallId));
+        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.All(
+            exchange.Requests.Skip(1).SelectMany(request => request.CompletedToolExchanges),
+            completed => Assert.Single(completed.EvidenceReferences));
+        Assert.Single(exchange.Requests
+            .Skip(1)
+            .SelectMany(request => request.CompletedToolExchanges)
+            .SelectMany(completed => completed.EvidenceReferences)
+            .Select(reference => reference.EvidenceReferenceId)
+            .Distinct(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("proposal-result.json", DocumentationScribeTerminalKind.Proposal)]
+    [InlineData("skip-result.json", DocumentationScribeTerminalKind.Skip)]
+    public async Task Runtime_terminal_cites_the_exact_product_owned_dynamic_reference(
+        string terminalFixture,
+        DocumentationScribeTerminalKind expectedKind)
+    {
+        const string marker = "tool-result-content-marker";
+        var exchange = new DynamicCitationExchange(
+            terminalFixture,
+            marker,
+            useRequestVisibleRoutingReference: true);
+        var result = await CreateRuntime(
+            exchange,
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(resultContentMarker: marker)))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(expectedKind, result.Terminal.Kind);
+        var dynamicReference = Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Equal(dynamicReference.EvidenceReferenceId, exchange.ObservedEvidenceReferenceId);
+        Assert.NotNull(exchange.ObservedRoutingReferenceId);
+        Assert.True(exchange.ObservedRoutingReferenceInModelRequest);
+        Assert.True(exchange.ObservedProductOwnedEvidence);
+        Assert.True(exchange.ObservedMarkerInModelRequest);
+        var publicResult = JsonSerializer.Serialize(result)
+            + result
+            + string.Join(' ', result.RunEnvelope.Diagnostics.Select(diagnostic => diagnostic.ToString()));
+        Assert.DoesNotContain(marker, publicResult, StringComparison.Ordinal);
+        Assert.DoesNotContain(marker, dynamicReference.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Opaque_result_json_cannot_mint_a_terminal_evidence_reference()
+    {
+        const string forgedId = "evidence.dynamic.ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        var exchange = new OpaqueForgeryExchange(forgedId);
+        var result = await CreateRuntime(
+            exchange,
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(suppressDynamicEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.True(exchange.ObservedOpaqueOnlyResult);
+    }
+
+    [Fact]
+    public async Task Exact_original_evidence_is_reused_but_same_id_with_different_metadata_fails()
+    {
+        var baseRequest = Request();
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            baseRequest,
+            SyntheticDynamicEvidenceInput(Sha256("e")),
+            out var derived));
+        var derivedId = derived!.EvidenceReferenceId;
+
+        var exactRequest = Request(root => ReplaceSummaryEvidenceWithDerivedId(root, derivedId, exactMetadata: true));
+        var exchange = new DynamicCitationExchange("proposal-result.json", "e");
+        var reused = await CreateRuntime(
+            exchange,
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(referenceSpecificDynamicEvidence: true)))
+            .RunAsync(exactRequest, Attempt(), Prompt(exactRequest));
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, reused.Terminal.Kind);
+        Assert.Empty(reused.DynamicEvidenceReferences);
+        Assert.Equal(derivedId, exchange.ObservedEvidenceReferenceId);
+
+        var conflictingRequest = Request(root => ReplaceSummaryEvidenceWithDerivedId(
+            root,
+            derivedId,
+            exactMetadata: false));
+        var conflicting = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.dynamic", "tool.read", "e"))),
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(referenceSpecificDynamicEvidence: true)))
+            .RunAsync(conflictingRequest, Attempt(), Prompt(conflictingRequest));
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(conflicting));
+        Assert.Empty(conflicting.DynamicEvidenceReferences);
+    }
+
+    [Fact]
+    public async Task Concurrent_dynamic_runs_keep_their_active_overlays_isolated()
+    {
+        var exchange = new ConcurrentDynamicCitationExchange();
+        var runtime = CreateRuntime(
+            exchange,
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(referenceSpecificDynamicEvidence: true)));
+
+        var results = await Task.WhenAll(
+            runtime.RunAsync(Request(), Attempt(), Prompt()),
+            runtime.RunAsync(Request(), Attempt(), Prompt()));
+
+        var references = results
+            .Select(result => Assert.Single(result.DynamicEvidenceReferences).EvidenceReferenceId)
+            .ToArray();
+        Assert.Equal(2, references.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(results, result => Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind));
     }
 
     [Theory]
@@ -278,6 +395,159 @@ public sealed class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
         Assert.Equal("tool.read", result.RunEnvelope.Diagnostics.Single().ReferenceId);
+    }
+
+    [Fact]
+    public async Task Unavailable_and_duplicate_dynamic_evidence_fail_without_committing_an_overlay()
+    {
+        var unavailable = new SyntheticPort(DocumentationScribeToolOutcome.Unavailable);
+        var unavailableResult = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(unavailable, new SyntheticCodec(unavailableHasDynamicEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(unavailableResult));
+        Assert.Empty(unavailableResult.DynamicEvidenceReferences);
+        Assert.Equal(1, unavailableResult.RunEnvelope.ToolRoundCount);
+        Assert.Equal(1, unavailableResult.RunEnvelope.ToolCallCount);
+
+        var duplicate = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var duplicateResult = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(duplicate, new SyntheticCodec(duplicateDynamicEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(duplicateResult));
+        Assert.Empty(duplicateResult.DynamicEvidenceReferences);
+        Assert.Equal(1, duplicateResult.RunEnvelope.ToolRoundCount);
+        Assert.Equal(1, duplicateResult.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Truncated_complete_claim_is_rejected_at_the_typed_tool_boundary()
+    {
+        var result = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(truncatedCompleteEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Null_nested_locator_field_maps_to_tool_protocol_failure()
+    {
+        var result = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(nullRepositoryLocatorPath: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Invalid_second_call_discards_publication_but_retains_incurred_tool_observations()
+    {
+        var result = await CreateRuntime(
+            Script(ToolResponse(
+                Call(0, "call.valid", "tool.read", "valid"),
+                Call(1, "call.invalid", "tool.read", "invalid"))),
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(invalidDynamicReferenceId: "invalid")))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Theory]
+    [InlineData("failure", DocumentationScribeFailureCode.ToolProtocol)]
+    [InlineData("timeout", DocumentationScribeFailureCode.Timeout)]
+    public async Task Later_tool_outcome_discards_buffered_publication_but_retains_incurred_counts(
+        string secondReference,
+        DocumentationScribeFailureCode expectedFailure)
+    {
+        var result = await CreateRuntime(
+            Script(ToolResponse(
+                Call(0, "call.valid", "tool.read", "valid"),
+                Call(1, "call.second", "tool.read", secondReference))),
+            RegistryWithCodec(new OutcomeByReferencePort(), new SyntheticCodec()))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(expectedFailure, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Cancellation_after_one_buffered_call_retains_incurred_counts_only()
+    {
+        var port = new HoldSecondPort();
+        using var cancellation = new CancellationTokenSource();
+        var pending = CreateRuntime(
+            Script(ToolResponse(
+                Call(0, "call.valid", "tool.read", "valid"),
+                Call(1, "call.wait", "tool.read", "wait"))),
+            RegistryWithCodec(port, new SyntheticCodec()))
+            .RunAsync(Request(), Attempt(), Prompt(), cancellation.Token);
+        await port.SecondStarted;
+
+        cancellation.Cancel();
+        var result = await pending;
+        port.Release();
+
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Provider_retry_clears_active_evidence_but_retains_run_wide_charges()
+    {
+        var request = Request(root => root["limits"]!["maximumEvidenceReferences"] = 4);
+        var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var exchange = Script(
+            ToolResponse(Call(0, "call.one", "tool.read", "one")),
+            FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable),
+            ToolResponse(Call(0, "call.two", "tool.read", "two")));
+
+        var result = await CreateRuntime(
+            exchange,
+            RegistryWithCodec(port, new SyntheticCodec(referenceSpecificDynamicEvidence: true)))
+            .RunAsync(request, Attempt(), Prompt(request));
+
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Empty(exchange.Requests[2].CompletedToolExchanges);
+        Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
+    public async Task Canonical_tool_exchange_bytes_have_an_independent_evidence_budget_check()
+    {
+        var request = Request(root => root["limits"]!["maximumEvidenceUtf8Bytes"] = 141);
+        var result = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
+            .RunAsync(request, Attempt(), Prompt(request));
+
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
     }
 
     [Fact]
@@ -949,6 +1219,7 @@ public sealed class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(1, result.RunEnvelope.ToolCallCount);
     }
 
@@ -1025,7 +1296,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "57f442e58de783d028c1d96ddede42139796b2db84d72ed54af8fecb164d3d86",
+                "9efaa665b0ef4571f8ae8ae5a7ac168d54c484383fd73ac8f6b1dd2b8d102620",
                 digest);
         }
         finally
@@ -1113,6 +1384,21 @@ public sealed class DocumentationScribeRuntimeTests
         return builder.Build();
     }
 
+    private static DocumentationScribeToolRegistry RegistryWithCodec(
+        IDocumentationScribeToolPort<SyntheticRequest, SyntheticResult> port,
+        SyntheticCodec codec)
+    {
+        var builder = new DocumentationScribeToolRegistryBuilder(ToolPolicyId);
+        builder.Add(
+            new SyntheticDescriptor("tool.read"),
+            port,
+            codec,
+            "Reads bounded synthetic evidence.",
+            ToolSchema,
+            16);
+        return builder.Build();
+    }
+
     private static ScriptedDocumentationScribeModelExchange Script(
         params DocumentationScribeModelResponse[] responses) =>
         new(responses.Select(ScriptedDocumentationScribeStep.Return).ToImmutableArray());
@@ -1135,6 +1421,21 @@ public sealed class DocumentationScribeRuntimeTests
         string operationId,
         string referenceId) =>
         new(responseIndex, callId, operationId, JsonSerializer.SerializeToUtf8Bytes(new { referenceId }));
+
+    private static DocumentationScribeDynamicEvidenceInput SyntheticDynamicEvidenceInput(string contentSha256) =>
+        new(
+            EvidenceInput.TargetSubject(
+                "synthetic.v1",
+                "M:Synthetic.Widget.Run(System.String)"),
+            EvidenceKind.SourceDeclaration,
+            EvidenceRelation.Declares,
+            DocumentationScribeEvidenceAuthority.SourceDeclaration,
+            EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs"),
+            contentSha256,
+            originalUtf8ByteCount: 1,
+            includedUtf8ByteCount: 1,
+            isTruncated: false,
+            claimCategoryIds: ["claim.purpose"]);
 
     private static DocumentationScribeRequest Request(Action<JsonObject>? mutate = null)
     {
@@ -1200,6 +1501,23 @@ public sealed class DocumentationScribeRuntimeTests
         return Encoding.UTF8.GetBytes(result.RootElement.GetProperty("terminal").GetRawText());
     }
 
+    private static byte[] CiteDynamicReference(byte[] terminalUtf8Json, string evidenceReferenceId)
+    {
+        var terminal = JsonNode.Parse(terminalUtf8Json)!.AsObject();
+        var kind = terminal["kind"]!.GetValue<string>();
+        if (kind == "proposal")
+        {
+            terminal["contentUnits"]![0]!["evidenceReferenceIds"] = new JsonArray(evidenceReferenceId);
+        }
+        else
+        {
+            Assert.Equal("skip", kind);
+            terminal["evidenceReferenceIds"] = new JsonArray(evidenceReferenceId);
+        }
+
+        return Encoding.UTF8.GetBytes(terminal.ToJsonString());
+    }
+
     private static byte[] ReadFixture(string name) => File.ReadAllBytes(Path.Join(
         FindRepositoryRoot(), "tests", "fixtures", "documentation-scribe", "v1", "valid", name));
 
@@ -1218,6 +1536,37 @@ public sealed class DocumentationScribeRuntimeTests
         {
             reference!["repositoryContextRef"] = value;
         }
+    }
+
+    private static void ReplaceSummaryEvidenceWithDerivedId(
+        JsonObject root,
+        string derivedId,
+        bool exactMetadata)
+    {
+        var references = root["evidenceReferences"]!.AsArray();
+        var summary = references.Single(reference =>
+            reference!["evidenceReferenceId"]!.GetValue<string>() == "evidence.summary")!;
+        references.Remove(summary);
+        summary["evidenceReferenceId"] = derivedId;
+        if (exactMetadata)
+        {
+            summary["kind"] = "evidence.source.declaration";
+            summary["relation"] = "evidence.declares";
+            summary["authority"] = "authority.source-declaration";
+            summary["locator"] = new JsonObject
+            {
+                ["repository"] = new JsonObject
+                {
+                    ["path"] = "src/Synthetic/Widget.cs",
+                },
+            };
+            summary["contentSha256"] = Sha256("e");
+            summary["originalUtf8ByteCount"] = 1;
+            summary["includedUtf8ByteCount"] = 1;
+            summary["isTruncated"] = false;
+        }
+
+        references.Insert(0, summary);
     }
 
     private static string FindRepositoryRoot()
@@ -1288,7 +1637,16 @@ public sealed class DocumentationScribeRuntimeTests
         }
     }
 
-    private sealed class SyntheticCodec : IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
+    private sealed class SyntheticCodec(
+        bool duplicateDynamicEvidence = false,
+        bool referenceSpecificDynamicEvidence = false,
+        bool unavailableHasDynamicEvidence = false,
+        bool suppressDynamicEvidence = false,
+        bool truncatedCompleteEvidence = false,
+        string? invalidDynamicReferenceId = null,
+        string? resultContentMarker = null,
+        bool nullRepositoryLocatorPath = false) :
+        IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
     {
         public DocumentationScribeToolDecodeResult<SyntheticRequest> DecodeArguments(
             ReadOnlyMemory<byte> argumentsUtf8Json)
@@ -1324,10 +1682,95 @@ public sealed class DocumentationScribeRuntimeTests
                 return DocumentationScribeToolEncodeResult.Rejected();
             }
 
+            var dynamicEvidence = suppressDynamicEvidence
+                || result.Outcome == DocumentationScribeToolOutcome.Unavailable
+                    && !unavailableHasDynamicEvidence
+                ? ImmutableArray<DocumentationScribeDynamicEvidenceInput>.Empty
+                :
+                [
+                    new DocumentationScribeDynamicEvidenceInput(
+                        EvidenceInput.TargetSubject(
+                            "synthetic.v1",
+                            "M:Synthetic.Widget.Run(System.String)"),
+                        EvidenceKind.SourceDeclaration,
+                        EvidenceRelation.Declares,
+                        DocumentationScribeEvidenceAuthority.SourceDeclaration,
+                        EvidenceInput.RepositoryLocator(
+                            nullRepositoryLocatorPath
+                                ? null!
+                                : request.ReferenceId == invalidDynamicReferenceId
+                                ? "../outside.cs"
+                                : "src/Synthetic/Widget.cs",
+                            truncatedCompleteEvidence ? 0 : null,
+                            truncatedCompleteEvidence ? 1 : null),
+                        referenceSpecificDynamicEvidence ? Sha256(request.ReferenceId) : new string('a', 64),
+                        originalUtf8ByteCount: truncatedCompleteEvidence ? 2 : 1,
+                        includedUtf8ByteCount: 1,
+                        isTruncated: truncatedCompleteEvidence,
+                        claimCategoryIds: [truncatedCompleteEvidence ? "claim.behavior" : "claim.purpose"]),
+                ];
+            if (duplicateDynamicEvidence)
+            {
+                dynamicEvidence = dynamicEvidence.Add(dynamicEvidence[0]);
+            }
+
+            var resultUtf8Json = resultContentMarker is null
+                ? JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId })
+                : JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    referenceId = result.ReferenceId,
+                    marker = resultContentMarker,
+                });
             return DocumentationScribeToolEncodeResult.Accepted(new DocumentationScribeToolResultPayload(
-                JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId }),
-                evidenceItemCount: 1));
+                resultUtf8Json,
+                dynamicEvidence));
         }
+    }
+
+    private sealed class OutcomeByReferencePort :
+        IDocumentationScribeToolPort<SyntheticRequest, SyntheticResult>
+    {
+        public ValueTask<SyntheticResult> InvokeAsync(
+            SyntheticRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var outcome = request.ReferenceId switch
+            {
+                "failure" => DocumentationScribeToolOutcome.Failure,
+                "timeout" => DocumentationScribeToolOutcome.TimedOut,
+                _ => DocumentationScribeToolOutcome.Complete,
+            };
+            return ValueTask.FromResult(new SyntheticResult(outcome, request.ReferenceId));
+        }
+    }
+
+    private sealed class HoldSecondPort : IDocumentationScribeToolPort<SyntheticRequest, SyntheticResult>
+    {
+        private readonly TaskCompletionSource secondStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<SyntheticResult> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task SecondStarted => secondStarted.Task;
+
+        public ValueTask<SyntheticResult> InvokeAsync(
+            SyntheticRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (request.ReferenceId != "wait")
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ValueTask.FromResult(new SyntheticResult(
+                    DocumentationScribeToolOutcome.Complete,
+                    request.ReferenceId));
+            }
+
+            secondStarted.TrySetResult();
+            return new ValueTask<SyntheticResult>(completion.Task);
+        }
+
+        internal void Release() => completion.TrySetResult(new SyntheticResult(
+            DocumentationScribeToolOutcome.Complete,
+            "wait"));
     }
 
     private sealed class HoldingPort : IDocumentationScribeToolPort<SyntheticRequest, SyntheticResult>
@@ -1348,6 +1791,117 @@ public sealed class DocumentationScribeRuntimeTests
         internal void Release() => completion.TrySetResult(new SyntheticResult(
             DocumentationScribeToolOutcome.Complete,
             "one"));
+    }
+
+    private sealed class DynamicCitationExchange(
+        string terminalFixture,
+        string marker,
+        bool useRequestVisibleRoutingReference = false) :
+        IDocumentationScribeModelExchange
+    {
+        internal string? ObservedEvidenceReferenceId { get; private set; }
+
+        internal string? ObservedRoutingReferenceId { get; private set; }
+
+        internal bool ObservedRoutingReferenceInModelRequest { get; private set; }
+
+        internal bool ObservedProductOwnedEvidence { get; private set; }
+
+        internal bool ObservedMarkerInModelRequest { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.CompletedToolExchanges.IsEmpty)
+            {
+                ObservedRoutingReferenceId = marker;
+                if (useRequestVisibleRoutingReference)
+                {
+                    using var targetEvidence = JsonDocument.Parse(request.Messages.Single(message =>
+                        message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+                    ObservedRoutingReferenceId = targetEvidence.RootElement
+                        .GetProperty("evidenceReferences")[0]
+                        .GetProperty("evidenceReferenceId")
+                        .GetString();
+                    Assert.False(string.IsNullOrEmpty(ObservedRoutingReferenceId));
+                    ObservedRoutingReferenceInModelRequest = Encoding.UTF8
+                        .GetString(request.DeterministicUtf8.AsSpan())
+                        .Contains(ObservedRoutingReferenceId, StringComparison.Ordinal);
+                }
+
+                return ValueTask.FromResult(ToolResponse(Call(
+                    0,
+                    "call.dynamic",
+                    "tool.read",
+                    ObservedRoutingReferenceId)));
+            }
+
+            var completed = Assert.Single(request.CompletedToolExchanges);
+            var reference = Assert.Single(completed.EvidenceReferences);
+            ObservedEvidenceReferenceId = reference.EvidenceReferenceId;
+            ObservedProductOwnedEvidence = true;
+            ObservedMarkerInModelRequest = Encoding.UTF8
+                .GetString(request.DeterministicUtf8.AsSpan())
+                .Contains(marker, StringComparison.Ordinal);
+            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+                ReadTerminal(terminalFixture),
+                reference.EvidenceReferenceId)));
+        }
+    }
+
+    private sealed class OpaqueForgeryExchange(string forgedEvidenceReferenceId) :
+        IDocumentationScribeModelExchange
+    {
+        internal bool ObservedOpaqueOnlyResult { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.CompletedToolExchanges.IsEmpty)
+            {
+                return ValueTask.FromResult(ToolResponse(Call(
+                    0,
+                    "call.forged",
+                    "tool.read",
+                    forgedEvidenceReferenceId)));
+            }
+
+            var completed = Assert.Single(request.CompletedToolExchanges);
+            Assert.Empty(completed.EvidenceReferences);
+            ObservedOpaqueOnlyResult = Encoding.UTF8
+                .GetString(completed.ResultUtf8Json.Span)
+                .Contains(forgedEvidenceReferenceId, StringComparison.Ordinal);
+            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+                ReadTerminal("proposal-result.json"),
+                forgedEvidenceReferenceId)));
+        }
+    }
+
+    private sealed class ConcurrentDynamicCitationExchange : IDocumentationScribeModelExchange
+    {
+        private int nextReference;
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.CompletedToolExchanges.IsEmpty)
+            {
+                var reference = "run-" + Interlocked.Increment(ref nextReference).ToString(CultureInfo.InvariantCulture);
+                return ValueTask.FromResult(ToolResponse(Call(0, "call.dynamic", "tool.read", reference)));
+            }
+
+            var referenceId = Assert.Single(Assert.Single(
+                request.CompletedToolExchanges).EvidenceReferences).EvidenceReferenceId;
+            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+                ReadTerminal("proposal-result.json"),
+                referenceId)));
+        }
     }
 
     private sealed class StatelessTerminalExchange(byte[] terminal) : IDocumentationScribeModelExchange
