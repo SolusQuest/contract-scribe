@@ -215,6 +215,7 @@ public sealed class DocumentationScribeRuntime
 
                 state.AttemptNumber++;
                 state.CompletedToolExchanges = [];
+                state.ActiveDynamicEvidenceReferences = [];
                 continue;
             }
 
@@ -296,10 +297,17 @@ public sealed class DocumentationScribeRuntime
             }
         }
 
-        state.ToolRoundCount++;
         var buffered = ImmutableArray.CreateBuilder<DocumentationScribeCompletedToolExchange>(prepared.Count);
         long prospectiveEvidenceItems = state.EvidenceItemCount;
         long prospectiveEvidenceBytes = state.EvidenceUtf8ByteCount;
+        long prospectiveExchangeBytes = state.SuccessfulToolExchangeUtf8ByteCount;
+        var prospectiveActive = state.ActiveDynamicEvidenceReferences.ToImmutableDictionary(
+            item => item.EvidenceReferenceId,
+            StringComparer.Ordinal).ToBuilder();
+        var prospectiveCharged = state.ChargedDynamicEvidenceById.ToBuilder();
+        var requestEvidenceById = state.Request.EvidenceReferences.ToImmutableDictionary(
+            item => item.EvidenceReferenceId,
+            StringComparer.Ordinal);
         foreach (var toolCall in prepared)
         {
             var checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
@@ -308,9 +316,6 @@ public sealed class DocumentationScribeRuntime
                 return checkpoint;
             }
 
-            var registrationIndex = registry.FindRegistrationIndex(toolCall.Call.OperationId);
-            state.ToolCallCount++;
-            state.PerOperationToolCalls[registrationIndex]++;
             OperationCompletion<ToolInvocationResult> completion;
             try
             {
@@ -370,18 +375,86 @@ public sealed class DocumentationScribeRuntime
                 return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
             }
 
+            if (invocation.Outcome == DocumentationScribeToolOutcome.Unavailable
+                && invocation.DynamicEvidence.Length > 0)
+            {
+                return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
+            }
+
+            var callReferences = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceReference>();
+            var callIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var input in invocation.DynamicEvidence)
+            {
+                if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+                        state.Request,
+                        input,
+                        out var created)
+                    || created is null
+                    || !callIds.Add(created.EvidenceReferenceId))
+                {
+                    return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
+                }
+
+                DocumentationScribeEvidenceReference accepted;
+                if (requestEvidenceById.TryGetValue(created.EvidenceReferenceId, out var original))
+                {
+                    if (!EvidenceReferenceEquivalent(original, created))
+                    {
+                        return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
+                    }
+
+                    accepted = original;
+                }
+                else if (prospectiveCharged.TryGetValue(created.EvidenceReferenceId, out var charged))
+                {
+                    if (!EvidenceReferenceEquivalent(charged, created))
+                    {
+                        return reducer.CommitToolProtocol(state, cancellationToken, toolCall.Call.OperationId);
+                    }
+
+                    accepted = charged;
+                    prospectiveActive[accepted.EvidenceReferenceId] = accepted;
+                }
+                else
+                {
+                    accepted = created;
+                    prospectiveCharged.Add(accepted.EvidenceReferenceId, accepted);
+                    prospectiveActive.Add(accepted.EvidenceReferenceId, accepted);
+                    try
+                    {
+                        prospectiveEvidenceItems = checked(prospectiveEvidenceItems + 1);
+                        prospectiveEvidenceBytes = checked(
+                            prospectiveEvidenceBytes + accepted.IncludedUtf8ByteCount);
+                    }
+                    catch (OverflowException)
+                    {
+                        return reducer.CommitFailure(
+                            state,
+                            cancellationToken,
+                            DocumentationScribeFailureCode.Budget);
+                    }
+                }
+
+                callReferences.Add(accepted);
+            }
+
+            var orderedCallReferences = callReferences
+                .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
+                .ToImmutableArray();
+
+            var completedExchange = new DocumentationScribeCompletedToolExchange(
+                toolCall.Call.ResponseIndex,
+                toolCall.Call.CallId,
+                toolCall.Call.OperationId,
+                toolCall.Call.ArgumentsUtf8JsonStorage,
+                invocation.Outcome.Id,
+                invocation.ResultUtf8Json,
+                orderedCallReferences);
             try
             {
-                var visible = CanonicalJson.Serialize(new
-                {
-                    toolCall.Call.CallId,
-                    toolCall.Call.OperationId,
-                    outcome = invocation.Outcome.Id,
-                    result = CanonicalJson.AsString(invocation.ResultUtf8Json),
-                });
-                prospectiveEvidenceItems = checked(
-                    prospectiveEvidenceItems + invocation.EvidenceItemCount);
-                prospectiveEvidenceBytes = checked(prospectiveEvidenceBytes + visible.Length);
+                prospectiveExchangeBytes = checked(
+                    prospectiveExchangeBytes
+                    + DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completedExchange));
             }
             catch (OverflowException)
             {
@@ -389,18 +462,13 @@ public sealed class DocumentationScribeRuntime
             }
 
             if (prospectiveEvidenceItems > state.Request.Limits.MaximumEvidenceReferences
-                || prospectiveEvidenceBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes)
+                || prospectiveEvidenceBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes
+                || prospectiveExchangeBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes)
             {
                 return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
-            buffered.Add(new DocumentationScribeCompletedToolExchange(
-                toolCall.Call.ResponseIndex,
-                toolCall.Call.CallId,
-                toolCall.Call.OperationId,
-                toolCall.Call.ArgumentsUtf8JsonStorage,
-                invocation.Outcome.Id,
-                invocation.ResultUtf8Json));
+            buffered.Add(completedExchange);
         }
 
         var finalCheckpoint = CommitCheckpoint(state, reducer, cancellationToken);
@@ -411,6 +479,18 @@ public sealed class DocumentationScribeRuntime
 
         state.EvidenceItemCount = prospectiveEvidenceItems;
         state.EvidenceUtf8ByteCount = prospectiveEvidenceBytes;
+        state.SuccessfulToolExchangeUtf8ByteCount = prospectiveExchangeBytes;
+        state.ToolRoundCount++;
+        state.ToolCallCount += prepared.Count;
+        for (var index = 0; index < roundCounts.Length; index++)
+        {
+            state.PerOperationToolCalls[index] += roundCounts[index];
+        }
+
+        state.ActiveDynamicEvidenceReferences = prospectiveActive.Values
+            .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
+            .ToImmutableArray();
+        state.ChargedDynamicEvidenceById = prospectiveCharged.ToImmutable();
         state.CompletedToolExchanges = state.CompletedToolExchanges.AddRange(buffered);
         return null;
     }
@@ -567,6 +647,22 @@ public sealed class DocumentationScribeRuntime
         CancellationToken cancellationToken) =>
         reducer.TryCommitPriority(state, cancellationToken);
 
+    private static bool EvidenceReferenceEquivalent(
+        DocumentationScribeEvidenceReference left,
+        DocumentationScribeEvidenceReference right) =>
+        string.Equals(left.EvidenceReferenceId, right.EvidenceReferenceId, StringComparison.Ordinal)
+        && left.RepositoryContextRef == right.RepositoryContextRef
+        && Equals(left.Subject, right.Subject)
+        && left.Kind == right.Kind
+        && left.Relation == right.Relation
+        && left.Authority == right.Authority
+        && Equals(left.Locator, right.Locator)
+        && string.Equals(left.ContentSha256, right.ContentSha256, StringComparison.Ordinal)
+        && left.OriginalUtf8ByteCount == right.OriginalUtf8ByteCount
+        && left.IncludedUtf8ByteCount == right.IncludedUtf8ByteCount
+        && left.IsTruncated == right.IsTruncated
+        && left.ClaimCategoryIds.SequenceEqual(right.ClaimCategoryIds, StringComparer.Ordinal);
+
     private static void ObserveLate(Task task) => _ = ObserveLateAsync(task);
 
     internal static async Task ObserveLateAsync(Task task)
@@ -662,11 +758,13 @@ internal sealed class DocumentationScribeTerminalReducer
             var validationBytes = DocumentationScribeRunResultWriter.Write(
                 state.Request,
                 state.AttemptId,
+                state.ActiveDynamicEvidenceReferences,
                 terminalUtf8Json,
                 validationEnvelope);
             candidate = DocumentationScribeValidation.ParseRunResult(
                 state.Request,
                 state.AttemptId,
+                state.ActiveDynamicEvidenceReferences,
                 validationBytes.AsMemory());
             if (candidate.Result is null
                 || candidate.Result.Terminal.Kind is not (DocumentationScribeTerminalKind.Proposal
@@ -828,6 +926,13 @@ internal sealed class RunState
 
     internal long EvidenceUtf8ByteCount { get; set; }
 
+    internal long SuccessfulToolExchangeUtf8ByteCount { get; set; }
+
+    internal ImmutableArray<DocumentationScribeEvidenceReference> ActiveDynamicEvidenceReferences { get; set; } = [];
+
+    internal ImmutableDictionary<string, DocumentationScribeEvidenceReference> ChargedDynamicEvidenceById { get; set; } =
+        ImmutableDictionary.Create<string, DocumentationScribeEvidenceReference>(StringComparer.Ordinal);
+
     internal ImmutableArray<DocumentationScribeCompletedToolExchange> CompletedToolExchanges { get; set; } = [];
 
     internal int ElapsedMilliseconds
@@ -850,6 +955,7 @@ internal sealed class RunState
         || HasUnrepresentableObservation
         || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
         || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
+        || SuccessfulToolExchangeUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
         || inputTokens > Request.Limits.MaximumInputTokens
         || outputTokens > Request.Limits.MaximumOutputTokens
         || cachedInputTokens > Request.Limits.MaximumInputTokens

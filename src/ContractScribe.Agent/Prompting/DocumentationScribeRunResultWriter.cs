@@ -10,6 +10,7 @@ internal static class DocumentationScribeRunResultWriter
     internal static ImmutableArray<byte> Write(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
+        ImmutableArray<DocumentationScribeEvidenceReference> dynamicEvidenceReferences,
         ReadOnlyMemory<byte> terminalUtf8Json,
         DocumentationScribeRunEnvelopeInput envelope)
     {
@@ -28,6 +29,10 @@ internal static class DocumentationScribeRunResultWriter
             writer.WriteNumber("scribeRunResultVersion", DocumentationScribeContract.Version);
             writer.WriteString("scribeRequestSha256", request.ArtifactSha256);
             writer.WriteString("attemptId", attemptId.Value);
+            writer.WritePropertyName("dynamicEvidenceReferences");
+            writer.WriteRawValue(
+                CanonicalJson.Serialize(dynamicEvidenceReferences).AsSpan(),
+                skipInputValidation: true);
             writer.WritePropertyName("terminal");
             terminal.RootElement.WriteTo(writer);
             writer.WritePropertyName("runEnvelope");

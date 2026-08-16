@@ -102,7 +102,8 @@ public sealed class DocumentationScribeCompletedToolExchange
         string operationId,
         ImmutableArray<byte> argumentsUtf8Json,
         string outcomeId,
-        ImmutableArray<byte> resultUtf8Json)
+        ImmutableArray<byte> resultUtf8Json,
+        ImmutableArray<DocumentationScribeEvidenceReference> evidenceReferences)
     {
         ResponseIndex = responseIndex;
         CallId = callId;
@@ -110,6 +111,7 @@ public sealed class DocumentationScribeCompletedToolExchange
         ArgumentsUtf8JsonStorage = argumentsUtf8Json;
         OutcomeId = outcomeId;
         ResultUtf8JsonStorage = resultUtf8Json;
+        EvidenceReferences = evidenceReferences;
     }
 
     public int ResponseIndex { get; }
@@ -123,6 +125,8 @@ public sealed class DocumentationScribeCompletedToolExchange
     public string OutcomeId { get; }
 
     public ReadOnlyMemory<byte> ResultUtf8Json => ResultUtf8JsonStorage.AsMemory();
+
+    public ImmutableArray<DocumentationScribeEvidenceReference> EvidenceReferences { get; }
 
     internal ImmutableArray<byte> ArgumentsUtf8JsonStorage { get; }
 

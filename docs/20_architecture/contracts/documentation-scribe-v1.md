@@ -119,7 +119,23 @@ The request contains no M4 work-plan, campaign, branch, issue, pull-request, pro
 
 ## Scribe Run Result
 
-`scribeRunResultVersion` is exactly `1`. The result contains root request/attempt correlation, exactly one terminal object, and one separate run envelope.
+`scribeRunResultVersion` is exactly `1`. The result contains root request/attempt correlation, the complete active `dynamicEvidenceReferences` overlay, exactly one terminal object, and one separate run envelope.
+
+### Trusted dynamic evidence overlay
+
+`dynamicEvidenceReferences` uses the same closed row, identifier, subject, locator, authority, claim-category, ordering, and repository-context namespace as request `evidenceReferences`. It is empty when no successful tool result added evidence. For a proposal or skip, it contains the full active trusted overlay even when a row is not cited by the terminal. It must be empty for failure and cancellation.
+
+Raw result JSON cannot authorize an overlay. `ParseRunResult` receives the exact parsed request, expected attempt, and a separately supplied trusted overlay; the embedded rows must equal that overlay exactly. Terminal evidence lookup uses the ordered union of request rows and the accepted overlay, so a model-provided ID without a trusted typed producer row is dangling evidence and fails closed.
+
+The Agent passes a successful tool result to Core as bounded typed evidence inputs without a caller-selected evidence ID, repository-context identity, request identity, attempt identity, session identity, or content bytes. Core validates the subject, kind/relation/authority, locator, committed content SHA-256, exact original/included byte counts, truncation fact, and ordered claim categories against the request, supplies the current repository context, and derives the ID. A truncated repository or generated-output row is valid only with an exact span over its fully committed source.
+
+The derived ID is `evidence.dynamic.` plus lowercase SHA-256 over a domain-separated canonical preimage containing only subject, kind, relation, authority, locator, content SHA-256, byte counts, truncation, and ordered claim-category IDs. Repository/request/attempt/session/call/cursor identities, time, and current culture do not participate.
+
+Within one tool payload, a duplicate derived ID is a terminal tool-protocol failure. Against request evidence or previously charged dynamic evidence, exact row equivalence reuses the existing row; any differing metadata fails closed. `tool.outcome.complete` and `tool.outcome.incomplete` may add rows, `tool.outcome.unavailable` adds none, and failure, cancellation, timeout, or budget outcomes commit none.
+
+The runtime commits one complete tool round atomically: completed exchanges, active overlay, charged evidence identity/byte history, canonical exchange-byte history, and tool counters advance together or not at all. Each completed exchange exposes product-owned `evidenceReferences` separately from opaque `resultJson`, and deterministic provider history serializes those rows explicitly. A transient provider retry clears completed exchanges and the active overlay before the next attempt, but retains run-wide charged evidence identity/byte history; this prevents a retry from reclaiming evidence budget.
+
+Three checks share the request evidence ceilings but are evaluated independently: distinct charged semantic-reference count, included bytes of distinct charged rows, and cumulative canonical model-visible bytes for every successful tool exchange including repeated equivalent results and product metadata. Crossing any check terminates with the budget failure and commits none of that tool round.
 
 ### Proposal
 
@@ -213,7 +229,7 @@ Every typed result carries one Core-owned closed `DocumentationScribeToolOutcome
 - operation-local timed out;
 - budget exhausted.
 
-Operation results add only their bounded typed data. The seam exposes no physical or absolute path, workspace/filesystem object, writer, mutable session, generic network object, credential, or mutation method. Repository-relative locator values are bounded data, not ambient filesystem authority. R1 defines no fake-only normative operation and does not freeze the later provider-visible tool inventory, names, JSON schemas, grouping, cursors, paging, or Roslyn mechanics.
+Operation results add only their bounded typed data, including optional ID-free dynamic-evidence inputs on complete or incomplete outcomes. Encoders do not accept an evidence-item count; the runtime derives semantic counts and encoded exchange bytes from the accepted typed values. The seam exposes no physical or absolute path, workspace/filesystem object, writer, mutable session, generic network object, credential, or mutation method. Repository-relative locator values are bounded data, not ambient filesystem authority. R1 defines no fake-only normative operation and does not freeze the later provider-visible tool inventory, names, JSON schemas, grouping, cursors, paging, or Roslyn mechanics.
 
 ## Stable validation categories
 

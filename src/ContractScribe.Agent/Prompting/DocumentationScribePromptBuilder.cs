@@ -176,17 +176,7 @@ internal static class DocumentationScribePromptBuilder
                 tool.InputSchemaJson,
             }),
             terminal = new { terminal.OperationId, terminal.SchemaJson },
-            completedToolExchanges = completedToolExchanges.Select(exchange => new
-            {
-                exchange.ResponseIndex,
-                exchange.CallId,
-                exchange.OperationId,
-                argumentsJson = CanonicalJson.AsString(CanonicalJson.Normalize(
-                    exchange.ArgumentsUtf8Json,
-                    rejectDuplicateProperties: false)),
-                exchange.OutcomeId,
-                resultJson = CanonicalJson.AsString(CanonicalJson.Normalize(exchange.ResultUtf8Json)),
-            }),
+            completedToolExchanges = completedToolExchanges.Select(ProjectCompletedToolExchange),
             outputLimits = new
             {
                 outputLimits.MaximumToolCalls,
@@ -212,6 +202,23 @@ internal static class DocumentationScribePromptBuilder
             deterministic);
     }
 
+    internal static int MeasureCompletedToolExchange(
+        DocumentationScribeCompletedToolExchange exchange) =>
+        CanonicalJson.Serialize(ProjectCompletedToolExchange(exchange)).Length;
+
+    private static CanonicalCompletedToolExchange ProjectCompletedToolExchange(
+        DocumentationScribeCompletedToolExchange exchange) =>
+        new(
+            exchange.ResponseIndex,
+            exchange.CallId,
+            exchange.OperationId,
+            CanonicalJson.AsString(CanonicalJson.Normalize(
+                exchange.ArgumentsUtf8Json,
+                rejectDuplicateProperties: false)),
+            exchange.OutcomeId,
+            CanonicalJson.AsString(CanonicalJson.Normalize(exchange.ResultUtf8Json)),
+            exchange.EvidenceReferences);
+
     private static DocumentationScribeModelMessage Message<T>(
         DocumentationScribeMessageKind kind,
         T content)
@@ -235,6 +242,15 @@ internal static class DocumentationScribePromptBuilder
         reference.IncludedUtf8ByteCount,
         reference.IsTruncated,
     };
+
+    private sealed record CanonicalCompletedToolExchange(
+        int ResponseIndex,
+        string CallId,
+        string OperationId,
+        string ArgumentsJson,
+        string OutcomeId,
+        string ResultJson,
+        ImmutableArray<DocumentationScribeEvidenceReference> EvidenceReferences);
 }
 
 internal sealed class PromptBoundaryException : Exception

@@ -59,6 +59,10 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(new[] { "tool.alpha", "tool.zeta" }, exchange.Requests[0].Tools.Select(tool => tool.OperationId));
         Assert.Equal(new[] { "call.z", "call.a" }, exchange.Requests[1].CompletedToolExchanges.Select(item => item.CallId));
         Assert.Equal(new[] { "call.z", "call.a", "call.a2" }, exchange.Requests[2].CompletedToolExchanges.Select(item => item.CallId));
+        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.All(
+            exchange.Requests.Skip(1).SelectMany(request => request.CompletedToolExchanges),
+            completed => Assert.Single(completed.EvidenceReferences));
     }
 
     [Theory]
@@ -278,6 +282,61 @@ public sealed class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
         Assert.Equal("tool.read", result.RunEnvelope.Diagnostics.Single().ReferenceId);
+    }
+
+    [Fact]
+    public async Task Unavailable_and_duplicate_dynamic_evidence_fail_without_committing_an_overlay()
+    {
+        var unavailable = new SyntheticPort(DocumentationScribeToolOutcome.Unavailable);
+        var unavailableResult = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(unavailable, new SyntheticCodec(unavailableHasDynamicEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(unavailableResult));
+        Assert.Empty(unavailableResult.DynamicEvidenceReferences);
+
+        var duplicate = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var duplicateResult = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(duplicate, new SyntheticCodec(duplicateDynamicEvidence: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(duplicateResult));
+        Assert.Empty(duplicateResult.DynamicEvidenceReferences);
+        Assert.Equal(0, duplicateResult.RunEnvelope.ToolRoundCount);
+    }
+
+    [Fact]
+    public async Task Provider_retry_clears_active_evidence_but_retains_run_wide_charges()
+    {
+        var request = Request(root => root["limits"]!["maximumEvidenceReferences"] = 4);
+        var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var exchange = Script(
+            ToolResponse(Call(0, "call.one", "tool.read", "one")),
+            FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable),
+            ToolResponse(Call(0, "call.two", "tool.read", "two")));
+
+        var result = await CreateRuntime(
+            exchange,
+            RegistryWithCodec(port, new SyntheticCodec(referenceSpecificDynamicEvidence: true)))
+            .RunAsync(request, Attempt(), Prompt(request));
+
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Empty(exchange.Requests[2].CompletedToolExchanges);
+        Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
+    }
+
+    [Fact]
+    public async Task Canonical_tool_exchange_bytes_have_an_independent_evidence_budget_check()
+    {
+        var request = Request(root => root["limits"]!["maximumEvidenceUtf8Bytes"] = 141);
+        var result = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
+            .RunAsync(request, Attempt(), Prompt(request));
+
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
     }
 
     [Fact]
@@ -949,7 +1008,8 @@ public sealed class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
-        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(0, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(0, result.RunEnvelope.ToolCallCount);
     }
 
     [Fact]
@@ -1025,7 +1085,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "57f442e58de783d028c1d96ddede42139796b2db84d72ed54af8fecb164d3d86",
+                "9efaa665b0ef4571f8ae8ae5a7ac168d54c484383fd73ac8f6b1dd2b8d102620",
                 digest);
         }
         finally
@@ -1107,6 +1167,21 @@ public sealed class DocumentationScribeRuntimeTests
             new SyntheticDescriptor("tool.read"),
             port,
             new SyntheticCodec(),
+            "Reads bounded synthetic evidence.",
+            ToolSchema,
+            16);
+        return builder.Build();
+    }
+
+    private static DocumentationScribeToolRegistry RegistryWithCodec(
+        SyntheticPort port,
+        SyntheticCodec codec)
+    {
+        var builder = new DocumentationScribeToolRegistryBuilder(ToolPolicyId);
+        builder.Add(
+            new SyntheticDescriptor("tool.read"),
+            port,
+            codec,
             "Reads bounded synthetic evidence.",
             ToolSchema,
             16);
@@ -1288,7 +1363,11 @@ public sealed class DocumentationScribeRuntimeTests
         }
     }
 
-    private sealed class SyntheticCodec : IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
+    private sealed class SyntheticCodec(
+        bool duplicateDynamicEvidence = false,
+        bool referenceSpecificDynamicEvidence = false,
+        bool unavailableHasDynamicEvidence = false) :
+        IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
     {
         public DocumentationScribeToolDecodeResult<SyntheticRequest> DecodeArguments(
             ReadOnlyMemory<byte> argumentsUtf8Json)
@@ -1324,9 +1403,33 @@ public sealed class DocumentationScribeRuntimeTests
                 return DocumentationScribeToolEncodeResult.Rejected();
             }
 
+            var dynamicEvidence = result.Outcome == DocumentationScribeToolOutcome.Unavailable
+                    && !unavailableHasDynamicEvidence
+                ? ImmutableArray<DocumentationScribeDynamicEvidenceInput>.Empty
+                :
+                [
+                    new DocumentationScribeDynamicEvidenceInput(
+                        EvidenceInput.TargetSubject(
+                            "synthetic.v1",
+                            "M:Synthetic.Widget.Run(System.String)"),
+                        EvidenceKind.SourceDeclaration,
+                        EvidenceRelation.Declares,
+                        DocumentationScribeEvidenceAuthority.SourceDeclaration,
+                        EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs"),
+                        referenceSpecificDynamicEvidence ? Sha256(request.ReferenceId) : new string('a', 64),
+                        originalUtf8ByteCount: 1,
+                        includedUtf8ByteCount: 1,
+                        isTruncated: false,
+                        claimCategoryIds: ["claim.purpose"]),
+                ];
+            if (duplicateDynamicEvidence)
+            {
+                dynamicEvidence = dynamicEvidence.Add(dynamicEvidence[0]);
+            }
+
             return DocumentationScribeToolEncodeResult.Accepted(new DocumentationScribeToolResultPayload(
                 JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId }),
-                evidenceItemCount: 1));
+                dynamicEvidence));
         }
     }
 

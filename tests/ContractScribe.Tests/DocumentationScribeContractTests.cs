@@ -38,7 +38,7 @@ public sealed class DocumentationScribeContractTests
         {
             var resultBytes = ReadFixture("valid", pair.Key);
             AssertSchemaValid(ResultSchema.Value, resultBytes, pair.Key);
-            var parsed = DocumentationScribeValidation.ParseRunResult(request, attemptId, resultBytes);
+            var parsed = DocumentationScribeValidation.ParseRunResult(request, attemptId, [], resultBytes);
             var result = Assert.IsType<DocumentationScribeRunResult>(parsed.Result);
             Assert.Null(parsed.Failure);
             Assert.Equal(pair.Value, result.Terminal.Kind);
@@ -100,6 +100,135 @@ public sealed class DocumentationScribeContractTests
     }
 
     [Fact]
+    public void Run_result_reuses_the_request_evidence_row_schema_and_requires_the_dynamic_overlay()
+    {
+        var requestSchema = JsonNode.Parse(ReadContractFile("v1.request.schema.json"))!.AsObject();
+        var resultSchema = JsonNode.Parse(ReadContractFile("v1.run-result.schema.json"))!.AsObject();
+        foreach (var definition in new[]
+                 {
+                     "repositoryPath",
+                     "span",
+                     "locator",
+                     "symbolRef",
+                     "byteCounts",
+                     "targetSubject",
+                     "componentSubject",
+                     "evidenceReference",
+                 })
+        {
+            Assert.True(
+                JsonNode.DeepEquals(
+                    requestSchema["$defs"]![definition],
+                    resultSchema["$defs"]![definition]),
+                definition);
+        }
+
+        var oldShape = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        oldShape.Remove("dynamicEvidenceReferences");
+        var oldShapeBytes = Serialize(oldShape);
+        Assert.False(Evaluate(ResultSchema.Value, oldShapeBytes));
+
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+        var failure = DocumentationScribeValidation.ParseRunResult(request, attempt, [], oldShapeBytes).Failure;
+        Assert.Equal("scribe.result.invalid-shape", failure?.Code);
+        Assert.Equal("/dynamicEvidenceReferences", failure?.Pointer);
+    }
+
+    [Fact]
+    public void Dynamic_evidence_identity_is_derived_and_the_result_overlay_is_exactly_correlated()
+    {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        var input = DynamicEvidenceInput();
+
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out var first));
+        Assert.NotNull(first);
+        Assert.Equal(
+            "evidence.dynamic.ec032585c0209f0f26c4dd8a33adac8f1bea4bf3e7aeb13156d57576d068b55c",
+            first.EvidenceReferenceId);
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out var second));
+        Assert.Equal(first, second);
+
+        var result = ParseObject(ReadFixture("valid", "proposal-result.json"));
+        result["dynamicEvidenceReferences"] = new JsonArray(DynamicEvidenceJson(first));
+        result["terminal"]!["contentUnits"]![0]!["evidenceReferenceIds"]!
+            .AsArray().Insert(0, first.EvidenceReferenceId);
+        var bytes = Serialize(result);
+        AssertSchemaValid(ResultSchema.Value, bytes, "dynamic-evidence-result");
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+
+        var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [first], bytes);
+        var accepted = Assert.IsType<DocumentationScribeRunResult>(parsed.Result);
+        Assert.Null(parsed.Failure);
+        var acceptedReference = Assert.Single(accepted.DynamicEvidenceReferences);
+        Assert.Equal(first.EvidenceReferenceId, acceptedReference.EvidenceReferenceId);
+        Assert.Equal(first.ContentSha256, acceptedReference.ContentSha256);
+        Assert.Equal(first.ClaimCategoryIds.ToArray(), acceptedReference.ClaimCategoryIds.ToArray());
+
+        var missingTrustedOverlay = DocumentationScribeValidation.ParseRunResult(request, attempt, [], bytes);
+        Assert.Equal("scribe.result.invalid-correlation", missingTrustedOverlay.Failure?.Code);
+        Assert.Equal("/dynamicEvidenceReferences", missingTrustedOverlay.Failure?.Pointer);
+
+        var forged = ParseObject(bytes);
+        forged["dynamicEvidenceReferences"]![0]!["contentSha256"] = new string('b', 64);
+        var forgedParse = DocumentationScribeValidation.ParseRunResult(request, attempt, [first], Serialize(forged));
+        Assert.Equal("scribe.result.invalid-correlation", forgedParse.Failure?.Code);
+        Assert.Equal("/dynamicEvidenceReferences/0", forgedParse.Failure?.Pointer);
+
+        var failureResult = ParseObject(ReadFixture("valid", "failure-result.json"));
+        failureResult["dynamicEvidenceReferences"] = new JsonArray(DynamicEvidenceJson(first));
+        var failureParse = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            [first],
+            Serialize(failureResult));
+        Assert.Equal("scribe.result.invalid-evidence", failureParse.Failure?.Code);
+        Assert.Equal("/dynamicEvidenceReferences", failureParse.Failure?.Pointer);
+    }
+
+    [Fact]
+    public void Dynamic_evidence_factory_rejects_inert_or_uncommitted_inputs()
+    {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(
+                locator: EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs"),
+                originalUtf8ByteCount: 2,
+                includedUtf8ByteCount: 1,
+                isTruncated: true),
+            out _));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(locator: EvidenceInput.RepositoryLocator("../outside.cs")),
+            out _));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(
+                kind: EvidenceKind.RepositoryDocumentation,
+                authority: DocumentationScribeEvidenceAuthority.SourceDeclaration),
+            out _));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(claimCategoryIds: ["claim.unknown"]),
+            out _));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            new DocumentationScribeDynamicEvidenceInput(
+                EvidenceInput.TargetSubject("other-context.v1", "M:Synthetic.Widget.Run(System.String)"),
+                EvidenceKind.SourceDeclaration,
+                EvidenceRelation.Declares,
+                DocumentationScribeEvidenceAuthority.SourceDeclaration,
+                EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs"),
+                new string('a', 64),
+                1,
+                1,
+                false,
+                ["claim.purpose"]),
+            out _));
+    }
+
+    [Fact]
     public void Invalid_fixture_manifest_has_stable_codes_and_pointers()
     {
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));
@@ -121,7 +250,7 @@ public sealed class DocumentationScribeContractTests
             else
             {
                 Assert.Equal("runResult", artifact);
-                var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, ReadFixture(path));
+                var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [], ReadFixture(path));
                 Assert.Null(parsed.Result);
                 Assert.Equal(expectedCode, parsed.Failure?.Code);
                 Assert.Equal(expectedPointer, parsed.Failure?.Pointer);
@@ -215,6 +344,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeValidation.ParseRunResult(
             syntheticRequest,
             syntheticAttempt,
+            [],
             syntheticResultBytes).IsValid);
 
         var supplementaryDocumentationId = "T:" + string.Concat(
@@ -239,6 +369,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeValidation.ParseRunResult(
             supplementaryRequest,
             syntheticAttempt,
+            [],
             supplementaryResultBytes).IsValid);
 
         AssertRequestMutationFails(
@@ -338,7 +469,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         var ordinaryAmpersand = ParseObject(ReadFixture("valid", "proposal-result.json"));
         ordinaryAmpersand["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Describes the R&D strategy; no entity is present.";
-        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(ordinaryAmpersand)).IsValid);
+        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(ordinaryAmpersand)).IsValid);
         var supplementaryException = ParseObject(ReadFixture("valid", "proposal-result.json"));
         supplementaryException["terminal"]!["contentUnits"]!.AsArray().Add(new JsonObject
         {
@@ -354,10 +485,12 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeValidation.ParseRunResult(
             request,
             attempt,
+            [],
             supplementaryExceptionBytes).IsValid);
         var parsed = DocumentationScribeValidation.ParseRunResult(
             request,
             attempt,
+            [],
             ReadFixture("valid", "proposal-result.json"));
         var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
         var patch = ParseObject(ReadRepositoryFixture("documentation-patch", "v1", "valid", "repository-request.json"));
@@ -485,7 +618,7 @@ public sealed class DocumentationScribeContractTests
         awkward["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Widget operation banana syntax perhaps.";
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
-        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(awkward)).IsValid);
+        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(awkward)).IsValid);
     }
 
     [Fact]
@@ -496,6 +629,7 @@ public sealed class DocumentationScribeContractTests
         var parsed = DocumentationScribeValidation.ParseRunResult(
             request,
             attempt,
+            [],
             ReadFixture("valid", "proposal-result.json"));
         var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
         var projected = Assert.IsType<DocumentationPatchStructuredContent>(proposal.PatchContent);
@@ -536,7 +670,7 @@ public sealed class DocumentationScribeContractTests
             ["evidenceReferenceIds"] = new JsonArray("evidence.summary"),
         });
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
-        var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(result));
+        var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(result));
         var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
         Assert.IsType<DocumentationPatchInheritDocContent>(proposal.PatchContent);
         Assert.Single(proposal.ContentUnits);
@@ -701,7 +835,7 @@ public sealed class DocumentationScribeContractTests
             ["currencyId"] = "currency.usd",
             ["amountMicrounits"] = request.Limits.MaximumCostMicrounits + 1,
         };
-        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(rawBudget)).IsValid);
+        Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(rawBudget)).IsValid);
 
         var boundaryRequestNode = ParseObject(ReadFixture("valid", "request.json"));
         var boundaryLimits = boundaryRequestNode["limits"]!;
@@ -752,6 +886,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeValidation.ParseRunResult(
             boundaryRequest,
             attempt,
+            [],
             rawBoundaryBudgetBytes).IsValid);
 
         var simultaneousTimeoutEnvelope = boundaryBudgetEnvelope with
@@ -785,6 +920,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeValidation.ParseRunResult(
             boundaryRequest,
             attempt,
+            [],
             rawSimultaneousTimeoutBytes).IsValid);
 
         rawSimultaneousTimeout["runEnvelope"]!["usage"]!["inputTokens"] =
@@ -794,6 +930,7 @@ public sealed class DocumentationScribeContractTests
         var overArtifactMaximum = DocumentationScribeValidation.ParseRunResult(
             boundaryRequest,
             attempt,
+            [],
             overArtifactMaximumBytes);
         Assert.False(overArtifactMaximum.IsValid);
         Assert.Equal("/runEnvelope/usage/inputTokens", overArtifactMaximum.Failure?.Pointer);
@@ -931,6 +1068,7 @@ public sealed class DocumentationScribeContractTests
         var boundedResultFailure = DocumentationScribeValidation.ParseRunResult(
             parsedRequest,
             attempt,
+            [],
             boundedResultBytes).Failure;
         Assert.Equal("scribe.result.unknown-field", boundedResultFailure?.Code);
         Assert.Equal("/runEnvelope", boundedResultFailure?.Pointer);
@@ -980,7 +1118,7 @@ public sealed class DocumentationScribeContractTests
         string? expectedPointer = null)
     {
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
-        var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, Serialize(result));
+        var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(result));
         Assert.Null(parsed.Result);
         Assert.Equal(expectedCode, parsed.Failure?.Code);
         if (expectedPointer is not null)
@@ -1015,6 +1153,78 @@ public sealed class DocumentationScribeContractTests
         null,
         null,
         ImmutableArray<DocumentationScribeDiagnosticInput>.Empty);
+
+    private static DocumentationScribeDynamicEvidenceInput DynamicEvidenceInput(
+        EvidenceLocator? locator = null,
+        EvidenceKind kind = EvidenceKind.SourceDeclaration,
+        DocumentationScribeEvidenceAuthority authority = DocumentationScribeEvidenceAuthority.SourceDeclaration,
+        int originalUtf8ByteCount = 1,
+        int includedUtf8ByteCount = 1,
+        bool isTruncated = false,
+        ImmutableArray<string> claimCategoryIds = default) =>
+        new(
+            EvidenceInput.TargetSubject(
+                "synthetic.v1",
+                "M:Synthetic.Widget.Run(System.String)"),
+            kind,
+            EvidenceRelation.Declares,
+            authority,
+            locator ?? EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs", 100, 101),
+            new string('a', 64),
+            originalUtf8ByteCount,
+            includedUtf8ByteCount,
+            isTruncated,
+            claimCategoryIds.IsDefault ? ["claim.purpose"] : claimCategoryIds);
+
+    private static JsonObject DynamicEvidenceJson(DocumentationScribeEvidenceReference reference)
+    {
+        var subject = Assert.IsType<TargetEvidenceSubject>(reference.Subject);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(reference.Locator);
+        var repository = new JsonObject
+        {
+            ["path"] = locator.Path,
+        };
+        if (locator.Span is { } span)
+        {
+            repository["span"] = new JsonObject
+            {
+                ["start"] = span.Start,
+                ["end"] = span.End,
+            };
+        }
+
+        var claimCategoryIds = new JsonArray();
+        foreach (var claimCategoryId in reference.ClaimCategoryIds)
+        {
+            claimCategoryIds.Add(claimCategoryId);
+        }
+
+        return new JsonObject
+        {
+            ["evidenceReferenceId"] = reference.EvidenceReferenceId,
+            ["repositoryContextRef"] = reference.RepositoryContextRef.Value,
+            ["subject"] = new JsonObject
+            {
+                ["symbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = subject.ParentSymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = subject.ParentSymbolRef.DocumentationCommentId,
+                },
+            },
+            ["kind"] = EvidenceVocabulary.GetId(reference.Kind),
+            ["relation"] = EvidenceVocabulary.GetId(reference.Relation),
+            ["authority"] = DocumentationScribeVocabulary.GetId(reference.Authority),
+            ["locator"] = new JsonObject
+            {
+                ["repository"] = repository,
+            },
+            ["contentSha256"] = reference.ContentSha256,
+            ["originalUtf8ByteCount"] = reference.OriginalUtf8ByteCount,
+            ["includedUtf8ByteCount"] = reference.IncludedUtf8ByteCount,
+            ["isTruncated"] = reference.IsTruncated,
+            ["claimCategoryIds"] = claimCategoryIds,
+        };
+    }
 
     private static void Reverse(JsonArray array)
     {
