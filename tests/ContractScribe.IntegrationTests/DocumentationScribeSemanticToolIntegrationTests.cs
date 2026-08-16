@@ -143,7 +143,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             null,
             stage =>
             {
-                if (stage == DocumentationScribeSemanticStage.FinalFreshness && !replaced)
+                if (stage == DocumentationScribeSemanticStage.Publish && !replaced)
                 {
                     var original = File.ReadAllBytes(fixture.ConsumerPath);
                     File.Move(fixture.ConsumerPath, fixture.ConsumerPath + ".replaced");
@@ -164,6 +164,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
 
     [Theory]
     [InlineData("Binding")]
+    [InlineData("DocumentationObservation")]
     [InlineData("Usages")]
     [InlineData("UsageTraversal")]
     [InlineData("Page")]
@@ -550,7 +551,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
     }
 
     [Fact]
-    public async Task SameSimpleNameAssemblyCannotContributeTargetUsages()
+    public async Task SameFullAssemblyIdentityCannotContributeTargetUsages()
     {
         using var fixture = SemanticFixture.Create(MethodId, includeSameNameDecoy: true);
         var loaded = fixture.Bootstrap();
@@ -560,6 +561,9 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
 
         Assert.DoesNotContain(page.Items, item =>
             item.Source.Fact.Commitment.Locator is RepositoryEvidenceLocator { Path: "Decoy.cs" });
+        Assert.Contains(page.Items, item =>
+            item.UsageKind == DocumentationScribeSemanticUsageKind.Invocation
+            && item.Source.Fact.Commitment.Locator is RepositoryEvidenceLocator { Path: "Consumer.cs" });
     }
 
     [Fact]
@@ -753,6 +757,83 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, optional.Outcome);
         Assert.Contains(optionalPage.Incomplete, item =>
             item.Reason == DocumentationScribeSemanticIncompleteReason.SourceByteLimit);
+
+        using var generatedFixture = SemanticFixture.Create(MethodId, padGenerated: true);
+        var generatedLoaded = generatedFixture.Bootstrap();
+        var generatedLimited = new DocumentationScribeSemanticToolLimits(
+            production.MaximumPageSize,
+            production.MaximumOptionalItems,
+            production.MaximumResultUtf8Bytes,
+            1024,
+            production.MaximumIncludedSourceUtf8Bytes,
+            production.MaximumCompilations,
+            production.MaximumSourceTrees,
+            production.MaximumSyntaxNodes,
+            production.MaximumElapsedMilliseconds);
+        var generated = await new DocumentationScribeSemanticToolPort(
+                generatedLoaded,
+                generatedFixture.CreateRequest(generatedLoaded),
+                generatedLimited)
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+        var generatedPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(generated.Page);
+        Assert.Same(DocumentationScribeToolOutcome.Incomplete, generated.Outcome);
+        Assert.Contains(generatedPage.Incomplete, item =>
+            item.Reason == DocumentationScribeSemanticIncompleteReason.SourceByteLimit);
+        Assert.DoesNotContain(generatedPage.Items, item =>
+            item.Source.Fact.Commitment.Locator is GeneratedOutputEvidenceLocator
+            {
+                ProducerKind: GeneratedOutputKind.SourceGenerator,
+            });
+
+        var lower = 0;
+        var upper = production.MaximumResultUtf8Bytes;
+        while (lower + 1 < upper)
+        {
+            var candidate = lower + ((upper - lower) / 2);
+            var tightLimits = new DocumentationScribeSemanticToolLimits(
+                production.MaximumPageSize,
+                production.MaximumOptionalItems,
+                candidate,
+                production.MaximumSourceFileUtf8Bytes,
+                production.MaximumIncludedSourceUtf8Bytes,
+                production.MaximumCompilations,
+                production.MaximumSourceTrees,
+                production.MaximumSyntaxNodes,
+                production.MaximumElapsedMilliseconds);
+            var candidateResult = await new DocumentationScribeSemanticToolPort(
+                    loaded,
+                    fixture.CreateRequest(loaded),
+                    tightLimits)
+                .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(2), CancellationToken.None);
+            if (candidateResult.Page is null)
+            {
+                lower = candidate;
+            }
+            else
+            {
+                upper = candidate;
+            }
+        }
+
+        var smallestSuccessfulLimits = new DocumentationScribeSemanticToolLimits(
+            production.MaximumPageSize,
+            production.MaximumOptionalItems,
+            upper,
+            production.MaximumSourceFileUtf8Bytes,
+            production.MaximumIncludedSourceUtf8Bytes,
+            production.MaximumCompilations,
+            production.MaximumSourceTrees,
+            production.MaximumSyntaxNodes,
+            production.MaximumElapsedMilliseconds);
+        var tight = await new DocumentationScribeSemanticToolPort(
+                loaded,
+                fixture.CreateRequest(loaded),
+                smallestSuccessfulLimits)
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(2), CancellationToken.None);
+        var tightPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(tight.Page);
+        Assert.Same(DocumentationScribeToolOutcome.Incomplete, tight.Outcome);
+        Assert.Contains(tightPage.Incomplete, item =>
+            item.Reason == DocumentationScribeSemanticIncompleteReason.ResultByteLimit);
     }
 
     [Fact]
@@ -1073,7 +1154,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             string targetDocumentationId,
             bool consumerUtf16 = false,
             bool includeSameNameDecoy = false,
-            bool padConsumer = false)
+            bool padConsumer = false,
+            bool padGenerated = false)
         {
             var repositoryRoot = FindRepositoryRoot();
             var sourceRoot = Path.Join(
@@ -1167,8 +1249,9 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                     name,
                     Encoding.UTF8))
                 .ToList();
-            const string sourceGeneratedText =
-                "using SemanticFixture; namespace GeneratedConsumer; public sealed class SourceGeneratedUse { public string Run() => new Runner().Execute(\"source-generator\"); }";
+            var sourceGeneratedText =
+                "using SemanticFixture; namespace GeneratedConsumer; public sealed class SourceGeneratedUse { public string Run() => new Runner().Execute(\"source-generator\"); }"
+                + (padGenerated ? "// " + new string('g', 2048) : string.Empty);
             const string toolGeneratedText =
                 "using SemanticFixture; namespace GeneratedConsumer; public sealed class ToolGeneratedUse { public string Run() => new Runner().Execute(\"tool-generated\"); }";
             var sourceGeneratedTree = CSharpSyntaxTree.ParseText(
@@ -1275,6 +1358,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                         OutputKind.DynamicallyLinkedLibrary,
                         deterministic: true,
                         nullableContextOptions: NullableContextOptions.Enable));
+                Assert.Equal(targetCompilation.Assembly.Identity, decoyCompilation.Assembly.Identity);
                 var decoyWorkspaceProject = workspace.AddProject("Decoy", LanguageNames.CSharp);
                 var decoyBindings = new Dictionary<SyntaxTree, LoadedSourceTree>(
                     ReferenceEqualityComparer.Instance)
