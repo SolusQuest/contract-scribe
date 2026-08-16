@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/ContractScribe.Agent/ContractScribe.Agent.csproj" />
     <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
     <ProjectReference Include="../../src/ContractScribe.Patching/ContractScribe.Patching.csproj" />
     <ProjectReference Include="../../src/ContractScribe.Cli/ContractScribe.Cli.csproj"
