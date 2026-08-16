@@ -297,14 +297,11 @@ public sealed class DocumentationScribeRuntime
             }
         }
 
+        state.ToolRoundCount++;
         var buffered = ImmutableArray.CreateBuilder<DocumentationScribeCompletedToolExchange>(prepared.Count);
-        long prospectiveEvidenceItems = state.EvidenceItemCount;
-        long prospectiveEvidenceBytes = state.EvidenceUtf8ByteCount;
-        long prospectiveExchangeBytes = state.SuccessfulToolExchangeUtf8ByteCount;
         var prospectiveActive = state.ActiveDynamicEvidenceReferences.ToImmutableDictionary(
             item => item.EvidenceReferenceId,
             StringComparer.Ordinal).ToBuilder();
-        var prospectiveCharged = state.ChargedDynamicEvidenceById.ToBuilder();
         var requestEvidenceById = state.Request.EvidenceReferences.ToImmutableDictionary(
             item => item.EvidenceReferenceId,
             StringComparer.Ordinal);
@@ -316,6 +313,9 @@ public sealed class DocumentationScribeRuntime
                 return checkpoint;
             }
 
+            var registrationIndex = registry.FindRegistrationIndex(toolCall.Call.OperationId);
+            state.ToolCallCount++;
+            state.PerOperationToolCalls[registrationIndex]++;
             OperationCompletion<ToolInvocationResult> completion;
             try
             {
@@ -405,7 +405,7 @@ public sealed class DocumentationScribeRuntime
 
                     accepted = original;
                 }
-                else if (prospectiveCharged.TryGetValue(created.EvidenceReferenceId, out var charged))
+                else if (state.ChargedDynamicEvidenceById.TryGetValue(created.EvidenceReferenceId, out var charged))
                 {
                     if (!EvidenceReferenceEquivalent(charged, created))
                     {
@@ -418,15 +418,8 @@ public sealed class DocumentationScribeRuntime
                 else
                 {
                     accepted = created;
-                    prospectiveCharged.Add(accepted.EvidenceReferenceId, accepted);
                     prospectiveActive.Add(accepted.EvidenceReferenceId, accepted);
-                    try
-                    {
-                        prospectiveEvidenceItems = checked(prospectiveEvidenceItems + 1);
-                        prospectiveEvidenceBytes = checked(
-                            prospectiveEvidenceBytes + accepted.IncludedUtf8ByteCount);
-                    }
-                    catch (OverflowException)
+                    if (!state.TryChargeDynamicEvidence(accepted))
                     {
                         return reducer.CommitFailure(
                             state,
@@ -450,20 +443,13 @@ public sealed class DocumentationScribeRuntime
                 invocation.Outcome.Id,
                 invocation.ResultUtf8Json,
                 orderedCallReferences);
-            try
-            {
-                prospectiveExchangeBytes = checked(
-                    prospectiveExchangeBytes
-                    + DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completedExchange));
-            }
-            catch (OverflowException)
+            if (!state.TryChargeSuccessfulToolExchange(
+                    DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completedExchange)))
             {
                 return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
 
-            if (prospectiveEvidenceItems > state.Request.Limits.MaximumEvidenceReferences
-                || prospectiveEvidenceBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes
-                || prospectiveExchangeBytes > state.Request.Limits.MaximumEvidenceUtf8Bytes)
+            if (state.IsEvidenceBudgetExceeded)
             {
                 return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
@@ -477,20 +463,9 @@ public sealed class DocumentationScribeRuntime
             return finalCheckpoint;
         }
 
-        state.EvidenceItemCount = prospectiveEvidenceItems;
-        state.EvidenceUtf8ByteCount = prospectiveEvidenceBytes;
-        state.SuccessfulToolExchangeUtf8ByteCount = prospectiveExchangeBytes;
-        state.ToolRoundCount++;
-        state.ToolCallCount += prepared.Count;
-        for (var index = 0; index < roundCounts.Length; index++)
-        {
-            state.PerOperationToolCalls[index] += roundCounts[index];
-        }
-
         state.ActiveDynamicEvidenceReferences = prospectiveActive.Values
             .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
             .ToImmutableArray();
-        state.ChargedDynamicEvidenceById = prospectiveCharged.ToImmutable();
         state.CompletedToolExchanges = state.CompletedToolExchanges.AddRange(buffered);
         return null;
     }
@@ -934,6 +909,46 @@ internal sealed class RunState
         ImmutableDictionary.Create<string, DocumentationScribeEvidenceReference>(StringComparer.Ordinal);
 
     internal ImmutableArray<DocumentationScribeCompletedToolExchange> CompletedToolExchanges { get; set; } = [];
+
+    internal bool TryChargeDynamicEvidence(DocumentationScribeEvidenceReference reference)
+    {
+        try
+        {
+            var itemCount = checked(EvidenceItemCount + 1);
+            var byteCount = checked(EvidenceUtf8ByteCount + reference.IncludedUtf8ByteCount);
+            ChargedDynamicEvidenceById = ChargedDynamicEvidenceById.Add(
+                reference.EvidenceReferenceId,
+                reference);
+            EvidenceItemCount = itemCount;
+            EvidenceUtf8ByteCount = byteCount;
+            return true;
+        }
+        catch (OverflowException)
+        {
+            arithmeticOverflow = true;
+            return false;
+        }
+    }
+
+    internal bool TryChargeSuccessfulToolExchange(int utf8ByteCount)
+    {
+        try
+        {
+            SuccessfulToolExchangeUtf8ByteCount = checked(
+                SuccessfulToolExchangeUtf8ByteCount + utf8ByteCount);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            arithmeticOverflow = true;
+            return false;
+        }
+    }
+
+    internal bool IsEvidenceBudgetExceeded => arithmeticOverflow
+        || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
+        || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
+        || SuccessfulToolExchangeUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes;
 
     internal int ElapsedMilliseconds
     {

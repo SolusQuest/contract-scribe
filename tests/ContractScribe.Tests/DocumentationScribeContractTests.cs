@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -146,8 +147,20 @@ public sealed class DocumentationScribeContractTests
         Assert.Equal(
             "evidence.dynamic.ec032585c0209f0f26c4dd8a33adac8f1bea4bf3e7aeb13156d57576d068b55c",
             first.EvidenceReferenceId);
-        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out var second));
-        Assert.Equal(first, second);
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("tr-TR");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("tr-TR");
+            Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out var second));
+            Assert.Equal(first, second);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUiCulture;
+        }
 
         var result = ParseObject(ReadFixture("valid", "proposal-result.json"));
         result["dynamicEvidenceReferences"] = new JsonArray(DynamicEvidenceJson(first));
@@ -184,6 +197,32 @@ public sealed class DocumentationScribeContractTests
             Serialize(failureResult));
         Assert.Equal("scribe.result.invalid-evidence", failureParse.Failure?.Code);
         Assert.Equal("/dynamicEvidenceReferences", failureParse.Failure?.Pointer);
+
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(contentSha256: new string('b', 64)),
+            out var other));
+        var orderedOverlay = new[] { first, other! }
+            .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var skip = ParseObject(ReadFixture("valid", "skip-result.json"));
+        skip["dynamicEvidenceReferences"] = new JsonArray(
+            orderedOverlay.Select(reference => DynamicEvidenceJson(reference)).ToArray());
+        skip["terminal"]!["evidenceReferenceIds"] = new JsonArray(first.EvidenceReferenceId);
+        var skipBytes = Serialize(skip);
+        AssertSchemaValid(ResultSchema.Value, skipBytes, "dynamic-evidence-skip");
+        Assert.True(DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            orderedOverlay,
+            skipBytes).IsValid);
+        var reordered = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            orderedOverlay.Reverse().ToImmutableArray(),
+            skipBytes);
+        Assert.Equal("scribe.result.invalid-correlation", reordered.Failure?.Code);
+        Assert.Equal("/dynamicEvidenceReferences/0", reordered.Failure?.Pointer);
     }
 
     [Fact]
@@ -197,6 +236,22 @@ public sealed class DocumentationScribeContractTests
                 originalUtf8ByteCount: 2,
                 includedUtf8ByteCount: 1,
                 isTruncated: true),
+            out _));
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(
+                originalUtf8ByteCount: 2,
+                includedUtf8ByteCount: 1,
+                isTruncated: true,
+                claimCategoryIds: ["claim.behavior"]),
+            out _));
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            DynamicEvidenceInput(
+                originalUtf8ByteCount: 2,
+                includedUtf8ByteCount: 1,
+                isTruncated: true,
+                claimCategoryIds: ["claim.purpose"]),
             out _));
         Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
             request,
@@ -1158,6 +1213,7 @@ public sealed class DocumentationScribeContractTests
         EvidenceLocator? locator = null,
         EvidenceKind kind = EvidenceKind.SourceDeclaration,
         DocumentationScribeEvidenceAuthority authority = DocumentationScribeEvidenceAuthority.SourceDeclaration,
+        string? contentSha256 = null,
         int originalUtf8ByteCount = 1,
         int includedUtf8ByteCount = 1,
         bool isTruncated = false,
@@ -1170,7 +1226,7 @@ public sealed class DocumentationScribeContractTests
             EvidenceRelation.Declares,
             authority,
             locator ?? EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs", 100, 101),
-            new string('a', 64),
+            contentSha256 ?? new string('a', 64),
             originalUtf8ByteCount,
             includedUtf8ByteCount,
             isTruncated,

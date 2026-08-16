@@ -160,7 +160,8 @@ public static class DocumentationScribeValidation
                 .ToDictionary(policy => policy.ClaimCategoryId, StringComparer.Ordinal);
             if (input.ClaimCategoryIds.Any(category =>
                     !claimPolicies.TryGetValue(category, out var policy)
-                    || !policy.AllowedAuthorities.Contains(input.Authority)))
+                    || !policy.AllowedAuthorities.Contains(input.Authority)
+                    || input.IsTruncated && policy.CompleteEvidenceRequired))
             {
                 return false;
             }
