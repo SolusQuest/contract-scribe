@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -14,18 +15,26 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly DocumentationScribeAttemptId attemptId;
     private readonly DocumentationScribeLoadedContext loadedContext;
     private readonly DocumentationScribeRepositoryToolLimits limits;
+    private readonly Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint;
     private readonly ImmutableDictionary<string, BoundScope> scopes;
     private readonly string runCorrelation = Guid.NewGuid().ToString("N");
     private readonly long started = Stopwatch.GetTimestamp();
     private readonly Dictionary<(ulong Volume, ulong FileId), string> physicalPaths = [];
     private readonly Dictionary<string, Observation> observations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AbsenceObservation> absences = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DocumentationScribeContextPhysicalIdentity> directoryObservations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PageChain> cursorChains = new(StringComparer.Ordinal);
     private readonly HashSet<string> consumedCursors = new(StringComparer.Ordinal);
+    private readonly HashSet<string> inspectedFilePaths = new(StringComparer.Ordinal);
+    private readonly HashSet<string> inspectedDirectoryPaths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> calls = new(StringComparer.Ordinal);
     private long bytesRead;
     private long returnedBytes;
     private int returnedItems;
     private int directoriesInspected;
+    private int entriesInspected;
+    private int filesInspected;
+    private int matchesDiscovered;
     private int activeChains;
 
     internal DocumentationScribeRepositoryToolSession(
@@ -33,12 +42,14 @@ internal sealed class DocumentationScribeRepositoryToolSession
         DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
-        DocumentationScribeRepositoryToolLimits limits)
+        DocumentationScribeRepositoryToolLimits limits,
+        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint)
     {
         this.request = request;
         this.attemptId = attemptId;
         this.loadedContext = loadedContext;
         this.limits = limits;
+        this.checkpoint = checkpoint;
         if (!DocumentationScribeAttemptId.TryParse(attemptId.Value, out _))
         {
             throw new ArgumentException("A valid attempt identifier is required.", nameof(attemptId));
@@ -88,15 +99,17 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 var file = ReadFile(path, scope.Scope.Required, cancellationToken);
                 var range = SelectLines(file.Text, toolRequest.StartLine, toolRequest.EndLine);
                 var excerpt = CreateExcerpt(file, range.Start, range.End);
+                Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeEvidencePublication, cancellationToken);
                 var route = CreateRoute(scope, file, cancellationToken);
-                var evidence = CreateEvidence(scope, file, range.Start, range.End, range.IsWholeFile);
-                CommitPublication(excerpt.IncludedUtf8ByteCount, 1, cancellationToken);
-                return new(
-                    range.IsWholeFile ? DocumentationScribeToolOutcome.Complete : DocumentationScribeToolOutcome.Incomplete,
+                var evidence = CreateEvidence(scope, file, range.Start, range.End);
+                var result = new DocumentationScribeRepositoryReadExcerptResult(
+                    excerpt.IsTruncated ? DocumentationScribeToolOutcome.Incomplete : DocumentationScribeToolOutcome.Complete,
                     null,
                     excerpt,
                     route,
                     evidence is null ? [] : [evidence]);
+                CommitPublication(MeasurePublication(result), 1, cancellationToken);
+                return result;
             }
             catch (Exception exception) when (TryFailure(exception, out var outcome, out var code))
             {
@@ -132,7 +145,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
                             string.Join('\0', file.RepositoryPath, file.ContentSha256, file.Utf8ByteCount),
                             file,
                             null))
-                        .ToImmutableArray());
+                        .ToImmutableArray(),
+                    null,
+                    (values, cursor, hasMore) => MeasurePublication(new DocumentationScribeRepositoryListFilesResult(
+                        hasMore ? DocumentationScribeToolOutcome.Incomplete : DocumentationScribeToolOutcome.Complete,
+                        null,
+                        values.Select(value => (DocumentationScribeRepositoryFileItem)value.Value).ToImmutableArray(),
+                        cursor)));
                 var items = page.Values.Select(value => (DocumentationScribeRepositoryFileItem)value.Value).ToImmutableArray();
                 return new(
                     page.HasMore ? DocumentationScribeToolOutcome.Incomplete : DocumentationScribeToolOutcome.Complete,
@@ -174,7 +193,14 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     cancellationToken,
                     () => Search(scope, query.Path, toolRequest.Literal, cancellationToken),
                     values => PrepareSearchPublication(
-                        scope, values, routes, evidence, cancellationToken));
+                        scope, values, routes, evidence, cancellationToken),
+                    (values, cursor, hasMore) => MeasurePublication(new DocumentationScribeRepositorySearchTextResult(
+                        hasMore ? DocumentationScribeToolOutcome.Incomplete : DocumentationScribeToolOutcome.Complete,
+                        null,
+                        values.Select(value => (DocumentationScribeRepositoryExcerpt)value.Value).ToImmutableArray(),
+                        cursor,
+                        routes.ToImmutable(),
+                        evidence.ToImmutable())));
                 var items = page.Values.Select(value => (DocumentationScribeRepositoryExcerpt)value.Value).ToImmutableArray();
 
                 return new(
@@ -199,16 +225,21 @@ internal sealed class DocumentationScribeRepositoryToolSession
         ImmutableArray<DocumentationScribeDynamicEvidenceInput>.Builder evidence,
         CancellationToken cancellationToken)
     {
+        var routeIds = new HashSet<string>(StringComparer.Ordinal);
+        var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var value in values)
         {
             var file = (StableTextFile)value.Source!;
             var item = (DocumentationScribeRepositoryExcerpt)value.Value;
-            if (CreateRoute(scope, file, cancellationToken) is { } route)
+            if (CreateRoute(scope, file, cancellationToken) is { } route
+                && routeIds.Add(route.RouteId))
             {
                 routes.Add(route);
             }
 
-            if (CreateEvidence(scope, file, item.StartUtf16, item.EndUtf16, false) is { } row)
+            if (CreateEvidence(scope, file, item.StartUtf16, item.EndUtf16) is { } row
+                && DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, row, out var reference)
+                && evidenceIds.Add(reference!.EvidenceReferenceId))
             {
                 evidence.Add(row);
             }
@@ -278,7 +309,65 @@ internal sealed class DocumentationScribeRepositoryToolSession
             throw new ArgumentException("An exact-file scope must equal its visible anchor path.", nameof(scope));
         }
 
+        ValidateEvidenceScope(scope, anchorPath);
+
         return new(scope with { RepositoryPath = path }, origin);
+    }
+
+    private void ValidateEvidenceScope(DocumentationScribeRepositoryToolScope scope, string anchorPath)
+    {
+        if (scope.Subject is null)
+        {
+            return;
+        }
+
+        var roleMatches = scope.Role switch
+        {
+            DocumentationScribeContextRole.MaintainedDocumentation =>
+                scope.Kind == EvidenceKind.RepositoryDocumentation
+                    && scope.Relation == EvidenceRelation.Documents
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.RepositoryDocumentation
+                || scope.Kind == EvidenceKind.PublicContract
+                    && scope.Relation == EvidenceRelation.Constrains
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.PublicContract,
+            DocumentationScribeContextRole.SourceDeclaration =>
+                scope.Kind == EvidenceKind.SourceDeclaration
+                    && scope.Relation == EvidenceRelation.Declares
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration
+                || scope.Kind == EvidenceKind.SourceImplementation
+                    && scope.Relation is EvidenceRelation.Declares or EvidenceRelation.References
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.SourceImplementation
+                || scope.Kind == EvidenceKind.SourceXmlDocumentation
+                    && scope.Relation == EvidenceRelation.Documents
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.ExistingDocumentation
+                || scope.Kind == EvidenceKind.SourceAttribute
+                    && scope.Relation == EvidenceRelation.Constrains
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration,
+            DocumentationScribeContextRole.TestEvidence =>
+                scope.Kind == EvidenceKind.Test
+                    && scope.Relation == EvidenceRelation.Tests
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.Test,
+            DocumentationScribeContextRole.UsageEvidence =>
+                scope.Kind == EvidenceKind.SourceImplementation
+                    && scope.Relation == EvidenceRelation.References
+                    && scope.Authority == DocumentationScribeEvidenceAuthority.SourceImplementation,
+            _ => false,
+        };
+        var probe = new DocumentationScribeDynamicEvidenceInput(
+            scope.Subject,
+            scope.Kind,
+            scope.Relation,
+            scope.Authority,
+            EvidenceInput.RepositoryLocator(anchorPath),
+            new string('a', 64),
+            1,
+            1,
+            false,
+            scope.ClaimCategoryIds);
+        if (!roleMatches || !DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, probe, out _))
+        {
+            throw new ArgumentException("The repository evidence scope is contradictory or not request-authorized.", nameof(scope));
+        }
     }
 
     private BoundScope GetScope(string scopeId, DocumentationScribeRepositoryToolOperations operation)
@@ -413,6 +502,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
                 }
 
+                ChargeMatch();
+
                 var lineStart = LineStart(file.Text, match);
                 var lineEnd = LineEnd(file.Text, end);
                 var excerpt = CreateExcerpt(file, lineStart, lineEnd, match, end);
@@ -433,7 +524,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         CancellationToken cancellationToken)
     {
         var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
-        var start = FullPath(root, path);
+        var start = ResolveExactProviderPath(path, cancellationToken);
         var pending = new Stack<(string Path, int Depth)>();
         pending.Push((start, 0));
         var files = new List<string>();
@@ -443,31 +534,66 @@ internal sealed class DocumentationScribeRepositoryToolSession
         {
             Check(cancellationToken);
             var (directory, depth) = pending.Pop();
+            var directoryRepositoryPath = RepositoryPath(root, directory);
+            if (absences.TryGetValue(directoryRepositoryPath, out var absence))
+            {
+                var currentChain = DocumentationScribeContextDirectoryChain.Read(root, Path.GetDirectoryName(directory)!);
+                if (Directory.Exists(directory) || File.Exists(directory)
+                    || !currentChain.SequenceEqual(absence.DirectoryChain))
+                {
+                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                }
+
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+            }
+
             if (depth > limits.MaximumDirectoryDepth)
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
             }
 
-            directoriesInspected = checked(directoriesInspected + 1);
-            if (directoriesInspected > limits.MaximumDirectoriesPerRun)
-            {
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
-            }
+            ChargeDirectory(directoryRepositoryPath);
 
             try
             {
-                _ = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(directory);
+                var identity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(directory);
+                if (directoryObservations.TryGetValue(directoryRepositoryPath, out var accepted)
+                    && accepted != identity)
+                {
+                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                }
+
+                directoryObservations[directoryRepositoryPath] = identity;
             }
             catch (DocumentationScribeContextReadException exception) when (
                 !scope.Scope.Required
                 && exception.Failure == DocumentationScribeContextReadFailure.Stale)
             {
+                if (!Directory.Exists(directory) && !File.Exists(directory))
+                {
+                    var parent = Path.GetDirectoryName(directory)!;
+                    absences[directoryRepositoryPath] = new(
+                        directory,
+                        DocumentationScribeContextDirectoryChain.Read(root, parent));
+                }
+
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
             }
-            string[] entries;
+            List<string> entries = [];
             try
             {
-                entries = Directory.GetFileSystemEntries(directory);
+                foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    Check(cancellationToken);
+                    ChargeEntry();
+                    inspected = checked(inspected + 1);
+                    if (inspected > limits.MaximumEntriesPerCall)
+                    {
+                        throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
+                    }
+
+                    entries.Add(entry);
+                }
             }
             catch (DirectoryNotFoundException)
             {
@@ -476,15 +602,12 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     : DocumentationScribeRepositoryToolFailureCodes.Unavailable);
             }
 
-            Array.Sort(entries, StringComparer.Ordinal);
+            entries.Sort(StringComparer.Ordinal);
             foreach (var entry in entries)
             {
                 Check(cancellationToken);
-                inspected = checked(inspected + 1);
-                if (inspected > limits.MaximumEntriesPerCall)
-                {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
-                }
+                var repositoryPath = RepositoryPath(root, entry);
+                _ = NormalizeRepositoryPath(repositoryPath, allowEmpty: false);
 
                 FileAttributes attributes;
                 try
@@ -511,7 +634,6 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     continue;
                 }
 
-                var repositoryPath = RepositoryPath(root, entry);
                 if (scope.Scope.Extensions.Length != 0
                     && !scope.Scope.Extensions.Contains(Path.GetExtension(repositoryPath), StringComparer.Ordinal))
                 {
@@ -526,6 +648,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
                 spellings[repositoryPath] = repositoryPath;
                 files.Add(repositoryPath);
+                ChargeFile(repositoryPath);
                 if (files.Count > limits.MaximumFilesPerCall)
                 {
                     throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
@@ -543,9 +666,22 @@ internal sealed class DocumentationScribeRepositoryToolSession
         CancellationToken cancellationToken)
     {
         Check(cancellationToken);
+        ChargeFile(repositoryPath);
         var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
-        var fullPath = FullPath(root, repositoryPath);
+        var fullPath = ResolveExactProviderPath(repositoryPath, cancellationToken);
         var parent = Path.GetDirectoryName(fullPath)!;
+        if (absences.TryGetValue(repositoryPath, out var absence))
+        {
+            var currentChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
+            if (File.Exists(fullPath) || Directory.Exists(fullPath)
+                || !currentChain.SequenceEqual(absence.DirectoryChain))
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+            }
+
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+        }
+
         var before = DocumentationScribeContextDirectoryChain.Read(root, parent);
         DocumentationScribeContextStableRead read;
         try
@@ -559,8 +695,18 @@ internal sealed class DocumentationScribeRepositoryToolSession
         catch (DocumentationScribeContextReadException exception)
         {
             var previouslyAccepted = observations.ContainsKey(repositoryPath);
+            if (!required && !previouslyAccepted
+                && exception.Failure == DocumentationScribeContextReadFailure.Stale
+                && !File.Exists(fullPath) && !Directory.Exists(fullPath))
+            {
+                var chain = DocumentationScribeContextDirectoryChain.Read(root, parent);
+                absences[repositoryPath] = new(fullPath, chain);
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+            }
+
             throw Failure(exception.Failure switch
             {
+                DocumentationScribeContextReadFailure.Budget when previouslyAccepted => DocumentationScribeRepositoryToolFailureCodes.Stale,
                 DocumentationScribeContextReadFailure.Budget => DocumentationScribeRepositoryToolFailureCodes.Budget,
                 DocumentationScribeContextReadFailure.Unsafe => DocumentationScribeRepositoryToolFailureCodes.UnsafeObject,
                 _ when !required && !previouslyAccepted => DocumentationScribeRepositoryToolFailureCodes.Unavailable,
@@ -583,6 +729,16 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
 
         physicalPaths[identity] = repositoryPath;
+        var sha = Sha256(read.Bytes);
+        if (observations.TryGetValue(repositoryPath, out var accepted)
+            && (accepted.Identity != read.Identity
+                || !accepted.DirectoryChain.SequenceEqual(after)
+                || !string.Equals(accepted.ContentSha256, sha, StringComparison.Ordinal)))
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+        }
+
+        observations[repositoryPath] = new(fullPath, repositoryPath, read.Identity, after, sha);
         string text;
         try
         {
@@ -600,16 +756,6 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 : DocumentationScribeRepositoryToolFailureCodes.Unavailable);
         }
 
-        var sha = Sha256(read.Bytes);
-        if (observations.TryGetValue(repositoryPath, out var accepted)
-            && (accepted.Identity != read.Identity
-                || !accepted.DirectoryChain.SequenceEqual(after)
-                || !string.Equals(accepted.ContentSha256, sha, StringComparison.Ordinal)))
-        {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
-        }
-
-        observations[repositoryPath] = new(fullPath, repositoryPath, read.Identity, after, sha);
         return new(repositoryPath, read.Bytes, text, sha, HasBom(read.Bytes));
     }
 
@@ -620,7 +766,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
         string? cursorValue,
         CancellationToken cancellationToken,
         Func<ImmutableArray<PageValue>> materialize,
-        Action<ImmutableArray<PageValue>>? preparePublication = null)
+        Action<ImmutableArray<PageValue>>? preparePublication,
+        Func<ImmutableArray<PageValue>, string?, bool, int> measurePublication)
     {
         PageChain? chain = null;
         var reserved = false;
@@ -658,7 +805,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
         try
         {
             var values = materialize();
-            var fingerprint = Sha256(Encoding.UTF8.GetBytes(string.Join('\n', values.Select(value => value.Key))));
+            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.AfterMaterialization, cancellationToken);
+            var fingerprint = Fingerprint(values);
             if (chain is not null && !string.Equals(chain.Fingerprint, fingerprint, StringComparison.Ordinal))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
@@ -669,23 +817,27 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidCursor);
             }
 
+            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeFinalMembershipCheck, cancellationToken);
+            var finalValues = materialize();
+            if (!string.Equals(fingerprint, Fingerprint(finalValues), StringComparison.Ordinal))
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+            }
+
+            values = finalValues;
             chain ??= CreateChain(operationId, scope, query, fingerprint);
             var count = Math.Min(query.PageSize, values.Length - position);
             var page = values.Skip(position).Take(count).ToImmutableArray();
             var hasMore = position + count < values.Length;
             preparePublication?.Invoke(page);
             VerifyFresh(cancellationToken);
-            var publicationBytes = page.Sum(value => value.Value is DocumentationScribeRepositoryExcerpt excerpt
-                ? excerpt.IncludedUtf8ByteCount
-                : 0);
-            var nextReturnedBytes = checked(returnedBytes + publicationBytes);
-            var nextReturnedItems = checked(returnedItems + page.Length);
-            if (nextReturnedBytes > limits.MaximumReturnedUtf8BytesPerRun
-                || nextReturnedItems > limits.MaximumReturnedItemsPerRun)
+            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication, cancellationToken);
+            if (!string.Equals(fingerprint, Fingerprint(materialize()), StringComparison.Ordinal))
             {
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
 
+            VerifyFresh(cancellationToken);
             var next = loadedContext.IssueCursor(chain.CursorScope, current, count, hasMore, cancellationToken);
             if (next is { } candidate
                 && (cursorChains.ContainsKey(candidate.Value)
@@ -694,8 +846,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidCursor);
             }
 
-            returnedBytes = nextReturnedBytes;
-            returnedItems = nextReturnedItems;
+            CommitPublication(measurePublication(page, next?.Value, hasMore), page.Length, cancellationToken);
             if (cursorValue is not null)
             {
                 cursorChains.Remove(cursorValue);
@@ -774,7 +925,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
             file.ContentSha256,
             file.RawBytes.Length,
             included,
-            start != 0 || end != file.Text.Length,
+            file.HasBom || start != 0 || end != file.Text.Length,
             matchStart,
             matchEnd);
     }
@@ -783,8 +934,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         BoundScope scope,
         StableTextFile file,
         int start,
-        int end,
-        bool wholeFile)
+        int end)
     {
         if (scope.Scope.Subject is null)
         {
@@ -792,8 +942,10 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
 
         var content = file.Text[start..end];
-        var included = wholeFile && file.HasBom ? file.RawBytes.Length : StrictUtf8.GetByteCount(content);
-        var locator = wholeFile
+        var included = StrictUtf8.GetByteCount(content);
+        var original = file.RawBytes.Length;
+        var complete = start == 0 && end == file.Text.Length && !file.HasBom;
+        var locator = complete
             ? EvidenceInput.RepositoryLocator(file.RepositoryPath)
             : EvidenceInput.RepositoryLocator(file.RepositoryPath, start, end);
         var input = new DocumentationScribeDynamicEvidenceInput(
@@ -803,13 +955,16 @@ internal sealed class DocumentationScribeRepositoryToolSession
             scope.Scope.Authority,
             locator,
             file.ContentSha256,
-            file.RawBytes.Length,
+            original,
             included,
-            included < file.RawBytes.Length,
+            !complete,
             scope.Scope.ClaimCategoryIds);
-        return DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out _)
-            ? input
-            : null;
+        if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out _))
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+        }
+
+        return input;
     }
 
     private DocumentationScribeInstructionRouteFact? CreateRoute(
@@ -890,6 +1045,146 @@ internal sealed class DocumentationScribeRepositoryToolSession
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
+        }
+
+        foreach (var absence in absences.Values)
+        {
+            Check(cancellationToken);
+            var parent = Path.GetDirectoryName(absence.FullPath)!;
+            var directories = DocumentationScribeContextDirectoryChain.Read(
+                loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                parent);
+            if (File.Exists(absence.FullPath) || Directory.Exists(absence.FullPath)
+                || !directories.SequenceEqual(absence.DirectoryChain))
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+            }
+        }
+
+        foreach (var directory in directoryObservations)
+        {
+            Check(cancellationToken);
+            var fullPath = FullPath(
+                loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                directory.Key == "." ? string.Empty : directory.Key);
+            if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(fullPath) != directory.Value)
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+            }
+        }
+    }
+
+    private static int MeasurePublication<T>(T value) => value switch
+    {
+        DocumentationScribeRepositoryReadExcerptResult result => checked(
+            512 + MeasureExcerpt(result.Excerpt) + MeasureRoute(result.Route)
+            + result.DynamicEvidence.Sum(MeasureEvidence)),
+        DocumentationScribeRepositoryListFilesResult result => checked(
+            512 + MeasureText(result.Cursor)
+            + result.Items.Sum(item => 256 + MeasureText(item.RepositoryPath) + MeasureText(item.ContentSha256))),
+        DocumentationScribeRepositorySearchTextResult result => checked(
+            768 + MeasureText(result.Cursor) + result.Items.Sum(MeasureExcerpt)
+            + result.Routes.Sum(MeasureRoute) + result.DynamicEvidence.Sum(MeasureEvidence)),
+        _ => throw new InvalidOperationException("Unsupported repository tool publication type."),
+    };
+
+    private static int MeasureExcerpt(DocumentationScribeRepositoryExcerpt? value) => value is null
+        ? 4
+        : checked(384 + MeasureText(value.RepositoryPath) + MeasureText(value.Content)
+            + MeasureText(value.ContentSha256));
+
+    private static int MeasureRoute(DocumentationScribeInstructionRouteFact? value) => value is null
+        ? 4
+        : checked(1_024 + MeasureText(value.RouteId) + MeasureText(value.OriginInstructionId)
+            + MeasureText(value.DestinationPath) + MeasureText(value.SourceCommitment.RepositoryPath)
+            + MeasureText(value.SourceCommitment.ContentSha256)
+            + MeasureText(value.SourceCommitment.IncludedContentSha256));
+
+    private static int MeasureEvidence(DocumentationScribeDynamicEvidenceInput value)
+    {
+        var subject = value.Subject.ParentSymbolRef;
+        var componentIdentity = value.Subject is ComponentEvidenceSubject component
+            ? MeasureText(component.Identity)
+            : 0;
+        var locator = value.Locator is RepositoryEvidenceLocator repository
+            ? MeasureText(repository.Path)
+            : MeasureText(value.Locator.ToString());
+        return checked(
+            1_024 + MeasureText(subject.CompilationContextRef) + MeasureText(subject.DocumentationCommentId)
+            + componentIdentity + locator + MeasureText(value.ContentSha256)
+            + value.ClaimCategoryIds.Sum(MeasureText));
+    }
+
+    private static int MeasureText(string? value) => value is null
+        ? 4
+        : checked(StrictUtf8.GetByteCount(value) + 2);
+
+    private void Checkpoint(
+        DocumentationScribeRepositoryToolCheckpoint value,
+        CancellationToken cancellationToken)
+    {
+        checkpoint?.Invoke(value);
+        Check(cancellationToken);
+    }
+
+    private static string Fingerprint(ImmutableArray<PageValue> values)
+    {
+        using var stream = new MemoryStream();
+        Span<byte> length = stackalloc byte[4];
+        foreach (var value in values)
+        {
+            var bytes = StrictUtf8.GetBytes(value.Key);
+            BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+
+        return Sha256(stream.ToArray());
+    }
+
+    private void ChargeEntry()
+    {
+        entriesInspected = checked(entriesInspected + 1);
+        if (entriesInspected > limits.MaximumEntriesPerRun)
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
+        }
+    }
+
+    private void ChargeDirectory(string repositoryPath)
+    {
+        if (!inspectedDirectoryPaths.Add(repositoryPath))
+        {
+            return;
+        }
+
+        directoriesInspected = checked(directoriesInspected + 1);
+        if (directoriesInspected > limits.MaximumDirectoriesPerRun)
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
+        }
+    }
+
+    private void ChargeFile(string repositoryPath)
+    {
+        if (!inspectedFilePaths.Add(repositoryPath))
+        {
+            return;
+        }
+
+        filesInspected = checked(filesInspected + 1);
+        if (filesInspected > limits.MaximumFilesPerRun)
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
+        }
+    }
+
+    private void ChargeMatch()
+    {
+        matchesDiscovered = checked(matchesDiscovered + 1);
+        if (matchesDiscovered > limits.MaximumMatchesPerRun)
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Budget);
         }
     }
 
@@ -990,8 +1285,19 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private static void ValidateLiteral(string literal)
     {
         ArgumentNullException.ThrowIfNull(literal);
+        int bytes;
+        try
+        {
+            bytes = StrictUtf8.GetByteCount(literal);
+        }
+        catch (EncoderFallbackException)
+        {
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+        }
+
+        var scalars = literal.EnumerateRunes().Count();
         if (literal.Length == 0 || literal.Contains('\r') || literal.Contains('\n')
-            || literal.Any(char.IsControl) || literal.Contains('*') || literal.Contains('?'))
+            || literal.Any(char.IsControl) || scalars > 1_024 || bytes > 4_096)
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
         }
@@ -1020,6 +1326,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
 
         if (path.Contains('\\')
+            || path.Any(char.IsControl)
             || Path.IsPathRooted(path)
             || path.Contains(':')
             || path.StartsWith("/", StringComparison.Ordinal)
@@ -1050,6 +1357,57 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
 
         return candidate;
+    }
+
+    private string ResolveExactProviderPath(string repositoryPath, CancellationToken cancellationToken)
+    {
+        var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
+        var current = Path.GetFullPath(root);
+        if (repositoryPath.Length == 0)
+        {
+            return current;
+        }
+
+        foreach (var segment in repositoryPath.Split('/'))
+        {
+            Check(cancellationToken);
+            string? exact = null;
+            var alternate = false;
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+                {
+                    ChargeEntry();
+                    var name = Path.GetFileName(entry);
+                    if (string.Equals(name, segment, StringComparison.Ordinal))
+                    {
+                        exact = entry;
+                    }
+                    else if (string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        alternate = true;
+                    }
+                }
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return FullPath(root, repositoryPath);
+            }
+
+            if (alternate)
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.UnsafeObject);
+            }
+
+            if (exact is null)
+            {
+                return FullPath(root, repositoryPath);
+            }
+
+            current = exact;
+        }
+
+        return current;
     }
 
     private static string RepositoryPath(string root, string fullPath) =>
@@ -1167,6 +1525,10 @@ internal sealed class DocumentationScribeRepositoryToolSession
         DocumentationScribeContextPhysicalIdentity Identity,
         ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain,
         string ContentSha256);
+
+    private sealed record AbsenceObservation(
+        string FullPath,
+        ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain);
 
     private sealed record NormalizedQuery(string Path, string? Literal, int PageSize);
 

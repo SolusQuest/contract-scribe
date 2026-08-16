@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Runtime.InteropServices;
 using ContractScribe.Core;
@@ -10,6 +12,8 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 [Collection("Integration process lane 2")]
 public sealed class DocumentationScribeRepositoryToolIntegrationTests
 {
+    private const string ProjectionOutputVariable = "CONTRACTSCRIBE_REPOSITORY_PROJECTION_OUTPUT";
+
     [Fact]
     public async Task CursorCannotCrossFreshToolSessionAndOriginalChainRemainsUsable()
     {
@@ -108,6 +112,98 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
         Assert.Empty(listed.Items);
     }
 
+    [Fact]
+    public async Task SemanticCommitmentsAreIdenticalAcrossFreshProcesses()
+    {
+        var childOutput = Environment.GetEnvironmentVariable(ProjectionOutputVariable);
+        if (!string.IsNullOrEmpty(childOutput))
+        {
+            using var fixture = RepositoryToolFixture.Create();
+            var bundle = fixture.Bundle();
+            var list = await bundle.ListFiles.InvokeAsync(
+                new("context.instructions", "docs", 8), default);
+            var search = await bundle.SearchText.InvokeAsync(
+                new("context.instructions", "bounded", "docs", 8), default);
+            var read = await bundle.ReadExcerpt.InvokeAsync(
+                new("context.instructions", "docs/guide.md"), default);
+            var evidenceIds = read.DynamicEvidence
+                .Concat(search.DynamicEvidence)
+                .Select(input =>
+                {
+                    Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+                        fixture.Request, input, out var reference));
+                    return reference!.EvidenceReferenceId;
+                })
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var projection = new
+            {
+                list = list.Items.Select(item => new { item.RepositoryPath, item.ContentSha256, item.Utf8ByteCount }),
+                search = search.Items.Select(item => new
+                {
+                    item.RepositoryPath,
+                    item.ContentSha256,
+                    item.StartUtf16,
+                    item.EndUtf16,
+                    item.MatchStartUtf16,
+                    item.MatchEndUtf16,
+                }),
+                read = new
+                {
+                    read.Excerpt!.RepositoryPath,
+                    read.Excerpt.ContentSha256,
+                    read.Excerpt.OriginalUtf8ByteCount,
+                    read.Excerpt.IncludedUtf8ByteCount,
+                },
+                evidenceIds,
+            };
+            File.WriteAllBytes(childOutput, JsonSerializer.SerializeToUtf8Bytes(projection));
+            return;
+        }
+
+        var first = Path.GetTempFileName();
+        var second = Path.GetTempFileName();
+        try
+        {
+            await RunProjectionChild(first);
+            await RunProjectionChild(second);
+            Assert.Equal(await File.ReadAllTextAsync(first), await File.ReadAllTextAsync(second));
+        }
+        finally
+        {
+            File.Delete(first);
+            File.Delete(second);
+        }
+    }
+
+    private static async Task RunProjectionChild(string outputPath)
+    {
+        var root = RepositoryToolFixture.FindRepositoryRoot();
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add("test");
+        start.ArgumentList.Add(Path.Join(root, "tests", "ContractScribe.IntegrationTests", "ContractScribe.IntegrationTests.csproj"));
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add("Release");
+        start.ArgumentList.Add("--no-build");
+        start.ArgumentList.Add("--no-restore");
+        start.ArgumentList.Add("--filter");
+        start.ArgumentList.Add("FullyQualifiedName~SemanticCommitmentsAreIdenticalAcrossFreshProcesses");
+        start.Environment[ProjectionOutputVariable] = outputPath;
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Projection child did not start.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.True(process.ExitCode == 0,
+            $"projection child exit={process.ExitCode}; stdout={await standardOutput}; stderr={await standardError}");
+        Assert.True(File.Exists(outputPath));
+    }
+
     private sealed class RepositoryToolFixture : IDisposable
     {
         private readonly LoadedRepositorySession repository;
@@ -130,6 +226,7 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
 
         internal string Root { get; }
         internal string OutsideRoot { get; }
+        internal DocumentationScribeRequest Request => request;
 
         internal static RepositoryToolFixture Create()
         {
@@ -281,7 +378,7 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
             return Assert.IsType<DocumentationScribeRequest>(parsed.Request);
         }
 
-        private static string FindRepositoryRoot()
+        internal static string FindRepositoryRoot()
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))

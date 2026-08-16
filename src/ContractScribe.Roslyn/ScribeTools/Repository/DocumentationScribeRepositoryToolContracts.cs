@@ -38,12 +38,15 @@ public sealed record DocumentationScribeRepositoryToolLimits
 {
     private DocumentationScribeRepositoryToolLimits(
         int maximumEntriesPerCall,
+        int maximumEntriesPerRun,
         int maximumFilesPerCall,
+        int maximumFilesPerRun,
         int maximumFileUtf8Bytes,
         int maximumBytesReadPerRun,
         int maximumReturnedUtf8BytesPerRun,
         int maximumReturnedItemsPerRun,
         int maximumMatchesPerCall,
+        int maximumMatchesPerRun,
         int maximumDirectoryDepth,
         int maximumDirectoriesPerRun,
         int maximumRouteDepth,
@@ -53,12 +56,15 @@ public sealed record DocumentationScribeRepositoryToolLimits
         int maximumElapsedMilliseconds)
     {
         MaximumEntriesPerCall = maximumEntriesPerCall;
+        MaximumEntriesPerRun = maximumEntriesPerRun;
         MaximumFilesPerCall = maximumFilesPerCall;
+        MaximumFilesPerRun = maximumFilesPerRun;
         MaximumFileUtf8Bytes = maximumFileUtf8Bytes;
         MaximumBytesReadPerRun = maximumBytesReadPerRun;
         MaximumReturnedUtf8BytesPerRun = maximumReturnedUtf8BytesPerRun;
         MaximumReturnedItemsPerRun = maximumReturnedItemsPerRun;
         MaximumMatchesPerCall = maximumMatchesPerCall;
+        MaximumMatchesPerRun = maximumMatchesPerRun;
         MaximumDirectoryDepth = maximumDirectoryDepth;
         MaximumDirectoriesPerRun = maximumDirectoriesPerRun;
         MaximumRouteDepth = maximumRouteDepth;
@@ -69,12 +75,15 @@ public sealed record DocumentationScribeRepositoryToolLimits
     }
 
     public int MaximumEntriesPerCall { get; }
+    public int MaximumEntriesPerRun { get; }
     public int MaximumFilesPerCall { get; }
+    public int MaximumFilesPerRun { get; }
     public int MaximumFileUtf8Bytes { get; }
     public int MaximumBytesReadPerRun { get; }
     public int MaximumReturnedUtf8BytesPerRun { get; }
     public int MaximumReturnedItemsPerRun { get; }
     public int MaximumMatchesPerCall { get; }
+    public int MaximumMatchesPerRun { get; }
     public int MaximumDirectoryDepth { get; }
     public int MaximumDirectoriesPerRun { get; }
     public int MaximumRouteDepth { get; }
@@ -85,12 +94,15 @@ public sealed record DocumentationScribeRepositoryToolLimits
 
     public static DocumentationScribeRepositoryToolLimits Create(
         int maximumEntriesPerCall = 1_024,
+        int maximumEntriesPerRun = 4_096,
         int maximumFilesPerCall = 256,
+        int maximumFilesPerRun = 1_024,
         int maximumFileUtf8Bytes = 262_144,
         int maximumBytesReadPerRun = 1_048_576,
         int maximumReturnedUtf8BytesPerRun = 262_144,
         int maximumReturnedItemsPerRun = 512,
         int maximumMatchesPerCall = 256,
+        int maximumMatchesPerRun = 1_024,
         int maximumDirectoryDepth = 32,
         int maximumDirectoriesPerRun = 1_024,
         int maximumRouteDepth = 32,
@@ -101,14 +113,28 @@ public sealed record DocumentationScribeRepositoryToolLimits
     {
         var values = new[]
         {
-            maximumEntriesPerCall, maximumFilesPerCall, maximumFileUtf8Bytes,
+            maximumEntriesPerCall, maximumEntriesPerRun,
+            maximumFilesPerCall, maximumFilesPerRun, maximumFileUtf8Bytes,
             maximumBytesReadPerRun, maximumReturnedUtf8BytesPerRun,
-            maximumReturnedItemsPerRun, maximumMatchesPerCall, maximumPageSize,
+            maximumReturnedItemsPerRun, maximumMatchesPerCall, maximumMatchesPerRun, maximumPageSize,
             maximumDirectoryDepth, maximumDirectoriesPerRun, maximumRouteDepth,
             maximumActiveChains, maximumCallsPerOperation, maximumElapsedMilliseconds,
         };
         if (values.Any(value => value <= 0)
             || maximumPageSize > 4_096
+            || maximumEntriesPerCall > 65_536
+            || maximumEntriesPerRun > 65_536
+            || maximumFilesPerCall > 16_384
+            || maximumFilesPerRun > 16_384
+            || maximumBytesReadPerRun > 67_108_864
+            || maximumReturnedItemsPerRun > 16_384
+            || maximumMatchesPerCall > 65_536
+            || maximumMatchesPerRun > 65_536
+            || maximumDirectoryDepth > 512
+            || maximumDirectoriesPerRun > 65_536
+            || maximumRouteDepth > 512
+            || maximumActiveChains > 4_096
+            || maximumCallsPerOperation > 4_096
             || maximumFileUtf8Bytes > DocumentationScribeContract.MaximumArtifactUtf8Bytes
             || maximumReturnedUtf8BytesPerRun > DocumentationScribeContract.MaximumArtifactUtf8Bytes
             || maximumElapsedMilliseconds > DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds)
@@ -117,9 +143,10 @@ public sealed record DocumentationScribeRepositoryToolLimits
         }
 
         return new(
-            maximumEntriesPerCall, maximumFilesPerCall, maximumFileUtf8Bytes,
+            maximumEntriesPerCall, maximumEntriesPerRun,
+            maximumFilesPerCall, maximumFilesPerRun, maximumFileUtf8Bytes,
             maximumBytesReadPerRun, maximumReturnedUtf8BytesPerRun,
-            maximumReturnedItemsPerRun, maximumMatchesPerCall,
+            maximumReturnedItemsPerRun, maximumMatchesPerCall, maximumMatchesPerRun,
             maximumDirectoryDepth, maximumDirectoriesPerRun, maximumRouteDepth,
             maximumPageSize,
             maximumActiveChains, maximumCallsPerOperation, maximumElapsedMilliseconds);
@@ -171,6 +198,9 @@ public sealed record DocumentationScribeRepositoryToolScope
     public EvidenceRelation Relation { get; }
     public DocumentationScribeEvidenceAuthority Authority { get; }
     public ImmutableArray<string> ClaimCategoryIds { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeRepositoryToolScope)} {{ IsDirectory = {IsDirectory}, Operations = {Operations}, Required = {Required}, Recursive = {Recursive}, ExtensionCount = {Extensions.Length}, Role = {Role}, HasEvidence = {Subject is not null}, ClaimCount = {ClaimCategoryIds.Length} }}";
 
     public static DocumentationScribeRepositoryToolScope Directory(
         string scopeId,
@@ -246,20 +276,32 @@ public sealed record DocumentationScribeRepositoryReadExcerptRequest(
     string ScopeId,
     string? RepositoryPath = null,
     int? StartLine = null,
-    int? EndLine = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositoryReadExcerptResult>;
+    int? EndLine = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositoryReadExcerptResult>
+{
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeRepositoryReadExcerptRequest)} {{ HasPath = {RepositoryPath is not null}, HasRange = {StartLine is not null || EndLine is not null} }}";
+}
 
 public sealed record DocumentationScribeRepositoryListFilesRequest(
     string ScopeId,
     string? Subdirectory = null,
     int PageSize = 32,
-    string? Cursor = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositoryListFilesResult>;
+    string? Cursor = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositoryListFilesResult>
+{
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeRepositoryListFilesRequest)} {{ HasSubdirectory = {Subdirectory is not null}, PageSize = {PageSize}, HasCursor = {Cursor is not null} }}";
+}
 
 public sealed record DocumentationScribeRepositorySearchTextRequest(
     string ScopeId,
     string Literal,
     string? Subdirectory = null,
     int PageSize = 32,
-    string? Cursor = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositorySearchTextResult>;
+    string? Cursor = null) : IDocumentationScribeToolRequest<DocumentationScribeRepositorySearchTextResult>
+{
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeRepositorySearchTextRequest)} {{ HasLiteral = {Literal is not null}, HasSubdirectory = {Subdirectory is not null}, PageSize = {PageSize}, HasCursor = {Cursor is not null} }}";
+}
 
 public sealed record DocumentationScribeRepositoryExcerpt(
     string RepositoryPath,
@@ -341,7 +383,15 @@ public static class DocumentationScribeRepositoryToolSchemas
         "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"scopeId\"],\"properties\":{\"scopeId\":{\"type\":\"string\"},\"subdirectory\":{\"type\":\"string\"},\"pageSize\":{\"type\":\"integer\",\"minimum\":1},\"cursor\":{\"type\":\"string\"}}}");
 
     public static ReadOnlyMemory<byte> SearchTextInputUtf8Json { get; } = Encoding.UTF8.GetBytes(
-        "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"scopeId\",\"literal\"],\"properties\":{\"scopeId\":{\"type\":\"string\"},\"literal\":{\"type\":\"string\",\"minLength\":1},\"subdirectory\":{\"type\":\"string\"},\"pageSize\":{\"type\":\"integer\",\"minimum\":1},\"cursor\":{\"type\":\"string\"}}}");
+        "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"scopeId\",\"literal\"],\"properties\":{\"scopeId\":{\"type\":\"string\"},\"literal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1024},\"subdirectory\":{\"type\":\"string\"},\"pageSize\":{\"type\":\"integer\",\"minimum\":1},\"cursor\":{\"type\":\"string\"}}}");
+}
+
+internal enum DocumentationScribeRepositoryToolCheckpoint
+{
+    AfterMaterialization,
+    BeforeFinalMembershipCheck,
+    BeforeEvidencePublication,
+    BeforeCursorPublication,
 }
 
 public sealed class DocumentationScribeRepositoryToolBundle
@@ -371,6 +421,35 @@ public sealed class DocumentationScribeRepositoryToolBundle
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(loadedContext);
         ArgumentNullException.ThrowIfNull(scopes);
-        return new(new(request, attemptId, loadedContext, scopes, limits ?? DocumentationScribeRepositoryToolLimits.Create()));
+        return CreateCore(request, attemptId, loadedContext, scopes, limits, null);
+    }
+
+    internal static DocumentationScribeRepositoryToolBundle CreateForTesting(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
+        DocumentationScribeLoadedContext loadedContext,
+        IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
+        DocumentationScribeRepositoryToolLimits? limits,
+        Action<DocumentationScribeRepositoryToolCheckpoint> checkpoint) =>
+        CreateCore(request, attemptId, loadedContext, scopes, limits, checkpoint);
+
+    private static DocumentationScribeRepositoryToolBundle CreateCore(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
+        DocumentationScribeLoadedContext loadedContext,
+        IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
+        DocumentationScribeRepositoryToolLimits? limits,
+        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(loadedContext);
+        ArgumentNullException.ThrowIfNull(scopes);
+        return new(new(
+            request,
+            attemptId,
+            loadedContext,
+            scopes,
+            limits ?? DocumentationScribeRepositoryToolLimits.Create(),
+            checkpoint));
     }
 }

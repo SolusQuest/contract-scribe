@@ -2,7 +2,10 @@ using System.Collections.Immutable;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
@@ -171,14 +174,18 @@ public sealed class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
-    public async Task UnsupportedSearchAndCancellationReturnNoAcceptedPayload()
+    public async Task LiteralMetacharactersAreOrdinaryTextAndCancellationReturnsNoPayload()
     {
         using var fixture = RepositoryToolFixture.Create();
         var bundle = fixture.Bundle();
-        var regexLike = await bundle.SearchText.InvokeAsync(
-            new("context.instructions", "*.md", "docs"), default);
-        Assert.Same(DocumentationScribeToolOutcome.Failure, regexLike.Outcome);
-        Assert.Empty(regexLike.Items);
+        File.WriteAllText(
+            Path.Join(fixture.Root, "docs", "patterns.md"),
+            "literal *.md and ?.cs\n",
+            new UTF8Encoding(false));
+        var literal = await bundle.SearchText.InvokeAsync(
+            new("context.instructions", "*.md", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.Complete, literal.Outcome);
+        Assert.Equal("docs/patterns.md", Assert.Single(literal.Items).RepositoryPath);
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -270,15 +277,19 @@ public sealed class DocumentationScribeRepositoryToolTests
         var result = await fixture.Bundle().ReadExcerpt.InvokeAsync(
             new("context.instructions", "docs/bom.md"), default);
 
-        Assert.Same(DocumentationScribeToolOutcome.Complete, result.Outcome);
+        Assert.Same(DocumentationScribeToolOutcome.Incomplete, result.Outcome);
         Assert.Equal("bom payload\n", result.Excerpt!.Content);
         Assert.Equal(
             Encoding.UTF8.GetByteCount(result.Excerpt.Content),
             result.Excerpt.IncludedUtf8ByteCount);
-        Assert.False(result.Excerpt.IsTruncated);
+        Assert.True(result.Excerpt.IsTruncated);
         var evidence = Assert.Single(result.DynamicEvidence);
-        Assert.Equal(result.Excerpt.OriginalUtf8ByteCount, evidence.IncludedUtf8ByteCount);
-        Assert.False(evidence.IsTruncated);
+        Assert.Equal(result.Excerpt.IncludedUtf8ByteCount, evidence.IncludedUtf8ByteCount);
+        Assert.Equal(result.Excerpt.OriginalUtf8ByteCount, evidence.OriginalUtf8ByteCount);
+        Assert.True(evidence.IsTruncated);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(evidence.Locator);
+        Assert.Equal(0, locator.Span!.Value.Start);
+        Assert.Equal(result.Excerpt.EndUtf16, locator.Span.Value.End);
     }
 
     [Fact]
@@ -407,13 +418,464 @@ public sealed class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolOperations.ListFiles,
             DocumentationScribeContextRole.MaintainedDocumentation,
             required: false);
-        var result = await fixture.Bundle(scopes: [scope]).ListFiles.InvokeAsync(
+        var bundle = fixture.Bundle(scopes: [scope]);
+        var result = await bundle.ListFiles.InvokeAsync(
             new("evidence.summary", "docs/missing", 8), default);
 
         Assert.Same(DocumentationScribeToolOutcome.Unavailable, result.Outcome);
         Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Unavailable, result.FailureCode);
         Assert.Empty(result.Items);
         Assert.Null(result.Cursor);
+
+        Directory.CreateDirectory(Path.Join(fixture.Root, "docs", "missing"));
+        var appeared = await bundle.ListFiles.InvokeAsync(
+            new("evidence.summary", "docs/missing", 8), default);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, appeared.FailureCode);
+    }
+
+    [Fact]
+    public async Task SameLineMatchesRetainItemsButDeduplicateRoutesAndEvidence()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "twice.md"), "hit hit\n", new UTF8Encoding(false));
+
+        var result = await fixture.Bundle().SearchText.InvokeAsync(
+            new("context.instructions", "hit", "docs", 8), default);
+
+        Assert.Equal(2, result.Items.Length);
+        Assert.Single(result.Routes);
+        Assert.Single(result.DynamicEvidence);
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            fixture.Request, result.DynamicEvidence[0], out _));
+    }
+
+    [Theory]
+    [InlineData((int)DocumentationScribeRepositoryToolCheckpoint.AfterMaterialization)]
+    [InlineData((int)DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication)]
+    public async Task FinalMembershipBarrierRejectsInsertionIntoInitiallyEmptyDirectory(int mutationPointValue)
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var empty = Path.Join(fixture.Root, "docs", "empty");
+        Directory.CreateDirectory(empty);
+        var inserted = false;
+        var mutationPoint = (DocumentationScribeRepositoryToolCheckpoint)mutationPointValue;
+        var bundle = fixture.Bundle(checkpoint: point =>
+        {
+            if (!inserted && point == mutationPoint)
+            {
+                inserted = true;
+                File.WriteAllText(Path.Join(empty, "late.md"), "late\n", new UTF8Encoding(false));
+            }
+        });
+
+        var result = await bundle.ListFiles.InvokeAsync(
+            new("context.instructions", "docs/empty", 8), default);
+
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
+        Assert.Empty(result.Items);
+        Assert.Null(result.Cursor);
+    }
+
+    [Fact]
+    public async Task FinalMembershipBarrierRejectsEmptyDirectoryIdentityReplacement()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var empty = Path.Join(fixture.Root, "docs", "replace-empty");
+        Directory.CreateDirectory(empty);
+        var replaced = false;
+        var bundle = fixture.Bundle(checkpoint: point =>
+        {
+            if (!replaced && point == DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication)
+            {
+                replaced = true;
+                Directory.Delete(empty);
+                Directory.CreateDirectory(empty);
+            }
+        });
+
+        var result = await bundle.ListFiles.InvokeAsync(
+            new("context.instructions", "docs/replace-empty", 8), default);
+
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
+        Assert.Empty(result.Items);
+        Assert.Null(result.Cursor);
+    }
+
+    [Fact]
+    public async Task OptionalAbsenceAndInvalidBytesBecomeStaleAfterReplacement()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var scope = DocumentationScribeRepositoryToolScope.Directory(
+            "evidence.summary",
+            "docs",
+            DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+            DocumentationScribeContextRole.MaintainedDocumentation,
+            required: false);
+        var missingBundle = fixture.Bundle(scopes: [scope]);
+        var missing = await missingBundle.ReadExcerpt.InvokeAsync(
+            new("evidence.summary", "docs/later.md"), default);
+        Assert.Same(DocumentationScribeToolOutcome.Unavailable, missing.Outcome);
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "later.md"), "now present\n", new UTF8Encoding(false));
+        var appeared = await missingBundle.ReadExcerpt.InvokeAsync(
+            new("evidence.summary", "docs/later.md"), default);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, appeared.FailureCode);
+
+        File.WriteAllBytes(Path.Join(fixture.Root, "docs", "invalid-later.md"), [0xff]);
+        var invalidBundle = fixture.Bundle(scopes: [scope]);
+        var invalid = await invalidBundle.ReadExcerpt.InvokeAsync(
+            new("evidence.summary", "docs/invalid-later.md"), default);
+        Assert.Same(DocumentationScribeToolOutcome.Unavailable, invalid.Outcome);
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "invalid-later.md"), "valid\n", new UTF8Encoding(false));
+        var replaced = await invalidBundle.ReadExcerpt.InvokeAsync(
+            new("evidence.summary", "docs/invalid-later.md"), default);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, replaced.FailureCode);
+    }
+
+    [Fact]
+    public async Task PreviouslyAcceptedFileGrowingPastCapIsStale()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var bundle = fixture.Bundle(limits: DocumentationScribeRepositoryToolLimits.Create(maximumFileUtf8Bytes: 64));
+        var accepted = await bundle.ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/guide.md"), default);
+        Assert.NotNull(accepted.Excerpt);
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "guide.md"), new string('x', 65), new UTF8Encoding(false));
+
+        var changed = await bundle.ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/guide.md"), default);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, changed.FailureCode);
+    }
+
+    [Fact]
+    public void RequestsScopesAndLimitsFailClosedWithoutSensitiveDumpsOrUnboundedOverrides()
+    {
+        const string secret = "SENSITIVE_LITERAL_42";
+        var request = new DocumentationScribeRepositorySearchTextRequest(secret, secret, secret, 4, secret);
+        Assert.DoesNotContain(secret, request.ToString(), StringComparison.Ordinal);
+        var scope = DocumentationScribeRepositoryToolScope.Directory(
+            secret, secret, DocumentationScribeRepositoryToolOperations.SearchText,
+            DocumentationScribeContextRole.MaintainedDocumentation);
+        Assert.DoesNotContain(secret, scope.ToString(), StringComparison.Ordinal);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DocumentationScribeRepositoryToolLimits.Create(maximumEntriesPerRun: 65_537));
+    }
+
+    [Fact]
+    public async Task RealR2ConsumerExecutesListSearchAndReadWithSeparateValidatedPayloads()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "twice.md"), "hit hit\n", new UTF8Encoding(false));
+        var bundle = fixture.Bundle();
+        var registry = new DocumentationScribeToolRegistryBuilder("tool-policy.read-only.v1")
+            .Add(DocumentationScribeRepositoryToolBundle.ListFilesDescriptor, bundle.ListFiles,
+                new ListCodec(), DocumentationScribeRepositoryToolSchemas.ListFilesDescription,
+                DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json, 8)
+            .Add(DocumentationScribeRepositoryToolBundle.SearchTextDescriptor, bundle.SearchText,
+                new SearchCodec(), DocumentationScribeRepositoryToolSchemas.SearchTextDescription,
+                DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json, 8)
+            .Add(DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor, bundle.ReadExcerpt,
+                new ReadCodec(), DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
+                DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, 8)
+            .Build();
+        var exchange = new RepositoryR2Exchange();
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            registry,
+            new DocumentationScribeRuntimeOptions("provider.test.v1", "model.test.v1", "scribe-protocol.v1"),
+            TimeProvider.System);
+        Assert.True(DocumentationScribeAttemptId.TryParse(
+            "scribe-attempt.11111111111111111111111111111111", out var attempt));
+
+        var result = await runtime.RunAsync(fixture.Request, attempt, Prompt(fixture.Request));
+
+        Assert.True(
+            result.Terminal.Kind == DocumentationScribeTerminalKind.Skip,
+            result.Terminal is DocumentationScribeFailureTerminal failure
+                ? $"failure={failure.Code}; diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.Code + ':' + item.ValidationCode))}; completed={exchange.Completed.Length}; anchor={exchange.AnchorId ?? "null"}"
+                : $"terminal={result.Terminal.Kind}");
+        Assert.Equal("context.instructions", exchange.AnchorId);
+        Assert.Equal(3, exchange.FirstRound.Length);
+        Assert.Equal(4, exchange.Completed.Length);
+        var searches = exchange.Completed.Where(item => item.OperationId ==
+            DocumentationScribeRepositoryToolOperationIds.SearchText).ToArray();
+        Assert.Equal(2, searches.Length);
+        Assert.All(searches, item => Assert.Single(item.EvidenceReferences));
+        Assert.Equal(
+            searches[0].EvidenceReferences[0].EvidenceReferenceId,
+            searches[1].EvidenceReferences[0].EvidenceReferenceId);
+        Assert.Equal(2, result.DynamicEvidenceReferences.Length);
+    }
+
+    [Fact]
+    public void TestLocalR2CodecsRejectUnknownFields()
+    {
+        Assert.False(new ListCodec().DecodeArguments(
+            "{\"scopeId\":\"context.instructions\",\"unknown\":true}"u8.ToArray()).IsValid);
+        Assert.False(new SearchCodec().DecodeArguments(
+            "{\"scopeId\":\"context.instructions\",\"literal\":\"x\",\"unknown\":true}"u8.ToArray()).IsValid);
+        Assert.False(new ReadCodec().DecodeArguments(
+            "{\"scopeId\":\"context.instructions\",\"unknown\":true}"u8.ToArray()).IsValid);
+    }
+
+    [Fact]
+    public async Task CancellationAtCursorBarrierPublishesNothingAndReleasesChainReservation()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        using var cancellation = new CancellationTokenSource();
+        var bundle = fixture.Bundle(pageSize: 1, checkpoint: point =>
+        {
+            if (point == DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var cancelled = await bundle.ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 1), cancellation.Token);
+        Assert.Same(DocumentationScribeToolOutcome.Cancelled, cancelled.Outcome);
+        Assert.Empty(cancelled.Items);
+        Assert.Null(cancelled.Cursor);
+
+        var fresh = await fixture.Bundle(pageSize: 1).ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 1), default);
+        Assert.NotNull(fresh.Cursor);
+    }
+
+    [Fact]
+    public async Task ProviderCaseSubstitutionAndUnrepresentableDiscoveredNamesFailClosed()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var cased = await fixture.Bundle().ReadExcerpt.InvokeAsync(
+            new("context.instructions", "DOCS/guide.md"), default);
+        Assert.Equal(
+            OperatingSystem.IsWindows()
+                ? DocumentationScribeRepositoryToolFailureCodes.UnsafeObject
+                : DocumentationScribeRepositoryToolFailureCodes.Stale,
+            cased.FailureCode);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(Path.Join(fixture.Root, "docs", "bad\\name.md"), "bad\n", new UTF8Encoding(false));
+            var listed = await fixture.Bundle().ListFiles.InvokeAsync(
+                new("context.instructions", "docs", 8), default);
+            Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest, listed.FailureCode);
+            Assert.Empty(listed.Items);
+        }
+    }
+
+    [Fact]
+    public async Task FullPublicationMetadataConsumesReturnedByteBudget()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var result = await fixture.Bundle(limits: DocumentationScribeRepositoryToolLimits.Create(
+            maximumReturnedUtf8BytesPerRun: 64)).ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, result.Outcome);
+        Assert.Empty(result.Items);
+        Assert.Null(result.Cursor);
+    }
+
+    [Fact]
+    public void ContradictoryEvidenceRoleIsRejectedBeforeToolExecution()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var subject = EvidenceInput.TargetSubject(
+            fixture.Request.Target.SymbolRef.CompilationContextRef,
+            fixture.Request.Target.SymbolRef.DocumentationCommentId);
+        var contradictory = DocumentationScribeRepositoryToolScope.Directory(
+            "context.instructions",
+            string.Empty,
+            DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+            DocumentationScribeContextRole.MaintainedDocumentation,
+            subject: subject,
+            kind: EvidenceKind.Test,
+            relation: EvidenceRelation.Tests,
+            authority: DocumentationScribeEvidenceAuthority.Test,
+            claimCategoryIds: ["claim.purpose"]);
+
+        Assert.Throws<ArgumentException>(() => fixture.Bundle(scopes: [contradictory]));
+    }
+
+    [Fact]
+    public async Task LiteralScalarAndUtf8BoundsRejectOversizedValues()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var result = await fixture.Bundle().SearchText.InvokeAsync(
+            new("context.instructions", new string('x', 1_025), "docs", 8), default);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest, result.FailureCode);
+        Assert.Empty(result.Items);
+    }
+
+    private static DocumentationScribePromptInput Prompt(DocumentationScribeRequest request) => new(
+        request.ContextReferences.Select(reference => new DocumentationScribeContextContent(
+            reference.ContextReferenceId,
+            reference.Kind,
+            reference.ContentSha256,
+            reference.IncludedUtf8ByteCount,
+            reference.IsTruncated,
+            reference.ContextReferenceId == "context.instructions"
+                ? "accepted instruction\n"
+                : new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
+        request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(
+            reference.EvidenceReferenceId,
+            reference.Authority,
+            reference.ContentSha256,
+            reference.IncludedUtf8ByteCount,
+            reference.IsTruncated,
+            new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
+
+    private sealed class RepositoryR2Exchange : IDocumentationScribeModelExchange
+    {
+        internal string? AnchorId { get; private set; }
+        internal ImmutableArray<DocumentationScribeCompletedToolExchange> FirstRound { get; private set; } = [];
+        internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.ProviderRequestNumber == 1)
+            {
+                var visiblePrompt = string.Join('\n', request.Messages.Select(message => message.Content));
+                var match = Regex.Match(
+                    visiblePrompt,
+                    "\\\"contextReferenceId\\\"\\s*:\\s*\\\"(?<id>[^\\\"]+)\\\"",
+                    RegexOptions.CultureInvariant);
+                AnchorId = match.Success
+                    ? match.Groups["id"].Value
+                    : visiblePrompt.Contains("context.instructions", StringComparison.Ordinal)
+                        ? "context.instructions"
+                        : null;
+                Assert.Equal("context.instructions", AnchorId);
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [
+                        Call(0, "call.list", DocumentationScribeRepositoryToolOperationIds.ListFiles,
+                            new { scopeId = AnchorId, subdirectory = "docs", pageSize = 8 }),
+                        Call(1, "call.search", DocumentationScribeRepositoryToolOperationIds.SearchText,
+                            new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 8 }),
+                        Call(2, "call.read", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+                            new { scopeId = AnchorId, repositoryPath = "docs/guide.md" }),
+                    ], []));
+            }
+
+            if (request.ProviderRequestNumber == 2)
+            {
+                FirstRound = request.CompletedToolExchanges;
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [Call(0, "call.search.retry", DocumentationScribeRepositoryToolOperationIds.SearchText,
+                        new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 8 })], []));
+            }
+
+            Completed = request.CompletedToolExchanges;
+            Assert.All(Completed, item => Assert.True(item.ResultUtf8Json.Length > 2));
+            var terminalPath = Path.Join(RepositoryToolFixture.FindRepositoryRoot(),
+                "tests", "fixtures", "documentation-scribe", "v1", "valid", "skip-result.json");
+            using var terminal = JsonDocument.Parse(File.ReadAllBytes(terminalPath));
+            var bytes = Encoding.UTF8.GetBytes(terminal.RootElement.GetProperty("terminal").GetRawText());
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [], [new DocumentationScribeModelTerminalSubmission(bytes)]));
+        }
+
+        private static DocumentationScribeModelToolCall Call(int index, string id, string operation, object arguments) =>
+            new(index, id, operation, JsonSerializer.SerializeToUtf8Bytes(arguments));
+
+    }
+
+    private abstract class RepositoryCodec<TRequest, TResult> : IDocumentationScribeToolCodec<TRequest, TResult>
+        where TRequest : IDocumentationScribeToolRequest<TResult>
+        where TResult : IDocumentationScribeToolResult
+    {
+        public abstract DocumentationScribeToolDecodeResult<TRequest> DecodeArguments(ReadOnlyMemory<byte> argumentsUtf8Json);
+
+        public DocumentationScribeToolEncodeResult EncodeResult(TRequest request, TResult result)
+        {
+            var evidence = result switch
+            {
+                DocumentationScribeRepositoryReadExcerptResult read => read.DynamicEvidence,
+                DocumentationScribeRepositorySearchTextResult search => search.DynamicEvidence,
+                _ => [],
+            };
+            return DocumentationScribeToolEncodeResult.Accepted(new DocumentationScribeToolResultPayload(
+                JsonSerializer.SerializeToUtf8Bytes(result), evidence));
+        }
+
+        protected static JsonElement? Object(ReadOnlyMemory<byte> json, params string[] allowed)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object
+                    || root.EnumerateObject().Any(property => !allowed.Contains(property.Name, StringComparer.Ordinal)))
+                {
+                    return null;
+                }
+
+                return root.Clone();
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        protected static string? String(JsonElement root, string name, bool required = false) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : required ? null : null;
+
+        protected static int Integer(JsonElement root, string name, int fallback) =>
+            root.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed) ? parsed : fallback;
+    }
+
+    private sealed class ListCodec : RepositoryCodec<DocumentationScribeRepositoryListFilesRequest, DocumentationScribeRepositoryListFilesResult>
+    {
+        public override DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryListFilesRequest> DecodeArguments(ReadOnlyMemory<byte> json)
+        {
+            var root = Object(json, "scopeId", "subdirectory", "pageSize", "cursor");
+            if (root is not { } value || String(value, "scopeId", true) is not { } scope)
+            {
+                return DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryListFilesRequest>.Rejected();
+            }
+
+            return DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryListFilesRequest>.Accepted(
+                new(scope, String(value, "subdirectory"), Integer(value, "pageSize", 32), String(value, "cursor")));
+        }
+    }
+
+    private sealed class SearchCodec : RepositoryCodec<DocumentationScribeRepositorySearchTextRequest, DocumentationScribeRepositorySearchTextResult>
+    {
+        public override DocumentationScribeToolDecodeResult<DocumentationScribeRepositorySearchTextRequest> DecodeArguments(ReadOnlyMemory<byte> json)
+        {
+            var root = Object(json, "scopeId", "literal", "subdirectory", "pageSize", "cursor");
+            if (root is not { } value
+                || String(value, "scopeId", true) is not { } scope
+                || String(value, "literal", true) is not { } literal)
+            {
+                return DocumentationScribeToolDecodeResult<DocumentationScribeRepositorySearchTextRequest>.Rejected();
+            }
+
+            return DocumentationScribeToolDecodeResult<DocumentationScribeRepositorySearchTextRequest>.Accepted(
+                new(scope, literal, String(value, "subdirectory"), Integer(value, "pageSize", 32), String(value, "cursor")));
+        }
+    }
+
+    private sealed class ReadCodec : RepositoryCodec<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>
+    {
+        public override DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryReadExcerptRequest> DecodeArguments(ReadOnlyMemory<byte> json)
+        {
+            var root = Object(json, "scopeId", "repositoryPath", "startLine", "endLine");
+            if (root is not { } value || String(value, "scopeId", true) is not { } scope)
+            {
+                return DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryReadExcerptRequest>.Rejected();
+            }
+
+            return DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryReadExcerptRequest>.Accepted(
+                new(scope, String(value, "repositoryPath"),
+                    value.TryGetProperty("startLine", out var start) && start.TryGetInt32(out var startLine) ? startLine : null,
+                    value.TryGetProperty("endLine", out var end) && end.TryGetInt32(out var endLine) ? endLine : null));
+        }
     }
 
     private sealed class RepositoryToolFixture : IDisposable
@@ -512,7 +974,8 @@ public sealed class DocumentationScribeRepositoryToolTests
         internal DocumentationScribeRepositoryToolBundle Bundle(
             int pageSize = 8,
             DocumentationScribeRepositoryToolLimits? limits = null,
-            IEnumerable<DocumentationScribeRepositoryToolScope>? scopes = null)
+            IEnumerable<DocumentationScribeRepositoryToolScope>? scopes = null,
+            Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint = null)
         {
             Assert.True(DocumentationScribeAttemptId.TryParse(
                 "scribe-attempt.11111111111111111111111111111111",
@@ -530,12 +993,11 @@ public sealed class DocumentationScribeRepositoryToolTests
                 extensions: [".md"],
                 subject: subject,
                 claimCategoryIds: ["claim.purpose"]);
-            return DocumentationScribeRepositoryToolBundle.Create(
-                request,
-                attempt,
-                loaded,
-                scopes ?? [scope],
-                limits ?? DocumentationScribeRepositoryToolLimits.Create(maximumPageSize: pageSize));
+            var configured = limits ?? DocumentationScribeRepositoryToolLimits.Create(maximumPageSize: pageSize);
+            return checkpoint is null
+                ? DocumentationScribeRepositoryToolBundle.Create(request, attempt, loaded, scopes ?? [scope], configured)
+                : DocumentationScribeRepositoryToolBundle.CreateForTesting(
+                    request, attempt, loaded, scopes ?? [scope], configured, checkpoint);
         }
 
         public void Dispose()
@@ -565,7 +1027,7 @@ public sealed class DocumentationScribeRepositoryToolTests
             return Assert.IsType<DocumentationScribeRequest>(parsed.Request);
         }
 
-        private static string FindRepositoryRoot()
+        internal static string FindRepositoryRoot()
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
