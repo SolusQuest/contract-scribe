@@ -8,6 +8,7 @@ using ContractScribe.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
 
 namespace ContractScribe.Roslyn;
@@ -19,6 +20,7 @@ internal enum DocumentationScribeSemanticStage
     Documentation,
     Relations,
     Usages,
+    UsageTraversal,
     Normalize,
     Page,
     FinalFreshness,
@@ -35,6 +37,8 @@ public sealed class DocumentationScribeSemanticToolPort
     private readonly DocumentationScribeLoadedContext loadedContext;
     private readonly DocumentationScribeRequest scribeRequest;
     private readonly DocumentationScribeSemanticToolLimits limits;
+    private readonly int remainingEvidenceReferences;
+    private readonly int remainingEvidenceUtf8Bytes;
     private readonly Action<DocumentationScribeSemanticStage>? stageObserver;
     private readonly Func<string, string> identity;
     private readonly Binding binding;
@@ -58,7 +62,9 @@ public sealed class DocumentationScribeSemanticToolPort
         this.scribeRequest = scribeRequest ?? throw new ArgumentNullException(nameof(scribeRequest));
         this.limits = Intersect(
             limits ?? DocumentationScribeSemanticToolLimits.Production,
-            scribeRequest.Limits);
+            scribeRequest,
+            out remainingEvidenceReferences,
+            out remainingEvidenceUtf8Bytes);
         this.stageObserver = stageObserver;
         this.identity = identity ?? Sha256;
 
@@ -113,7 +119,19 @@ public sealed class DocumentationScribeSemanticToolPort
                     bindingFailure));
             }
 
-            var snapshot = BuildSnapshot(started, cancellationToken);
+            var declarationFact = loadedContext.Facts.Evidence.Single(item =>
+                string.Equals(item.KindId, "source.target-declaration", StringComparison.Ordinal));
+            if (remainingEvidenceReferences < 1
+                || declarationFact.Commitment.OriginalUtf8ByteCount > limits.MaximumSourceFileUtf8Bytes
+                || declarationFact.Commitment.IncludedUtf8ByteCount > limits.MaximumIncludedSourceUtf8Bytes
+                || declarationFact.Commitment.IncludedUtf8ByteCount > remainingEvidenceUtf8Bytes)
+            {
+                return ValueTask.FromResult(Terminal(
+                    DocumentationScribeToolOutcome.BudgetExhausted,
+                    DocumentationScribeSemanticFailureReason.BudgetExhausted));
+            }
+
+            var snapshot = BuildSnapshot(declarationFact, started, cancellationToken);
             Check(DocumentationScribeSemanticStage.Normalize, started, cancellationToken);
 
             var coreBytes = EstimateCoreBytes(snapshot.Core);
@@ -128,6 +146,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 snapshot.Items,
                 snapshot.Incomplete,
                 coreBytes,
+                snapshot.Core.Declaration.Fact.Commitment.IncludedUtf8ByteCount,
                 out var incomplete);
             var snapshotIdentity = SnapshotIdentity(snapshot.Core, normalizedItems, incomplete);
             var normalizedRequestIdentity = Identity(
@@ -135,7 +154,16 @@ public sealed class DocumentationScribeSemanticToolPort
                 scribeRequest.ArtifactSha256,
                 limits.MaximumOptionalItems.ToString(CultureInfo.InvariantCulture),
                 limits.MaximumResultUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumPageSize.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumSourceFileUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumIncludedSourceUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumCompilations.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumSourceTrees.ToString(CultureInfo.InvariantCulture),
+                limits.MaximumSyntaxNodes.ToString(CultureInfo.InvariantCulture),
                 limits.MaximumElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                remainingEvidenceReferences.ToString(CultureInfo.InvariantCulture),
+                remainingEvidenceUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                CanonicalRequestEvidence(scribeRequest.EvidenceReferences),
                 DocumentationScribeSemanticToolSelection.SelectionId,
                 DocumentationScribeSemanticToolSelection.VocabularyId,
                 DocumentationScribeSemanticToolSelection.OrderingId,
@@ -178,7 +206,7 @@ public sealed class DocumentationScribeSemanticToolPort
             var hasMore = position + count < normalizedItems.Length;
 
             Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken);
-            ValidateFinalSources(snapshot.Validations, cancellationToken);
+            ValidateFinalSources(snapshot.Validations, started, cancellationToken);
             if (!loadedContext.VerifyFreshness(cancellationToken))
             {
                 return ValueTask.FromResult(Terminal(
@@ -194,7 +222,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 hasMore,
                 cancellationToken);
 
-            ValidateFinalSources(snapshot.Validations, cancellationToken);
+            ValidateFinalSources(snapshot.Validations, started, cancellationToken);
             if (!loadedContext.VerifyFreshness(cancellationToken))
             {
                 return ValueTask.FromResult(Terminal(
@@ -206,16 +234,24 @@ public sealed class DocumentationScribeSemanticToolPort
             var outcome = incomplete.IsEmpty
                 ? DocumentationScribeToolOutcome.Complete
                 : DocumentationScribeToolOutcome.Incomplete;
-            return ValueTask.FromResult(new DocumentationScribeSemanticToolResult(
+            var result = new DocumentationScribeSemanticToolResult(
                 outcome,
                 new DocumentationScribeSemanticEvidencePage(
                     snapshot.Core,
                     pageItems,
                     incomplete,
                     nextCursor),
-                null));
+                null);
+            if (MeasureResultBytes(result) > limits.MaximumResultUtf8Bytes)
+            {
+                return ValueTask.FromResult(Terminal(
+                    DocumentationScribeToolOutcome.BudgetExhausted,
+                    DocumentationScribeSemanticFailureReason.BudgetExhausted));
+            }
+
+            return ValueTask.FromResult(result);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return ValueTask.FromResult(Terminal(
                 DocumentationScribeToolOutcome.Cancelled,
@@ -265,13 +301,17 @@ public sealed class DocumentationScribeSemanticToolPort
     public override string ToString() =>
         $"{nameof(DocumentationScribeSemanticToolPort)} {{ Operation = {DocumentationScribeSemanticToolSelection.OperationId}, Context = <bound>, Request = <bound> }}";
 
-    private Snapshot BuildSnapshot(long started, CancellationToken cancellationToken)
+    private Snapshot BuildSnapshot(
+        DocumentationScribeEvidenceContextFact declarationFact,
+        long started,
+        CancellationToken cancellationToken)
     {
         var method = binding.Method!;
         var target = binding.Target!;
         Check(DocumentationScribeSemanticStage.Target, started, cancellationToken);
         var summary = CreateMethodSummary(method, target);
         var selectedObservation = ObserveSelectedTarget(cancellationToken);
+        Check(started, cancellationToken);
         var observation = selectedObservation.ObservationSet!.Observations.Single(item =>
             item.Subject.ParentSymbolRef == loadedContext.Facts.SymbolRef
             && item.Subject.ComponentKind is null);
@@ -279,9 +319,9 @@ public sealed class DocumentationScribeSemanticToolPort
             observation.Value,
             observation.Completeness,
             observation.UnavailableCause);
-        var declarationFact = loadedContext.Facts.Evidence.Single(item =>
-            string.Equals(item.KindId, "source.target-declaration", StringComparison.Ordinal));
-        var declaration = ToSourceView(declarationFact);
+        var declaration = ToSourceView(
+            declarationFact,
+            loadedContext.Facts.CompilationContextRef);
         var coreContentIdentity = Identity(
             "semantic.target-core.v1",
             loadedContext.Facts.ContentIdentity,
@@ -306,6 +346,7 @@ public sealed class DocumentationScribeSemanticToolPort
         var items = new List<CandidateItem>();
         var incomplete = new List<DocumentationScribeSemanticIncomplete>();
         var validations = new List<SourceValidation>();
+        var repositoryReads = new Dictionary<string, RepositorySourceValidation?>(StringComparer.Ordinal);
 
         Check(DocumentationScribeSemanticStage.Documentation, started, cancellationToken);
         AddDocumentationItems(
@@ -313,6 +354,7 @@ public sealed class DocumentationScribeSemanticToolPort
             items,
             incomplete,
             validations,
+            repositoryReads,
             started,
             cancellationToken);
         Check(DocumentationScribeSemanticStage.Relations, started, cancellationToken);
@@ -320,6 +362,7 @@ public sealed class DocumentationScribeSemanticToolPort
             items,
             incomplete,
             validations,
+            repositoryReads,
             started,
             cancellationToken);
         Check(DocumentationScribeSemanticStage.Usages, started, cancellationToken);
@@ -329,6 +372,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 items,
                 incomplete,
                 validations,
+                repositoryReads,
                 started,
                 cancellationToken);
         }
@@ -346,44 +390,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
     private ObservedRepositorySession ObserveSelectedTarget(CancellationToken cancellationToken)
     {
-        var set = binding.ClassificationSet!;
-        var target = binding.Target!;
-        var buffer = new ClassificationCandidateBuffer();
-        var targetLocators = AuthoritativeReferences(binding.Method!)
-            .Where(reference => binding.Project!.SourceTrees.ContainsKey(reference.SyntaxTree))
-            .Select(reference => CandidateLocator(
-                binding.Project!,
-                binding.Project!.SourceTrees[reference.SyntaxTree],
-                reference.Span))
-            .ToImmutableArray();
-        buffer.AddTarget(
-            target.SymbolRef.CompilationContextRef,
-            target.SymbolRef.DocumentationCommentId,
-            target.PrimaryKind,
-            target.Traits,
-            target.Origin,
-            targetLocators);
-        foreach (var component in set.Components.Where(item =>
-                     item.ParentSymbolRef == loadedContext.Facts.SymbolRef))
-        {
-            buffer.AddComponent(
-                component.ParentSymbolRef.CompilationContextRef,
-                component.ParentSymbolRef.DocumentationCommentId,
-                component.ComponentKind,
-                component.Identity,
-                component.Origin);
-        }
-
-        var selectedOutcome = buffer.Normalize(set.TargetProfile, cancellationToken: cancellationToken);
-        if (selectedOutcome.Status != ClassificationRunStatus.Success)
-        {
-            throw new InvalidOperationException("semantic.documentation.selection-failed");
-        }
-
-        var session = ClassifiedRepositorySession.Bind(
-            loadedContext.RepositorySession,
-            selectedOutcome);
-        var observed = new DocumentationObserver().Observe(session, cancellationToken);
+        var observed = new DocumentationObserver().Observe(
+            GetClassifiedSession(loadedContext),
+            cancellationToken);
         if (observed.Status != DocumentationObservationRunStatus.Success)
         {
             throw new InvalidOperationException("semantic.documentation.unavailable");
@@ -397,6 +406,7 @@ public sealed class DocumentationScribeSemanticToolPort
         List<CandidateItem> items,
         List<DocumentationScribeSemanticIncomplete> incomplete,
         List<SourceValidation> validations,
+        Dictionary<string, RepositorySourceValidation?> repositoryReads,
         long started,
         CancellationToken cancellationToken)
     {
@@ -414,6 +424,8 @@ public sealed class DocumentationScribeSemanticToolPort
                 "semantic.documentation",
                 incomplete,
                 validations,
+                repositoryReads,
+                started,
                 cancellationToken);
             if (materialized is null)
             {
@@ -436,6 +448,7 @@ public sealed class DocumentationScribeSemanticToolPort
         List<CandidateItem> items,
         List<DocumentationScribeSemanticIncomplete> incomplete,
         List<SourceValidation> validations,
+        Dictionary<string, RepositorySourceValidation?> repositoryReads,
         long started,
         CancellationToken cancellationToken)
     {
@@ -474,6 +487,8 @@ public sealed class DocumentationScribeSemanticToolPort
                 "semantic.relation",
                 incomplete,
                 validations,
+                repositoryReads,
+                started,
                 cancellationToken);
             if (materialized is null)
             {
@@ -502,6 +517,7 @@ public sealed class DocumentationScribeSemanticToolPort
         List<CandidateItem> items,
         List<DocumentationScribeSemanticIncomplete> incomplete,
         List<SourceValidation> validations,
+        Dictionary<string, RepositorySourceValidation?> repositoryReads,
         long started,
         CancellationToken cancellationToken)
     {
@@ -520,6 +536,7 @@ public sealed class DocumentationScribeSemanticToolPort
         var sourceTreeCount = 0;
         var syntaxNodeCount = 0;
         var occurrences = new Dictionary<string, Occurrence>(StringComparer.Ordinal);
+        var occurrenceLimitReached = false;
         foreach (var project in projects)
         {
             Check(started, cancellationToken);
@@ -537,64 +554,59 @@ public sealed class DocumentationScribeSemanticToolPort
                 }
 
                 var root = pair.Key.GetRoot(cancellationToken);
+                Check(started, cancellationToken);
                 var model = project.Compilation.GetSemanticModel(pair.Key, ignoreAccessibility: true);
-                var consumed = new List<TextSpan>();
+                Check(started, cancellationToken);
 
-                foreach (var nameOf in root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                             .Where(IsNameOfExpression)
-                             .OrderBy(node => node.SpanStart))
+                foreach (var node in root.DescendantNodesAndSelf())
                 {
                     CountNode(ref syntaxNodeCount, incomplete);
-                    Check(started, cancellationToken);
-                    if (!nameOf.ArgumentList.DescendantNodesAndSelf()
-                            .Any(node => ResolvesToTarget(model.GetSymbolInfo(node, cancellationToken).Symbol)))
+                    Check(DocumentationScribeSemanticStage.UsageTraversal, started, cancellationToken);
+                    if (node is InvocationExpressionSyntax invocation)
                     {
+                        var operation = model.GetOperation(invocation, cancellationToken);
+                        Check(started, cancellationToken);
+                        if (operation is INameOfOperation
+                            && NameOfArgumentResolvesToTarget(
+                                project,
+                                model,
+                                invocation,
+                                started,
+                                cancellationToken))
+                        {
+                            AddOccurrence(
+                                occurrences,
+                                project,
+                                pair.Key,
+                                pair.Value,
+                                invocation.Span,
+                                DocumentationScribeSemanticUsageKind.NameOf,
+                                isTest: false,
+                                ref occurrenceLimitReached);
+                        }
+                        else if (operation is IInvocationOperation invoked
+                                 && ResolvesToTarget(project, invoked.TargetMethod))
+                        {
+                            AddOccurrence(
+                                occurrences,
+                                project,
+                                pair.Key,
+                                pair.Value,
+                                invocation.Span,
+                                DocumentationScribeSemanticUsageKind.Invocation,
+                                IsTestOccurrence(model, invocation.SpanStart, cancellationToken),
+                                ref occurrenceLimitReached);
+                        }
+
                         continue;
                     }
 
-                    AddOccurrence(
-                        occurrences,
-                        project,
-                        pair.Key,
-                        pair.Value,
-                        nameOf.Span,
-                        DocumentationScribeSemanticUsageKind.NameOf,
-                        isTest: false);
-                    consumed.Add(nameOf.Span);
-                }
-
-                foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                             .Where(node => !IsNameOfExpression(node))
-                             .OrderBy(node => node.SpanStart))
-                {
-                    CountNode(ref syntaxNodeCount, incomplete);
-                    Check(started, cancellationToken);
-                    if (consumed.Any(span => span.Contains(invocation.Span))
-                        || !ResolvesToTarget(model.GetSymbolInfo(invocation, cancellationToken).Symbol))
-                    {
-                        continue;
-                    }
-
-                    var isTest = IsTestOccurrence(model, invocation.SpanStart, cancellationToken);
-                    AddOccurrence(
-                        occurrences,
-                        project,
-                        pair.Key,
-                        pair.Value,
-                        invocation.Span,
-                        DocumentationScribeSemanticUsageKind.Invocation,
-                        isTest);
-                    consumed.Add(invocation.Span);
-                }
-
-                foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>()
-                             .OrderBy(node => node.SpanStart))
-                {
-                    CountNode(ref syntaxNodeCount, incomplete);
-                    Check(started, cancellationToken);
-                    if (consumed.Any(span => span.Contains(name.Span))
+                    if (node is not SimpleNameSyntax name
                         || IsDeclarationName(name)
-                        || !ResolvesToTarget(model.GetSymbolInfo(name, cancellationToken).Symbol))
+                        || IsConsumedInvocationName(project, model, name, cancellationToken)
+                        || !ResolvesToTarget(
+                            project,
+                            model.GetSymbolInfo(name, cancellationToken).Symbol))
                     {
                         continue;
                     }
@@ -606,9 +618,15 @@ public sealed class DocumentationScribeSemanticToolPort
                         pair.Value,
                         name.Span,
                         DocumentationScribeSemanticUsageKind.MemberReference,
-                        IsTestOccurrence(model, name.SpanStart, cancellationToken));
+                        IsTestOccurrence(model, name.SpanStart, cancellationToken),
+                        ref occurrenceLimitReached);
                 }
             }
+        }
+
+        if (occurrenceLimitReached)
+        {
+            AddIncomplete(incomplete, DocumentationScribeSemanticIncompleteReason.ItemLimit);
         }
 
         foreach (var occurrence in occurrences.Values
@@ -632,6 +650,8 @@ public sealed class DocumentationScribeSemanticToolPort
                 "semantic.usage." + occurrence.Kind.ToString().ToLowerInvariant(),
                 incomplete,
                 validations,
+                repositoryReads,
+                started,
                 cancellationToken);
             if (materialized is null)
             {
@@ -675,7 +695,8 @@ public sealed class DocumentationScribeSemanticToolPort
         LoadedSourceTree source,
         TextSpan span,
         DocumentationScribeSemanticUsageKind kind,
-        bool isTest)
+        bool isTest,
+        ref bool limitReached)
     {
         var key = string.Join(
             "|",
@@ -686,14 +707,102 @@ public sealed class DocumentationScribeSemanticToolPort
             kind.ToString(),
             loadedContext.Facts.SymbolRef.CompilationContextRef,
             loadedContext.Facts.SymbolRef.DocumentationCommentId);
-        occurrences.TryAdd(key, new Occurrence(
+        var occurrence = new Occurrence(
             key,
             project,
             tree,
             source,
             span,
             kind,
-            isTest));
+            isTest);
+        if (occurrences.ContainsKey(key))
+        {
+            return;
+        }
+
+        var capacity = limits.MaximumOptionalItems;
+        if (capacity == 0)
+        {
+            limitReached = true;
+            return;
+        }
+        if (occurrences.Count < capacity)
+        {
+            occurrences.Add(key, occurrence);
+            return;
+        }
+
+        limitReached = true;
+        var worst = occurrences.Values
+            .OrderBy(item => item.IsTest ? 0 : 1)
+            .ThenBy(item => item.Key, StringComparer.Ordinal)
+            .Last();
+        if (CompareOccurrences(occurrence, worst) < 0)
+        {
+            occurrences.Remove(worst.Key);
+            occurrences.Add(key, occurrence);
+        }
+    }
+
+    private static int CompareOccurrences(Occurrence left, Occurrence right)
+    {
+        var priority = (left.IsTest ? 0 : 1).CompareTo(right.IsTest ? 0 : 1);
+        return priority != 0
+            ? priority
+            : StringComparer.Ordinal.Compare(left.Key, right.Key);
+    }
+
+    private bool NameOfArgumentResolvesToTarget(
+        LoadedProject project,
+        SemanticModel model,
+        InvocationExpressionSyntax invocation,
+        long started,
+        CancellationToken cancellationToken)
+    {
+        foreach (var node in invocation.ArgumentList.DescendantNodesAndSelf())
+        {
+            Check(started, cancellationToken);
+            var symbolInfo = model.GetSymbolInfo(node, cancellationToken);
+            var symbols = symbolInfo.Symbol is not null
+                ? ImmutableArray.Create(symbolInfo.Symbol)
+                : !symbolInfo.CandidateSymbols.IsEmpty
+                    ? symbolInfo.CandidateSymbols
+                    : node is ExpressionSyntax expression
+                        ? model.GetMemberGroup(expression, cancellationToken)
+                        : [];
+            var methods = symbols
+                .Select(symbol => symbol is IAliasSymbol alias ? alias.Target : symbol)
+                .OfType<IMethodSymbol>()
+                .Select(NormalizeMethod)
+                .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+                .ToArray();
+            if (methods.Length == 1 && ResolvesToTarget(project, methods[0]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsConsumedInvocationName(
+        LoadedProject project,
+        SemanticModel model,
+        SimpleNameSyntax name,
+        CancellationToken cancellationToken)
+    {
+        var invocation = name.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+        if (invocation is null || !invocation.Expression.Span.Contains(name.Span))
+        {
+            return false;
+        }
+
+        return model.GetOperation(invocation, cancellationToken) switch
+        {
+            INameOfOperation => true,
+            IInvocationOperation operation => ResolvesToTarget(project, operation.TargetMethod),
+            _ => false,
+        };
     }
 
     private Materialized? Materialize(
@@ -704,6 +813,8 @@ public sealed class DocumentationScribeSemanticToolPort
         string kindId,
         List<DocumentationScribeSemanticIncomplete> incomplete,
         List<SourceValidation> validations,
+        Dictionary<string, RepositorySourceValidation?> repositoryReads,
+        long started,
         CancellationToken cancellationToken)
     {
         var project = loadedContext.RepositorySession.Projects.SingleOrDefault(item =>
@@ -726,6 +837,8 @@ public sealed class DocumentationScribeSemanticToolPort
                 kindId,
                 incomplete,
                 validations,
+                repositoryReads,
+                started,
                 cancellationToken);
     }
 
@@ -739,9 +852,12 @@ public sealed class DocumentationScribeSemanticToolPort
         string kindId,
         List<DocumentationScribeSemanticIncomplete> incomplete,
         List<SourceValidation> validations,
+        Dictionary<string, RepositorySourceValidation?> repositoryReads,
+        long started,
         CancellationToken cancellationToken)
     {
         var text = tree.GetText(cancellationToken).ToString();
+        Check(started, cancellationToken);
         if (span.Start < 0 || span.End > text.Length || span.Length <= 0)
         {
             throw new DocumentationScribeContextReadException(
@@ -771,22 +887,27 @@ public sealed class DocumentationScribeSemanticToolPort
                     "semantic.unsafe.source-binding");
             }
 
-            RepositorySourceValidation? repository;
-            try
+            if (!repositoryReads.TryGetValue(source.RepositoryPath, out var repository))
             {
-                repository = ReadRepositorySource(
-                    source.RepositoryPath,
-                    source.PhysicalSourceIdentity,
-                    text,
-                    cancellationToken);
-            }
-            catch (SemanticBudgetException)
-            {
-                AddIncomplete(
-                    incomplete,
-                    DocumentationScribeSemanticIncompleteReason.SourceByteLimit,
-                    1);
-                return null;
+                try
+                {
+                    repository = ReadRepositorySource(
+                        source.RepositoryPath,
+                        source.PhysicalSourceIdentity,
+                        text,
+                        started,
+                        cancellationToken);
+                }
+                catch (SemanticBudgetException)
+                {
+                    AddIncomplete(
+                        incomplete,
+                        DocumentationScribeSemanticIncompleteReason.SourceByteLimit,
+                        1);
+                    return null;
+                }
+
+                repositoryReads.Add(source.RepositoryPath, repository);
             }
             if (repository is null)
             {
@@ -795,6 +916,13 @@ public sealed class DocumentationScribeSemanticToolPort
                     DocumentationScribeSemanticIncompleteReason.UnsupportedEncoding,
                     1);
                 return null;
+            }
+            if (!string.Equals(repository.ExpectedPhysicalIdentity, source.PhysicalSourceIdentity, StringComparison.Ordinal)
+                || !string.Equals(repository.ExpectedText, text, StringComparison.Ordinal))
+            {
+                throw new DocumentationScribeContextReadException(
+                    DocumentationScribeContextReadFailure.Stale,
+                    "semantic.stale.cached-source");
             }
 
             validation = repository;
@@ -870,22 +998,29 @@ public sealed class DocumentationScribeSemanticToolPort
             span.End,
             span.Start,
             span.End);
-        return new Materialized(evidence, ToSourceView(evidence), validation);
+        return new Materialized(
+            evidence,
+            ToSourceView(evidence, project.CompilationContextRef),
+            validation);
     }
 
     private RepositorySourceValidation? ReadRepositorySource(
         string repositoryPath,
         string expectedPhysicalIdentity,
         string expectedText,
+        long started,
         CancellationToken cancellationToken)
     {
+        Check(started, cancellationToken);
         var resolver = new RepositoryPathResolver();
         var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
         var fullPath = Path.GetFullPath(Path.Join(
             root,
             repositoryPath.Replace('/', Path.DirectorySeparatorChar)));
         var resolved = resolver.ResolveSource(root, fullPath);
+        Check(started, cancellationToken);
         var physicalIdentity = resolver.PhysicalIdentity(root, resolved.PhysicalPath);
+        Check(started, cancellationToken);
         if (!string.Equals(physicalIdentity, expectedPhysicalIdentity, StringComparison.Ordinal))
         {
             throw new DocumentationScribeContextReadException(
@@ -894,11 +1029,13 @@ public sealed class DocumentationScribeSemanticToolPort
         }
 
         var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root);
+        Check(started, cancellationToken);
         var directories = ParentDirectories(root, resolved.PhysicalPath)
             .Select(path => new DirectoryValidation(
                 path,
                 DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(path)))
             .ToImmutableArray();
+        Check(started, cancellationToken);
         DocumentationScribeContextStableRead read;
         try
         {
@@ -906,6 +1043,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 resolved.PhysicalPath,
                 limits.MaximumSourceFileUtf8Bytes,
                 cancellationToken);
+            Check(started, cancellationToken);
         }
         catch (DocumentationScribeContextReadException exception)
             when (exception.Failure == DocumentationScribeContextReadFailure.Budget)
@@ -938,6 +1076,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 DocumentationScribeContextReadFailure.Stale,
                 "semantic.stale.source-text");
         }
+        Check(started, cancellationToken);
 
         return new RepositorySourceValidation(
             repositoryPath,
@@ -955,31 +1094,42 @@ public sealed class DocumentationScribeSemanticToolPort
 
     private void ValidateFinalSources(
         ImmutableArray<SourceValidation> validations,
+        long started,
         CancellationToken cancellationToken)
     {
         foreach (var validation in validations)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            Check(started, cancellationToken);
             if (validation is GeneratedSourceValidation generated)
             {
-                ValidateGeneratedSource(generated, cancellationToken);
+                ValidateGeneratedSource(generated, started, cancellationToken);
                 continue;
             }
 
             var repository = (RepositorySourceValidation)validation;
             if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(repository.Root)
-                    != repository.RootIdentity
-                || repository.Directories.Any(item =>
-                    DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(item.Path)
-                    != item.Identity))
+                    != repository.RootIdentity)
             {
                 throw new DocumentationScribeContextReadException(
                     DocumentationScribeContextReadFailure.Stale,
                     "semantic.stale.directory");
             }
+            Check(started, cancellationToken);
+            foreach (var directory in repository.Directories)
+            {
+                if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(directory.Path)
+                    != directory.Identity)
+                {
+                    throw new DocumentationScribeContextReadException(
+                        DocumentationScribeContextReadFailure.Stale,
+                        "semantic.stale.directory");
+                }
+                Check(started, cancellationToken);
+            }
 
             var resolver = new RepositoryPathResolver();
             var resolved = resolver.ResolveSource(repository.Root, repository.PhysicalPath);
+            Check(started, cancellationToken);
             if (!string.Equals(
                     resolver.PhysicalIdentity(repository.Root, resolved.PhysicalPath),
                     repository.ExpectedPhysicalIdentity,
@@ -994,6 +1144,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 resolved.PhysicalPath,
                 limits.MaximumSourceFileUtf8Bytes,
                 cancellationToken);
+            Check(started, cancellationToken);
             if (read.Identity != repository.FileIdentity
                 || read.Identity.LinkCount != 1
                 || !read.Bytes.AsSpan().SequenceEqual(repository.Bytes))
@@ -1005,6 +1156,7 @@ public sealed class DocumentationScribeSemanticToolPort
 
             var decoded = StrictUtf8.GetString(
                 repository.HasUtf8Bom ? read.Bytes.AsSpan(3) : read.Bytes);
+            Check(started, cancellationToken);
             if (!string.Equals(decoded, repository.ExpectedText, StringComparison.Ordinal))
             {
                 throw new DocumentationScribeContextReadException(
@@ -1016,8 +1168,10 @@ public sealed class DocumentationScribeSemanticToolPort
 
     private void ValidateGeneratedSource(
         GeneratedSourceValidation validation,
+        long started,
         CancellationToken cancellationToken)
     {
+        Check(started, cancellationToken);
         var repository = GetClassifiedSession(loadedContext).RepositorySession;
         var project = repository.Projects.SingleOrDefault(item =>
             string.Equals(
@@ -1040,6 +1194,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 DocumentationScribeContextReadFailure.Stale,
                 "semantic.stale.generated-source");
         }
+        Check(started, cancellationToken);
     }
 
     private ImmutableArray<DocumentationScribeSemanticEvidenceItem> NormalizeCandidates(
@@ -1077,11 +1232,13 @@ public sealed class DocumentationScribeSemanticToolPort
         ImmutableArray<DocumentationScribeSemanticEvidenceItem> items,
         ImmutableArray<DocumentationScribeSemanticIncomplete> initialIncomplete,
         int coreBytes,
+        int coreEvidenceBytes,
         out ImmutableArray<DocumentationScribeSemanticIncomplete> incomplete)
     {
         var builder = ImmutableArray.CreateBuilder<DocumentationScribeSemanticEvidenceItem>();
         var incompleteBuilder = initialIncomplete.ToBuilder();
         var bytes = coreBytes;
+        var evidenceBytes = coreEvidenceBytes;
         foreach (var item in items)
         {
             if (builder.Count >= limits.MaximumOptionalItems)
@@ -1094,7 +1251,9 @@ public sealed class DocumentationScribeSemanticToolPort
             }
 
             var itemBytes = EstimateItemBytes(item);
-            if (bytes + itemBytes > limits.MaximumResultUtf8Bytes)
+            var itemEvidenceBytes = item.Source.Fact.Commitment.IncludedUtf8ByteCount;
+            if (bytes + itemBytes > limits.MaximumResultUtf8Bytes
+                || evidenceBytes + itemEvidenceBytes > remainingEvidenceUtf8Bytes)
             {
                 AddIncomplete(
                     incompleteBuilder,
@@ -1105,14 +1264,13 @@ public sealed class DocumentationScribeSemanticToolPort
 
             builder.Add(item);
             bytes += itemBytes;
+            evidenceBytes += itemEvidenceBytes;
         }
 
         incomplete = incompleteBuilder
             .GroupBy(item => item.Reason)
             .OrderBy(group => group.Key)
-            .Select(group => new DocumentationScribeSemanticIncomplete(
-                group.Key,
-                group.Sum(item => item.OmittedCount)))
+            .Select(group => new DocumentationScribeSemanticIncomplete(group.Key))
             .ToImmutableArray();
         return builder.ToImmutable();
     }
@@ -1151,7 +1309,7 @@ public sealed class DocumentationScribeSemanticToolPort
             .FirstOrDefault();
     }
 
-    private bool ResolvesToTarget(ISymbol? symbol)
+    private bool ResolvesToTarget(LoadedProject project, ISymbol? symbol)
     {
         symbol = symbol is IAliasSymbol alias ? alias.Target : symbol;
         if (symbol is not IMethodSymbol method)
@@ -1160,14 +1318,26 @@ public sealed class DocumentationScribeSemanticToolPort
         }
 
         method = NormalizeMethod(method);
-        return string.Equals(
+        if (!method.ContainingAssembly.Identity.Equals(binding.Method!.ContainingAssembly.Identity)
+            || !string.Equals(
                 method.GetDocumentationCommentId(),
                 loadedContext.Facts.SymbolRef.DocumentationCommentId,
-                StringComparison.Ordinal)
-            && string.Equals(
-                method.ContainingAssembly?.Identity.Name,
-                binding.Method!.ContainingAssembly.Identity.Name,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var exactSymbols = DocumentationCommentId.GetSymbolsForDeclarationId(
+                loadedContext.Facts.SymbolRef.DocumentationCommentId,
+                project.Compilation)
+            .OfType<IMethodSymbol>()
+            .Select(NormalizeMethod)
+            .Where(candidate => candidate.ContainingAssembly.Identity.Equals(
+                binding.Method.ContainingAssembly.Identity))
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+            .ToArray();
+        return exactSymbols.Length == 1
+            && SymbolEqualityComparer.Default.Equals(exactSymbols[0], method);
     }
 
     private static IMethodSymbol NormalizeMethod(IMethodSymbol method)
@@ -1241,7 +1411,9 @@ public sealed class DocumentationScribeSemanticToolPort
             .ToImmutableArray();
         return new DocumentationScribeSemanticMethodSummary(
             loadedContext.Facts.SymbolRef,
-            target.Traits.Order().ToImmutableArray(),
+            target.Traits
+                .OrderBy(ClassificationVocabulary.GetId, StringComparer.Ordinal)
+                .ToImmutableArray(),
             target.Origin,
             method.MetadataName,
             method.ContainingNamespace.IsGlobalNamespace
@@ -1273,9 +1445,10 @@ public sealed class DocumentationScribeSemanticToolPort
             IDynamicTypeSymbol => new(
                 DocumentationScribeSemanticTypeKind.Dynamic,
                 nullability,
-                null,
-                null,
-                [],
+                 null,
+                 null,
+                 null,
+                 [],
                 null,
                 null,
                 null,
@@ -1284,9 +1457,10 @@ public sealed class DocumentationScribeSemanticToolPort
             IArrayTypeSymbol array => new(
                 DocumentationScribeSemanticTypeKind.Array,
                 nullability,
-                null,
-                null,
-                [],
+                 null,
+                 null,
+                 null,
+                 [],
                 CreateType(array.ElementType, depth + 1),
                 array.Rank,
                 null,
@@ -1295,9 +1469,10 @@ public sealed class DocumentationScribeSemanticToolPort
             IPointerTypeSymbol pointer => new(
                 DocumentationScribeSemanticTypeKind.Pointer,
                 nullability,
-                null,
-                null,
-                [],
+                 null,
+                 null,
+                 null,
+                 [],
                 CreateType(pointer.PointedAtType, depth + 1),
                 null,
                 null,
@@ -1306,9 +1481,10 @@ public sealed class DocumentationScribeSemanticToolPort
             ITypeParameterSymbol parameter => new(
                 DocumentationScribeSemanticTypeKind.TypeParameter,
                 nullability,
-                null,
-                null,
-                [],
+                 null,
+                 null,
+                 null,
+                 [],
                 null,
                 null,
                 parameter.DeclaringMethod is null
@@ -1318,10 +1494,13 @@ public sealed class DocumentationScribeSemanticToolPort
                 parameter.Name),
             INamedTypeSymbol named => new(
                 DocumentationScribeSemanticTypeKind.Named,
-                nullability,
-                named.ContainingAssembly?.Identity.Name,
-                FullMetadataName(named.OriginalDefinition),
-                named.TypeArguments.Select(item => CreateType(item, depth + 1)).ToImmutableArray(),
+                 nullability,
+                 named.ContainingAssembly?.Identity.GetDisplayName(),
+                 FullMetadataName(named.OriginalDefinition),
+                 named.ContainingType is null
+                     ? null
+                     : CreateType(named.ContainingType, depth + 1),
+                 named.TypeArguments.Select(item => CreateType(item, depth + 1)).ToImmutableArray(),
                 null,
                 null,
                 null,
@@ -1404,6 +1583,8 @@ public sealed class DocumentationScribeSemanticToolPort
     private static ClassificationSet? GetClassificationSet(DocumentationScribeLoadedContext context)
         => GetClassifiedSession(context).Classification.ClassificationSet;
 
+    // UnsafeAccessor is managed runtime field access, not native interop. X3 uses it only to
+    // consume the exact X1-owned classified session without rerunning or widening M1 selection.
     [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "classifiedSession")]
     private static extern ref readonly ClassifiedRepositorySession GetClassifiedSession(
         DocumentationScribeLoadedContext context);
@@ -1426,6 +1607,10 @@ public sealed class DocumentationScribeSemanticToolPort
                     ValidateType(pointer.PointedAtType, depth + 1);
                     break;
                 case INamedTypeSymbol named:
+                    if (named.ContainingType is not null)
+                    {
+                        ValidateType(named.ContainingType, depth + 1);
+                    }
                     foreach (var argument in named.TypeArguments)
                     {
                         ValidateType(argument, depth + 1);
@@ -1520,51 +1705,25 @@ public sealed class DocumentationScribeSemanticToolPort
     }
 
     private DocumentationScribeSemanticSourceEvidence ToSourceView(
-        DocumentationScribeEvidenceContextFact evidence)
+        DocumentationScribeEvidenceContextFact evidence,
+        string compilationContextRef)
     {
-        var range = evidence.Range
-            ?? throw new InvalidOperationException("semantic.source.range-missing");
-        var commitment = evidence.Commitment;
-        return commitment.Locator switch
+        if (evidence.Range is null
+            || evidence.Commitment.Locator is not (RepositoryEvidenceLocator or GeneratedOutputEvidenceLocator))
         {
-            RepositoryEvidenceLocator repository => new DocumentationScribeSemanticRepositoryEvidence(
-                repository.Path,
-                commitment.ContentSha256,
-                commitment.IncludedContentSha256,
-                commitment.OriginalUtf8ByteCount,
-                commitment.IncludedUtf8ByteCount,
-                commitment.IsTruncated,
-                commitment.HasUtf8Bom,
-                range,
-                evidence.IncludedRange,
-                evidence.Content),
-            GeneratedOutputEvidenceLocator
-            {
-                ProducerKind: GeneratedOutputKind.SourceGenerator,
-            } generated => new DocumentationScribeSemanticSourceGeneratorEvidence(
-                    generated.ProducerId,
-                    generated.OutputId,
-                    commitment.ContentSha256,
-                    commitment.IncludedContentSha256,
-                    commitment.OriginalUtf8ByteCount,
-                    commitment.IncludedUtf8ByteCount,
-                    commitment.IsTruncated,
-                    range,
-                    evidence.IncludedRange,
-                    evidence.Content),
-            GeneratedOutputEvidenceLocator generated => new DocumentationScribeSemanticToolGeneratedEvidence(
-                generated.ProducerId,
-                generated.OutputId,
-                commitment.ContentSha256,
-                commitment.IncludedContentSha256,
-                commitment.OriginalUtf8ByteCount,
-                commitment.IncludedUtf8ByteCount,
-                commitment.IsTruncated,
-                range,
-                evidence.IncludedRange,
-                evidence.Content),
-            _ => throw new InvalidOperationException("semantic.source.locator-not-admitted"),
-        };
+            throw new InvalidOperationException("semantic.source.locator-not-admitted");
+        }
+
+        var correlationIdentity = Identity(
+            "semantic.source-correlation.v1",
+            loadedContext.Facts.RepositoryContextRef.Value,
+            compilationContextRef,
+            scribeRequest.ArtifactSha256,
+            evidence.EvidenceId);
+        return new DocumentationScribeSemanticSourceEvidence(
+            evidence,
+            compilationContextRef,
+            correlationIdentity);
     }
 
     private static bool SourceMatches(
@@ -1586,41 +1745,32 @@ public sealed class DocumentationScribeSemanticToolPort
             _ => false,
         };
 
-    private static CandidateLocator CandidateLocator(
-        LoadedProject project,
-        LoadedSourceTree source,
-        TextSpan span) => source.Kind switch
-        {
-            LoadedSourceKind.Repository => ClassificationInput.RepositoryLocator(
-                source.RepositoryPath!,
-                span.Start,
-                span.End),
-            LoadedSourceKind.SourceGenerator => ClassificationInput.GeneratedSourceLocator(
-                source.GeneratedSource!.ProducerId,
-                source.GeneratedSource.OutputId,
-                span.Start,
-                span.End),
-            LoadedSourceKind.ToolGenerated => ClassificationInput.ToolGeneratedLocator(
-                source.GeneratedSource!.ProducerId,
-                source.GeneratedSource.OutputId,
-                span.Start,
-                span.End),
-            _ => throw new InvalidOperationException(
-                "semantic.source.kind-not-admitted:" + project.ProjectIdentity),
-        };
-
     private static DocumentationScribeSemanticToolLimits Intersect(
         DocumentationScribeSemanticToolLimits semantic,
-        DocumentationScribeRunLimits request) => new(
-        semantic.MaximumPageSize,
-        Math.Min(semantic.MaximumOptionalItems, Math.Max(1, request.MaximumEvidenceReferences)),
-        Math.Min(semantic.MaximumResultUtf8Bytes, Math.Max(1024, request.MaximumEvidenceUtf8Bytes)),
-        semantic.MaximumSourceFileUtf8Bytes,
-        semantic.MaximumIncludedSourceUtf8Bytes,
-        semantic.MaximumCompilations,
-        semantic.MaximumSourceTrees,
-        semantic.MaximumSyntaxNodes,
-        Math.Min(semantic.MaximumElapsedMilliseconds, request.MaximumElapsedMilliseconds));
+        DocumentationScribeRequest request,
+        out int remainingReferences,
+        out int remainingUtf8Bytes)
+    {
+        var existingBytes = request.EvidenceReferences.Aggregate(
+            0L,
+            (total, reference) => checked(total + reference.IncludedUtf8ByteCount));
+        remainingReferences = Math.Max(
+            0,
+            request.Limits.MaximumEvidenceReferences - request.EvidenceReferences.Length);
+        remainingUtf8Bytes = (int)Math.Max(
+            0L,
+            (long)request.Limits.MaximumEvidenceUtf8Bytes - existingBytes);
+        return new DocumentationScribeSemanticToolLimits(
+            semantic.MaximumPageSize,
+            Math.Min(semantic.MaximumOptionalItems, Math.Max(0, remainingReferences - 1)),
+            Math.Min(semantic.MaximumResultUtf8Bytes, DocumentationScribeContract.MaximumArtifactUtf8Bytes),
+            semantic.MaximumSourceFileUtf8Bytes,
+            semantic.MaximumIncludedSourceUtf8Bytes,
+            semantic.MaximumCompilations,
+            semantic.MaximumSourceTrees,
+            semantic.MaximumSyntaxNodes,
+            Math.Min(semantic.MaximumElapsedMilliseconds, request.Limits.MaximumElapsedMilliseconds));
+    }
 
     private void Check(
         DocumentationScribeSemanticStage stage,
@@ -1683,11 +1833,50 @@ public sealed class DocumentationScribeSemanticToolPort
                 CanonicalMethod(core.Method),
                 CanonicalComponents(core.ApplicableComponents),
                 CanonicalDocumentation(core.Documentation),
-                CanonicalSource(core.Declaration),
+                CanonicalSourceForResult(core.Declaration),
             ]));
 
     private static int EstimateItemBytes(DocumentationScribeSemanticEvidenceItem item) =>
-        StrictUtf8.GetByteCount(CanonicalItem(item));
+        StrictUtf8.GetByteCount(CanonicalItemForResult(item));
+
+    private static int MeasureResultBytes(DocumentationScribeSemanticToolResult result)
+    {
+        var page = result.Page;
+        var material = Canonical(
+            "result",
+            [
+                result.Outcome.Id,
+                result.FailureReason?.ToString() ?? string.Empty,
+                page is null ? string.Empty : CanonicalCoreForResult(page.Core),
+                page is null ? string.Empty : string.Join("|", page.Items.Select(CanonicalItemForResult)),
+                page is null ? string.Empty : string.Join("|", page.Incomplete.Select(item => item.Reason.ToString())),
+                page?.NextCursor?.Value ?? string.Empty,
+            ]);
+        return StrictUtf8.GetByteCount(material);
+    }
+
+    private static string CanonicalCoreForResult(DocumentationScribeSemanticTargetCore core) => Canonical(
+        "core-result",
+        [
+            core.ContentIdentity,
+            core.CorrelationIdentity,
+            CanonicalMethod(core.Method),
+            CanonicalComponents(core.ApplicableComponents),
+            CanonicalDocumentation(core.Documentation),
+            CanonicalSourceForResult(core.Declaration),
+        ]);
+
+    private static string CanonicalRequestEvidence(
+        ImmutableArray<DocumentationScribeEvidenceReference> references) =>
+        string.Join(
+            "|",
+            references.OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
+                .Select(item => Canonical(
+                    "request-evidence",
+                    [
+                        item.EvidenceReferenceId,
+                        item.IncludedUtf8ByteCount.ToString(CultureInfo.InvariantCulture),
+                    ])));
 
     private string SnapshotIdentity(
         DocumentationScribeSemanticTargetCore core,
@@ -1696,14 +1885,17 @@ public sealed class DocumentationScribeSemanticToolPort
             "semantic.snapshot.v1",
             core.ContentIdentity,
             string.Join("|", items.Select(CanonicalItem)),
-            string.Join("|", incomplete.Select(item => $"{item.Reason}:{item.OmittedCount}")));
+            string.Join("|", incomplete.Select(item => item.Reason.ToString())));
 
     private static string CanonicalMethod(DocumentationScribeSemanticMethodSummary method) => Canonical(
         "method",
         [
             method.SymbolRef.CompilationContextRef,
             method.SymbolRef.DocumentationCommentId,
-            string.Join(",", method.Traits.Order()),
+            method.PrimaryKind.ToString(),
+            string.Join(",", method.Traits
+                .OrderBy(ClassificationVocabulary.GetId, StringComparer.Ordinal)
+                .Select(ClassificationVocabulary.GetId)),
             method.Origin.ToString(),
             method.MetadataName,
             method.ContainingNamespace,
@@ -1712,10 +1904,29 @@ public sealed class DocumentationScribeSemanticToolPort
             method.EffectiveAccessibility.ToString(),
             method.ReturnRefKind.ToString(),
             CanonicalType(method.ReturnType),
-            string.Join("|", method.Parameters.Select(item =>
-                $"{item.Ordinal}:{item.Name}:{CanonicalType(item.Type)}:{item.RefKind}:{item.IsParams}:{item.IsOptional}")),
-            string.Join("|", method.TypeParameters.Select(item =>
-                $"{item.Ordinal}:{item.Name}:{item.HasReferenceTypeConstraint}:{item.HasValueTypeConstraint}:{item.HasUnmanagedConstraint}:{item.HasNotNullConstraint}:{item.HasConstructorConstraint}:{item.ReferenceTypeConstraintNullability}:{string.Join(",", item.ConstraintTypes.Select(CanonicalType))}")),
+            string.Join("", method.Parameters.Select(item => Canonical(
+                "parameter",
+                [
+                    item.Ordinal.ToString(CultureInfo.InvariantCulture),
+                    item.Name,
+                    CanonicalType(item.Type),
+                    item.RefKind.ToString(),
+                    item.IsParams ? "1" : "0",
+                    item.IsOptional ? "1" : "0",
+                ]))),
+            string.Join("", method.TypeParameters.Select(item => Canonical(
+                "type-parameter",
+                [
+                    item.Ordinal.ToString(CultureInfo.InvariantCulture),
+                    item.Name,
+                    item.HasReferenceTypeConstraint ? "1" : "0",
+                    item.HasValueTypeConstraint ? "1" : "0",
+                    item.HasUnmanagedConstraint ? "1" : "0",
+                    item.HasNotNullConstraint ? "1" : "0",
+                    item.HasConstructorConstraint ? "1" : "0",
+                    item.ReferenceTypeConstraintNullability.ToString(),
+                    string.Join("", item.ConstraintTypes.Select(CanonicalType)),
+                ]))),
         ]);
 
     private static string CanonicalType(DocumentationScribeSemanticTypeFact type) => Canonical(
@@ -1723,8 +1934,9 @@ public sealed class DocumentationScribeSemanticToolPort
         [
             type.Kind.ToString(),
             type.Nullability.ToString(),
-            type.AssemblyName ?? string.Empty,
+            type.AssemblyIdentity ?? string.Empty,
             type.MetadataName ?? string.Empty,
+            type.ContainingType is null ? string.Empty : CanonicalType(type.ContainingType),
             string.Join("|", type.TypeArguments.Select(CanonicalType)),
             type.ElementType is null ? string.Empty : CanonicalType(type.ElementType),
             type.ArrayRank?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
@@ -1735,26 +1947,70 @@ public sealed class DocumentationScribeSemanticToolPort
 
     private static string CanonicalComponents(
         ImmutableArray<DocumentationScribeSemanticApplicableComponent> components) =>
-        string.Join("|", components.Select(item => $"{item.Kind}:{item.Identity}:{item.Name}"));
+        string.Join("", components.Select(item => Canonical(
+            "component",
+            [item.Kind.ToString(), item.Identity, item.Name ?? string.Empty])));
 
     private static string CanonicalDocumentation(DocumentationScribeSemanticDocumentationState value) =>
         $"{value.Value}:{value.Completeness}:{value.UnavailableCause}";
 
-    private static string CanonicalSource(DocumentationScribeSemanticSourceEvidence source) => Canonical(
-        "source",
-        [
-            SourceViewSortKey(source),
-            source.ContentSha256,
-            source.IncludedContentSha256,
-            source.OriginalUtf8ByteCount.ToString(CultureInfo.InvariantCulture),
-            source.IncludedUtf8ByteCount.ToString(CultureInfo.InvariantCulture),
-            source.IsTruncated ? "1" : "0",
-            source.HasUtf8Bom ? "1" : "0",
-            source.Range.Start.ToString(CultureInfo.InvariantCulture),
-            source.Range.End.ToString(CultureInfo.InvariantCulture),
-            source.IncludedRange?.Start.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
-            source.IncludedRange?.End.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
-        ]);
+    private static string CanonicalSource(DocumentationScribeSemanticSourceEvidence source)
+    {
+        var fact = source.Fact;
+        var commitment = fact.Commitment;
+        return Canonical(
+            "source",
+            [
+                fact.EvidenceId,
+                fact.Authority.ToString(),
+                fact.Role.ToString(),
+                fact.SubjectId,
+                fact.KindId,
+                source.CompilationContextRef,
+                CanonicalLocator(commitment.Locator),
+                commitment.ContentSha256,
+                commitment.IncludedContentSha256,
+                commitment.OriginalUtf8ByteCount.ToString(CultureInfo.InvariantCulture),
+                commitment.IncludedUtf8ByteCount.ToString(CultureInfo.InvariantCulture),
+                commitment.IsTruncated ? "1" : "0",
+                commitment.HasUtf8Bom ? "1" : "0",
+                commitment.IncludedHasUtf8Bom ? "1" : "0",
+                fact.Range?.Start.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                fact.Range?.End.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                fact.IncludedRange?.Start.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                fact.IncludedRange?.End.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                fact.Content,
+            ]);
+    }
+
+    private static string CanonicalSourceForResult(DocumentationScribeSemanticSourceEvidence source) =>
+        Canonical("source-result", [CanonicalSource(source), source.CorrelationIdentity]);
+
+    private static string CanonicalLocator(EvidenceLocator locator) => locator switch
+    {
+        RepositoryEvidenceLocator repository => Canonical(
+            "repository",
+            [
+                repository.Path,
+                repository.Span?.Start.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                repository.Span?.End.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            ]),
+        GeneratedOutputEvidenceLocator generated => Canonical(
+            "generated",
+            [
+                generated.ProducerKind.ToString(),
+                generated.ProducerId,
+                generated.OutputId,
+                generated.SourceSha256,
+                generated.Span?.Start.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                generated.Span?.End.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            ]),
+        MetadataEvidenceLocator metadata => Canonical(
+            "metadata",
+            [metadata.AssemblyIdentity, metadata.DocumentationCommentId]),
+        SyntheticEvidenceLocator synthetic => Canonical("synthetic", [synthetic.FixtureId]),
+        _ => throw new InvalidOperationException("semantic.source.locator-not-admitted"),
+    };
 
     private static string CanonicalItem(DocumentationScribeSemanticEvidenceItem item) => Canonical(
         "item",
@@ -1769,13 +2025,16 @@ public sealed class DocumentationScribeSemanticToolPort
             CanonicalSource(item.Source),
         ]);
 
+    private static string CanonicalItemForResult(DocumentationScribeSemanticEvidenceItem item) =>
+        Canonical("item-result", [CanonicalItem(item), CanonicalSourceForResult(item.Source)]);
+
     private static string SourceViewSortKey(DocumentationScribeSemanticSourceEvidence source) => source switch
     {
-        DocumentationScribeSemanticRepositoryEvidence repository => "0|" + repository.RepositoryPath,
-        DocumentationScribeSemanticSourceGeneratorEvidence generated =>
-            "1|" + generated.ProducerId + "|" + generated.OutputId,
-        DocumentationScribeSemanticToolGeneratedEvidence generated =>
-            "2|" + generated.ProducerId + "|" + generated.OutputId,
+        { Fact.Commitment.Locator: RepositoryEvidenceLocator repository } =>
+            "0|" + repository.Path + "|" + source.CompilationContextRef,
+        { Fact.Commitment.Locator: GeneratedOutputEvidenceLocator generated } =>
+            (generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "1|" : "2|")
+            + generated.ProducerId + "|" + generated.OutputId + "|" + source.CompilationContextRef,
         _ => throw new InvalidOperationException("semantic.source.view-not-admitted"),
     };
 
@@ -1819,10 +2078,6 @@ public sealed class DocumentationScribeSemanticToolPort
     private static StringComparison PathComparison() => OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
-
-    private static bool IsNameOfExpression(InvocationExpressionSyntax invocation) =>
-        invocation.Expression is IdentifierNameSyntax identifier
-        && string.Equals(identifier.Identifier.ValueText, "nameof", StringComparison.Ordinal);
 
     private static bool IsDeclarationName(SimpleNameSyntax name) => name.Parent switch
     {
@@ -1894,27 +2149,58 @@ public sealed class DocumentationScribeSemanticToolPort
         var result = Accessibility(method.DeclaredAccessibility);
         for (var type = method.ContainingType; type is not null; type = type.ContainingType)
         {
-            var containing = Accessibility(type.DeclaredAccessibility);
-            if (AccessibilityRank(containing) < AccessibilityRank(result))
-            {
-                result = containing;
-            }
+            result = IntersectAccessibility(result, Accessibility(type.DeclaredAccessibility));
         }
 
         return result;
     }
 
-    private static int AccessibilityRank(DocumentationScribeSemanticAccessibility accessibility) =>
-        accessibility switch
+    private static DocumentationScribeSemanticAccessibility IntersectAccessibility(
+        DocumentationScribeSemanticAccessibility left,
+        DocumentationScribeSemanticAccessibility right)
+    {
+        if (left == DocumentationScribeSemanticAccessibility.NotApplicable
+            || right == DocumentationScribeSemanticAccessibility.NotApplicable)
         {
-            DocumentationScribeSemanticAccessibility.Private => 0,
-            DocumentationScribeSemanticAccessibility.PrivateProtected => 1,
-            DocumentationScribeSemanticAccessibility.Internal => 2,
-            DocumentationScribeSemanticAccessibility.Protected => 2,
-            DocumentationScribeSemanticAccessibility.ProtectedInternal => 3,
-            DocumentationScribeSemanticAccessibility.Public => 4,
-            _ => -1,
-        };
+            return DocumentationScribeSemanticAccessibility.NotApplicable;
+        }
+        if (left == DocumentationScribeSemanticAccessibility.Private
+            || right == DocumentationScribeSemanticAccessibility.Private)
+        {
+            return DocumentationScribeSemanticAccessibility.Private;
+        }
+        if (left == DocumentationScribeSemanticAccessibility.Public)
+        {
+            return right;
+        }
+        if (right == DocumentationScribeSemanticAccessibility.Public)
+        {
+            return left;
+        }
+        if (left == right)
+        {
+            return left;
+        }
+        if (left == DocumentationScribeSemanticAccessibility.PrivateProtected
+            || right == DocumentationScribeSemanticAccessibility.PrivateProtected
+            || (left == DocumentationScribeSemanticAccessibility.Internal
+                && right == DocumentationScribeSemanticAccessibility.Protected)
+            || (left == DocumentationScribeSemanticAccessibility.Protected
+                && right == DocumentationScribeSemanticAccessibility.Internal))
+        {
+            return DocumentationScribeSemanticAccessibility.PrivateProtected;
+        }
+        if (left == DocumentationScribeSemanticAccessibility.ProtectedInternal)
+        {
+            return right;
+        }
+        if (right == DocumentationScribeSemanticAccessibility.ProtectedInternal)
+        {
+            return left;
+        }
+
+        throw new InvalidOperationException("semantic.accessibility.intersection-not-admitted");
+    }
 
     private static DocumentationScribeSemanticRefKind RefKind(RefKind kind) => kind switch
     {
@@ -1939,7 +2225,11 @@ public sealed class DocumentationScribeSemanticToolPort
     private static void AddIncomplete(
         ICollection<DocumentationScribeSemanticIncomplete> incomplete,
         DocumentationScribeSemanticIncompleteReason reason,
-        int count) => incomplete.Add(new(reason, count));
+        int count = 1)
+    {
+        _ = count;
+        incomplete.Add(new(reason));
+    }
 
     private sealed record Binding(
         ClassificationSet? ClassificationSet,
@@ -1987,6 +2277,7 @@ public sealed class DocumentationScribeSemanticToolPort
                 "semantic.item.v1",
                 [
                     materialized.Evidence.EvidenceId,
+                    materialized.Source.CompilationContextRef,
                     kind.ToString(),
                     usageKind?.ToString() ?? string.Empty,
                     relationKind?.ToString() ?? string.Empty,
@@ -2006,8 +2297,8 @@ public sealed class DocumentationScribeSemanticToolPort
             return new CandidateItem(
                 priority,
                 SourceViewSortKey(materialized.Source)
-                    + "|" + materialized.Source.Range.Start.ToString("D10", CultureInfo.InvariantCulture)
-                    + "|" + materialized.Source.Range.End.ToString("D10", CultureInfo.InvariantCulture)
+                    + "|" + materialized.Source.Fact.Range!.Value.Start.ToString("D10", CultureInfo.InvariantCulture)
+                    + "|" + materialized.Source.Fact.Range!.Value.End.ToString("D10", CultureInfo.InvariantCulture)
                     + "|" + kind + "|" + itemIdentity,
                 canonical,
                 item);

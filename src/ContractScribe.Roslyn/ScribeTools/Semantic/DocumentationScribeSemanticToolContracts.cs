@@ -54,8 +54,8 @@ public sealed record DocumentationScribeSemanticToolLimits
         int maximumElapsedMilliseconds)
     {
         if (maximumPageSize is < 1 or > 100
-            || maximumOptionalItems is < 1 or > 4096
-            || maximumResultUtf8Bytes is < 1024 or > 16_777_216
+            || maximumOptionalItems is < 0 or > 4096
+            || maximumResultUtf8Bytes is < 0 or > DocumentationScribeContract.MaximumArtifactUtf8Bytes
             || maximumSourceFileUtf8Bytes is < 1024 or > 33_554_432
             || maximumIncludedSourceUtf8Bytes is < 32 or > 65_536
             || maximumCompilations is < 1 or > 256
@@ -252,8 +252,9 @@ public sealed record DocumentationScribeSemanticTypeFact
     internal DocumentationScribeSemanticTypeFact(
         DocumentationScribeSemanticTypeKind kind,
         DocumentationScribeSemanticNullability nullability,
-        string? assemblyName,
+        string? assemblyIdentity,
         string? metadataName,
+        DocumentationScribeSemanticTypeFact? containingType,
         ImmutableArray<DocumentationScribeSemanticTypeFact> typeArguments,
         DocumentationScribeSemanticTypeFact? elementType,
         int? arrayRank,
@@ -263,8 +264,9 @@ public sealed record DocumentationScribeSemanticTypeFact
     {
         Kind = kind;
         Nullability = nullability;
-        AssemblyName = assemblyName;
+        AssemblyIdentity = assemblyIdentity;
         MetadataName = metadataName;
+        ContainingType = containingType;
         TypeArguments = typeArguments;
         ElementType = elementType;
         ArrayRank = arrayRank;
@@ -277,9 +279,11 @@ public sealed record DocumentationScribeSemanticTypeFact
 
     public DocumentationScribeSemanticNullability Nullability { get; }
 
-    public string? AssemblyName { get; }
+    public string? AssemblyIdentity { get; }
 
     public string? MetadataName { get; }
+
+    public DocumentationScribeSemanticTypeFact? ContainingType { get; }
 
     public ImmutableArray<DocumentationScribeSemanticTypeFact> TypeArguments { get; }
 
@@ -375,146 +379,26 @@ public sealed record DocumentationScribeSemanticDocumentationState(
     DocumentationAuthorityCompleteness Completeness,
     DocumentationUnavailableCause UnavailableCause);
 
-public abstract class DocumentationScribeSemanticSourceEvidence
+public sealed record DocumentationScribeSemanticSourceEvidence
 {
-    private protected DocumentationScribeSemanticSourceEvidence(
-        string contentSha256,
-        string includedContentSha256,
-        int originalUtf8ByteCount,
-        int includedUtf8ByteCount,
-        bool isTruncated,
-        bool hasUtf8Bom,
-        Utf16Span range,
-        Utf16Span? includedRange,
-        string content)
+    internal DocumentationScribeSemanticSourceEvidence(
+        DocumentationScribeEvidenceContextFact fact,
+        string compilationContextRef,
+        string correlationIdentity)
     {
-        ContentSha256 = contentSha256;
-        IncludedContentSha256 = includedContentSha256;
-        OriginalUtf8ByteCount = originalUtf8ByteCount;
-        IncludedUtf8ByteCount = includedUtf8ByteCount;
-        IsTruncated = isTruncated;
-        HasUtf8Bom = hasUtf8Bom;
-        Range = range;
-        IncludedRange = includedRange;
-        Content = content;
+        Fact = fact ?? throw new ArgumentNullException(nameof(fact));
+        CompilationContextRef = compilationContextRef;
+        CorrelationIdentity = correlationIdentity;
     }
 
-    public string ContentSha256 { get; }
+    public DocumentationScribeEvidenceContextFact Fact { get; }
 
-    public string IncludedContentSha256 { get; }
+    public string CompilationContextRef { get; }
 
-    public int OriginalUtf8ByteCount { get; }
-
-    public int IncludedUtf8ByteCount { get; }
-
-    public bool IsTruncated { get; }
-
-    public bool HasUtf8Bom { get; }
-
-    public Utf16Span Range { get; }
-
-    public Utf16Span? IncludedRange { get; }
-
-    public string Content { get; }
+    public string CorrelationIdentity { get; }
 
     public override string ToString() =>
-        $"{GetType().Name} {{ OriginalUtf8ByteCount = {OriginalUtf8ByteCount}, IncludedUtf8ByteCount = {IncludedUtf8ByteCount}, IsTruncated = {IsTruncated}, Content = <authorized-content> }}";
-}
-
-public sealed class DocumentationScribeSemanticRepositoryEvidence
-    : DocumentationScribeSemanticSourceEvidence
-{
-    internal DocumentationScribeSemanticRepositoryEvidence(
-        string repositoryPath,
-        string contentSha256,
-        string includedContentSha256,
-        int originalUtf8ByteCount,
-        int includedUtf8ByteCount,
-        bool isTruncated,
-        bool hasUtf8Bom,
-        Utf16Span range,
-        Utf16Span? includedRange,
-        string content)
-        : base(
-            contentSha256,
-            includedContentSha256,
-            originalUtf8ByteCount,
-            includedUtf8ByteCount,
-            isTruncated,
-            hasUtf8Bom,
-            range,
-            includedRange,
-            content) => RepositoryPath = repositoryPath;
-
-    public string RepositoryPath { get; }
-}
-
-public sealed class DocumentationScribeSemanticSourceGeneratorEvidence
-    : DocumentationScribeSemanticSourceEvidence
-{
-    internal DocumentationScribeSemanticSourceGeneratorEvidence(
-        string producerId,
-        string outputId,
-        string contentSha256,
-        string includedContentSha256,
-        int originalUtf8ByteCount,
-        int includedUtf8ByteCount,
-        bool isTruncated,
-        Utf16Span range,
-        Utf16Span? includedRange,
-        string content)
-        : base(
-            contentSha256,
-            includedContentSha256,
-            originalUtf8ByteCount,
-            includedUtf8ByteCount,
-            isTruncated,
-            false,
-            range,
-            includedRange,
-            content)
-    {
-        ProducerId = producerId;
-        OutputId = outputId;
-    }
-
-    public string ProducerId { get; }
-
-    public string OutputId { get; }
-}
-
-public sealed class DocumentationScribeSemanticToolGeneratedEvidence
-    : DocumentationScribeSemanticSourceEvidence
-{
-    internal DocumentationScribeSemanticToolGeneratedEvidence(
-        string producerId,
-        string outputId,
-        string contentSha256,
-        string includedContentSha256,
-        int originalUtf8ByteCount,
-        int includedUtf8ByteCount,
-        bool isTruncated,
-        Utf16Span range,
-        Utf16Span? includedRange,
-        string content)
-        : base(
-            contentSha256,
-            includedContentSha256,
-            originalUtf8ByteCount,
-            includedUtf8ByteCount,
-            isTruncated,
-            false,
-            range,
-            includedRange,
-            content)
-    {
-        ProducerId = producerId;
-        OutputId = outputId;
-    }
-
-    public string ProducerId { get; }
-
-    public string OutputId { get; }
+        $"{nameof(DocumentationScribeSemanticSourceEvidence)} {{ Compilation = <correlated>, Fact = <authorized-content> }}";
 }
 
 public sealed record DocumentationScribeSemanticApplicableComponent(
@@ -595,8 +479,7 @@ public sealed record DocumentationScribeSemanticEvidenceItem
 }
 
 public sealed record DocumentationScribeSemanticIncomplete(
-    DocumentationScribeSemanticIncompleteReason Reason,
-    int OmittedCount);
+    DocumentationScribeSemanticIncompleteReason Reason);
 
 public sealed record DocumentationScribeSemanticEvidencePage
 {

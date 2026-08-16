@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
@@ -26,23 +28,25 @@ public sealed class DocumentationScribeSemanticToolTests
     }
 
     [Fact]
-    public void ResultSourceUnionContainsOnlyTheThreeAdmittedCases()
+    public void ResultSourceReusesTheCoreClosedLocatorUnion()
     {
-        var cases = typeof(DocumentationScribeSemanticSourceEvidence).Assembly
-            .GetExportedTypes()
-            .Where(type => type.IsSubclassOf(typeof(DocumentationScribeSemanticSourceEvidence)))
-            .OrderBy(type => type.Name, StringComparer.Ordinal)
-            .ToArray();
-
+        Assert.True(typeof(DocumentationScribeSemanticSourceEvidence).IsSealed);
+        Assert.Equal(
+            typeof(DocumentationScribeEvidenceContextFact),
+            typeof(DocumentationScribeSemanticSourceEvidence)
+                .GetProperty(nameof(DocumentationScribeSemanticSourceEvidence.Fact))!
+                .PropertyType);
+        Assert.True(typeof(EvidenceLocator).IsAbstract);
         Assert.Equal(
             [
-                typeof(DocumentationScribeSemanticRepositoryEvidence),
-                typeof(DocumentationScribeSemanticSourceGeneratorEvidence),
-                typeof(DocumentationScribeSemanticToolGeneratedEvidence),
+                typeof(GeneratedOutputEvidenceLocator),
+                typeof(MetadataEvidenceLocator),
+                typeof(RepositoryEvidenceLocator),
+                typeof(SyntheticEvidenceLocator),
             ],
-            cases);
-        Assert.DoesNotContain(cases, type => type.Name.Contains("Metadata", StringComparison.Ordinal));
-        Assert.DoesNotContain(cases, type => type.Name.Contains("Synthetic", StringComparison.Ordinal));
+            typeof(EvidenceLocator).Assembly.GetExportedTypes()
+                .Where(type => type.IsSubclassOf(typeof(EvidenceLocator)))
+                .OrderBy(type => type.Name, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -97,6 +101,52 @@ public sealed class DocumentationScribeSemanticToolTests
             DocumentationScribeSemanticToolLimits.Production.MaximumElapsedMilliseconds,
             1,
             300_000);
+        var zeroResidual = new DocumentationScribeSemanticToolLimits(
+            1,
+            0,
+            0,
+            1024,
+            32,
+            1,
+            1,
+            1,
+            1);
+        Assert.Equal(0, zeroResidual.MaximumOptionalItems);
+        Assert.Equal(0, zeroResidual.MaximumResultUtf8Bytes);
+        Assert.InRange(
+            DocumentationScribeSemanticToolLimits.Production.MaximumResultUtf8Bytes,
+            0,
+            DocumentationScribeContract.MaximumArtifactUtf8Bytes);
+    }
+
+    [Theory]
+    [InlineData(
+        DocumentationScribeSemanticAccessibility.Internal,
+        DocumentationScribeSemanticAccessibility.Protected,
+        DocumentationScribeSemanticAccessibility.PrivateProtected)]
+    [InlineData(
+        DocumentationScribeSemanticAccessibility.Internal,
+        DocumentationScribeSemanticAccessibility.ProtectedInternal,
+        DocumentationScribeSemanticAccessibility.Internal)]
+    [InlineData(
+        DocumentationScribeSemanticAccessibility.Protected,
+        DocumentationScribeSemanticAccessibility.ProtectedInternal,
+        DocumentationScribeSemanticAccessibility.Protected)]
+    [InlineData(
+        DocumentationScribeSemanticAccessibility.PrivateProtected,
+        DocumentationScribeSemanticAccessibility.ProtectedInternal,
+        DocumentationScribeSemanticAccessibility.PrivateProtected)]
+    public void AccessibilityUsesDomainIntersectionInsteadOfNumericRank(
+        DocumentationScribeSemanticAccessibility left,
+        DocumentationScribeSemanticAccessibility right,
+        DocumentationScribeSemanticAccessibility expected)
+    {
+        var method = typeof(DocumentationScribeSemanticToolPort).GetMethod(
+            "IntersectAccessibility",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        var actual = method!.Invoke(null, [left, right]);
+
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
@@ -121,18 +171,34 @@ public sealed class DocumentationScribeSemanticToolTests
     public void SourceAndResultDumpChannelsHideAuthorizedContent()
     {
         const string marker = "SECRET-SOURCE-MARKER";
-        var range = EvidenceInput.RepositoryLocator("src/Marker.cs", 2, 22).Span!.Value;
-        var source = new DocumentationScribeSemanticRepositoryEvidence(
-            "src/Marker.cs",
-            new string('a', 64),
-            new string('b', 64),
-            64,
-            20,
-            true,
+        var markerBytes = Encoding.UTF8.GetBytes(marker);
+        var markerSha256 = Convert.ToHexString(SHA256.HashData(markerBytes)).ToLowerInvariant();
+        var locator = EvidenceInput.RepositoryLocator("src/Marker.cs", 2, 22);
+        var range = locator.Span!.Value;
+        var commitment = DocumentationScribeContextValidation.CreateEvidenceSourceCommitment(
+            locator,
+            markerSha256,
+            markerSha256,
+            markerBytes.Length,
+            markerBytes.Length,
             false,
-            range,
-            range,
-            marker);
+            false,
+            false);
+        var fact = DocumentationScribeContextValidation.CreateEvidenceFact(
+            DocumentationScribeContextAuthority.Usage,
+            DocumentationScribeContextRole.UsageEvidence,
+            "symbol.marker",
+            "semantic.usage.invocation",
+            commitment,
+            marker,
+            range.Start,
+            range.End,
+            range.Start,
+            range.End);
+        var source = new DocumentationScribeSemanticSourceEvidence(
+            fact,
+            "compilation.marker",
+            new string('d', 64));
         var item = new DocumentationScribeSemanticEvidenceItem(
             new string('c', 64),
             DocumentationScribeSemanticEvidenceKind.Usage,
