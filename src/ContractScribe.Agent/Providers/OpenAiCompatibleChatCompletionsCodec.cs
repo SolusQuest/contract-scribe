@@ -207,7 +207,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Unsupported();
             }
 
-            if (hasRefusal || !string.IsNullOrEmpty(contentText) || calls.Count == 0)
+            if ((hasRefusal && refusal.ValueKind != JsonValueKind.Null)
+                || !string.IsNullOrEmpty(contentText)
+                || calls.Count == 0)
             {
                 throw Malformed();
             }

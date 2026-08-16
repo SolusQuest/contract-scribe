@@ -94,6 +94,23 @@ public sealed class DocumentationScribeProviderTransportTests
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.ProductProjectionUtf8));
     }
 
+    [Fact]
+    public void Null_refusal_is_absent_semantically_but_non_null_refusal_fails_closed()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var accepted = OpenAiCompatibleChatCompletionsCodec.ParseResponse(Encoding.UTF8.GetBytes("""
+            {"choices":[{"index":0,"message":{"role":"assistant","content":null,"refusal":null,"tool_calls":[{"id":"call.accepted","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+            """), prepared);
+
+        Assert.Single(accepted.ToolCalls);
+
+        var rejected = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(Encoding.UTF8.GetBytes("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":null,"refusal":"blocked","tool_calls":[{"id":"call.rejected","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                """), prepared));
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, rejected.Code);
+    }
+
     [Theory]
     [InlineData("http://localhost:1234/v1")]
     [InlineData("http://127.1:1234/v1")]
