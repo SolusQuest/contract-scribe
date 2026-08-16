@@ -488,7 +488,7 @@ public sealed class DocumentationScribeRepositoryToolTests
             if (!replaced && point == DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication)
             {
                 replaced = true;
-                Directory.Delete(empty);
+                Directory.Move(empty, empty + "-old");
                 Directory.CreateDirectory(empty);
             }
         });
@@ -647,11 +647,7 @@ public sealed class DocumentationScribeRepositoryToolTests
         using var fixture = RepositoryToolFixture.Create();
         var cased = await fixture.Bundle().ReadExcerpt.InvokeAsync(
             new("context.instructions", "DOCS/guide.md"), default);
-        Assert.Equal(
-            OperatingSystem.IsWindows()
-                ? DocumentationScribeRepositoryToolFailureCodes.UnsafeObject
-                : DocumentationScribeRepositoryToolFailureCodes.Stale,
-            cased.FailureCode);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.UnsafeObject, cased.FailureCode);
 
         if (!OperatingSystem.IsWindows())
         {
