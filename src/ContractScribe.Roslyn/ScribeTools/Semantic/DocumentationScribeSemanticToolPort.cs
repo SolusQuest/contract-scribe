@@ -442,6 +442,7 @@ public sealed class DocumentationScribeSemanticToolPort
             _ => Check(DocumentationScribeSemanticStage.DocumentationObservation, started, cancellationToken)).Observe(
             selectedSession,
             cancellationToken);
+        Check(started, cancellationToken);
         if (observed.Status == DocumentationObservationRunStatus.Cancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();

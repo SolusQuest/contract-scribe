@@ -372,6 +372,25 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Same(DocumentationScribeToolOutcome.TimedOut, timed.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, timed.FailureReason);
         Assert.Null(timed.Page);
+
+        var observationTimedPort = new DocumentationScribeSemanticToolPort(
+            loaded,
+            request,
+            timeoutLimits,
+            stage =>
+            {
+                if (stage == DocumentationScribeSemanticStage.DocumentationObservation)
+                {
+                    Thread.Sleep(10);
+                }
+            },
+            null);
+        var observationTimed = await observationTimedPort.InvokeAsync(
+            DocumentationScribeSemanticToolRequest.Create(20),
+            CancellationToken.None);
+        Assert.Same(DocumentationScribeToolOutcome.TimedOut, observationTimed.Outcome);
+        Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, observationTimed.FailureReason);
+        Assert.Null(observationTimed.Page);
     }
 
     [Fact]
