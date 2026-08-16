@@ -93,6 +93,12 @@ public sealed class DocumentationScribeProviderTransportTests
         Assert.Equal(
             "d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8",
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.ProductProjectionUtf8));
+        Assert.Equal(
+            "dcd885ddbece7e432e0544c06f4305a1807419d200cc224f53f7a43a0d594132",
+            OpenAiCompatibleChatCompletionsCodec.Digest(second.BodyUtf8));
+        Assert.Equal(
+            "057dd9c7ad1e0819cc2708520eda78ed8fb9f5fe3355330049b65de7aa067e51",
+            OpenAiCompatibleChatCompletionsCodec.Digest(second.ProductProjectionUtf8));
     }
 
     [Fact]
@@ -110,6 +116,32 @@ public sealed class DocumentationScribeProviderTransportTests
                 {"choices":[{"index":0,"message":{"role":"assistant","content":null,"refusal":"blocked","tool_calls":[{"id":"call.rejected","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
                 """), prepared));
         Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, rejected.Code);
+    }
+
+    [Fact]
+    public void Completed_exchange_preserves_typed_evidence_on_wire_and_in_product_projection()
+    {
+        var evidence = ScribeRequest(maximumElapsedMilliseconds: 5_000).EvidenceReferences[0];
+        var completed = new DocumentationScribeCompletedToolExchange(
+            0,
+            "call.evidence",
+            "tool.alpha",
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [evidence]);
+
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model");
+        using var wire = JsonDocument.Parse(prepared.BodyUtf8);
+        using var wrapper = JsonDocument.Parse(
+            wire.RootElement.GetProperty("messages")[6].GetProperty("content").GetString()!);
+        AssertEvidence(Assert.Single(wrapper.RootElement.GetProperty("evidenceReferences").EnumerateArray()), evidence);
+
+        using var projection = JsonDocument.Parse(prepared.ProductProjectionUtf8);
+        var projected = Assert.Single(
+            Assert.Single(projection.RootElement.GetProperty("completedToolExchanges").EnumerateArray())
+                .GetProperty("evidenceReferences").EnumerateArray());
+        AssertEvidence(projected, evidence);
     }
 
     [Theory]
@@ -1023,6 +1055,20 @@ public sealed class DocumentationScribeProviderTransportTests
             reference.IsTruncated,
             new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray();
         return new DocumentationScribePromptInput(context, evidence);
+    }
+
+    private static void AssertEvidence(
+        JsonElement actual,
+        DocumentationScribeEvidenceReference expected)
+    {
+        Assert.Equal(expected.EvidenceReferenceId, actual.GetProperty("evidenceReferenceId").GetString());
+        Assert.Equal(
+            DocumentationScribeVocabulary.GetId(expected.Authority),
+            actual.GetProperty("authority").GetString());
+        Assert.Equal(expected.ContentSha256, actual.GetProperty("contentSha256").GetString());
+        Assert.Equal(expected.OriginalUtf8ByteCount, actual.GetProperty("originalUtf8ByteCount").GetInt32());
+        Assert.Equal(expected.IncludedUtf8ByteCount, actual.GetProperty("includedUtf8ByteCount").GetInt32());
+        Assert.Equal(expected.IsTruncated, actual.GetProperty("isTruncated").GetBoolean());
     }
 
     private static string FindRepositoryRoot()

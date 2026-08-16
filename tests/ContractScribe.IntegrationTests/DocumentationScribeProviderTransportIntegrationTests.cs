@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
@@ -29,11 +30,23 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         string fixture,
         DocumentationScribeTerminalKind expectedKind)
     {
+        var request = Request();
+        var dynamicInput = DynamicEvidenceInput();
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            request,
+            dynamicInput,
+            out var expectedDynamic));
         var terminal = ReadTerminal(fixture);
+        if (expectedKind == DocumentationScribeTerminalKind.Proposal)
+        {
+            var node = JsonNode.Parse(terminal)!.AsObject();
+            node["contentUnits"]![0]!["evidenceReferenceIds"]![0] = expectedDynamic!.EvidenceReferenceId;
+            terminal = Encoding.UTF8.GetBytes(node.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+        }
+
         var firstResponse = Completion("cs_tool_000", "call.one", "{\"referenceId\":\"one\"}");
         var secondResponse = Completion("cs_terminal", "call.terminal", Encoding.UTF8.GetString(terminal));
         await using var server = new LoopbackServer(firstResponse, secondResponse);
-        var request = Request();
         var port = new SyntheticPort();
         var registry = Registry(request.ToolPolicyId, port);
         using var exchange = new OpenAiCompatibleHttpModelExchange(
@@ -72,6 +85,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             Assert.Equal(DocumentationScribeToolOutcome.Complete.Id,
                 content.RootElement.GetProperty("outcome").GetString());
             Assert.Equal("one", content.RootElement.GetProperty("result").GetProperty("referenceId").GetString());
+            var transported = Assert.Single(content.RootElement.GetProperty("evidenceReferences").EnumerateArray());
+            Assert.Equal(expectedDynamic!.EvidenceReferenceId, transported.GetProperty("evidenceReferenceId").GetString());
+            Assert.Equal(expectedDynamic.ContentSha256, transported.GetProperty("contentSha256").GetString());
         }
 
         Assert.All(server.Requests, observed =>
@@ -93,9 +109,12 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                     DocumentationScribeContentUnitKind.Return],
                 proposal.ContentUnits.Select(unit => unit.Kind));
             Assert.Equal(
-                ["evidence.summary", "evidence.parameter", "evidence.return"],
+                [expectedDynamic!.EvidenceReferenceId, "evidence.parameter", "evidence.return"],
                 proposal.ContentUnits.SelectMany(unit => unit.EvidenceReferenceIds));
         }
+
+        Assert.Equal(expectedDynamic!.EvidenceReferenceId,
+            Assert.Single(result.DynamicEvidenceReferences).EvidenceReferenceId);
     }
 
     [Fact]
@@ -454,8 +473,22 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             SyntheticResult result) => DocumentationScribeToolEncodeResult.Accepted(
                 new DocumentationScribeToolResultPayload(
                     JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId }),
-                    ImmutableArray<DocumentationScribeDynamicEvidenceInput>.Empty));
+                    [DynamicEvidenceInput()]));
     }
+
+    private static DocumentationScribeDynamicEvidenceInput DynamicEvidenceInput() => new(
+        EvidenceInput.TargetSubject(
+            "synthetic.v1",
+            "M:Synthetic.Widget.Run(System.String)"),
+        EvidenceKind.SourceDeclaration,
+        EvidenceRelation.Declares,
+        DocumentationScribeEvidenceAuthority.SourceDeclaration,
+        EvidenceInput.RepositoryLocator("src/Synthetic/Widget.cs"),
+        new string('a', 64),
+        originalUtf8ByteCount: 1,
+        includedUtf8ByteCount: 1,
+        isTruncated: false,
+        claimCategoryIds: ["claim.purpose"]);
 
     private sealed class CaptureExchange : IDocumentationScribeModelExchange
     {
