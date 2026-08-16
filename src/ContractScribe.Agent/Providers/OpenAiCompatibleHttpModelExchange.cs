@@ -103,11 +103,11 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
         catch (HttpIOException exception)
         {
-            return Failure(Classify(exception.HttpRequestError));
+            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
         }
         catch (HttpRequestException exception)
         {
-            return Failure(Classify(exception.HttpRequestError));
+            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
         }
         catch (IOException)
         {
@@ -212,7 +212,12 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
     }
 
-    private static DocumentationScribeModelFailureCode Classify(HttpRequestError error) => error switch
+    private static DocumentationScribeModelFailureCode ClassifyBeforeResponse(HttpRequestError error) =>
+        error == HttpRequestError.ResponseEnded
+            ? DocumentationScribeModelFailureCode.TransientUnavailable
+            : ClassifyStatus200BodyRead(error);
+
+    private static DocumentationScribeModelFailureCode ClassifyStatus200BodyRead(HttpRequestError error) => error switch
     {
         HttpRequestError.SecureConnectionError
             or HttpRequestError.UserAuthenticationError
@@ -313,11 +318,13 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             }
             catch (HttpRequestException exception)
             {
-                throw new OpenAiCompatibleSanitizedTransportException(Classify(exception.HttpRequestError));
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    ClassifyBeforeResponse(exception.HttpRequestError));
             }
             catch (HttpIOException exception)
             {
-                throw new OpenAiCompatibleSanitizedTransportException(Classify(exception.HttpRequestError));
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    ClassifyBeforeResponse(exception.HttpRequestError));
             }
             catch (OperationCanceledException)
             {

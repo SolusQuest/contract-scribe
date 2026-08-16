@@ -238,9 +238,34 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var response = await exchange.SendAsync(await ModelRequestAsync(), CancellationToken.None);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.NotNull(response.Failure);
+        Assert.Equal(DocumentationScribeModelFailureCode.TransientUnavailable, response.Failure!.Code);
         Assert.Equal(1, server.CompleteRequestBodies);
         Assert.InRange(server.AcceptedConnections, 1, 2);
+    }
+
+    [Fact]
+    public async Task Runtime_owns_retry_after_pre_response_eof_without_transport_body_replay()
+    {
+        var terminal = Completion(
+            "cs_terminal",
+            "call.terminal",
+            Encoding.UTF8.GetString(ReadTerminal("skip-result.json")));
+        await using var server = new ReplayFaultServer(terminal);
+        var request = Request();
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            Registry(request.ToolPolicyId, new SyntheticPort()),
+            new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
+
+        var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, server.CompleteRequestBodies);
+        Assert.InRange(server.AcceptedConnections, 2, 3);
     }
 
     [Fact]
@@ -517,10 +542,12 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     {
         private readonly TcpListener listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource disposal = new();
+        private readonly byte[]? responseAfterSecondCompleteBody;
         private readonly Task serverTask;
 
-        internal ReplayFaultServer()
+        internal ReplayFaultServer(byte[]? responseAfterSecondCompleteBody = null)
         {
+            this.responseAfterSecondCompleteBody = responseAfterSecondCompleteBody;
             listener.Start();
             var endpoint = (IPEndPoint)listener.LocalEndpoint;
             Endpoint = new Uri($"http://127.0.0.1:{endpoint.Port}/v1/chat/completions");
@@ -574,6 +601,13 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                     {
                         _ = await ReadRequestAsync(stream);
                         CompleteRequestBodies++;
+                        if (responseAfterSecondCompleteBody is not null && CompleteRequestBodies == 2)
+                        {
+                            await stream.WriteAsync(Encoding.ASCII.GetBytes(
+                                $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {responseAfterSecondCompleteBody.Length}\r\nConnection: close\r\n\r\n"));
+                            await stream.WriteAsync(responseAfterSecondCompleteBody);
+                            return;
+                        }
                     }
                     catch (EndOfStreamException)
                     {
