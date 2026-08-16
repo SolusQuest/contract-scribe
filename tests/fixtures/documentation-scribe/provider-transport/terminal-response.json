@@ -1,0 +1,1 @@
+{"choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call.terminal","type":"function","function":{"name":"cs_terminal","arguments":"{\"kind\":\"skip\"}"}}]},"finish_reason":"tool_calls"}]}
