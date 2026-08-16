@@ -79,15 +79,22 @@ public sealed class DocumentationScribeRuntimeTests
         DocumentationScribeTerminalKind expectedKind)
     {
         const string marker = "tool-result-content-marker";
-        var exchange = new DynamicCitationExchange(terminalFixture, marker);
+        var exchange = new DynamicCitationExchange(
+            terminalFixture,
+            marker,
+            useRequestVisibleRoutingReference: true);
         var result = await CreateRuntime(
             exchange,
-            Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(resultContentMarker: marker)))
             .RunAsync(Request(), Attempt(), Prompt());
 
         Assert.Equal(expectedKind, result.Terminal.Kind);
         var dynamicReference = Assert.Single(result.DynamicEvidenceReferences);
         Assert.Equal(dynamicReference.EvidenceReferenceId, exchange.ObservedEvidenceReferenceId);
+        Assert.NotNull(exchange.ObservedRoutingReferenceId);
+        Assert.True(exchange.ObservedRoutingReferenceInModelRequest);
         Assert.True(exchange.ObservedProductOwnedEvidence);
         Assert.True(exchange.ObservedMarkerInModelRequest);
         var publicResult = JsonSerializer.Serialize(result)
@@ -1620,7 +1627,8 @@ public sealed class DocumentationScribeRuntimeTests
         bool unavailableHasDynamicEvidence = false,
         bool suppressDynamicEvidence = false,
         bool truncatedCompleteEvidence = false,
-        string? invalidDynamicReferenceId = null) :
+        string? invalidDynamicReferenceId = null,
+        string? resultContentMarker = null) :
         IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
     {
         public DocumentationScribeToolDecodeResult<SyntheticRequest> DecodeArguments(
@@ -1687,8 +1695,15 @@ public sealed class DocumentationScribeRuntimeTests
                 dynamicEvidence = dynamicEvidence.Add(dynamicEvidence[0]);
             }
 
+            var resultUtf8Json = resultContentMarker is null
+                ? JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId })
+                : JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    referenceId = result.ReferenceId,
+                    marker = resultContentMarker,
+                });
             return DocumentationScribeToolEncodeResult.Accepted(new DocumentationScribeToolResultPayload(
-                JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId }),
+                resultUtf8Json,
                 dynamicEvidence));
         }
     }
@@ -1759,10 +1774,17 @@ public sealed class DocumentationScribeRuntimeTests
             "one"));
     }
 
-    private sealed class DynamicCitationExchange(string terminalFixture, string marker) :
+    private sealed class DynamicCitationExchange(
+        string terminalFixture,
+        string marker,
+        bool useRequestVisibleRoutingReference = false) :
         IDocumentationScribeModelExchange
     {
         internal string? ObservedEvidenceReferenceId { get; private set; }
+
+        internal string? ObservedRoutingReferenceId { get; private set; }
+
+        internal bool ObservedRoutingReferenceInModelRequest { get; private set; }
 
         internal bool ObservedProductOwnedEvidence { get; private set; }
 
@@ -1775,7 +1797,26 @@ public sealed class DocumentationScribeRuntimeTests
             cancellationToken.ThrowIfCancellationRequested();
             if (request.CompletedToolExchanges.IsEmpty)
             {
-                return ValueTask.FromResult(ToolResponse(Call(0, "call.dynamic", "tool.read", marker)));
+                ObservedRoutingReferenceId = marker;
+                if (useRequestVisibleRoutingReference)
+                {
+                    using var targetEvidence = JsonDocument.Parse(request.Messages.Single(message =>
+                        message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+                    ObservedRoutingReferenceId = targetEvidence.RootElement
+                        .GetProperty("evidenceReferences")[0]
+                        .GetProperty("evidenceReferenceId")
+                        .GetString();
+                    Assert.False(string.IsNullOrEmpty(ObservedRoutingReferenceId));
+                    ObservedRoutingReferenceInModelRequest = Encoding.UTF8
+                        .GetString(request.DeterministicUtf8.AsSpan())
+                        .Contains(ObservedRoutingReferenceId, StringComparison.Ordinal);
+                }
+
+                return ValueTask.FromResult(ToolResponse(Call(
+                    0,
+                    "call.dynamic",
+                    "tool.read",
+                    ObservedRoutingReferenceId)));
             }
 
             var completed = Assert.Single(request.CompletedToolExchanges);
