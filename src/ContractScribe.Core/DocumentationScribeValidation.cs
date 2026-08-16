@@ -2750,13 +2750,22 @@ public static class DocumentationScribeValidation
     {
         var valid = locator switch
         {
-            RepositoryEvidenceLocator repository =>
+            RepositoryEvidenceLocator { Path: not null } repository =>
                 IsRepositoryRelativePathValue(repository.Path)
                 && IsSpanValueValid(repository.Span),
-            MetadataEvidenceLocator metadata =>
+            MetadataEvidenceLocator
+            {
+                AssemblyIdentity: not null,
+                DocumentationCommentId: not null,
+            } metadata =>
                 IsCompilationContextRef(metadata.AssemblyIdentity)
                 && IsDocumentationCommentId(metadata.DocumentationCommentId),
-            GeneratedOutputEvidenceLocator generated =>
+            GeneratedOutputEvidenceLocator
+            {
+                ProducerId: not null,
+                OutputId: not null,
+                SourceSha256: not null,
+            } generated =>
                 Enum.IsDefined(generated.ProducerKind)
                 && IsPrefixedSha256(
                     generated.ProducerId,
@@ -2766,7 +2775,8 @@ public static class DocumentationScribeValidation
                     generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.")
                 && IsSha256Value(generated.SourceSha256)
                 && IsSpanValueValid(generated.Span),
-            SyntheticEvidenceLocator synthetic => IsCompilationContextRef(synthetic.FixtureId),
+            SyntheticEvidenceLocator { FixtureId: not null } synthetic =>
+                IsCompilationContextRef(synthetic.FixtureId),
             _ => false,
         };
         if (!valid || !isTruncated)

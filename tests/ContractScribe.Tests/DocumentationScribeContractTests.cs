@@ -284,6 +284,41 @@ public sealed class DocumentationScribeContractTests
     }
 
     [Fact]
+    public void Dynamic_evidence_factory_rejects_null_nested_locator_fields_without_throwing()
+    {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        var sha256 = new string('a', 64);
+        EvidenceLocator[] malformedLocators =
+        [
+            EvidenceInput.RepositoryLocator(null!),
+            EvidenceInput.MetadataLocator(null!, "M:Synthetic.Widget.Run(System.String)"),
+            EvidenceInput.MetadataLocator("synthetic.v1", null!),
+            EvidenceInput.GeneratedOutputLocator(
+                GeneratedOutputKind.SourceGenerator,
+                null!,
+                "sgo." + sha256,
+                sha256),
+            EvidenceInput.GeneratedOutputLocator(
+                GeneratedOutputKind.SourceGenerator,
+                "sgp." + sha256,
+                null!,
+                sha256),
+            EvidenceInput.GeneratedOutputLocator(
+                GeneratedOutputKind.SourceGenerator,
+                "sgp." + sha256,
+                "sgo." + sha256,
+                null!),
+            EvidenceInput.SyntheticLocator(null!),
+        ];
+
+        Assert.All(malformedLocators, locator =>
+            Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+                request,
+                DynamicEvidenceInput(locator: locator),
+                out _)));
+    }
+
+    [Fact]
     public void Invalid_fixture_manifest_has_stable_codes_and_pointers()
     {
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));

@@ -438,6 +438,22 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
+    public async Task Null_nested_locator_field_maps_to_tool_protocol_failure()
+    {
+        var result = await CreateRuntime(
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            RegistryWithCodec(
+                new SyntheticPort(DocumentationScribeToolOutcome.Complete),
+                new SyntheticCodec(nullRepositoryLocatorPath: true)))
+            .RunAsync(Request(), Attempt(), Prompt());
+
+        Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+    }
+
+    [Fact]
     public async Task Invalid_second_call_discards_publication_but_retains_incurred_tool_observations()
     {
         var result = await CreateRuntime(
@@ -1628,7 +1644,8 @@ public sealed class DocumentationScribeRuntimeTests
         bool suppressDynamicEvidence = false,
         bool truncatedCompleteEvidence = false,
         string? invalidDynamicReferenceId = null,
-        string? resultContentMarker = null) :
+        string? resultContentMarker = null,
+        bool nullRepositoryLocatorPath = false) :
         IDocumentationScribeToolCodec<SyntheticRequest, SyntheticResult>
     {
         public DocumentationScribeToolDecodeResult<SyntheticRequest> DecodeArguments(
@@ -1679,7 +1696,9 @@ public sealed class DocumentationScribeRuntimeTests
                         EvidenceRelation.Declares,
                         DocumentationScribeEvidenceAuthority.SourceDeclaration,
                         EvidenceInput.RepositoryLocator(
-                            request.ReferenceId == invalidDynamicReferenceId
+                            nullRepositoryLocatorPath
+                                ? null!
+                                : request.ReferenceId == invalidDynamicReferenceId
                                 ? "../outside.cs"
                                 : "src/Synthetic/Widget.cs",
                             truncatedCompleteEvidence ? 0 : null,
