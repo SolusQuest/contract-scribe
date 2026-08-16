@@ -390,10 +390,12 @@ public sealed class DocumentationScribeRuntimeTests
             root["context"]!["auditOutcome"] = "audit.outcome.compliant";
             root["target"]!["symbolRef"]!["documentationCommentId"] = DocumentationId;
             root["target"]!["applicableComponents"]![0]!["name"] = "other";
-            foreach (var evidence in root["evidenceReferences"]!.AsArray())
+            foreach (var symbol in root["evidenceReferences"]!.AsArray().Select(evidence =>
             {
                 var subject = evidence!["subject"]!;
-                var symbol = subject["parentSymbolRef"] ?? subject["symbolRef"];
+                return subject["parentSymbolRef"] ?? subject["symbolRef"];
+            }))
+            {
                 symbol!["documentationCommentId"] = DocumentationId;
             }
         });
