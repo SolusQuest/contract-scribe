@@ -337,17 +337,20 @@ public sealed class DocumentationScribeRuntimeTests
         await CreateRuntime(exchange, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
 
         var modelRequest = Assert.Single(exchange.Requests);
-        using var systemPolicy = JsonDocument.Parse(modelRequest.Messages.Single(message =>
-            message.Kind == DocumentationScribeMessageKind.SystemPolicy).Content);
+        using var runPolicy = JsonDocument.Parse(modelRequest.Messages.Single(message =>
+            message.Kind == DocumentationScribeMessageKind.RunPolicy).Content);
         using var maintainedContext = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.MaintainedContext).Content);
-        var context = maintainedContext.RootElement.GetProperty("context");
-        Assert.Equal("repoctx-11111111111111111111111111111111", context.GetProperty("repositoryContextRef").GetString());
+        var context = runPolicy.RootElement.GetProperty("context");
+        Assert.Equal("samples/Synthetic.csproj", maintainedContext.RootElement
+            .GetProperty("scope").GetProperty("inputIdentity").GetString());
+        Assert.Equal("repoctx-11111111111111111111111111111111", context
+            .GetProperty("repositoryContextRef").GetString());
         Assert.Equal("profile.external-api", context.GetProperty("targetProfile").GetString());
         Assert.Equal("audit.outcome.violation", context.GetProperty("auditOutcome").GetString());
-        Assert.Equal("required", systemPolicy.RootElement.GetProperty("styleProfile")
+        Assert.Equal("required", runPolicy.RootElement.GetProperty("styleProfile")
             .GetProperty("summary").GetProperty("disposition").GetString());
-        Assert.Equal("authority.source-declaration", systemPolicy.RootElement.GetProperty("styleProfile")
+        Assert.Equal("authority.source-declaration", runPolicy.RootElement.GetProperty("styleProfile")
             .GetProperty("claimPolicies")[0].GetProperty("allowedAuthorities")[0].GetString());
 
         using var targetEvidence = JsonDocument.Parse(modelRequest.Messages.Single(message =>
@@ -375,14 +378,30 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
-    public async Task Run_specific_state_follows_the_reusable_repository_prefix()
+    public async Task Reusable_prefix_is_identical_across_fresh_sessions_and_compatible_targets()
     {
         var request = Request();
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var freshSession = Request(root => ReplaceRepositoryContext(
+            root,
+            "repoctx-22222222222222222222222222222222"));
+        var compatibleTarget = Request(root =>
+        {
+            const string DocumentationId = "M:Synthetic.Widget.Other(System.String)";
+            root["context"]!["auditOutcome"] = "audit.outcome.compliant";
+            root["target"]!["symbolRef"]!["documentationCommentId"] = DocumentationId;
+            root["target"]!["applicableComponents"]![0]!["name"] = "other";
+            foreach (var evidence in root["evidenceReferences"]!.AsArray())
+            {
+                var subject = evidence!["subject"]!;
+                var symbol = subject["parentSymbolRef"] ?? subject["symbolRef"];
+                symbol!["documentationCommentId"] = DocumentationId;
+            }
+        });
 
-        await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
+        var first = await FirstRequest(request);
+        var second = await FirstRequest(freshSession);
+        var third = await FirstRequest(compatibleTarget);
 
-        var modelRequest = Assert.Single(exchange.Requests);
         Assert.Equal(
             [
                 DocumentationScribeMessageKind.SystemPolicy,
@@ -391,14 +410,30 @@ public sealed class DocumentationScribeRuntimeTests
                 DocumentationScribeMessageKind.RunPolicy,
                 DocumentationScribeMessageKind.TargetEvidence,
             ],
-            modelRequest.Messages.Select(message => message.Kind));
-        Assert.All(modelRequest.Messages.Take(3), message =>
+            first.Messages.Select(message => message.Kind));
+        var prefix = first.Messages.Take(3).Select(message => (message.Kind, message.Content)).ToArray();
+        Assert.Equal(prefix, second.Messages.Take(3).Select(message => (message.Kind, message.Content)));
+        Assert.Equal(prefix, third.Messages.Take(3).Select(message => (message.Kind, message.Content)));
+        Assert.All(first.Messages.Take(3), message =>
         {
             Assert.DoesNotContain(request.ArtifactSha256, message.Content, StringComparison.Ordinal);
             Assert.DoesNotContain(AttemptId, message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("repoctx-", message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("audit.outcome.", message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("profile.external-api", message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("symbolRef", message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("parameter/0", message.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("maximumProviderRequests", message.Content, StringComparison.Ordinal);
         });
-        Assert.Contains(request.ArtifactSha256, modelRequest.Messages[3].Content, StringComparison.Ordinal);
-        Assert.Contains(AttemptId, modelRequest.Messages[3].Content, StringComparison.Ordinal);
+        Assert.NotEqual(first.Messages[3].Content, second.Messages[3].Content);
+        Assert.NotEqual(first.Messages[3].Content, third.Messages[3].Content);
+
+        async Task<DocumentationScribeModelRequest> FirstRequest(DocumentationScribeRequest current)
+        {
+            var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+            await CreateRuntime(exchange, EmptyRegistry()).RunAsync(current, Attempt(), Prompt(current));
+            return Assert.Single(exchange.Requests);
+        }
     }
 
     [Fact]
@@ -988,7 +1023,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "d485b93e8f446e3f288e11e2ab57b2c570536e66af4c1e0b18f1ee2fdb527890",
+                "57f442e58de783d028c1d96ddede42139796b2db84d72ed54af8fecb164d3d86",
                 digest);
         }
         finally
@@ -1168,6 +1203,20 @@ public sealed class DocumentationScribeRuntimeTests
 
     private static string Sha256(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static void ReplaceRepositoryContext(JsonObject root, string value)
+    {
+        root["context"]!["repositoryContextRef"] = value;
+        foreach (var reference in root["contextReferences"]!.AsArray())
+        {
+            reference!["repositoryContextRef"] = value;
+        }
+
+        foreach (var reference in root["evidenceReferences"]!.AsArray())
+        {
+            reference!["repositoryContextRef"] = value;
+        }
+    }
 
     private static string FindRepositoryRoot()
     {

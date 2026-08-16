@@ -100,7 +100,6 @@ internal static class DocumentationScribePromptBuilder
                     authority = "system",
                     request.ScribeRequestVersion,
                     request.ToolPolicyId,
-                    request.StyleProfile,
                     behavior = new[]
                     {
                         "read-only",
@@ -116,7 +115,8 @@ internal static class DocumentationScribePromptBuilder
                 {
                     authority = "repository-instruction",
                     references = request.ContextReferences
-                        .Where(item => item.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction),
+                        .Where(item => item.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
+                        .Select(PrefixReference),
                     content = instructions,
                 }),
             Message(
@@ -124,9 +124,13 @@ internal static class DocumentationScribePromptBuilder
                 new
                 {
                     authority = "maintained-context",
-                    request.Context,
+                    scope = new
+                    {
+                        request.Context.InputIdentity,
+                    },
                     references = request.ContextReferences
-                        .Where(item => item.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction),
+                        .Where(item => item.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction)
+                        .Select(PrefixReference),
                     content = maintained,
                 }),
             Message(
@@ -136,6 +140,8 @@ internal static class DocumentationScribePromptBuilder
                     request.ArtifactSha256,
                     attemptId = attemptId.Value,
                     attemptNumber,
+                    request.Context,
+                    request.StyleProfile,
                     request.Limits,
                 }),
             Message(
@@ -218,6 +224,17 @@ internal static class DocumentationScribePromptBuilder
 
         return new DocumentationScribeModelMessage(kind, CanonicalJson.AsString(bytes));
     }
+
+    private static object PrefixReference(DocumentationScribeContextReference reference) => new
+    {
+        reference.ContextReferenceId,
+        reference.Kind,
+        reference.Path,
+        reference.ContentSha256,
+        reference.OriginalUtf8ByteCount,
+        reference.IncludedUtf8ByteCount,
+        reference.IsTruncated,
+    };
 }
 
 internal sealed class PromptBoundaryException : Exception
