@@ -233,6 +233,7 @@ public sealed record DocumentationScribeContextSourceCommitment
     internal DocumentationScribeContextSourceCommitment(
         EvidenceLocator locator,
         string contentSha256,
+        string includedContentSha256,
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
         bool isTruncated,
@@ -241,6 +242,7 @@ public sealed record DocumentationScribeContextSourceCommitment
     {
         Locator = locator;
         ContentSha256 = contentSha256;
+        IncludedContentSha256 = includedContentSha256;
         OriginalUtf8ByteCount = originalUtf8ByteCount;
         IncludedUtf8ByteCount = includedUtf8ByteCount;
         IsTruncated = isTruncated;
@@ -254,6 +256,8 @@ public sealed record DocumentationScribeContextSourceCommitment
         (Locator as RepositoryEvidenceLocator)?.Path;
 
     public string ContentSha256 { get; }
+
+    public string IncludedContentSha256 { get; }
 
     public int OriginalUtf8ByteCount { get; }
 

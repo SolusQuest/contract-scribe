@@ -1110,6 +1110,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         var extraCommitment = DocumentationScribeContextValidation.CreateSourceCommitment(
             "extra/AGENTS.md",
             Sha256(extraBytes),
+            Sha256(extraBytes),
             extraBytes.Length,
             extraBytes.Length,
             false,

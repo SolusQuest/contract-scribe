@@ -125,6 +125,7 @@ public sealed class DocumentationScribeContextContractTests
         var truncatedCommitment = DocumentationScribeContextValidation.CreateSourceCommitment(
             "src/Widget.cs",
             baseline.Commitment.ContentSha256,
+            baseline.Commitment.IncludedContentSha256,
             baseline.Commitment.OriginalUtf8ByteCount + 1,
             baseline.Commitment.IncludedUtf8ByteCount,
             true,
@@ -142,7 +143,7 @@ public sealed class DocumentationScribeContextContractTests
     }
 
     [Fact]
-    public void NonTruncatedContentMustMatchItsFullSourceCommitment()
+    public void ContentMustMatchItsIncludedPayloadCommitment()
     {
         var commitment = Commitment("src/Widget.cs", "same-size-a");
 
@@ -154,6 +155,51 @@ public sealed class DocumentationScribeContextContractTests
                 "source.kind",
                 commitment,
                 "same-size-b"));
+
+        var included = Encoding.UTF8.GetBytes("same-size-a");
+        var truncated = DocumentationScribeContextValidation.CreateSourceCommitment(
+            "src/Widget.cs",
+            Sha("complete-source"),
+            Sha("same-size-a"),
+            included.Length + 1,
+            included.Length,
+            true,
+            false);
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeContextValidation.CreateEvidenceFact(
+                DocumentationScribeContextAuthority.Source,
+                DocumentationScribeContextRole.SourceDeclaration,
+                "subject-a",
+                "source.kind",
+                truncated,
+                "same-size-b"));
+
+        var substituted = DocumentationScribeContextValidation.CreateSourceCommitment(
+            "src/Widget.cs",
+            Sha("complete-source"),
+            Sha("same-size-b"),
+            included.Length + 1,
+            included.Length,
+            true,
+            false);
+        var first = DocumentationScribeContextValidation.CreateEvidenceFact(
+            DocumentationScribeContextAuthority.Source,
+            DocumentationScribeContextRole.SourceDeclaration,
+            "subject-a",
+            "source.kind",
+            truncated,
+            "same-size-a");
+        var second = DocumentationScribeContextValidation.CreateEvidenceFact(
+            DocumentationScribeContextAuthority.Source,
+            DocumentationScribeContextRole.SourceDeclaration,
+            "subject-a",
+            "source.kind",
+            substituted,
+            "same-size-b");
+        Assert.NotEqual(first.EvidenceId, second.EvidenceId);
+        Assert.NotEqual(
+            DocumentationScribeContextValidation.ComputeCommitmentsSha256([truncated]),
+            DocumentationScribeContextValidation.ComputeCommitmentsSha256([substituted]));
     }
 
     [Fact]
@@ -633,6 +679,10 @@ public sealed class DocumentationScribeContextContractTests
         Assert.All(values, value =>
             Assert.DoesNotContain(marker, value.ToString(), StringComparison.Ordinal));
         Assert.DoesNotContain(commitment.ContentSha256, commitment.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            commitment.IncludedContentSha256,
+            commitment.ToString(),
+            StringComparison.Ordinal);
         Assert.DoesNotContain(repositoryContextRef.ToString(), facts.ToString(), StringComparison.Ordinal);
     }
 
@@ -724,6 +774,7 @@ public sealed class DocumentationScribeContextContractTests
         return DocumentationScribeContextValidation.CreateSourceCommitment(
             path,
             Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
             bytes.Length,
             bytes.Length,
             false,
@@ -736,6 +787,7 @@ public sealed class DocumentationScribeContextContractTests
         int byteCount) =>
         DocumentationScribeContextValidation.CreateEvidenceSourceCommitment(
             locator,
+            sourceSha,
             sourceSha,
             byteCount,
             byteCount,

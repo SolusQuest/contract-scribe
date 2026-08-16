@@ -222,6 +222,7 @@ public static class DocumentationScribeContextValidation
     public static DocumentationScribeContextSourceCommitment CreateSourceCommitment(
         string path,
         string contentSha256,
+        string includedContentSha256,
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
         bool isTruncated,
@@ -232,6 +233,7 @@ public static class DocumentationScribeContextValidation
         return CreateEvidenceSourceCommitment(
             new RepositoryEvidenceLocator(normalizedPath, null),
             contentSha256,
+            includedContentSha256,
             originalUtf8ByteCount,
             includedUtf8ByteCount,
             isTruncated,
@@ -242,6 +244,7 @@ public static class DocumentationScribeContextValidation
     public static DocumentationScribeContextSourceCommitment CreateEvidenceSourceCommitment(
         EvidenceLocator locator,
         string contentSha256,
+        string includedContentSha256,
         int originalUtf8ByteCount,
         int includedUtf8ByteCount,
         bool isTruncated,
@@ -251,6 +254,7 @@ public static class DocumentationScribeContextValidation
         ArgumentNullException.ThrowIfNull(locator);
         var normalizedLocator = ValidateEvidenceLocator(locator);
         ValidateSha256(contentSha256, nameof(contentSha256));
+        ValidateSha256(includedContentSha256, nameof(includedContentSha256));
         if (normalizedLocator is GeneratedOutputEvidenceLocator generated
             && !string.Equals(
                 generated.SourceSha256,
@@ -273,9 +277,21 @@ public static class DocumentationScribeContextValidation
             throw new ArgumentOutOfRangeException(nameof(originalUtf8ByteCount));
         }
 
+        if (!isTruncated
+            && !string.Equals(
+                contentSha256,
+                includedContentSha256,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "A complete payload must commit to the complete source bytes.",
+                nameof(includedContentSha256));
+        }
+
         return new DocumentationScribeContextSourceCommitment(
             normalizedLocator,
             contentSha256,
+            includedContentSha256,
             originalUtf8ByteCount,
             includedUtf8ByteCount,
             isTruncated,
@@ -307,6 +323,7 @@ public static class DocumentationScribeContextValidation
             depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
             repositoryPath,
             commitment.ContentSha256,
+            commitment.IncludedContentSha256,
             commitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IsTruncated ? "1" : "0",
@@ -429,6 +446,7 @@ public static class DocumentationScribeContextValidation
         evidenceFields.AddRange(LocatorIdentityFields(commitment.Locator));
         evidenceFields.AddRange([
             commitment.ContentSha256,
+            commitment.IncludedContentSha256,
             commitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             commitment.IsTruncated ? "1" : "0",
@@ -494,6 +512,7 @@ public static class DocumentationScribeContextValidation
             DocumentationScribeContextVocabulary.GetId(selection),
             depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
             sourceCommitment.ContentSha256,
+            sourceCommitment.IncludedContentSha256,
             sourceCommitment.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             sourceCommitment.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             sourceCommitment.IsTruncated ? "1" : "0",
@@ -699,10 +718,12 @@ public static class DocumentationScribeContextValidation
         var fields = commitments
             .OrderBy(item => LocatorSortKey(item.Locator), StringComparer.Ordinal)
             .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
+            .ThenBy(item => item.IncludedContentSha256, StringComparer.Ordinal)
             .SelectMany(item => new[]
             {
                 LocatorSortKey(item.Locator),
                 item.ContentSha256,
+                item.IncludedContentSha256,
                 item.OriginalUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 item.IncludedUtf8ByteCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 item.IsTruncated ? "1" : "0",
@@ -785,19 +806,16 @@ public static class DocumentationScribeContextValidation
             throw new ArgumentException("Included content does not match its byte commitment.", nameof(content));
         }
 
-        if (!commitment.IsTruncated)
+        var contentBytes = StrictUtf8.GetBytes(content);
+        var committedBytes = commitment.IncludedHasUtf8Bom
+            ? new byte[] { 0xef, 0xbb, 0xbf }.Concat(contentBytes).ToArray()
+            : contentBytes;
+        var actual = Convert.ToHexString(SHA256.HashData(committedBytes)).ToLowerInvariant();
+        if (!string.Equals(actual, commitment.IncludedContentSha256, StringComparison.Ordinal))
         {
-            var contentBytes = StrictUtf8.GetBytes(content);
-            var committedBytes = commitment.HasUtf8Bom
-                ? new byte[] { 0xef, 0xbb, 0xbf }.Concat(contentBytes).ToArray()
-                : contentBytes;
-            var actual = Convert.ToHexString(SHA256.HashData(committedBytes)).ToLowerInvariant();
-            if (!string.Equals(actual, commitment.ContentSha256, StringComparison.Ordinal))
-            {
-                throw new ArgumentException(
-                    "Included content does not match its source commitment.",
-                    nameof(content));
-            }
+            throw new ArgumentException(
+                "Included content does not match its payload commitment.",
+                nameof(content));
         }
     }
 

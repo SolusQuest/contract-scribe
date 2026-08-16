@@ -644,10 +644,17 @@ public sealed class DocumentationScribeContextBootstrapper
             var includedHasUtf8Bom = includesCompleteSource && selectedSource.HasUtf8Bom;
             var includedSourceBytes = StrictUtf8.GetByteCount(sourceContent)
                 + (includedHasUtf8Bom ? 3 : 0);
+            var includedSourceSha256 = includesCompleteSource
+                ? selectedSource.Sha256
+                : Sha256(
+                    StrictUtf8.GetBytes(sourceContent),
+                    cancellationToken,
+                    () => Check(selection, started, cancellationToken));
 
             var sourceCommitment = DocumentationScribeContextValidation.CreateEvidenceSourceCommitment(
                 selection.SourceLocator,
                 selectedSource.Sha256,
+                includedSourceSha256,
                 selectedSource.Bytes.Length,
                 includedSourceBytes,
                 includedSourceBytes < selectedSource.Bytes.Length,
@@ -1161,12 +1168,14 @@ public sealed class DocumentationScribeContextBootstrapper
                     "context.budget.total-bytes");
             }
 
+            var contentSha256 = Sha256(
+                read.Bytes,
+                cancellationToken,
+                () => Check(selection, started, cancellationToken));
             var commitment = DocumentationScribeContextValidation.CreateSourceCommitment(
                 candidate.RepositoryPath,
-                Sha256(
-                    read.Bytes,
-                    cancellationToken,
-                    () => Check(selection, started, cancellationToken)),
+                contentSha256,
+                contentSha256,
                 read.Bytes.Length,
                 includedByteCount,
                 false,
