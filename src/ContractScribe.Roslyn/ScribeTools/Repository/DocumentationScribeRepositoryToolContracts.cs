@@ -392,6 +392,7 @@ internal enum DocumentationScribeRepositoryToolCheckpoint
     BeforeFinalMembershipCheck,
     BeforeEvidencePublication,
     BeforeCursorPublication,
+    AfterFreshRead,
 }
 
 public sealed class DocumentationScribeRepositoryToolBundle
