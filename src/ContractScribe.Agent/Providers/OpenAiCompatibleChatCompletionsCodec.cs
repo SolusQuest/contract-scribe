@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ContractScribe.Agent.Prompting;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 
@@ -393,6 +394,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 writer.WriteString("outcome", exchange.OutcomeId);
                 writer.WritePropertyName("result");
                 writer.WriteRawValue(exchange.ResultUtf8Json.Span);
+                writer.WritePropertyName("evidenceReferences");
+                writer.WriteRawValue(CanonicalJson.Serialize(exchange.EvidenceReferences).AsSpan());
                 writer.WriteEndObject();
             }
 
@@ -434,6 +437,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             writer.WriteString("outcome", exchange.OutcomeId);
             writer.WritePropertyName("result");
             writer.WriteRawValue(exchange.ResultUtf8Json.Span);
+            writer.WritePropertyName("evidenceReferences");
+            writer.WriteRawValue(CanonicalJson.Serialize(exchange.EvidenceReferences).AsSpan());
             writer.WriteEndObject();
         }
 
