@@ -505,8 +505,13 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         }
 
         var cached = directHit ?? cachedDetail;
-        if (directHit is not null && cachedDetail is not null && directHit != cachedDetail
-            || input is not null && (cached > input || directMiss > input))
+        var cacheComponentsExceedInput = input is int inputTotal
+            && cached is int cachedTokens
+            && directMiss is int uncachedTokens
+            && cachedTokens + uncachedTokens > inputTotal;
+        if ((directHit is not null && cachedDetail is not null && directHit != cachedDetail)
+            || (input is not null && (cached > input || directMiss > input))
+            || cacheComponentsExceedInput)
         {
             throw Malformed();
         }

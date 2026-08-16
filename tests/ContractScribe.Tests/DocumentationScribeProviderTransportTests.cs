@@ -472,6 +472,30 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
+    public void Usage_cache_components_cannot_exceed_the_prompt_total()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var invalidDirect = ToolResponseWithUsage(
+            promptTokens: 100, cachedDetail: 80, directHit: 80, directMiss: 80);
+        var invalidDetailAlias = ToolResponseWithUsage(
+            promptTokens: 100, cachedDetail: 80, directHit: null, directMiss: 80);
+        var exact = ToolResponseWithUsage(
+            promptTokens: 100, cachedDetail: 80, directHit: 80, directMiss: 20);
+
+        foreach (var body in new[] { invalidDirect, invalidDetailAlias })
+        {
+            var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared));
+            Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        }
+
+        var accepted = OpenAiCompatibleChatCompletionsCodec.ParseResponse(exact, prepared);
+        Assert.Equal(80, accepted.Usage!.CachedInputTokens);
+        Assert.Equal(20, accepted.Usage.UncachedInputTokens);
+        Assert.Equal(DocumentationScribeCacheObservation.Mixed, accepted.Cache);
+    }
+
+    [Fact]
     public async Task Contradictory_cache_detail_fails_the_runtime_envelope_without_retry()
     {
         var body = Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2}}}");
@@ -919,7 +943,11 @@ public sealed class DocumentationScribeProviderTransportTests
             },
         });
 
-    private static byte[] ToolResponseWithUsage(int promptTokens, int cachedDetail, int? directHit) =>
+    private static byte[] ToolResponseWithUsage(
+        int promptTokens,
+        int cachedDetail,
+        int? directHit,
+        int? directMiss = null) =>
         JsonSerializer.SerializeToUtf8Bytes(new
         {
             choices = new[]
@@ -947,6 +975,7 @@ public sealed class DocumentationScribeProviderTransportTests
             {
                 prompt_tokens = promptTokens,
                 prompt_cache_hit_tokens = directHit,
+                prompt_cache_miss_tokens = directMiss,
                 prompt_tokens_details = new { cached_tokens = cachedDetail },
             },
         }, new JsonSerializerOptions
