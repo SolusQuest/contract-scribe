@@ -36,6 +36,14 @@ public sealed class DocumentationScribeContextContent
                 nameof(includedUtf8ByteCount));
         }
 
+        if (!isTruncated
+            && !DocumentationScribeBoundary.MatchesNormalizedContentSha256(Content, ContentSha256))
+        {
+            throw new ArgumentException(
+                "The normalized content does not match its SHA-256 commitment.",
+                nameof(contentSha256));
+        }
+
         IncludedUtf8ByteCount = includedUtf8ByteCount;
         IsTruncated = isTruncated;
     }
@@ -85,6 +93,14 @@ public sealed class DocumentationScribeEvidenceContent
             throw new ArgumentException(
                 "The normalized content does not match its included-byte commitment.",
                 nameof(includedUtf8ByteCount));
+        }
+
+        if (!isTruncated
+            && !DocumentationScribeBoundary.MatchesNormalizedContentSha256(Content, ContentSha256))
+        {
+            throw new ArgumentException(
+                "The normalized content does not match its SHA-256 commitment.",
+                nameof(contentSha256));
         }
 
         IncludedUtf8ByteCount = includedUtf8ByteCount;

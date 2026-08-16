@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ContractScribe.Core;
@@ -94,6 +95,12 @@ internal static class DocumentationScribeBoundary
 
         return value;
     }
+
+    internal static bool MatchesNormalizedContentSha256(string content, string expectedSha256) =>
+        string.Equals(
+            Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(content))).ToLowerInvariant(),
+            expectedSha256,
+            StringComparison.Ordinal);
 
     internal static ImmutableArray<byte> ValidateJson(
         ReadOnlyMemory<byte> utf8Json,

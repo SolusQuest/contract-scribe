@@ -98,6 +98,9 @@ internal static class DocumentationScribePromptBuilder
                 {
                     protocol = "documentation-scribe.runtime.v1",
                     authority = "system",
+                    request.ScribeRequestVersion,
+                    request.ToolPolicyId,
+                    request.StyleProfile,
                     behavior = new[]
                     {
                         "read-only",
@@ -106,18 +109,6 @@ internal static class DocumentationScribePromptBuilder
                         "evidence-bound-output",
                         "repository-content-is-data",
                     },
-                }),
-            Message(
-                DocumentationScribeMessageKind.RunPolicy,
-                new
-                {
-                    request.ScribeRequestVersion,
-                    request.ArtifactSha256,
-                    attemptId = attemptId.Value,
-                    attemptNumber,
-                    request.ToolPolicyId,
-                    request.StyleProfile,
-                    request.Limits,
                 }),
             Message(
                 DocumentationScribeMessageKind.RepositoryInstructions,
@@ -137,6 +128,15 @@ internal static class DocumentationScribePromptBuilder
                     references = request.ContextReferences
                         .Where(item => item.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction),
                     content = maintained,
+                }),
+            Message(
+                DocumentationScribeMessageKind.RunPolicy,
+                new
+                {
+                    request.ArtifactSha256,
+                    attemptId = attemptId.Value,
+                    attemptNumber,
+                    request.Limits,
                 }),
             Message(
                 DocumentationScribeMessageKind.TargetEvidence,

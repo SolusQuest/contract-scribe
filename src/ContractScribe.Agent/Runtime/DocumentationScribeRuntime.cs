@@ -482,9 +482,20 @@ public sealed class DocumentationScribeRuntime
             return OperationCompletion<T>.TimedOut();
         }
 
-        var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, timeProvider, cancellationToken);
-        var timeoutTask = Task.Delay(TimeSpan.FromMilliseconds(remaining), timeProvider);
-        var winner = await Task.WhenAny(task, cancellationTask, timeoutTask).ConfigureAwait(false);
+        using var boundaryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var boundaryTask = Task.Delay(
+            TimeSpan.FromMilliseconds(remaining),
+            timeProvider,
+            boundaryCancellation.Token);
+        Task winner;
+        try
+        {
+            winner = await Task.WhenAny(task, boundaryTask).ConfigureAwait(false);
+        }
+        finally
+        {
+            boundaryCancellation.Cancel();
+        }
         if (cancellationToken.IsCancellationRequested)
         {
             operationCancellation.Cancel();
@@ -493,7 +504,7 @@ public sealed class DocumentationScribeRuntime
             return OperationCompletion<T>.Cancelled();
         }
 
-        if (state.RemainingMilliseconds <= 0 || winner == timeoutTask)
+        if (state.RemainingMilliseconds <= 0 || winner == boundaryTask)
         {
             operationCancellation.Cancel();
             ObserveLate(task);
