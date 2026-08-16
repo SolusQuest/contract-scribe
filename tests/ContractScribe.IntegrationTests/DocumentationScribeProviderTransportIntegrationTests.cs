@@ -454,7 +454,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             SyntheticResult result) => DocumentationScribeToolEncodeResult.Accepted(
                 new DocumentationScribeToolResultPayload(
                     JsonSerializer.SerializeToUtf8Bytes(new { referenceId = result.ReferenceId }),
-                    evidenceItemCount: 1));
+                    ImmutableArray<DocumentationScribeDynamicEvidenceInput>.Empty));
     }
 
     private sealed class CaptureExchange : IDocumentationScribeModelExchange

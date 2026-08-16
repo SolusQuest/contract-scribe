@@ -67,7 +67,8 @@ public sealed class DocumentationScribeProviderTransportTests
             call.OperationId,
             call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
             DocumentationScribeToolOutcome.Complete.Id,
-            Encoding.UTF8.GetBytes("{\"referenceId\":\"one\"}").ToImmutableArray());
+            Encoding.UTF8.GetBytes("{\"referenceId\":\"one\"}").ToImmutableArray(),
+            []);
         var second = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "synthetic-model-v1");
         using (var wire = JsonDocument.Parse(second.BodyUtf8))
         {
@@ -395,7 +396,8 @@ public sealed class DocumentationScribeProviderTransportTests
             "tool.alpha",
             Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
             DocumentationScribeToolOutcome.Complete.Id,
-            Encoding.UTF8.GetBytes("{}").ToImmutableArray());
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            []);
         var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model");
 
         foreach (var body in new[]
@@ -440,7 +442,8 @@ public sealed class DocumentationScribeProviderTransportTests
             "tool.alpha",
             Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
             DocumentationScribeToolOutcome.Complete.Id,
-            Encoding.UTF8.GetBytes("{}").ToImmutableArray());
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            []);
         var reused = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model");
         var reuse = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
             OpenAiCompatibleChatCompletionsCodec.ParseResponse(
@@ -549,7 +552,8 @@ public sealed class DocumentationScribeProviderTransportTests
             "tool.alpha",
             Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
             DocumentationScribeToolOutcome.Complete.Id,
-            Encoding.UTF8.GetBytes("{}").ToImmutableArray());
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            []);
         var sequencing = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
             OpenAiCompatibleChatCompletionsCodec.Prepare(Request([invalidCompletedRound]), "model"));
         Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, sequencing.Code);
@@ -696,7 +700,8 @@ public sealed class DocumentationScribeProviderTransportTests
                 operationId,
                 Encoding.UTF8.GetBytes("{\"value\":\"" + value + "\"}").ToImmutableArray(),
                 DocumentationScribeToolOutcome.Complete.Id,
-                Encoding.UTF8.GetBytes("{\"value\":\"" + value + "\"}").ToImmutableArray());
+                Encoding.UTF8.GetBytes("{\"value\":\"" + value + "\"}").ToImmutableArray(),
+                []);
         var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request(
         [
             Completed(0, "call.one", "tool.alpha", "one"),
@@ -852,7 +857,8 @@ public sealed class DocumentationScribeProviderTransportTests
             "tool.alpha",
             Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
             DocumentationScribeToolOutcome.Complete.Id,
-            Encoding.UTF8.GetBytes("{\"marker\":\"" + resultMarker + "\"}").ToImmutableArray());
+            Encoding.UTF8.GetBytes("{\"marker\":\"" + resultMarker + "\"}").ToImmutableArray(),
+            []);
 
         var response = await exchange.SendAsync(Request([completed], messages: messages), CancellationToken.None);
         var captured = observations.Text;
