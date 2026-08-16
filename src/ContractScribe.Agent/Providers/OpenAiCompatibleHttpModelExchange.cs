@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Authentication;
 using ContractScribe.Agent.Runtime;
 
 namespace ContractScribe.Agent.Providers;
@@ -25,7 +26,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(handler);
         this.options = options;
-        invoker = new HttpMessageInvoker(handler, disposeHandler);
+        invoker = new HttpMessageInvoker(
+            new SanitizingHandler(handler, disposeHandler),
+            disposeHandler: true);
     }
 
     public async ValueTask<DocumentationScribeModelResponse> SendAsync(
@@ -90,9 +93,17 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         {
             return Failure(exception.Code);
         }
+        catch (OpenAiCompatibleSanitizedTransportException exception)
+        {
+            return Failure(exception.Code);
+        }
         catch (OperationCanceledException)
         {
             return Failure(DocumentationScribeModelFailureCode.TransientUnavailable);
+        }
+        catch (HttpIOException exception)
+        {
+            return Failure(Classify(exception.HttpRequestError));
         }
         catch (HttpRequestException exception)
         {
@@ -270,6 +281,75 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             ImmutableArray<DocumentationScribeModelTerminalSubmission>.Empty,
             new DocumentationScribeModelFailure(code, retryAfterMilliseconds));
 
+    private sealed class SanitizingHandler : DelegatingHandler
+    {
+        private readonly bool disposeInnerHandler;
+
+        internal SanitizingHandler(HttpMessageHandler innerHandler, bool disposeInnerHandler)
+        {
+            InnerHandler = innerHandler;
+            this.disposeInnerHandler = disposeInnerHandler;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OpenAiCompatibleSanitizedCancellationException(cancellationToken);
+            }
+            catch (OpenAiCompatibleProtocolException)
+            {
+                throw;
+            }
+            catch (OpenAiCompatibleSanitizedTransportException)
+            {
+                throw;
+            }
+            catch (HttpRequestException exception)
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(Classify(exception.HttpRequestError));
+            }
+            catch (HttpIOException exception)
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(Classify(exception.HttpRequestError));
+            }
+            catch (OperationCanceledException)
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    DocumentationScribeModelFailureCode.TransientUnavailable);
+            }
+            catch (IOException)
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    DocumentationScribeModelFailureCode.TransientUnavailable);
+            }
+            catch (AuthenticationException)
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    DocumentationScribeModelFailureCode.PermanentUnavailable);
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            {
+                throw new OpenAiCompatibleSanitizedTransportException(
+                    DocumentationScribeModelFailureCode.PermanentUnavailable);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposeInnerHandler)
+            {
+                base.Dispose(disposing);
+            }
+        }
+    }
+
     private sealed class SingleSerializationContent(byte[] body) : HttpContent
     {
         private int serializationCount;
@@ -296,4 +376,24 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             return true;
         }
     }
+}
+
+internal sealed class OpenAiCompatibleSanitizedTransportException : Exception
+{
+    internal OpenAiCompatibleSanitizedTransportException(DocumentationScribeModelFailureCode code)
+        : base("The selected provider transport failed.") => Code = code;
+
+    internal DocumentationScribeModelFailureCode Code { get; }
+
+    public override string ToString() => Message;
+}
+
+internal sealed class OpenAiCompatibleSanitizedCancellationException : OperationCanceledException
+{
+    internal OpenAiCompatibleSanitizedCancellationException(CancellationToken cancellationToken)
+        : base("The selected provider request was canceled.", innerException: null, cancellationToken)
+    {
+    }
+
+    public override string ToString() => Message;
 }

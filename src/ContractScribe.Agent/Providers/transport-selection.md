@@ -65,7 +65,8 @@ Every network request is `POST` to the exact configured endpoint over exact HTTP
 - Authenticated execution is HTTPS with platform certificate validation and no redirect.
 - Plain HTTP is limited to credential-free canonical literal `127.0.0.1` or `[::1]` with an explicit port. Bearer credentials use the RFC 6750 `b64token` alphabet, require at least one non-padding character, and permit `=` only as terminal padding.
 - Only an unencoded status-200 JSON response enters the bounded parser. Non-success status takes precedence over body prose. Non-streaming tool calls are ordered by their array position and may not carry a streaming-only `index` field.
-- Provider error bodies, raw responses, credentials, request bodies, and exception prose do not become product values or diagnostics. Incoming call IDs are checked against both the current response and all completed rounds before a tool can run.
+- A provider-owned inner handler converts nonfatal transport exceptions to stable content-free exceptions before `HttpMessageInvoker` telemetry can observe them; the sanitized exception text omits raw inner exceptions and stack paths. Premature EOF after a status-200 response is malformed, not retryable.
+- Provider error bodies, raw responses, credentials, request bodies, and exception prose do not become product values or diagnostics. Incoming ordinary and terminal call IDs share the same bounded correlation domain and are checked against both the current response and all completed rounds before a tool can run.
 - Retry, delay, deadline, fallback, pricing, and cache correctness remain outside the transport.
 
 Redirect following, compressed responses, HTTP/2 or HTTP/3, proxies, HTTP-date retry hints, custom certificate policy, request compression, provider-specific branches, and support claims are unsupported in this issue.

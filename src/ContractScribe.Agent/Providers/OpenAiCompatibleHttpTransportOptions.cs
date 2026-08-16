@@ -111,6 +111,7 @@ public sealed class OpenAiCompatibleHttpTransportOptions
         }
 
         var padding = false;
+        var hasPayload = false;
         foreach (var value in credential)
         {
             if (value == '=')
@@ -123,6 +124,13 @@ public sealed class OpenAiCompatibleHttpTransportOptions
             {
                 throw new ArgumentException("The credential is outside the selected transport boundary.", nameof(credential));
             }
+
+            hasPayload = true;
+        }
+
+        if (!hasPayload)
+        {
+            throw new ArgumentException("The credential is outside the selected transport boundary.", nameof(credential));
         }
     }
 

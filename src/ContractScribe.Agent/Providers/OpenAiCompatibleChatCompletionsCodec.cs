@@ -171,6 +171,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     }
 
                     var callId = RequireString(call, "id");
+                    DocumentationScribeBoundary.ValidateCorrelationId(callId, nameof(callId));
                     if (request.CompletedCallIds.Contains(callId)
                         || !callIds.Add(callId)
                         || !string.Equals(RequireString(call, "type"), "function", StringComparison.Ordinal))
@@ -501,13 +502,13 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             reasoning = OptionalInt(RequireObject(completionDetails), "reasoning_tokens", DocumentationScribeContract.MaximumObservedOutputTokens);
         }
 
+        var cached = directHit ?? cachedDetail;
         if (directHit is not null && cachedDetail is not null && directHit != cachedDetail
-            || input is not null && (directHit > input || directMiss > input))
+            || input is not null && (cached > input || directMiss > input))
         {
             throw Malformed();
         }
 
-        var cached = directHit ?? cachedDetail;
         var modelUsage = input is null && output is null && cached is null && directMiss is null && reasoning is null
             ? null
             : new DocumentationScribeModelUsage(input, output, cached, directMiss, reasoning);

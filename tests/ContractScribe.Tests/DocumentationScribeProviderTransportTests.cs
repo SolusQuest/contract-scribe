@@ -136,6 +136,8 @@ public sealed class DocumentationScribeProviderTransportTests
             confidential.Endpoint, "model", networkEnabled: true, "contains space"));
         Assert.Throws<ArgumentException>(() => new OpenAiCompatibleHttpTransportOptions(
             confidential.Endpoint, "model", networkEnabled: true, "invalid:token"));
+        Assert.Throws<ArgumentException>(() => new OpenAiCompatibleHttpTransportOptions(
+            confidential.Endpoint, "model", networkEnabled: true, "=="));
     }
 
     [Fact]
@@ -290,6 +292,62 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
+    public async Task Underlying_exception_is_sanitized_before_network_telemetry_observes_it()
+    {
+        const string outerMarker = "underlying-exception-secret-marker";
+        const string innerMarker = "C:\\private\\machine-path-marker";
+        using var observations = new NetworkObservationCollector();
+        var handler = new CapturingHandler((_, _) => Task.FromException<HttpResponseMessage>(
+            new HttpRequestException(outerMarker, new IOException(innerMarker))));
+        using var exchange = Exchange(handler);
+
+        var response = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var captured = observations.Text;
+
+        Assert.Equal(DocumentationScribeModelFailureCode.TransientUnavailable, response.Failure!.Code);
+        Assert.DoesNotContain(outerMarker, captured, StringComparison.Ordinal);
+        Assert.DoesNotContain(innerMarker, captured, StringComparison.Ordinal);
+        Assert.DoesNotContain(FindRepositoryRoot(), captured, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(outerMarker, response.Failure.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(innerMarker, response.Failure.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Provider_response_markers_do_not_cross_observer_or_failure_boundaries()
+    {
+        const string normalMarker = "normal-provider-response-marker";
+        const string malformedMarker = "malformed-provider-response-marker";
+        const string errorMarker = "provider-error-response-marker";
+        using var observations = new NetworkObservationCollector();
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            JsonResponse("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.normal\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\\\"marker\\\":\\\"" + normalMarker + "\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            JsonResponse("{\"marker\":\"" + malformedMarker + "\",\"choices\":[]}"),
+            new HttpResponseMessage(HttpStatusCode.BadGateway)
+            {
+                Content = new StringContent(errorMarker, Encoding.UTF8, "text/plain"),
+            },
+        ]);
+        var handler = new CapturingHandler((_, _) => Task.FromResult(responses.Dequeue()));
+        using var exchange = Exchange(handler);
+
+        var normal = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var malformed = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var error = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var captured = observations.Text;
+
+        Assert.Single(normal.ToolCalls);
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, malformed.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureCode.TransientUnavailable, error.Failure!.Code);
+        foreach (var marker in new[] { normalMarker, malformedMarker, errorMarker })
+        {
+            Assert.DoesNotContain(marker, captured, StringComparison.Ordinal);
+            Assert.DoesNotContain(marker, malformed.Failure.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(marker, error.Failure.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Response_structure_precedes_finish_reason_and_uses_array_position()
     {
         var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
@@ -333,6 +391,127 @@ public sealed class DocumentationScribeProviderTransportTests
                 OpenAiCompatibleChatCompletionsCodec.ParseResponse(Encoding.UTF8.GetBytes(body), prepared));
             Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
         }
+    }
+
+    [Fact]
+    public void Terminal_call_ids_use_the_same_bounded_correlation_domain()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        foreach (var callId in new[]
+        {
+            string.Empty,
+            "call.\0terminal",
+            new string('x', DocumentationScribeBoundary.MaximumCorrelationIdUtf8Bytes + 1),
+        })
+        {
+            var body = TerminalResponse(callId, "{\"kind\":\"skip\"}");
+            var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared));
+            Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        }
+
+        var boundary = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            TerminalResponse(
+                new string('x', DocumentationScribeBoundary.MaximumCorrelationIdUtf8Bytes),
+                "{\"kind\":\"skip\"}"),
+            prepared);
+        Assert.Single(boundary.TerminalSubmissions);
+
+        var completed = new DocumentationScribeCompletedToolExchange(
+            0,
+            "call.used-terminal-id",
+            "tool.alpha",
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray());
+        var reused = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model");
+        var reuse = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                TerminalResponse("call.used-terminal-id", "{\"kind\":\"skip\"}"),
+                reused));
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, reuse.Code);
+    }
+
+    [Fact]
+    public void Usage_cache_detail_is_bounded_by_direct_prompt_total()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var invalidDetailOnly = ToolResponseWithUsage(promptTokens: 1, cachedDetail: 2, directHit: null);
+        var invalidAgreement = ToolResponseWithUsage(promptTokens: 1, cachedDetail: 2, directHit: 2);
+        var exact = ToolResponseWithUsage(promptTokens: 2, cachedDetail: 2, directHit: null);
+        var within = ToolResponseWithUsage(promptTokens: 2, cachedDetail: 1, directHit: null);
+
+        foreach (var body in new[] { invalidDetailOnly, invalidAgreement })
+        {
+            var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared));
+            Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        }
+
+        Assert.Equal(2,
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(exact, prepared).Usage!.CachedInputTokens);
+        Assert.Equal(1,
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(within, prepared).Usage!.CachedInputTokens);
+    }
+
+    [Fact]
+    public async Task Contradictory_cache_detail_fails_the_runtime_envelope_without_retry()
+    {
+        var body = Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2}}}");
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(Encoding.UTF8.GetString(body))));
+        using var exchange = Exchange(handler);
+        var request = ScribeRequest(maximumElapsedMilliseconds: 5_000);
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+            new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(
+            "scribe-attempt.0123456789abcdef0123456789abcdef",
+            out var attempt));
+
+        var result = await runtime.RunAsync(request, attempt, ScribePrompt(request));
+
+        Assert.Equal(DocumentationScribeFailureCode.Provider,
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public void Malformed_duplicate_ambiguous_and_out_of_order_states_fail_closed()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var malformedBodies = new[]
+        {
+            ReadProviderFixture("malformed-duplicate-response.json"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.same\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}},{\"id\":\"call.same\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_001\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.tool\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}},{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}},{\"id\":\"call.two\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\"},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.bad-json\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.unknown\",\"type\":\"function\",\"function\":{\"name\":\"unknown_alias\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"},{\"index\":1,\"message\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}"),
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":1,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+        };
+
+        foreach (var body in malformedBodies)
+        {
+            var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared));
+            Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        }
+
+        var invalidCompletedRound = new DocumentationScribeCompletedToolExchange(
+            1,
+            "call.gap",
+            "tool.alpha",
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray());
+        var sequencing = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.Prepare(Request([invalidCompletedRound]), "model"));
+        Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, sequencing.Code);
     }
 
     [Fact]
@@ -696,6 +875,67 @@ public sealed class DocumentationScribeProviderTransportTests
     {
         Content = new StringContent(body, Encoding.UTF8, "application/json"),
     };
+
+    private static byte[] TerminalResponse(string callId, string arguments) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                id = callId,
+                                type = "function",
+                                function = new { name = OpenAiCompatibleChatCompletionsCodec.TerminalAlias, arguments },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+        });
+
+    private static byte[] ToolResponseWithUsage(int promptTokens, int cachedDetail, int? directHit) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                id = "call.usage",
+                                type = "function",
+                                function = new { name = "cs_tool_000", arguments = "{}" },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+            usage = new
+            {
+                prompt_tokens = promptTokens,
+                prompt_cache_hit_tokens = directHit,
+                prompt_tokens_details = new { cached_tokens = cachedDetail },
+            },
+        }, new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        });
 
     private static DocumentationScribeRequest ScribeRequest(int maximumElapsedMilliseconds)
     {
