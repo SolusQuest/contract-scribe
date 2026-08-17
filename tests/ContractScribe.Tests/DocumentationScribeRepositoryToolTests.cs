@@ -1027,6 +1027,114 @@ public sealed class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
+    public async Task EntryBudgetChargesRepeatedSnapshotAtTheExactBoundary()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var initialCompleted = false;
+        var repeatedCompleted = false;
+        var result = await fixture.Bundle(
+            limits: DocumentationScribeRepositoryToolLimits.Create(maximumEntriesPerCall: 8),
+            checkpoint: point =>
+            {
+                initialCompleted |= point == DocumentationScribeRepositoryToolCheckpoint.AfterInitialDirectorySnapshot;
+                repeatedCompleted |= point == DocumentationScribeRepositoryToolCheckpoint.AfterRepeatedDirectorySnapshot;
+            }).ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default);
+
+        Assert.True(initialCompleted);
+        Assert.False(repeatedCompleted);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, result.Outcome);
+        Assert.Empty(result.Items);
+        Assert.Null(result.Cursor);
+    }
+
+    [Fact]
+    public async Task EntryBudgetChargesFinalDirectoryRevalidation()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var revalidationStarted = false;
+        var result = await fixture.Bundle(
+            limits: DocumentationScribeRepositoryToolLimits.Create(maximumEntriesPerCall: 24),
+            checkpoint: point =>
+            {
+                revalidationStarted |= point == DocumentationScribeRepositoryToolCheckpoint.BeforeDirectoryRevalidation;
+            }).ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default);
+
+        Assert.True(revalidationStarted);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, result.Outcome);
+        Assert.Empty(result.Items);
+        Assert.Null(result.Cursor);
+    }
+
+    [Fact]
+    public async Task EntryBudgetAcceptsExactBoundaryAndRejectsOneAdditionalEntry()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var limits = DocumentationScribeRepositoryToolLimits.Create(maximumEntriesPerCall: 72);
+        var exact = await fixture.Bundle(limits: limits).ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.Complete, exact.Outcome);
+        Assert.Equal(2, exact.Items.Length);
+
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "third.md"), "third\n", new UTF8Encoding(false));
+        var over = await fixture.Bundle(limits: limits).ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, over.Outcome);
+        Assert.Empty(over.Items);
+        Assert.Null(over.Cursor);
+    }
+
+    [Fact]
+    public async Task EntryBudgetRemainsMonotonicAcrossCallsAfterFailure()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var initialSnapshots = 0;
+        var bundle = fixture.Bundle(
+            limits: DocumentationScribeRepositoryToolLimits.Create(
+                maximumEntriesPerCall: 100,
+                maximumEntriesPerRun: 9),
+            checkpoint: point =>
+            {
+                if (point == DocumentationScribeRepositoryToolCheckpoint.AfterInitialDirectorySnapshot)
+                {
+                    initialSnapshots++;
+                }
+            });
+
+        var first = await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, first.Outcome);
+        Assert.Equal(1, initialSnapshots);
+
+        var second = await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default);
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, second.Outcome);
+        Assert.Equal(1, initialSnapshots);
+        Assert.Empty(second.Items);
+        Assert.Null(second.Cursor);
+    }
+
+    [Fact]
+    public async Task NearConfiguredMaximumInventoryUsesLinearChargedSnapshots()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        for (var index = 0; index < 62; index++)
+        {
+            File.WriteAllText(Path.Join(fixture.Root, "docs", $"item-{index:D3}.md"), "item\n", new UTF8Encoding(false));
+        }
+
+        var result = await fixture.Bundle(
+            pageSize: 64,
+            limits: DocumentationScribeRepositoryToolLimits.Create(
+                maximumEntriesPerCall: 2_048,
+                maximumEntriesPerRun: 2_048,
+                maximumFilesPerCall: 64,
+                maximumFilesPerRun: 64,
+                maximumPageSize: 64)).ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 64), default);
+
+        Assert.Same(DocumentationScribeToolOutcome.Complete, result.Outcome);
+        Assert.Equal(64, result.Items.Length);
+    }
+
+    [Fact]
     public async Task NarrowPathAndModerateInventoryStayWithinConfiguredEntryLimits()
     {
         using var fixture = RepositoryToolFixture.Create();
@@ -1045,7 +1153,12 @@ public sealed class DocumentationScribeRepositoryToolTests
             File.WriteAllText(Path.Join(fixture.Root, "docs", $"item-{index:D2}.md"), "item\n", new UTF8Encoding(false));
         }
 
-        var listed = await fixture.Bundle(pageSize: 128).ListFiles.InvokeAsync(
+        var listed = await fixture.Bundle(
+            pageSize: 128,
+            limits: DocumentationScribeRepositoryToolLimits.Create(
+                maximumEntriesPerCall: 2_048,
+                maximumEntriesPerRun: 2_048,
+                maximumPageSize: 128)).ListFiles.InvokeAsync(
             new("context.instructions", "docs", 128), default);
         Assert.Same(DocumentationScribeToolOutcome.Complete, listed.Outcome);
         Assert.Equal(66, listed.Items.Length);

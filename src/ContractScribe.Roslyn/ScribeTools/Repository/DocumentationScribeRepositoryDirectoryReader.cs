@@ -70,7 +70,11 @@ internal static class DocumentationScribeRepositoryDirectoryReader
                    observer))
         {
             entries = ReadEntries(directory, cancellationToken, checkpoint, chargeEntry);
-            var repeated = ReadEntries(directory, cancellationToken, checkpoint, static () => { });
+            observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterInitialDirectorySnapshot);
+            checkpoint();
+            var repeated = ReadEntries(directory, cancellationToken, checkpoint, chargeEntry);
+            observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterRepeatedDirectorySnapshot);
+            checkpoint();
             if (!entries.SequenceEqual(repeated))
             {
                 throw Stale();
@@ -91,7 +95,8 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         DocumentationScribeRepositoryDirectoryObservation observation,
         CancellationToken cancellationToken,
-        Action checkpoint)
+        Action checkpoint,
+        Action chargeEntry)
     {
         var current = Capture(
             repositoryRoot,
@@ -99,7 +104,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
             observation.RepositoryPath,
             cancellationToken,
             checkpoint,
-            static () => { });
+            chargeEntry);
         if (!string.Equals(current.RepositoryPath, observation.RepositoryPath, StringComparison.Ordinal)
             || !current.DirectoryIdentities.SequenceEqual(observation.DirectoryIdentities)
             || !current.Entries.SequenceEqual(observation.Entries))
@@ -114,7 +119,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         string[] segments,
         CancellationToken cancellationToken,
         Action checkpoint,
-        Action? chargeEntry = null)
+        Action chargeEntry)
     {
         var identities = ImmutableArray.CreateBuilder<DocumentationScribeContextPhysicalIdentity>();
         var current = OpenRoot(repositoryRoot);
@@ -154,7 +159,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         ImmutableArray<DocumentationScribeContextPhysicalIdentity> expected,
         CancellationToken cancellationToken,
         Action checkpoint,
-        Action? chargeEntry,
+        Action chargeEntry,
         Action<DocumentationScribeRepositoryToolCheckpoint>? observer)
     {
         if (expected.Length != segments.Length + 1)
@@ -225,7 +230,6 @@ internal static class DocumentationScribeRepositoryDirectoryReader
 
             spellings[name] = name;
             using var child = OpenRelative(directory, name, requireDirectory: null);
-            RequireExactName(directory, name, cancellationToken, checkpoint);
             entries.Add(new(name, ReadIdentity(child)));
         }
 
@@ -237,13 +241,13 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         string expected,
         CancellationToken cancellationToken,
         Action checkpoint,
-        Action? chargeEntry = null)
+        Action chargeEntry)
     {
         var exact = 0;
         var folded = 0;
         foreach (var name in EnumerateNames(directory, cancellationToken, checkpoint))
         {
-            chargeEntry?.Invoke();
+            chargeEntry();
             if (!string.Equals(name, expected, StringComparison.OrdinalIgnoreCase))
             {
                 continue;

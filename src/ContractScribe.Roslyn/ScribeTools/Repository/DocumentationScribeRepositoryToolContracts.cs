@@ -396,6 +396,9 @@ internal enum DocumentationScribeRepositoryToolCheckpoint
     BeforeBoundPathOpen,
     AfterBoundDirectoryOpen,
     AfterDirectoryPreObservation,
+    AfterInitialDirectorySnapshot,
+    AfterRepeatedDirectorySnapshot,
+    BeforeDirectoryRevalidation,
 }
 
 public sealed class DocumentationScribeRepositoryToolBundle

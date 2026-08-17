@@ -113,7 +113,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     excerpt,
                     route,
                     evidence is null ? [] : [evidence]);
-                CommitPublication(MeasurePublication(result), 1, cancellationToken);
+                CommitPublication(MeasurePublication(result), 1, call, cancellationToken);
                 return result;
             }
             catch (Exception exception) when (TryFailure(exception, out var outcome, out var code))
@@ -144,6 +144,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     scope,
                     query,
                     toolRequest.Cursor,
+                    call,
                     cancellationToken,
                     () => ListInventory(scope, query.Path, call, cancellationToken),
                     null,
@@ -190,6 +191,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     scope,
                     query,
                     toolRequest.Cursor,
+                    call,
                     cancellationToken,
                     () => Search(scope, query.Path, toolRequest.Literal, call, cancellationToken),
                     values => PrepareSearchPublication(
@@ -853,6 +855,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         BoundScope scope,
         NormalizedQuery query,
         string? cursorValue,
+        CallBudget call,
         CancellationToken cancellationToken,
         Func<PageMaterialization> materialize,
         Action<ImmutableArray<PageValue>>? preparePublication,
@@ -926,14 +929,14 @@ internal sealed class DocumentationScribeRepositoryToolSession
             var page = values.Skip(position).Take(count).ToImmutableArray();
             var hasMore = position + count < values.Length;
             preparePublication?.Invoke(page);
-            VerifyFresh(cancellationToken);
+            VerifyFresh(call, cancellationToken);
             Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication, cancellationToken);
             if (!string.Equals(fingerprint, Fingerprint(materialize()), StringComparison.Ordinal))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
 
-            VerifyFresh(cancellationToken);
+            VerifyFresh(call, cancellationToken);
             var next = loadedContext.IssueCursor(
                 chain.CursorScope,
                 current,
@@ -948,7 +951,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidCursor);
             }
 
-            CommitPublication(measurePublication(page, next?.Value, hasMore), page.Length, cancellationToken);
+            CommitPublication(measurePublication(page, next?.Value, hasMore), page.Length, call, cancellationToken);
             if (cursorValue is not null)
             {
                 cursorChains.Remove(cursorValue);
@@ -1105,9 +1108,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
             commitment);
     }
 
-    private void CommitPublication(int utf8Bytes, int items, CancellationToken cancellationToken)
+    private void CommitPublication(
+        int utf8Bytes,
+        int items,
+        CallBudget call,
+        CancellationToken cancellationToken)
     {
-        VerifyFresh(cancellationToken);
+        VerifyFresh(call, cancellationToken);
         var nextBytes = checked(returnedBytes + utf8Bytes);
         var nextItems = checked(returnedItems + items);
         if (nextBytes > limits.MaximumReturnedUtf8BytesPerRun
@@ -1121,7 +1128,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         returnedItems = nextItems;
     }
 
-    private void VerifyFresh(CancellationToken cancellationToken)
+    private void VerifyFresh(CallBudget call, CancellationToken cancellationToken)
     {
         Check(cancellationToken);
         if (!loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken)))
@@ -1203,12 +1210,14 @@ internal sealed class DocumentationScribeRepositoryToolSession
             Check(cancellationToken);
             try
             {
+                Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeDirectoryRevalidation, cancellationToken);
                 DocumentationScribeRepositoryDirectoryReader.Revalidate(
                     loadedContext.RepositorySession.PhysicalRepositoryRoot,
                     loadedContext.RepositoryRootIdentity,
                     directory,
                     cancellationToken,
-                    () => Check(cancellationToken));
+                    () => Check(cancellationToken),
+                    () => ChargeEntry(call));
             }
             catch (DocumentationScribeContextReadException exception)
             {
