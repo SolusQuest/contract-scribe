@@ -171,6 +171,80 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Null(result.Page);
     }
 
+    [Fact]
+    public async Task RestoredRepositoryRootSubstitutionDuringSourceReadFailsWithoutEvidence()
+    {
+        const string targetPath = "Consumer.cs";
+        using var fixture = SemanticFixture.Create(MethodId);
+        var loaded = fixture.Bootstrap();
+        var acceptedRoot = fixture.Root;
+        var backup = acceptedRoot + ".accepted";
+        var replacement = acceptedRoot + ".replacement";
+        var installed = false;
+        var restored = false;
+        var port = new DocumentationScribeSemanticToolPort(
+            loaded,
+            fixture.CreateRequest(loaded),
+            null,
+            null,
+            null,
+            observationObserver: observation =>
+            {
+                if (!string.Equals(observation.RepositoryPath, targetPath, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(acceptedRoot, backup);
+                    Directory.CreateDirectory(acceptedRoot);
+                    File.WriteAllText(
+                        Path.Join(acceptedRoot, targetPath),
+                        "namespace Replacement; public sealed class SemanticMarker { }\n",
+                        new UTF8Encoding(false));
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == -1
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(acceptedRoot, replacement);
+                    Directory.Move(backup, acceptedRoot);
+                    restored = true;
+                }
+            });
+
+        try
+        {
+            var result = await port.InvokeAsync(
+                DocumentationScribeSemanticToolRequest.Create(20),
+                CancellationToken.None);
+
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
+            Assert.Equal(DocumentationScribeSemanticFailureReason.SourceDrift, result.FailureReason);
+            Assert.Null(result.Page);
+            Assert.DoesNotContain("SemanticMarker", result.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!Directory.Exists(acceptedRoot) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, acceptedRoot);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("Binding")]
     [InlineData("DocumentationObservation")]

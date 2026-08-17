@@ -97,6 +97,9 @@ public sealed class DocumentationScribeLoadedContext
 
     internal LoadedRepositorySession RepositorySession => classifiedSession.RepositorySession;
 
+    internal DocumentationScribeContextPhysicalIdentity RepositoryRootIdentity =>
+        freshnessGuard.RootIdentity;
+
     internal bool IsCurrent =>
         classifiedSession.IsBoundToClassificationSession
         && !classifiedSession.RepositorySession.IsDisposed
@@ -285,69 +288,33 @@ public sealed class DocumentationScribeLoadedContext
 }
 
 internal sealed record DocumentationScribeContextAcceptedFileObservation(
-    string FullPath,
+    DocumentationScribeContextPathObservation Path,
     int MaximumBytes,
-    ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain,
     DocumentationScribeContextPhysicalIdentity Identity,
     string ContentSha256);
-
-internal sealed record DocumentationScribeContextDirectoryObservation(
-    string FullPath,
-    DocumentationScribeContextPhysicalIdentity Identity);
-
-internal static class DocumentationScribeContextDirectoryChain
-{
-    internal static ImmutableArray<DocumentationScribeContextDirectoryObservation> Read(
-        string root,
-        string directory)
-    {
-        var normalizedRoot = Path.GetFullPath(root);
-        var normalizedDirectory = Path.GetFullPath(directory);
-        var relative = Path.GetRelativePath(normalizedRoot, normalizedDirectory);
-        var chain = ImmutableArray.CreateBuilder<DocumentationScribeContextDirectoryObservation>();
-        chain.Add(new(
-            normalizedRoot,
-            DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(normalizedRoot)));
-        if (relative == ".")
-        {
-            return chain.ToImmutable();
-        }
-
-        var current = normalizedRoot;
-        foreach (var segment in relative.Split(
-                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                     StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Join(current, segment);
-            chain.Add(new(
-                current,
-                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(current)));
-        }
-
-        return chain.ToImmutable();
-    }
-}
 
 internal sealed class DocumentationScribeContextFreshnessGuard
 {
     private readonly string root;
     private readonly DocumentationScribeContextPhysicalIdentity rootIdentity;
-    private readonly ImmutableArray<string> absentPaths;
+    private readonly ImmutableArray<DocumentationScribeContextPathObservation> absentPaths;
     private readonly ImmutableArray<DocumentationScribeContextAcceptedFileObservation> observations;
     private readonly ClassifiedRepositorySession classifiedSession;
     private readonly RepositoryContextRef repositoryContextRef;
     private readonly Action? verificationCheckpoint;
+    private readonly Action<DocumentationScribeContextObservationEvent>? observationObserver;
     private readonly SemaphoreSlim verificationGate = new(1, 1);
     private int failed;
 
     internal DocumentationScribeContextFreshnessGuard(
         string root,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
-        IEnumerable<string> absentPaths,
+        IEnumerable<DocumentationScribeContextPathObservation> absentPaths,
         IEnumerable<DocumentationScribeContextAcceptedFileObservation> observations,
         ClassifiedRepositorySession classifiedSession,
         RepositoryContextRef repositoryContextRef,
-        Action? verificationCheckpoint = null)
+        Action? verificationCheckpoint = null,
+        Action<DocumentationScribeContextObservationEvent>? observationObserver = null)
     {
         this.root = root;
         this.rootIdentity = rootIdentity;
@@ -356,9 +323,12 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         this.classifiedSession = classifiedSession;
         this.repositoryContextRef = repositoryContextRef;
         this.verificationCheckpoint = verificationCheckpoint;
+        this.observationObserver = observationObserver;
     }
 
     internal bool HasNotFailed => Volatile.Read(ref failed) == 0;
+
+    internal DocumentationScribeContextPhysicalIdentity RootIdentity => rootIdentity;
 
     internal void VerifyOrThrow(
         CancellationToken cancellationToken = default,
@@ -416,7 +386,7 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         {
             throw;
         }
-        catch
+        catch (DocumentationScribeContextReadException)
         {
             return false;
         }
@@ -426,46 +396,59 @@ internal sealed class DocumentationScribeContextFreshnessGuard
         CancellationToken cancellationToken,
         Action? checkpoint)
     {
+        try
+        {
+            VerifyStateCore(cancellationToken, checkpoint);
+        }
+        catch (DocumentationScribeContextReadException exception)
+            when (exception.Failure == DocumentationScribeContextReadFailure.Stale)
+        {
+            throw Stale();
+        }
+    }
+
+    private void VerifyStateCore(
+        CancellationToken cancellationToken,
+        Action? checkpoint)
+    {
         Checkpoint(cancellationToken, checkpoint);
         if (!classifiedSession.IsBoundToClassificationSession
             || classifiedSession.RepositorySession.IsDisposed
             || classifiedSession.RepositorySession.RepositoryContextRef != repositoryContextRef
             || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
-                != rootIdentity
-            || absentPaths.Any(
-                DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow))
+                != rootIdentity)
         {
             throw Stale();
+        }
+
+        foreach (var absence in absentPaths)
+        {
+            Checkpoint(cancellationToken, checkpoint);
+            DocumentationScribeContextStableFileReader.RevalidateAbsence(
+                root,
+                rootIdentity,
+                absence,
+                cancellationToken,
+                () => Checkpoint(cancellationToken, checkpoint),
+                observationObserver);
         }
 
         foreach (var observation in observations)
         {
             Checkpoint(cancellationToken, checkpoint);
-            var directoryChain = DocumentationScribeContextDirectoryChain.Read(
+            var observed = DocumentationScribeContextStableFileReader.ReadCapturedFile(
                 root,
-                Path.GetDirectoryName(observation.FullPath)!);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!directoryChain.SequenceEqual(observation.DirectoryChain))
-            {
-                throw Stale();
-            }
-
-            var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
-                observation.FullPath,
+                rootIdentity,
+                observation.Path,
                 observation.MaximumBytes,
+                acceptedBytes: true,
                 cancellationToken,
-                () => Checkpoint(cancellationToken, checkpoint));
+                () => Checkpoint(cancellationToken, checkpoint),
+                observationObserver);
             cancellationToken.ThrowIfCancellationRequested();
-            var directoryChainAfter = DocumentationScribeContextDirectoryChain.Read(
-                root,
-                Path.GetDirectoryName(observation.FullPath)!);
+            var contentSha256 = Sha256(observed.Read.Bytes);
             cancellationToken.ThrowIfCancellationRequested();
-            var contentSha256 = Sha256(read.Bytes);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (read.Identity != observation.Identity
-                || !directoryChainAfter.SequenceEqual(observation.DirectoryChain)
-                || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root)
-                    != rootIdentity
+            if (observed.Read.Identity != observation.Identity
                 || !string.Equals(
                     contentSha256,
                     observation.ContentSha256,
@@ -502,6 +485,7 @@ public sealed class DocumentationScribeContextBootstrapper
     private readonly Func<int, byte[]> randomBytes;
     private readonly Action? freshnessCheckpoint;
     private readonly Action? cursorPublicationObserver;
+    private readonly Action<DocumentationScribeContextObservationEvent>? observationObserver;
 
     public DocumentationScribeContextBootstrapper()
         : this(null, () => Environment.TickCount64, RandomNumberGenerator.GetBytes)
@@ -513,13 +497,15 @@ public sealed class DocumentationScribeContextBootstrapper
         Func<long>? clock = null,
         Func<int, byte[]>? randomBytes = null,
         Action? freshnessCheckpoint = null,
-        Action? cursorPublicationObserver = null)
+        Action? cursorPublicationObserver = null,
+        Action<DocumentationScribeContextObservationEvent>? observationObserver = null)
     {
         this.observer = observer;
         this.clock = clock ?? (() => Environment.TickCount64);
         this.randomBytes = randomBytes ?? RandomNumberGenerator.GetBytes;
         this.freshnessCheckpoint = freshnessCheckpoint;
         this.cursorPublicationObserver = cursorPublicationObserver;
+        this.observationObserver = observationObserver;
     }
 
     public DocumentationScribeContextBootstrapResult Bootstrap(
@@ -701,7 +687,8 @@ public sealed class DocumentationScribeContextBootstrapper
                 observations,
                 classifiedSession,
                 selection.RepositoryContextRef,
-                freshnessCheckpoint);
+                freshnessCheckpoint,
+                observationObserver);
             Observe(
                 DocumentationScribeContextBootstrapStage.Cursor,
                 selection,
@@ -1069,12 +1056,17 @@ public sealed class DocumentationScribeContextBootstrapper
         }
 
         var candidates = new List<InstructionCandidate>();
-        var absent = ImmutableArray.CreateBuilder<string>();
+        var absent = ImmutableArray.CreateBuilder<DocumentationScribeContextPathObservation>();
         if (selection.ConfiguredAgentEntrypoint is { } configured)
         {
-            var fullConfigured = FullPath(root, configured);
-            if (!DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow(
-                    fullConfigured))
+            var captured = CapturePath(
+                root,
+                rootIdentity,
+                configured,
+                selection,
+                started,
+                cancellationToken);
+            if (captured.FileIdentity is null)
             {
                 throw new DocumentationScribeContextReadException(
                     DocumentationScribeContextReadFailure.Stale,
@@ -1084,21 +1076,29 @@ public sealed class DocumentationScribeContextBootstrapper
             candidates.Add(new InstructionCandidate(
                 configured,
                 DocumentationScribeContextRole.AgentEntrypoint,
-                0));
+                0,
+                captured));
         }
         else
         {
-            var rootAgent = FullPath(root, "AGENTS.md");
-            if (DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow(rootAgent))
+            var captured = CapturePath(
+                root,
+                rootIdentity,
+                "AGENTS.md",
+                selection,
+                started,
+                cancellationToken);
+            if (captured.FileIdentity is not null)
             {
                 candidates.Add(new InstructionCandidate(
                     "AGENTS.md",
                     DocumentationScribeContextRole.AgentEntrypoint,
-                    0));
+                    0,
+                    captured));
             }
             else
             {
-                absent.Add(rootAgent);
+                absent.Add(captured);
             }
         }
 
@@ -1117,17 +1117,24 @@ public sealed class DocumentationScribeContextBootstrapper
                 continue;
             }
 
-            var fullPath = FullPath(root, path);
-            if (DocumentationScribeContextStableFileReader.RegularFileExistsNoFollow(fullPath))
+            var captured = CapturePath(
+                root,
+                rootIdentity,
+                path,
+                selection,
+                started,
+                cancellationToken);
+            if (captured.FileIdentity is not null)
             {
                 candidates.Add(new InstructionCandidate(
                     path,
                     DocumentationScribeContextRole.ScopedInstruction,
-                    index + 1));
+                    index + 1,
+                    captured));
             }
             else
             {
-                absent.Add(fullPath);
+                absent.Add(captured);
             }
         }
 
@@ -1151,7 +1158,8 @@ public sealed class DocumentationScribeContextBootstrapper
                 observations,
                 selection,
                 started,
-                cancellationToken);
+                cancellationToken,
+                candidate.Observation);
             Observe(
                 DocumentationScribeContextBootstrapStage.Decode,
                 selection,
@@ -1228,45 +1236,38 @@ public sealed class DocumentationScribeContextBootstrapper
         List<DocumentationScribeContextAcceptedFileObservation> observations,
         DocumentationScribeContextBootstrapSelection selection,
         long started,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DocumentationScribeContextPathObservation? captured = null)
     {
-        var fullPath = FullPath(root, repositoryPath);
-        var parent = Path.GetDirectoryName(fullPath)
-            ?? throw new DocumentationScribeContextReadException(
-                DocumentationScribeContextReadFailure.Unsafe,
-                "context.unsafe.repository-object");
-        var beforeDirectoryChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
-        if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root) != rootIdentity)
-        {
-            throw new DocumentationScribeContextReadException(
-                DocumentationScribeContextReadFailure.Stale,
-                "context.stale.repository-root");
-        }
-
         Observe(
             DocumentationScribeContextBootstrapStage.Open,
             selection,
             started,
             cancellationToken);
-        var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
-            fullPath,
-            maximumBytes,
-            cancellationToken,
-            () => Check(selection, started, cancellationToken));
+        var observed = captured is null
+            ? DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                root,
+                rootIdentity,
+                repositoryPath,
+                maximumBytes,
+                cancellationToken,
+                () => Check(selection, started, cancellationToken),
+                observationObserver)
+            : DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                root,
+                rootIdentity,
+                captured,
+                maximumBytes,
+                acceptedBytes: false,
+                cancellationToken,
+                () => Check(selection, started, cancellationToken),
+                observationObserver);
         Observe(
             DocumentationScribeContextBootstrapStage.Read,
             selection,
             started,
             cancellationToken);
-        var afterDirectoryChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
-        if (!beforeDirectoryChain.SequenceEqual(afterDirectoryChain)
-            || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root) != rootIdentity
-            || read.Identity.LinkCount != 1)
-        {
-            throw new DocumentationScribeContextReadException(
-                DocumentationScribeContextReadFailure.Unsafe,
-                "context.unsafe.physical-identity");
-        }
+        var read = observed.Read;
 
         var identity = (read.Identity.Volume, read.Identity.FileId);
         if (acceptedIdentities.TryGetValue(identity, out var acceptedPath)
@@ -1279,9 +1280,8 @@ public sealed class DocumentationScribeContextBootstrapper
 
         acceptedIdentities[identity] = repositoryPath;
         observations.Add(new DocumentationScribeContextAcceptedFileObservation(
-            fullPath,
+            observed.Observation,
             maximumBytes,
-            afterDirectoryChain,
             read.Identity,
             Sha256(
                 read.Bytes,
@@ -1289,6 +1289,21 @@ public sealed class DocumentationScribeContextBootstrapper
                 () => Check(selection, started, cancellationToken))));
         return read;
     }
+
+    private DocumentationScribeContextPathObservation CapturePath(
+        string root,
+        DocumentationScribeContextPhysicalIdentity rootIdentity,
+        string repositoryPath,
+        DocumentationScribeContextBootstrapSelection selection,
+        long started,
+        CancellationToken cancellationToken) =>
+        DocumentationScribeContextStableFileReader.CapturePath(
+            root,
+            rootIdentity,
+            repositoryPath,
+            cancellationToken,
+            () => Check(selection, started, cancellationToken),
+            observationObserver);
 
     private void Observe(
         DocumentationScribeContextBootstrapStage stage,
@@ -1482,13 +1497,14 @@ public sealed class DocumentationScribeContextBootstrapper
     private sealed record InstructionCandidate(
         string RepositoryPath,
         DocumentationScribeContextRole Role,
-        int Depth);
+        int Depth,
+        DocumentationScribeContextPathObservation Observation);
 
     private sealed record InstructionDiscovery(
         ImmutableArray<DocumentationScribeInstructionContextFact> Instructions,
         ImmutableArray<DocumentationScribeInstructionRouteFact> Routes,
         ImmutableArray<DocumentationScribeContextOmissionFact> Omissions,
-        ImmutableArray<string> AbsentPaths);
+        ImmutableArray<DocumentationScribeContextPathObservation> AbsentPaths);
 
     private sealed class SyntaxReferenceComparer : IEqualityComparer<SyntaxReference>
     {
