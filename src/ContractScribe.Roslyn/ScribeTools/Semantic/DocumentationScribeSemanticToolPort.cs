@@ -44,14 +44,16 @@ public sealed class DocumentationScribeSemanticToolPort
     private readonly int remainingEvidenceReferences;
     private readonly int remainingEvidenceUtf8Bytes;
     private readonly Action<DocumentationScribeSemanticStage>? stageObserver;
+    private readonly Action<DocumentationScribeContextObservationEvent>? observationObserver;
     private readonly Func<string, string> identity;
+    private readonly Func<long, TimeSpan> elapsed;
     private readonly Binding binding;
 
     public DocumentationScribeSemanticToolPort(
         DocumentationScribeLoadedContext loadedContext,
         DocumentationScribeRequest scribeRequest,
         DocumentationScribeSemanticToolLimits? limits = null)
-        : this(loadedContext, scribeRequest, limits, null, null)
+        : this(loadedContext, scribeRequest, limits, null, null, null, null)
     {
     }
 
@@ -60,7 +62,9 @@ public sealed class DocumentationScribeSemanticToolPort
         DocumentationScribeRequest scribeRequest,
         DocumentationScribeSemanticToolLimits? limits,
         Action<DocumentationScribeSemanticStage>? stageObserver,
-        Func<string, string>? identity)
+        Func<string, string>? identity,
+        Action<DocumentationScribeContextObservationEvent>? observationObserver = null,
+        Func<long, TimeSpan>? elapsed = null)
     {
         this.loadedContext = loadedContext ?? throw new ArgumentNullException(nameof(loadedContext));
         this.scribeRequest = scribeRequest ?? throw new ArgumentNullException(nameof(scribeRequest));
@@ -70,7 +74,9 @@ public sealed class DocumentationScribeSemanticToolPort
             out remainingEvidenceReferences,
             out remainingEvidenceUtf8Bytes);
         this.stageObserver = stageObserver;
+        this.observationObserver = observationObserver;
         this.identity = identity ?? Sha256;
+        this.elapsed = elapsed ?? Stopwatch.GetElapsedTime;
 
         var requestBinding = loadedContext.ValidateRequestBinding(scribeRequest);
         if (!requestBinding.IsValid)
@@ -109,7 +115,9 @@ public sealed class DocumentationScribeSemanticToolPort
                     DocumentationScribeSemanticFailureReason.InvalidRequest));
             }
 
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Binding, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -200,7 +208,8 @@ public sealed class DocumentationScribeSemanticToolPort
                     cursor,
                     scope,
                     out position,
-                    cancellationToken))
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Page, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -221,7 +230,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
             Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken);
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -234,10 +245,13 @@ public sealed class DocumentationScribeSemanticToolPort
                 request.Cursor,
                 count,
                 hasMore,
-                cancellationToken);
+                cancellationToken,
+                () => Check(DocumentationScribeSemanticStage.Cursor, started, cancellationToken));
 
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -264,7 +278,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
             Check(DocumentationScribeSemanticStage.Publish, started, cancellationToken);
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Publish, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -1127,37 +1143,28 @@ public sealed class DocumentationScribeSemanticToolPort
         CancellationToken cancellationToken)
     {
         Check(started, cancellationToken);
-        var resolver = new RepositoryPathResolver();
         var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
-        var fullPath = Path.GetFullPath(Path.Join(
-            root,
-            repositoryPath.Replace('/', Path.DirectorySeparatorChar)));
-        var resolved = resolver.ResolveSource(root, fullPath);
-        Check(started, cancellationToken);
-        var physicalIdentity = resolver.PhysicalIdentity(root, resolved.PhysicalPath);
-        Check(started, cancellationToken);
-        if (!string.Equals(physicalIdentity, expectedPhysicalIdentity, StringComparison.Ordinal))
+        if (!string.Equals(
+                LogicalPhysicalIdentity(repositoryPath),
+                expectedPhysicalIdentity,
+                StringComparison.Ordinal))
         {
             throw new DocumentationScribeContextReadException(
                 DocumentationScribeContextReadFailure.Unsafe,
                 "semantic.unsafe.physical-binding");
         }
 
-        var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root);
-        Check(started, cancellationToken);
-        var directories = ParentDirectories(root, resolved.PhysicalPath)
-            .Select(path => new DirectoryValidation(
-                path,
-                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(path)))
-            .ToImmutableArray();
-        Check(started, cancellationToken);
-        DocumentationScribeContextStableRead read;
+        DocumentationScribeContextObservedRead observed;
         try
         {
-            read = DocumentationScribeContextStableFileReader.ReadRegularFile(
-                resolved.PhysicalPath,
+            observed = DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                root,
+                loadedContext.RepositoryRootIdentity,
+                repositoryPath,
                 limits.MaximumSourceFileUtf8Bytes,
-                cancellationToken);
+                cancellationToken,
+                () => Check(started, cancellationToken),
+                observationObserver);
             Check(started, cancellationToken);
         }
         catch (DocumentationScribeContextReadException exception)
@@ -1166,6 +1173,7 @@ public sealed class DocumentationScribeSemanticToolPort
             throw new SemanticBudgetException();
         }
 
+        var read = observed.Read;
         if (read.Identity.LinkCount != 1)
         {
             throw new DocumentationScribeContextReadException(
@@ -1195,12 +1203,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
         return new RepositorySourceValidation(
             repositoryPath,
-            resolved.PhysicalPath,
             expectedPhysicalIdentity,
             expectedText,
-            root,
-            rootIdentity,
-            directories,
+            observed.Observation,
             read.Identity,
             read.Bytes,
             Sha256(read.Bytes),
@@ -1222,31 +1227,8 @@ public sealed class DocumentationScribeSemanticToolPort
             }
 
             var repository = (RepositorySourceValidation)validation;
-            if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(repository.Root)
-                    != repository.RootIdentity)
-            {
-                throw new DocumentationScribeContextReadException(
-                    DocumentationScribeContextReadFailure.Stale,
-                    "semantic.stale.directory");
-            }
-            Check(started, cancellationToken);
-            foreach (var directory in repository.Directories)
-            {
-                if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(directory.Path)
-                    != directory.Identity)
-                {
-                    throw new DocumentationScribeContextReadException(
-                        DocumentationScribeContextReadFailure.Stale,
-                        "semantic.stale.directory");
-                }
-                Check(started, cancellationToken);
-            }
-
-            var resolver = new RepositoryPathResolver();
-            var resolved = resolver.ResolveSource(repository.Root, repository.PhysicalPath);
-            Check(started, cancellationToken);
             if (!string.Equals(
-                    resolver.PhysicalIdentity(repository.Root, resolved.PhysicalPath),
+                    LogicalPhysicalIdentity(repository.RepositoryPath),
                     repository.ExpectedPhysicalIdentity,
                     StringComparison.Ordinal))
             {
@@ -1255,11 +1237,17 @@ public sealed class DocumentationScribeSemanticToolPort
                     "semantic.unsafe.physical-binding");
             }
 
-            var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
-                resolved.PhysicalPath,
+            var observed = DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                loadedContext.RepositoryRootIdentity,
+                repository.Observation,
                 limits.MaximumSourceFileUtf8Bytes,
-                cancellationToken);
+                acceptedBytes: true,
+                cancellationToken,
+                () => Check(started, cancellationToken),
+                observationObserver);
             Check(started, cancellationToken);
+            var read = observed.Read;
             if (read.Identity != repository.FileIdentity
                 || read.Identity.LinkCount != 1
                 || !read.Bytes.AsSpan().SequenceEqual(repository.Bytes))
@@ -1983,7 +1971,7 @@ public sealed class DocumentationScribeSemanticToolPort
     private void Check(long started, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Stopwatch.GetElapsedTime(started).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
+        if (elapsed(started).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
         {
             throw new SemanticTimeoutException();
         }
@@ -2256,27 +2244,8 @@ public sealed class DocumentationScribeSemanticToolPort
         _ => throw new InvalidOperationException("semantic.source.identity-not-admitted"),
     };
 
-    private static IEnumerable<string> ParentDirectories(string root, string file)
-    {
-        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        var current = Directory.GetParent(file)?.FullName;
-        var directories = new Stack<string>();
-        while (current is not null
-               && !string.Equals(current, rootFull, PathComparison()))
-        {
-            directories.Push(current);
-            current = Directory.GetParent(current)?.FullName;
-        }
-
-        while (directories.Count > 0)
-        {
-            yield return directories.Pop();
-        }
-    }
-
-    private static StringComparison PathComparison() => OperatingSystem.IsWindows()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
+    private static string LogicalPhysicalIdentity(string repositoryPath) =>
+        OperatingSystem.IsWindows() ? repositoryPath.ToUpperInvariant() : repositoryPath;
 
     private static bool IsDeclarationName(SimpleNameSyntax name) => name.Parent switch
     {
@@ -2519,10 +2488,6 @@ public sealed class DocumentationScribeSemanticToolPort
         LoadedSourceTree Source,
         TextSpan Span);
 
-    private sealed record DirectoryValidation(
-        string Path,
-        DocumentationScribeContextPhysicalIdentity Identity);
-
     private sealed class MaterializationCache
     {
         internal Dictionary<SyntaxTree, string> SourceTexts { get; } = [];
@@ -2540,12 +2505,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
     private sealed record RepositorySourceValidation(
         string RepositoryPath,
-        string PhysicalPath,
         string ExpectedPhysicalIdentity,
         string ExpectedText,
-        string Root,
-        DocumentationScribeContextPhysicalIdentity RootIdentity,
-        ImmutableArray<DirectoryValidation> Directories,
+        DocumentationScribeContextPathObservation Observation,
         DocumentationScribeContextPhysicalIdentity FileIdentity,
         byte[] Bytes,
         string SourceSha256,

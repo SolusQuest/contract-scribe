@@ -24,6 +24,7 @@ public sealed class RepositoryLoader
     private readonly RegisteredToolchain? preselectedToolchain;
     private readonly LoaderExecutionTrace? trace;
     private readonly Func<int, byte[]> repositoryContextBytes;
+    private readonly Func<string, DocumentationScribeContextPhysicalIdentity> rootIdentityReader;
 
     public RepositoryLoader()
         : this(
@@ -33,7 +34,8 @@ public sealed class RepositoryLoader
             null,
             null,
             null,
-            RandomNumberGenerator.GetBytes)
+            RandomNumberGenerator.GetBytes,
+            DocumentationScribeContextStableFileReader.ReadDirectoryIdentity)
     {
     }
 
@@ -51,7 +53,8 @@ public sealed class RepositoryLoader
             generatedAuthorityComparisonObserver,
             preselectedToolchain,
             trace,
-            RandomNumberGenerator.GetBytes)
+            RandomNumberGenerator.GetBytes,
+            DocumentationScribeContextStableFileReader.ReadDirectoryIdentity)
     {
     }
 
@@ -62,7 +65,8 @@ public sealed class RepositoryLoader
         Action<int>? generatedAuthorityComparisonObserver,
         RegisteredToolchain? preselectedToolchain,
         LoaderExecutionTrace? trace,
-        Func<int, byte[]> repositoryContextBytes)
+        Func<int, byte[]> repositoryContextBytes,
+        Func<string, DocumentationScribeContextPhysicalIdentity> rootIdentityReader)
     {
         this.observer = observer;
         this.digest = digest ?? (bytes => SHA256.HashData(bytes.Span));
@@ -73,6 +77,8 @@ public sealed class RepositoryLoader
         this.trace = trace;
         this.repositoryContextBytes = repositoryContextBytes
             ?? throw new ArgumentNullException(nameof(repositoryContextBytes));
+        this.rootIdentityReader = rootIdentityReader
+            ?? throw new ArgumentNullException(nameof(rootIdentityReader));
     }
 
     public async Task<RepositoryLoadOutcome> LoadAsync(
@@ -81,6 +87,7 @@ public sealed class RepositoryLoader
     {
         ResolvedRepositoryPaths? paths = null;
         IReadOnlyDictionary<string, InventoryEntry>? before = null;
+        DocumentationScribeContextPhysicalIdentity? repositoryRootIdentity = null;
         PostRegistrationResult? loaded = null;
         RegisteredToolchain? selectedToolchain = null;
         LoaderExecutionState? state = null;
@@ -91,6 +98,7 @@ public sealed class RepositoryLoader
             Observe(LoaderStage.RequestValidation, cancellationToken);
             trace?.Enter(LoaderExecutionPhase.PathResolution);
             paths = pathResolver.Resolve(request.RepositoryRoot, request.InputPath);
+            repositoryRootIdentity = rootIdentityReader(paths.PhysicalRoot);
             trace?.MarkPathsResolved();
             state = new LoaderExecutionState();
             state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
@@ -121,6 +129,7 @@ public sealed class RepositoryLoader
                 generatedAuthorityComparisonObserver,
                 trace,
                 repositoryContextBytes,
+                repositoryRootIdentity,
                 cancellationToken);
             trace?.MarkSessionTransferred();
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
@@ -178,6 +187,42 @@ public sealed class RepositoryLoader
             {
                 if (outcome.Session is { } successfulSession)
                 {
+                    DocumentationScribeContextPhysicalIdentity currentRootIdentity;
+                    try
+                    {
+                        currentRootIdentity = rootIdentityReader(paths.PhysicalRoot);
+                    }
+                    catch (DocumentationScribeContextReadException)
+                    {
+                        successfulSession.Dispose();
+                        return RepositoryLoadOutcome.Failure(
+                            new LoaderFact("repository", "repository.protected-drift"),
+                            outcome.Toolchain,
+                            outcome.Diagnostics,
+                            outcome.SecondaryFacts);
+                    }
+                    catch (Exception exception)
+                    {
+                        trace?.RecordPrimary(LoaderExceptionBoundary.FinalInventory, exception);
+                        successfulSession.Dispose();
+                        return RepositoryLoadOutcome.Failure(
+                            new LoaderFact("internal", "loader.internal-error"),
+                            outcome.Toolchain,
+                            outcome.Diagnostics,
+                            outcome.SecondaryFacts);
+                    }
+
+                    if (repositoryRootIdentity is null
+                        || currentRootIdentity != repositoryRootIdentity)
+                    {
+                        successfulSession.Dispose();
+                        return RepositoryLoadOutcome.Failure(
+                            new LoaderFact("repository", "repository.protected-drift"),
+                            outcome.Toolchain,
+                            outcome.Diagnostics,
+                            outcome.SecondaryFacts);
+                    }
+
                     successfulSession.SealDocumentationPatchRepositoryPolicy(
                         DocumentationPatchRepositoryPolicy.Create(
                             paths.PhysicalRoot,
@@ -328,6 +373,7 @@ internal static class PostRegistrationLoader
         Action<int>? generatedAuthorityComparisonObserver,
         LoaderExecutionTrace? trace,
         Func<int, byte[]> repositoryContextBytes,
+        DocumentationScribeContextPhysicalIdentity repositoryRootIdentity,
         CancellationToken cancellationToken)
     {
         var identities = new GeneratedIdentityHasher(digest);
@@ -572,7 +618,8 @@ internal static class PostRegistrationLoader
                 toolchain.Identity,
                 loadedProjects,
                 ValidateGeneratedFacts(generatedFacts),
-                workspace);
+                workspace,
+                repositoryRootIdentity);
             trace?.MarkSessionConstructed();
             trace?.Enter(LoaderExecutionPhase.SessionTransfer);
             return new PostRegistrationResult(

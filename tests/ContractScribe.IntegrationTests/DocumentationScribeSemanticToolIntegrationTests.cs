@@ -171,6 +171,80 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Null(result.Page);
     }
 
+    [Fact]
+    public async Task RestoredRepositoryRootSubstitutionDuringSourceReadFailsWithoutEvidence()
+    {
+        const string targetPath = "Consumer.cs";
+        using var fixture = SemanticFixture.Create(MethodId);
+        var loaded = fixture.Bootstrap();
+        var acceptedRoot = fixture.Root;
+        var backup = acceptedRoot + ".accepted";
+        var replacement = acceptedRoot + ".replacement";
+        var installed = false;
+        var restored = false;
+        var port = new DocumentationScribeSemanticToolPort(
+            loaded,
+            fixture.CreateRequest(loaded),
+            null,
+            null,
+            null,
+            observationObserver: observation =>
+            {
+                if (!string.Equals(observation.RepositoryPath, targetPath, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(acceptedRoot, backup);
+                    Directory.CreateDirectory(acceptedRoot);
+                    File.WriteAllText(
+                        Path.Join(acceptedRoot, targetPath),
+                        "namespace Replacement; public sealed class SemanticMarker { }\n",
+                        new UTF8Encoding(false));
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == -1
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(acceptedRoot, replacement);
+                    Directory.Move(backup, acceptedRoot);
+                    restored = true;
+                }
+            });
+
+        try
+        {
+            var result = await port.InvokeAsync(
+                DocumentationScribeSemanticToolRequest.Create(20),
+                CancellationToken.None);
+
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
+            Assert.Equal(DocumentationScribeSemanticFailureReason.SourceDrift, result.FailureReason);
+            Assert.Null(result.Page);
+            Assert.DoesNotContain("SemanticMarker", result.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!Directory.Exists(acceptedRoot) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, acceptedRoot);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("Binding")]
     [InlineData("DocumentationObservation")]
@@ -400,6 +474,77 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Same(DocumentationScribeToolOutcome.TimedOut, observationTimed.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, observationTimed.FailureReason);
         Assert.Null(observationTimed.Page);
+    }
+
+    [Theory]
+    [InlineData("Binding", false)]
+    [InlineData("Page", true)]
+    [InlineData("Cursor", false)]
+    public async Task SemanticDeadlineExpiresInsideFreshnessAndCursorEnumeration(
+        string targetStageId,
+        bool validateCursor)
+    {
+        var targetStage = Enum.Parse<DocumentationScribeSemanticStage>(targetStageId);
+        using var fixture = SemanticFixture.Create(MethodId);
+        var armed = false;
+        var currentStage = DocumentationScribeSemanticStage.Target;
+        var expired = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (armed
+                    && currentStage == targetStage
+                    && observation.Stage
+                        == DocumentationScribeContextObservationStage.DuringNameEnumeration)
+                {
+                    expired = true;
+                }
+            });
+        var loaded = fixture.Bootstrap(bootstrapper);
+        var request = fixture.CreateRequest(loaded);
+        var limits = new DocumentationScribeSemanticToolLimits(
+            20,
+            256,
+            262_144,
+            4_194_304,
+            8_192,
+            32,
+            512,
+            500_000,
+            100);
+        DocumentationScribeContextCursor? cursor = null;
+        if (validateCursor)
+        {
+            var seed = await new DocumentationScribeSemanticToolPort(
+                loaded,
+                request,
+                limits,
+                null,
+                null,
+                elapsed: _ => TimeSpan.Zero).InvokeAsync(
+                    DocumentationScribeSemanticToolRequest.Create(2),
+                    CancellationToken.None);
+            cursor = Assert.IsType<DocumentationScribeContextCursor>(seed.Page?.NextCursor);
+        }
+
+        var port = new DocumentationScribeSemanticToolPort(
+            loaded,
+            request,
+            limits,
+            stage => currentStage = stage,
+            null,
+            elapsed: _ => expired ? TimeSpan.FromMilliseconds(101) : TimeSpan.Zero);
+        armed = true;
+
+        var result = await port.InvokeAsync(
+            DocumentationScribeSemanticToolRequest.Create(1, cursor),
+            CancellationToken.None);
+
+        Assert.True(expired);
+        Assert.Same(DocumentationScribeToolOutcome.TimedOut, result.Outcome);
+        Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, result.FailureReason);
+        Assert.Null(result.Page);
     }
 
     [Fact]
@@ -1417,7 +1562,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 new ToolchainIdentity("test", "test", "test", "test"),
                 projects,
                 [sourceFact, toolFact],
-                workspace);
+                workspace,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
             var classified = new SymbolClassifier().ClassifySession(
                 repository,
                 TargetProfile.ExternalApi);
@@ -1446,7 +1592,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 toolGeneratedTree);
         }
 
-        public DocumentationScribeLoadedContext Bootstrap()
+        public DocumentationScribeLoadedContext Bootstrap(
+            DocumentationScribeContextBootstrapper? bootstrapper = null)
         {
             var sourcePath = targetReference.SyntaxTree.FilePath;
             var sourceBytes = File.ReadAllBytes(Path.Join(Root, sourcePath));
@@ -1461,7 +1608,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 targetReference.Span.Start,
                 targetReference.Span.End,
                 Sha(sourceBytes));
-            var result = new DocumentationScribeContextBootstrapper().Bootstrap(classified, selection);
+            var result = (bootstrapper ?? new DocumentationScribeContextBootstrapper())
+                .Bootstrap(classified, selection);
             Assert.Contains(
                 result.Status,
                 new[]
