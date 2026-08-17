@@ -45,6 +45,15 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Contains(page.Items, item => item.RelationKind == RelationKind.Overrides);
         Assert.Contains(page.Items, item => item.Kind == DocumentationScribeSemanticEvidenceKind.Usage);
         Assert.Contains(page.Items, item => item.Kind == DocumentationScribeSemanticEvidenceKind.TestUsage);
+        var testConsumerText = File.ReadAllText(Path.Join(fixture.Root, "TestConsumer.cs"));
+        var localTestStart = testConsumerText.IndexOf(
+            "new Runner().Execute(\"local-test\")",
+            StringComparison.Ordinal);
+        Assert.True(localTestStart >= 0);
+        Assert.Contains(page.Items, item =>
+            item.Kind == DocumentationScribeSemanticEvidenceKind.TestUsage
+            && item.Source.Fact.Commitment.Locator is RepositoryEvidenceLocator { Path: "TestConsumer.cs" }
+            && item.Source.Fact.Range!.Value.Start == localTestStart);
         Assert.Contains(page.Items, item => item.Source.Fact.Commitment.Locator is GeneratedOutputEvidenceLocator
         {
             ProducerKind: GeneratedOutputKind.SourceGenerator,

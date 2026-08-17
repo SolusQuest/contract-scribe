@@ -1511,20 +1511,28 @@ public sealed class DocumentationScribeSemanticToolPort
             return false;
         }
 
-        return method.GetAttributes().Any(attribute =>
+        for (IMethodSymbol? candidate = method; candidate is not null; candidate = candidate.ContainingSymbol as IMethodSymbol)
         {
-            var type = attribute.AttributeClass;
-            if (type is null)
+            if (candidate.GetAttributes().Any(attribute =>
             {
-                return false;
-            }
+                var type = attribute.AttributeClass;
+                if (type is null)
+                {
+                    return false;
+                }
 
-            var metadataName = FullMetadataName(type);
-            var assemblyName = type.ContainingAssembly?.Identity.Name;
-            return DocumentationScribeSemanticToolSelection.TestMarkers.Any(marker =>
-                string.Equals(marker.AttributeMetadataName, metadataName, StringComparison.Ordinal)
-                && string.Equals(marker.AssemblySimpleName, assemblyName, StringComparison.Ordinal));
-        });
+                var metadataName = FullMetadataName(type);
+                var assemblyName = type.ContainingAssembly?.Identity.Name;
+                return DocumentationScribeSemanticToolSelection.TestMarkers.Any(marker =>
+                    string.Equals(marker.AttributeMetadataName, metadataName, StringComparison.Ordinal)
+                    && string.Equals(marker.AssemblySimpleName, assemblyName, StringComparison.Ordinal));
+            }))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private DocumentationScribeSemanticMethodSummary CreateMethodSummary(
