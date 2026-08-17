@@ -1182,8 +1182,21 @@ internal static class DocumentationScribeContextStableFileReader
 
         if (handle.IsInvalid)
         {
+            var error = Marshal.GetLastPInvokeError();
             handle.Dispose();
-            throw Stale();
+            throw OperatingSystem.IsWindows()
+                ? error switch
+                {
+                    2 or 3 => Stale(),
+                    267 => Unsafe(),
+                    _ => new InvalidOperationException("context.internal.native-open"),
+                }
+                : error switch
+                {
+                    2 => Stale(),
+                    20 or 21 or 40 => Unsafe(),
+                    _ => new InvalidOperationException("context.internal.native-open"),
+                };
         }
 
         return handle;
@@ -1195,9 +1208,17 @@ internal static class DocumentationScribeContextStableFileReader
     {
         if (OperatingSystem.IsWindows())
         {
-            if (GetFileType(handle) != FileTypeDisk
-                || !GetFileInformationByHandle(handle, out var information)
-                || (information.Attributes & FileAttributes.ReparsePoint) != 0
+            if (GetFileType(handle) != FileTypeDisk)
+            {
+                throw Unsafe();
+            }
+
+            if (!GetFileInformationByHandle(handle, out var information))
+            {
+                throw new InvalidOperationException("context.internal.native-identity");
+            }
+
+            if ((information.Attributes & FileAttributes.ReparsePoint) != 0
                 || ((information.Attributes & FileAttributes.Directory) != 0) != expectDirectory)
             {
                 throw Unsafe();
@@ -1219,8 +1240,12 @@ internal static class DocumentationScribeContextStableFileReader
 
         if (OperatingSystem.IsLinux())
         {
-            if (FStat(handle, out var information) != 0
-                || (information.Mode & UnixFileTypeMask) != (expectDirectory
+            if (FStat(handle, out var information) != 0)
+            {
+                throw new InvalidOperationException("context.internal.native-identity");
+            }
+
+            if ((information.Mode & UnixFileTypeMask) != (expectDirectory
                     ? UnixDirectory
                     : UnixRegularFile))
             {
@@ -1261,7 +1286,8 @@ internal static class DocumentationScribeContextStableFileReader
             {
                 attributes = File.GetAttributes(current);
             }
-            catch
+            catch (Exception exception) when (exception is FileNotFoundException
+                or DirectoryNotFoundException)
             {
                 throw Stale();
             }
