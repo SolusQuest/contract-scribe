@@ -58,6 +58,25 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
     }
 
     [Fact]
+    public async Task ReadExcerptRejectsLinuxChildMountWithoutContentOrEvidence()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = RepositoryToolFixture.CreateLinuxRoot();
+
+        var result = await fixture.Bundle("proc/version").ReadExcerpt.InvokeAsync(
+            new("context.instructions", "proc/version"), default);
+
+        Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.UnsafeObject, result.FailureCode);
+        Assert.Null(result.Excerpt);
+        Assert.Empty(result.DynamicEvidence);
+    }
+
+    [Fact]
     public async Task UnicodeAndMixedNewlinesKeepExactStableExcerptCommitments()
     {
         using var fixture = RepositoryToolFixture.Create();
@@ -209,19 +228,22 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
         private readonly LoadedRepositorySession repository;
         private readonly DocumentationScribeLoadedContext loaded;
         private readonly DocumentationScribeRequest request;
+        private readonly bool deleteRoots;
 
         private RepositoryToolFixture(
             string root,
             string outsideRoot,
             LoadedRepositorySession repository,
             DocumentationScribeLoadedContext loaded,
-            DocumentationScribeRequest request)
+            DocumentationScribeRequest request,
+            bool deleteRoots)
         {
             Root = root;
             OutsideRoot = outsideRoot;
             this.repository = repository;
             this.loaded = loaded;
             this.request = request;
+            this.deleteRoots = deleteRoots;
         }
 
         internal string Root { get; }
@@ -243,6 +265,18 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
                 new UTF8Encoding(false));
             File.WriteAllText(Path.Join(outside, "secret.md"), "outside-secret-marker\n", new UTF8Encoding(false));
 
+            return Create(root, outside, instructionContent, deleteRoots: true);
+        }
+
+        internal static RepositoryToolFixture CreateLinuxRoot() =>
+            Create("/", string.Empty, "accepted instruction\n", deleteRoots: false);
+
+        private static RepositoryToolFixture Create(
+            string root,
+            string outside,
+            string instructionContent,
+            bool deleteRoots)
+        {
             var request = ParseRequest(instructionContent);
             var repository = new LoadedRepositorySession(
                 request.Context.RepositoryContextRef,
@@ -294,10 +328,10 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
                 new DocumentationScribeContextCursorAuthority(RandomNumberGenerator.GetBytes(32)),
                 freshness,
                 null);
-            return new(root, outside, repository, loaded, request);
+            return new(root, outside, repository, loaded, request, deleteRoots);
         }
 
-        internal DocumentationScribeRepositoryToolBundle Bundle()
+        internal DocumentationScribeRepositoryToolBundle Bundle(string? exactFilePath = null)
         {
             Assert.True(DocumentationScribeAttemptId.TryParse(
                 "scribe-attempt.11111111111111111111111111111111",
@@ -305,16 +339,24 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
             var subject = EvidenceInput.TargetSubject(
                 request.Target.SymbolRef.CompilationContextRef,
                 request.Target.SymbolRef.DocumentationCommentId);
-            var scope = DocumentationScribeRepositoryToolScope.Directory(
-                "context.instructions",
-                string.Empty,
-                DocumentationScribeRepositoryToolOperations.ReadExcerpt
-                    | DocumentationScribeRepositoryToolOperations.ListFiles
-                    | DocumentationScribeRepositoryToolOperations.SearchText,
-                DocumentationScribeContextRole.MaintainedDocumentation,
-                extensions: [".md", ".txt"],
-                subject: subject,
-                claimCategoryIds: ["claim.purpose"]);
+            var scope = exactFilePath is null
+                ? DocumentationScribeRepositoryToolScope.Directory(
+                    "context.instructions",
+                    string.Empty,
+                    DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                        | DocumentationScribeRepositoryToolOperations.ListFiles
+                        | DocumentationScribeRepositoryToolOperations.SearchText,
+                    DocumentationScribeContextRole.MaintainedDocumentation,
+                    extensions: [".md", ".txt"],
+                    subject: subject,
+                    claimCategoryIds: ["claim.purpose"])
+                : DocumentationScribeRepositoryToolScope.Directory(
+                    "context.instructions",
+                    string.Empty,
+                    DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+                    DocumentationScribeContextRole.MaintainedDocumentation,
+                    subject: subject,
+                    claimCategoryIds: ["claim.purpose"]);
             return DocumentationScribeRepositoryToolBundle.Create(
                 request,
                 attempt,
@@ -358,8 +400,11 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
         public void Dispose()
         {
             repository.Dispose();
-            Directory.Delete(Root, recursive: true);
-            Directory.Delete(OutsideRoot, recursive: true);
+            if (deleteRoots)
+            {
+                Directory.Delete(Root, recursive: true);
+                Directory.Delete(OutsideRoot, recursive: true);
+            }
         }
 
         private static DocumentationScribeRequest ParseRequest(string instructionContent)

@@ -105,6 +105,11 @@ internal static class DocumentationScribeContextStableFileReader
     private const int UnixOpenCloseOnExec = 0x80000;
     private const int UnixOpenNoFollow = 0x20000;
     private const int UnixOpenDirectory = 0x10000;
+    private const long LinuxOpenAt2SystemCall = 437;
+    private const ulong LinuxResolveNoCrossDevice = 0x01;
+    private const ulong LinuxResolveNoMagicLinks = 0x02;
+    private const ulong LinuxResolveNoSymbolicLinks = 0x04;
+    private const ulong LinuxResolveBeneath = 0x08;
     private const uint UnixFileTypeMask = 0xF000;
     private const uint UnixRegularFile = 0x8000;
     private const uint UnixDirectory = 0x4000;
@@ -1073,21 +1078,20 @@ internal static class DocumentationScribeContextStableFileReader
         CancellationToken cancellationToken,
         Action? checkpoint)
     {
-        var enumerationFileDescriptor = OpenAt(
-            parent.DangerousGetHandle().ToInt32(),
+        using var enumerationHandle = OpenRelativeLinux(
+            parent,
             ".",
             UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow | UnixOpenDirectory);
-        if (enumerationFileDescriptor < 0)
+        ValidateLinuxRelativeOpen(enumerationHandle);
+
+        var enumerationFileDescriptor = enumerationHandle.DangerousGetHandle().ToInt32();
+        var directory = FdOpenDirectory(enumerationFileDescriptor);
+        if (directory == IntPtr.Zero)
         {
             throw new InvalidOperationException("context.internal.native-enumeration");
         }
 
-        var directory = FdOpenDirectory(enumerationFileDescriptor);
-        if (directory == IntPtr.Zero)
-        {
-            _ = Close(enumerationFileDescriptor);
-            throw new InvalidOperationException("context.internal.native-enumeration");
-        }
+        enumerationHandle.SetHandleAsInvalid();
 
         try
         {
@@ -1135,13 +1139,11 @@ internal static class DocumentationScribeContextStableFileReader
         }
         else if (OperatingSystem.IsLinux())
         {
-            handle = new SafeFileHandle(
-                (IntPtr)OpenAt(
-                    parent.DangerousGetHandle().ToInt32(),
-                    name,
-                    UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow | UnixOpenDirectory),
-                ownsHandle: true);
-            ValidateUnixOpen(handle);
+            handle = OpenRelativeLinux(
+                parent,
+                name,
+                UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow | UnixOpenDirectory);
+            ValidateLinuxRelativeOpen(handle);
         }
         else
         {
@@ -1164,13 +1166,11 @@ internal static class DocumentationScribeContextStableFileReader
         }
         else if (OperatingSystem.IsLinux())
         {
-            handle = new SafeFileHandle(
-                (IntPtr)OpenAt(
-                    parent.DangerousGetHandle().ToInt32(),
-                    name,
-                    UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow),
-                ownsHandle: true);
-            ValidateUnixOpen(handle);
+            handle = OpenRelativeLinux(
+                parent,
+                name,
+                UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow);
+            ValidateLinuxRelativeOpen(handle);
         }
         else
         {
@@ -1209,7 +1209,42 @@ internal static class DocumentationScribeContextStableFileReader
         }
     }
 
-    private static void ValidateUnixOpen(SafeFileHandle handle)
+    private static SafeFileHandle OpenRelativeLinux(SafeFileHandle parent, string name, int flags)
+    {
+        ValidateLinuxOpenAt2Architecture(RuntimeInformation.ProcessArchitecture);
+        var how = new LinuxOpenHow
+        {
+            Flags = unchecked((ulong)flags),
+            Resolve = LinuxResolveNoCrossDevice
+                | LinuxResolveNoMagicLinks
+                | LinuxResolveNoSymbolicLinks
+                | LinuxResolveBeneath,
+        };
+        var descriptor = OpenAt2(
+            LinuxOpenAt2SystemCall,
+            parent.DangerousGetHandle().ToInt32(),
+            name,
+            ref how,
+            (nuint)Marshal.SizeOf<LinuxOpenHow>());
+        return new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+    }
+
+    internal static void ValidateLinuxOpenAt2Architecture(Architecture architecture)
+    {
+        if (architecture is not Architecture.X64 and not Architecture.Arm64)
+        {
+            throw Unsafe();
+        }
+    }
+
+    internal static Exception ClassifyLinuxRelativeOpenFailure(int error) => error switch
+    {
+        2 or 11 => Stale(),
+        18 or 20 or 21 or 22 or 38 or 40 => Unsafe(),
+        _ => new InvalidOperationException("context.internal.native-open"),
+    };
+
+    private static void ValidateLinuxRelativeOpen(SafeFileHandle handle)
     {
         if (!handle.IsInvalid)
         {
@@ -1218,12 +1253,7 @@ internal static class DocumentationScribeContextStableFileReader
 
         var error = Marshal.GetLastPInvokeError();
         handle.Dispose();
-        throw error switch
-        {
-            2 => Stale(),
-            20 or 21 or 40 => Unsafe(),
-            _ => new InvalidOperationException("context.internal.native-open"),
-        };
+        throw ClassifyLinuxRelativeOpenFailure(error);
     }
 
     private static SafeFileHandle NtOpenRelative(
@@ -1532,6 +1562,14 @@ internal static class DocumentationScribeContextStableFileReader
         public long Reserved3;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxOpenHow
+    {
+        public ulong Flags;
+        public ulong Mode;
+        public ulong Resolve;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileW(
         string fileName,
@@ -1576,11 +1614,13 @@ internal static class DocumentationScribeContextStableFileReader
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int Open(string path, int flags);
 
-    [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
-    private static extern int OpenAt(int directoryFileDescriptor, string path, int flags);
-
-    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
-    private static extern int Close(int fileDescriptor);
+    [DllImport("libc", EntryPoint = "syscall", SetLastError = true)]
+    private static extern long OpenAt2(
+        long systemCallNumber,
+        int directoryFileDescriptor,
+        string path,
+        ref LinuxOpenHow how,
+        nuint size);
 
     [DllImport("libc", EntryPoint = "fdopendir", SetLastError = true)]
     private static extern IntPtr FdOpenDirectory(int fileDescriptor);
