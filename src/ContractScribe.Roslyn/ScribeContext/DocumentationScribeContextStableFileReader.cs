@@ -780,16 +780,19 @@ internal static class DocumentationScribeContextStableFileReader
         CancellationToken cancellationToken,
         Action? checkpoint)
     {
-        var duplicate = Dup(parent.DangerousGetHandle().ToInt32());
-        if (duplicate < 0)
+        var enumerationFileDescriptor = OpenAt(
+            parent.DangerousGetHandle().ToInt32(),
+            ".",
+            UnixOpenReadOnly | UnixOpenCloseOnExec | UnixOpenNoFollow | UnixOpenDirectory);
+        if (enumerationFileDescriptor < 0)
         {
             throw new InvalidOperationException("context.internal.native-enumeration");
         }
 
-        var directory = FdOpenDirectory(duplicate);
+        var directory = FdOpenDirectory(enumerationFileDescriptor);
         if (directory == IntPtr.Zero)
         {
-            _ = Close(duplicate);
+            _ = Close(enumerationFileDescriptor);
             throw new InvalidOperationException("context.internal.native-enumeration");
         }
 
@@ -1254,9 +1257,6 @@ internal static class DocumentationScribeContextStableFileReader
 
     [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
     private static extern int OpenAt(int directoryFileDescriptor, string path, int flags);
-
-    [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
-    private static extern int Dup(int fileDescriptor);
 
     [DllImport("libc", EntryPoint = "close", SetLastError = true)]
     private static extern int Close(int fileDescriptor);
