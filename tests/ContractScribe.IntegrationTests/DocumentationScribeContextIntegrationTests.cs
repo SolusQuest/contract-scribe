@@ -1019,6 +1019,64 @@ public sealed class DocumentationScribeContextIntegrationTests
     }
 
     [Fact]
+    public async Task ProductionLoadedSessionRejectsRootReplacementBeforeBootstrap()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var load = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        await using var session = Assert.IsType<LoadedRepositorySession>(load.Session);
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        Assert.Equal(ClassificationRunStatus.Success, classified.Classification.Status);
+        var target = Assert.Single(
+            classified.Classification.ClassificationSet!.Targets,
+            candidate => candidate.SymbolRef.DocumentationCommentId == "T:App"
+                && candidate.SupportStatus == SupportStatus.Supported);
+        var app = Assert.Single(session.Projects, project =>
+            project.ProjectIdentity == "App/App.csproj");
+        var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+            "T:App",
+            app.Compilation));
+        var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
+        var source = app.SourceTrees[reference.SyntaxTree];
+        var sourcePath = Assert.IsType<string>(source.RepositoryPath);
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            session.RepositoryContextRef,
+            session.InputIdentity,
+            TargetProfile.ExternalApi,
+            target.SymbolRef,
+            sourcePath,
+            reference.Span.Start,
+            reference.Span.End,
+            Sha256(File.ReadAllBytes(Path.Join(fixture.Root, sourcePath))),
+            configuredAgentEntrypoint: null,
+            limits: null);
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        Directory.Move(root, backup);
+        Directory.CreateDirectory(Path.Join(root, "App"));
+        File.Copy(Path.Join(backup, sourcePath), Path.Join(root, sourcePath));
+        File.WriteAllText(Path.Join(root, "AGENTS.md"), "replacement-instruction-marker\n");
+
+        try
+        {
+            var result = new DocumentationScribeContextBootstrapper().Bootstrap(
+                classified,
+                selection);
+
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Move(backup, root);
+        }
+    }
+
+    [Fact]
     public void LeafSubstitutionBetweenReadsIsStaleAndReturnsNoReplacementBytes()
     {
         const string path = "src/App/Widget.cs";
