@@ -101,7 +101,8 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         ToolchainIdentity toolchain,
         IReadOnlyList<LoadedProject> projects,
         IReadOnlyList<GeneratedSourceFact> generatedSources,
-        IDisposable workspace)
+        IDisposable workspace,
+        DocumentationScribeContextPhysicalIdentity? repositoryRootIdentity = null)
     {
         RepositoryContextRef = repositoryContextRef;
         PhysicalRepositoryRoot = physicalRepositoryRoot;
@@ -109,12 +110,15 @@ public sealed class LoadedRepositorySession : IAsyncDisposable, IDisposable
         Toolchain = toolchain;
         Projects = projects;
         GeneratedSources = generatedSources;
+        RepositoryRootIdentity = repositoryRootIdentity;
         this.workspace = workspace;
     }
 
     public RepositoryContextRef RepositoryContextRef { get; }
 
     internal string PhysicalRepositoryRoot { get; }
+
+    internal DocumentationScribeContextPhysicalIdentity? RepositoryRootIdentity { get; }
 
     public string InputIdentity { get; }
 

@@ -492,6 +492,795 @@ public sealed class DocumentationScribeContextIntegrationTests
     }
 
     [Fact]
+    public void OrdinaryParentSubstitutionRestoredBeforeIdentityAcceptancePublishesNoContext()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var parent = Path.GetDirectoryName(fixture.FullPath(path))!;
+        var backup = parent + ".accepted";
+        var replacement = parent + ".replacement";
+        var installed = false;
+        var restored = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (!string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(parent, backup);
+                    Directory.CreateDirectory(parent);
+                    File.WriteAllText(
+                        Path.Join(parent, "Widget.cs"),
+                        "namespace Replacement; public class Marker { }\n");
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == 1
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(parent, replacement);
+                    Directory.Move(backup, parent);
+                    restored = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+            Assert.DoesNotContain("Replacement", result.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!Directory.Exists(parent) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, parent);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void OrdinaryParentSubstitutionDuringFreshnessPermanentlyInvalidatesContext()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var parent = Path.GetDirectoryName(fixture.FullPath(path))!;
+        var backup = parent + ".accepted";
+        var replacement = parent + ".replacement";
+        var armed = false;
+        var installed = false;
+        var restored = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (!armed
+                    || !string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(parent, backup);
+                    Directory.CreateDirectory(parent);
+                    File.WriteAllText(
+                        Path.Join(parent, "Widget.cs"),
+                        "namespace Replacement; public class Marker { }\n");
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == 1
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(parent, replacement);
+                    Directory.Move(backup, parent);
+                    restored = true;
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        armed = true;
+
+        try
+        {
+            Assert.False(loaded.VerifyFreshness());
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.False(loaded.IsCurrent);
+        }
+        finally
+        {
+            if (!Directory.Exists(parent) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, parent);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void AcceptedInstructionAbsenceIsParentIdentityBound()
+    {
+        using var fixture = ContextFixture.Create(BasicSource());
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+
+        fixture.WriteText("src/AGENTS.md", "replacement-instruction-marker\n");
+
+        Assert.False(loaded.VerifyFreshness());
+        Assert.False(loaded.IsCurrent);
+    }
+
+    [Fact]
+    public void OrdinaryParentSubstitutionCannotHideAcceptedInstructionPresence()
+    {
+        const string path = "src/AGENTS.md";
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.PopulateBasicInstructions();
+        var parent = Path.GetDirectoryName(fixture.FullPath(path))!;
+        var backup = parent + ".accepted";
+        var replacement = parent + ".replacement";
+        var armed = false;
+        var installed = false;
+        var restored = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (!armed
+                    || !string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(parent, backup);
+                    Directory.CreateDirectory(parent);
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == 0
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(parent, replacement);
+                    Directory.Move(backup, parent);
+                    restored = true;
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        armed = true;
+
+        try
+        {
+            Assert.False(loaded.VerifyFreshness());
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.False(loaded.IsCurrent);
+        }
+        finally
+        {
+            if (!Directory.Exists(parent) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, parent);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void CaseOnlyLeafSubstitutionBetweenInspectionAndOpenIsUnsafeOnWindows(
+        string observationKindId)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var original = fixture.FullPath(path);
+        var alternate = Path.Join(Path.GetDirectoryName(original)!, "WIDGET.CS");
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
+        var moved = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 2
+                    && observation.Kind == targetKind
+                    && !moved)
+                {
+                    File.Move(original, alternate);
+                    moved = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(moved);
+            Assert.Equal(
+                DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+                result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (!File.Exists(original) && File.Exists(alternate))
+            {
+                File.Move(alternate, original);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void DisappearingLeafBetweenInspectionAndOpenIsStale(string observationKindId)
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var original = fixture.FullPath(path);
+        var backup = original + ".accepted";
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
+        var moved = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 2
+                    && observation.Kind == targetKind
+                    && !moved)
+                {
+                    File.Move(original, backup);
+                    moved = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(moved);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (!File.Exists(original) && File.Exists(backup))
+            {
+                File.Move(backup, original);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(0u, 5, typeof(InvalidOperationException))]
+    [InlineData(0u, 0, typeof(DocumentationScribeContextReadException))]
+    [InlineData(2u, 0, typeof(DocumentationScribeContextReadException))]
+    public void WindowsFileTypeMappingSeparatesUnknownFailureFromValidNonDiskTypes(
+        uint fileType,
+        int error,
+        Type expectedException)
+    {
+        var exception = Record.Exception(() =>
+            DocumentationScribeContextStableFileReader.ValidateWindowsFileType(fileType, error));
+
+        Assert.IsType(expectedException, exception);
+        if (exception is DocumentationScribeContextReadException readFailure)
+        {
+            Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, readFailure.Failure);
+        }
+        else
+        {
+            Assert.Equal("context.internal.native-identity", exception?.Message);
+        }
+    }
+
+    [Fact]
+    public void WindowsDiskFileTypeIsAcceptedWithoutAStaleLastError()
+    {
+        DocumentationScribeContextStableFileReader.ValidateWindowsFileType(1, 5);
+    }
+
+    [Fact]
+    public void CaseOnlyIntermediateParentSubstitutionIsUnsafeOnWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var original = Path.GetDirectoryName(fixture.FullPath(path))!;
+        var alternate = Path.Join(Path.GetDirectoryName(original)!, "APP");
+        var moved = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 1
+                    && observation.Kind == DocumentationScribeContextObservationKind.Parent
+                    && !moved)
+                {
+                    Directory.Move(original, alternate);
+                    moved = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(moved);
+            Assert.Equal(
+                DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+                result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (!Directory.Exists(original) && Directory.Exists(alternate))
+            {
+                Directory.Move(alternate, original);
+            }
+        }
+    }
+
+    [Fact]
+    public void UnknownObservationFaultUsesBoundedInternalFailure()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("unpublished-native-marker");
+                }
+            });
+
+        var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+        Assert.Equal(DocumentationScribeContextFailureCategory.Internal, result.Failure?.Category);
+        Assert.Equal("context.internal-error", result.Failure?.Code);
+        Assert.DoesNotContain("unpublished-native-marker", result.ToString(), StringComparison.Ordinal);
+        Assert.Null(result.Context);
+    }
+
+    [Fact]
+    public void UnknownFreshnessFaultDoesNotPermanentlyPoisonContext()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var armed = false;
+        var injected = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (armed
+                    && !injected
+                    && observation.Stage
+                        == DocumentationScribeContextObservationStage.DuringNameEnumeration
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    injected = true;
+                    throw new InvalidOperationException("unpublished-native-freshness-marker");
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        armed = true;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => loaded.VerifyFreshness());
+        Assert.Equal("unpublished-native-freshness-marker", exception.Message);
+        Assert.True(injected);
+        Assert.True(loaded.IsCurrent);
+        Assert.True(loaded.VerifyFreshness());
+        Assert.True(loaded.IsCurrent);
+    }
+
+    [Fact]
+    public void RootSubstitutionRestoredAfterReplacementHandleAcquisitionIsStale()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        var replacement = root + ".replacement";
+        var installed = false;
+        var restored = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (!string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                    && !installed)
+                {
+                    Directory.Move(root, backup);
+                    Directory.CreateDirectory(root);
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+                         && observation.SegmentIndex == -1
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(root, replacement);
+                    Directory.Move(backup, root);
+                    restored = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (!Directory.Exists(root) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, root);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadedRootIdentityRejectsReplacementBeforeBootstrapWithIdenticalSourceBytes()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        Directory.Move(root, backup);
+        Directory.CreateDirectory(Path.Join(root, "src", "App"));
+        File.Copy(Path.Join(backup, "src", "App", "Widget.cs"), fixture.FullPath(path));
+        File.WriteAllText(Path.Join(root, "AGENTS.md"), "replacement-instruction-marker\n");
+
+        try
+        {
+            var result = fixture.Bootstrap();
+
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.DoesNotContain("replacement-instruction-marker", result.ToString(), StringComparison.Ordinal);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Move(backup, root);
+        }
+    }
+
+    [Fact]
+    public async Task ProductionLoadedSessionRejectsRootReplacementBeforeBootstrap()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var load = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+        await using var session = Assert.IsType<LoadedRepositorySession>(load.Session);
+        var classified = new SymbolClassifier().ClassifySession(
+            session,
+            TargetProfile.ExternalApi);
+        Assert.Equal(ClassificationRunStatus.Success, classified.Classification.Status);
+        var target = Assert.Single(
+            classified.Classification.ClassificationSet!.Targets,
+            candidate => candidate.SymbolRef.DocumentationCommentId == "T:App"
+                && candidate.SupportStatus == SupportStatus.Supported);
+        var app = Assert.Single(session.Projects, project =>
+            project.ProjectIdentity == "App/App.csproj");
+        var symbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId(
+            "T:App",
+            app.Compilation));
+        var reference = Assert.Single(symbol.DeclaringSyntaxReferences);
+        var source = app.SourceTrees[reference.SyntaxTree];
+        var sourcePath = Assert.IsType<string>(source.RepositoryPath);
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            session.RepositoryContextRef,
+            session.InputIdentity,
+            TargetProfile.ExternalApi,
+            target.SymbolRef,
+            sourcePath,
+            reference.Span.Start,
+            reference.Span.End,
+            Sha256(File.ReadAllBytes(Path.Join(fixture.Root, sourcePath))),
+            configuredAgentEntrypoint: null,
+            limits: null);
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        Directory.Move(root, backup);
+        Directory.CreateDirectory(Path.Join(root, "App"));
+        File.Copy(Path.Join(backup, sourcePath), Path.Join(root, sourcePath));
+        File.WriteAllText(Path.Join(root, "AGENTS.md"), "replacement-instruction-marker\n");
+
+        try
+        {
+            var result = new DocumentationScribeContextBootstrapper().Bootstrap(
+                classified,
+                selection);
+
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Move(backup, root);
+        }
+    }
+
+    [Fact]
+    public void LeafSubstitutionBetweenReadsIsStaleAndReturnsNoReplacementBytes()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var original = fixture.FullPath(path);
+        var backup = original + ".accepted";
+        var replaced = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterFirstLeafRead
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && !replaced)
+                {
+                    File.Move(original, backup);
+                    File.WriteAllText(
+                        original,
+                        "namespace Replacement; public class ReboundMarker { }\n");
+                    replaced = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(replaced);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.DoesNotContain("ReboundMarker", result.ToString(), StringComparison.Ordinal);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (File.Exists(backup))
+            {
+                File.Delete(original);
+                File.Move(backup, original);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void AcceptedFileGrowthDuringEitherReadIsStale(string observationKindId)
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+        var fullPath = fixture.FullPath(path);
+        var originalBytes = File.ReadAllBytes(fullPath);
+        var observation = DocumentationScribeContextStableFileReader.CapturePath(
+            fixture.Root,
+            loaded.RepositoryRootIdentity,
+            path,
+            CancellationToken.None);
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
+        var grown = false;
+
+        try
+        {
+            var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+                DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                    fixture.Root,
+                    loaded.RepositoryRootIdentity,
+                    observation,
+                    originalBytes.Length,
+                    acceptedBytes: true,
+                    CancellationToken.None,
+                    observer: item =>
+                    {
+                        if (!grown
+                            && item.Stage == DocumentationScribeContextObservationStage.DuringRead
+                            && item.Kind == targetKind)
+                        {
+                            File.AppendAllText(fullPath, new string('x', originalBytes.Length + 1));
+                            grown = true;
+                        }
+                    }));
+
+            Assert.True(grown);
+            Assert.Equal(DocumentationScribeContextReadFailure.Stale, exception.Failure);
+            Assert.Equal("context.stale.repository-object", exception.Code);
+        }
+        finally
+        {
+            File.WriteAllBytes(fullPath, originalBytes);
+        }
+    }
+
+    [Fact]
+    public void BoundParentReturnsOriginalBytesWhenPathIsRestoredBeforeFinalObservation()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var parent = Path.GetDirectoryName(fixture.FullPath(path))!;
+        var backup = parent + ".accepted";
+        var replacement = parent + ".replacement";
+        var installed = false;
+        var restored = false;
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+
+        try
+        {
+            var observed = DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                fixture.Root,
+                loaded.RepositoryRootIdentity,
+                path,
+                maximumBytes: 4096,
+                CancellationToken.None,
+                observer: observation =>
+            {
+                if (!string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (observation.Stage == DocumentationScribeContextObservationStage.AfterFirstLeafRead
+                    && !installed)
+                {
+                    Directory.Move(parent, backup);
+                    Directory.CreateDirectory(parent);
+                    File.WriteAllText(
+                        Path.Join(parent, "Widget.cs"),
+                        "namespace Replacement; public class BoundMarker { }\n");
+                    installed = true;
+                }
+                else if (observation.Stage
+                             == DocumentationScribeContextObservationStage.BeforeFinalObservation
+                         && installed
+                         && !restored)
+                {
+                    Directory.Move(parent, replacement);
+                    Directory.Move(backup, parent);
+                    restored = true;
+                }
+            });
+
+            Assert.True(installed);
+            Assert.True(restored);
+            Assert.DoesNotContain(
+                "BoundMarker",
+                Encoding.UTF8.GetString(observed.Read.Bytes),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!Directory.Exists(parent) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, parent);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ExactPlusCaseVariantLeafCollisionIsUnsafeOnCaseSensitiveHost()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("src/App/WIDGET.CS", "namespace Collision; public class LeafMarker { }\n");
+
+        var result = fixture.Bootstrap();
+
+        Assert.Equal(
+            DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            result.Failure?.Category);
+        Assert.Null(result.Context);
+    }
+
+    [Fact]
+    public void ExactPlusCaseVariantDirectoryCollisionIsUnsafeOnCaseSensitiveHost()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var fixture = ContextFixture.Create(BasicSource());
+        fixture.WriteText("src/APP/Other.cs", "namespace Collision; public class ParentMarker { }\n");
+
+        var result = fixture.Bootstrap();
+
+        Assert.Equal(
+            DocumentationScribeContextFailureCategory.UnsafeRepositoryObject,
+            result.Failure?.Category);
+        Assert.Null(result.Context);
+    }
+
+    [Fact]
     public void SessionDisposalAtFinalPublicationCheckpointPublishesNoCapability()
     {
         using var fixture = ContextFixture.Create(BasicSource());
@@ -1657,7 +2446,8 @@ public sealed class DocumentationScribeContextIntegrationTests
                     .Where(fact => fact is not null)
                     .Cast<GeneratedSourceFact>()
                     .ToArray(),
-                workspace);
+                workspace,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
             var classified = new SymbolClassifier().ClassifySession(
                 repository,
                 TargetProfile.ExternalApi);
