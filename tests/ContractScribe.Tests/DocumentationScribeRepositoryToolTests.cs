@@ -967,6 +967,27 @@ public sealed class DocumentationScribeRepositoryToolTests
         }
     }
 
+    [Fact]
+    public void LinuxRelativeDirectoryOpenRejectsMountCrossing()
+    {
+        if (!OperatingSystem.IsLinux() || !Directory.Exists("/proc"))
+        {
+            return;
+        }
+
+        var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeRepositoryDirectoryReader.Capture(
+                "/",
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/"),
+                "proc",
+                default,
+                () => { },
+                () => { }));
+
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, exception.Failure);
+        Assert.Equal("context.unsafe.repository-object", exception.Code);
+    }
+
     [Theory]
     [InlineData("empty")]
     [InlineData("excluded")]
