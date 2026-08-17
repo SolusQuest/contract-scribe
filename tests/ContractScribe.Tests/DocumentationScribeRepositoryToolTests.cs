@@ -112,6 +112,187 @@ public sealed class DocumentationScribeRepositoryToolTests
         Assert.DoesNotContain("replacement-secret", result.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryMembershipRejectsRestoredOrdinaryDirectorySubstitution(bool search)
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var docs = Path.Join(fixture.Root, "docs");
+        var retained = Path.Join(fixture.Root, "docs-retained");
+        var replacement = Path.Join(fixture.Root, "replacement");
+        Directory.CreateDirectory(replacement);
+        File.WriteAllText(Path.Join(replacement, "hidden.md"), "replacement-secret\n", new UTF8Encoding(false));
+        var swapped = false;
+        var restored = false;
+        var scope = DocumentationScribeRepositoryToolScope.Directory(
+            "context.instructions",
+            string.Empty,
+            DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                | DocumentationScribeRepositoryToolOperations.ListFiles
+                | DocumentationScribeRepositoryToolOperations.SearchText,
+            DocumentationScribeContextRole.MaintainedDocumentation,
+            required: false,
+            extensions: [".md"]);
+        var bundle = fixture.Bundle(scopes: [scope], checkpoint: point =>
+        {
+            if (!swapped && point == DocumentationScribeRepositoryToolCheckpoint.AfterDirectoryPreObservation)
+            {
+                Directory.Move(docs, retained);
+                Directory.Move(replacement, docs);
+                swapped = true;
+            }
+            else if (swapped && !restored
+                && point == DocumentationScribeRepositoryToolCheckpoint.AfterBoundDirectoryOpen)
+            {
+                Directory.Move(docs, replacement);
+                Directory.Move(retained, docs);
+                restored = true;
+            }
+        });
+
+        var failure = search
+            ? (await bundle.SearchText.InvokeAsync(
+                new("context.instructions", "replacement-secret", "docs", 8), default)).FailureCode
+            : (await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default)).FailureCode;
+
+        Assert.True(swapped);
+        Assert.True(restored);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, failure);
+    }
+
+    [Fact]
+    public async Task OptionalFilePreservesStaleClassificationForRestoredSubstitution()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var docs = Path.Join(fixture.Root, "docs");
+        var retained = Path.Join(fixture.Root, "docs-retained");
+        var replacement = Path.Join(fixture.Root, "replacement");
+        Directory.CreateDirectory(replacement);
+        File.WriteAllText(Path.Join(replacement, "guide.md"), "replacement-secret\n", new UTF8Encoding(false));
+        var swapped = false;
+        var restored = false;
+        var scope = DocumentationScribeRepositoryToolScope.Directory(
+            "context.instructions",
+            string.Empty,
+            DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+            DocumentationScribeContextRole.MaintainedDocumentation,
+            required: false);
+        var bundle = fixture.Bundle(scopes: [scope], checkpoint: point =>
+        {
+            if (!swapped && point == DocumentationScribeRepositoryToolCheckpoint.BeforeBoundPathOpen)
+            {
+                Directory.Move(docs, retained);
+                Directory.Move(replacement, docs);
+                swapped = true;
+            }
+            else if (swapped && !restored
+                && point == DocumentationScribeRepositoryToolCheckpoint.AfterBoundDirectoryOpen)
+            {
+                Directory.Move(docs, replacement);
+                Directory.Move(retained, docs);
+                restored = true;
+            }
+        });
+
+        var result = await bundle.ReadExcerpt.InvokeAsync(new("context.instructions", "docs/guide.md"), default);
+
+        Assert.True(swapped);
+        Assert.True(restored);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
+        Assert.Null(result.Excerpt);
+    }
+
+    [Fact]
+    public async Task OptionalAbsentFileIsUnavailableOnlyAfterIdentityBoundAbsence()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var scope = DocumentationScribeRepositoryToolScope.Directory(
+            "context.instructions",
+            string.Empty,
+            DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+            DocumentationScribeContextRole.MaintainedDocumentation,
+            required: false);
+
+        var result = await fixture.Bundle(scopes: [scope]).ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/missing.md"), default);
+
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Unavailable, result.FailureCode);
+        Assert.Null(result.Excerpt);
+    }
+
+    [Theory]
+    [InlineData(FreshnessDeadlinePoint.OrdinaryFreshness)]
+    [InlineData(FreshnessDeadlinePoint.CursorValidation)]
+    [InlineData(FreshnessDeadlinePoint.CursorIssuance)]
+    public async Task DeadlineExpiresInsideFreshnessNameEnumerationWithoutPoisoning(
+        FreshnessDeadlinePoint point)
+    {
+        var armed = point == FreshnessDeadlinePoint.OrdinaryFreshness;
+        var enableArming = true;
+        var expired = false;
+        var verification = 0;
+        var targetVerification = point == FreshnessDeadlinePoint.CursorIssuance ? 2 : 1;
+        using var fixture = RepositoryToolFixture.Create(freshnessObserver: value =>
+        {
+            if (!armed)
+            {
+                return;
+            }
+
+            if (value.Stage == DocumentationScribeContextObservationStage.AfterPreObservation)
+            {
+                verification++;
+            }
+            else if (value.Stage == DocumentationScribeContextObservationStage.DuringNameEnumeration
+                && verification == targetVerification)
+            {
+                expired = true;
+            }
+        });
+        var bundle = fixture.Bundle(
+            pageSize: 1,
+            checkpoint: checkpoint =>
+            {
+                if (point == FreshnessDeadlinePoint.CursorIssuance
+                    && enableArming
+                    && checkpoint == DocumentationScribeRepositoryToolCheckpoint.BeforeCursorPublication)
+                {
+                    armed = true;
+                    verification = 0;
+                }
+            },
+            elapsed: () => expired ? TimeSpan.FromMinutes(1) : TimeSpan.Zero);
+
+        DocumentationScribeRepositoryListFilesResult timedOut;
+        string? cursor = null;
+        if (point == FreshnessDeadlinePoint.CursorValidation)
+        {
+            var first = await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 1), default);
+            cursor = Assert.IsType<string>(first.Cursor);
+            armed = true;
+            verification = 0;
+            timedOut = await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 1, cursor), default);
+        }
+        else
+        {
+            timedOut = await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 1), default);
+        }
+
+        Assert.True(expired);
+        Assert.Same(DocumentationScribeToolOutcome.TimedOut, timedOut.Outcome);
+        Assert.Empty(timedOut.Items);
+        Assert.Null(timedOut.Cursor);
+
+        armed = false;
+        enableArming = false;
+        expired = false;
+        var recovered = await bundle.ListFiles.InvokeAsync(
+            new("context.instructions", "docs", 1, cursor), default);
+        Assert.NotEqual(DocumentationScribeRepositoryToolFailureCodes.Stale, recovered.FailureCode);
+        Assert.NotEmpty(recovered.Items);
+    }
+
     [Fact]
     public async Task EscapedJsonBytesCountAgainstPublicationBudget()
     {
@@ -1208,7 +1389,8 @@ public sealed class DocumentationScribeRepositoryToolTests
             repositoryDisposed = true;
         }
 
-        internal static RepositoryToolFixture Create()
+        internal static RepositoryToolFixture Create(
+            Action<DocumentationScribeContextObservationEvent>? freshnessObserver = null)
         {
             var root = Path.Join(Path.GetTempPath(), "contract-scribe-x2-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Join(root, "docs"));
@@ -1253,13 +1435,24 @@ public sealed class DocumentationScribeRepositoryToolTests
                 [],
                 [],
                 []);
+            var acceptedInstruction = DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                root,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root),
+                "AGENTS.md",
+                4_096,
+                default);
             var freshness = new DocumentationScribeContextFreshnessGuard(
                 root,
                 DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root),
                 [],
-                [],
+                [new DocumentationScribeContextAcceptedFileObservation(
+                    acceptedInstruction.Observation,
+                    4_096,
+                    acceptedInstruction.Read.Identity,
+                    Convert.ToHexString(SHA256.HashData(acceptedInstruction.Read.Bytes)).ToLowerInvariant())],
                 classified,
-                request.Context.RepositoryContextRef);
+                request.Context.RepositoryContextRef,
+                observationObserver: freshnessObserver);
             var loaded = new DocumentationScribeLoadedContext(
                 classified,
                 selection,
@@ -1274,7 +1467,8 @@ public sealed class DocumentationScribeRepositoryToolTests
             int pageSize = 8,
             DocumentationScribeRepositoryToolLimits? limits = null,
             IEnumerable<DocumentationScribeRepositoryToolScope>? scopes = null,
-            Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint = null)
+            Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint = null,
+            Func<TimeSpan>? elapsed = null)
         {
             Assert.True(DocumentationScribeAttemptId.TryParse(
                 "scribe-attempt.11111111111111111111111111111111",
@@ -1293,10 +1487,10 @@ public sealed class DocumentationScribeRepositoryToolTests
                 subject: subject,
                 claimCategoryIds: ["claim.purpose"]);
             var configured = limits ?? DocumentationScribeRepositoryToolLimits.Create(maximumPageSize: pageSize);
-            return checkpoint is null
+            return checkpoint is null && elapsed is null
                 ? DocumentationScribeRepositoryToolBundle.Create(request, attempt, loaded, scopes ?? [scope], configured)
                 : DocumentationScribeRepositoryToolBundle.CreateForTesting(
-                    request, attempt, loaded, scopes ?? [scope], configured, checkpoint);
+                    request, attempt, loaded, scopes ?? [scope], configured, checkpoint ?? (_ => { }), elapsed);
         }
 
         public void Dispose()
@@ -1343,5 +1537,12 @@ public sealed class DocumentationScribeRepositoryToolTests
             {
             }
         }
+    }
+
+    public enum FreshnessDeadlinePoint
+    {
+        OrdinaryFreshness,
+        CursorValidation,
+        CursorIssuance,
     }
 }

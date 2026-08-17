@@ -395,6 +395,7 @@ internal enum DocumentationScribeRepositoryToolCheckpoint
     AfterFreshRead,
     BeforeBoundPathOpen,
     AfterBoundDirectoryOpen,
+    AfterDirectoryPreObservation,
 }
 
 public sealed class DocumentationScribeRepositoryToolBundle
@@ -433,8 +434,9 @@ public sealed class DocumentationScribeRepositoryToolBundle
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits? limits,
-        Action<DocumentationScribeRepositoryToolCheckpoint> checkpoint) =>
-        CreateCore(request, attemptId, loadedContext, scopes, limits, checkpoint);
+        Action<DocumentationScribeRepositoryToolCheckpoint> checkpoint,
+        Func<TimeSpan>? elapsed = null) =>
+        CreateCore(request, attemptId, loadedContext, scopes, limits, checkpoint, elapsed);
 
     private static DocumentationScribeRepositoryToolBundle CreateCore(
         DocumentationScribeRequest request,
@@ -442,7 +444,8 @@ public sealed class DocumentationScribeRepositoryToolBundle
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits? limits,
-        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint)
+        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint,
+        Func<TimeSpan>? elapsed = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(loadedContext);
@@ -453,6 +456,7 @@ public sealed class DocumentationScribeRepositoryToolBundle
             loadedContext,
             scopes,
             limits ?? DocumentationScribeRepositoryToolLimits.Create(),
-            checkpoint));
+            checkpoint,
+            elapsed));
     }
 }

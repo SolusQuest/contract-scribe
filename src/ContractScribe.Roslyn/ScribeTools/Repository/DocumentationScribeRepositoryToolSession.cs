@@ -17,6 +17,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly DocumentationScribeLoadedContext loadedContext;
     private readonly DocumentationScribeRepositoryToolLimits limits;
     private readonly Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint;
+    private readonly Func<TimeSpan> elapsed;
     private readonly ImmutableDictionary<string, BoundScope> scopes;
     private readonly string runCorrelation = Guid.NewGuid().ToString("N");
     private readonly long started = Stopwatch.GetTimestamp();
@@ -24,7 +25,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly Dictionary<string, Observation> observations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DocumentationScribeContextPathObservation> absences = new(StringComparer.Ordinal);
     private readonly HashSet<string> directoryAbsences = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, DocumentationScribeContextPhysicalIdentity> directoryObservations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DocumentationScribeRepositoryDirectoryObservation> directoryObservations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PageChain> cursorChains = new(StringComparer.Ordinal);
     private readonly HashSet<string> consumedCursors = new(StringComparer.Ordinal);
     private readonly HashSet<string> inspectedFilePaths = new(StringComparer.Ordinal);
@@ -45,13 +46,15 @@ internal sealed class DocumentationScribeRepositoryToolSession
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits limits,
-        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint)
+        Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint,
+        Func<TimeSpan>? elapsed = null)
     {
         this.request = request;
         this.attemptId = attemptId;
         this.loadedContext = loadedContext;
         this.limits = limits;
         this.checkpoint = checkpoint;
+        this.elapsed = elapsed ?? (() => Stopwatch.GetElapsedTime(started));
         if (!DocumentationScribeAttemptId.TryParse(attemptId.Value, out _))
         {
             throw new ArgumentException("A valid attempt identifier is required.", nameof(attemptId));
@@ -502,7 +505,12 @@ internal sealed class DocumentationScribeRepositoryToolSession
         foreach (var enumerated in paths)
         {
             var repositoryPath = enumerated.RepositoryPath;
-            var file = ReadFile(repositoryPath, scope.Scope.Required, call, cancellationToken, enumerated.FullPath);
+            var file = ReadFile(
+                repositoryPath,
+                scope.Scope.Required,
+                call,
+                cancellationToken,
+                enumerated.FullPath);
             candidates.Add(CandidateKey(file));
             var offset = 0;
             while (offset <= file.Text.Length - literal.Length)
@@ -544,23 +552,20 @@ internal sealed class DocumentationScribeRepositoryToolSession
         CallBudget call,
         CancellationToken cancellationToken)
     {
-        var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
-        var start = ResolveExactProviderPath(path, call, cancellationToken);
         var pending = new Stack<(string Path, int Depth)>();
-        pending.Push((start, 0));
+        pending.Push((path.Length == 0 ? "." : path, 0));
         var files = new List<EnumeratedFile>();
         var spellings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         while (pending.Count > 0)
         {
             Check(cancellationToken);
-            var (directory, depth) = pending.Pop();
-            var directoryRepositoryPath = RepositoryPath(root, directory);
+            var (directoryRepositoryPath, depth) = pending.Pop();
             if (absences.TryGetValue(directoryRepositoryPath, out var absence))
             {
                 try
                 {
                     DocumentationScribeContextStableFileReader.RevalidateAbsence(
-                        root,
+                        loadedContext.RepositorySession.PhysicalRepositoryRoot,
                         loadedContext.RepositoryRootIdentity,
                         absence,
                         cancellationToken,
@@ -587,61 +592,90 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
             ChargeDirectory(directoryRepositoryPath);
 
+            DocumentationScribeRepositoryDirectoryObservation observed;
             try
             {
-                var identity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(directory);
-                if (directoryObservations.TryGetValue(directoryRepositoryPath, out var accepted)
-                    && accepted != identity)
-                {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
-                }
-
-                directoryObservations[directoryRepositoryPath] = identity;
+                observed = DocumentationScribeRepositoryDirectoryReader.Capture(
+                    loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                    loadedContext.RepositoryRootIdentity,
+                    directoryRepositoryPath,
+                    cancellationToken,
+                    () => Check(cancellationToken),
+                    () => ChargeEntry(call),
+                    value => Checkpoint(value, cancellationToken));
             }
-            catch (DocumentationScribeContextReadException exception) when (
-                !scope.Scope.Required
-                && exception.Failure == DocumentationScribeContextReadFailure.Stale)
+            catch (DocumentationScribeContextReadException exception)
             {
-                if (!Directory.Exists(directory) && !File.Exists(directory))
+                if (!scope.Scope.Required
+                    && !directoryObservations.ContainsKey(directoryRepositoryPath)
+                    && exception.Failure == DocumentationScribeContextReadFailure.Stale
+                    && directoryRepositoryPath != ".")
                 {
-                    var missing = DocumentationScribeContextStableFileReader.CapturePath(
-                        root,
-                        loadedContext.RepositoryRootIdentity,
-                        directoryRepositoryPath,
-                        cancellationToken,
-                        () => Check(cancellationToken));
-                    if (missing.FileIdentity is null)
+                    try
                     {
-                        absences[directoryRepositoryPath] = missing;
-                        directoryAbsences.Add(directoryRepositoryPath);
+                        _ = DocumentationScribeRepositoryDirectoryReader.Capture(
+                            loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                            loadedContext.RepositoryRootIdentity,
+                            directoryRepositoryPath,
+                            cancellationToken,
+                            () => Check(cancellationToken),
+                            () => ChargeEntry(call));
+                        throw MapReadFailure(exception, previouslyAccepted: false, required: true);
+                    }
+                    catch (ToolFailure)
+                    {
+                        throw;
+                    }
+                    catch (DocumentationScribeContextReadException fallback)
+                        when (fallback.Failure != DocumentationScribeContextReadFailure.Stale)
+                    {
+                        throw MapReadFailure(fallback, previouslyAccepted: false, required: true);
+                    }
+                    catch (DocumentationScribeContextReadException)
+                    {
+                    }
+
+                    try
+                    {
+                        var missing = DocumentationScribeContextStableFileReader.CapturePath(
+                            loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                            loadedContext.RepositoryRootIdentity,
+                            directoryRepositoryPath,
+                            cancellationToken,
+                            () => Check(cancellationToken));
+                        if (missing.FileIdentity is null)
+                        {
+                            absences[directoryRepositoryPath] = missing;
+                            directoryAbsences.Add(directoryRepositoryPath);
+                            throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+                        }
+                    }
+                    catch (ToolFailure)
+                    {
+                        throw;
+                    }
+                    catch (DocumentationScribeContextReadException fallback)
+                    {
+                        throw MapReadFailure(fallback, previouslyAccepted: false, required: true);
                     }
                 }
 
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
-            }
-            List<string> entries = [];
-            try
-            {
-                foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
-                {
-                    Check(cancellationToken);
-                    ChargeEntry(call);
-
-                    entries.Add(entry);
-                }
-            }
-            catch (DirectoryNotFoundException)
-            {
-                throw Failure(scope.Scope.Required
-                    ? DocumentationScribeRepositoryToolFailureCodes.Stale
-                    : DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+                throw MapReadFailure(exception, directoryObservations.ContainsKey(directoryRepositoryPath), required: true);
             }
 
-            entries.Sort(StringComparer.Ordinal);
-            foreach (var entry in entries)
+            if (directoryObservations.TryGetValue(directoryRepositoryPath, out var acceptedDirectory)
+                && !DirectoryObservationsEqual(acceptedDirectory, observed))
+            {
+                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+            }
+
+            directoryObservations[directoryRepositoryPath] = observed;
+            foreach (var entry in observed.Entries)
             {
                 Check(cancellationToken);
-                var repositoryPath = RepositoryPath(root, entry);
+                var repositoryPath = directoryRepositoryPath == "."
+                    ? entry.Name
+                    : directoryRepositoryPath + "/" + entry.Name;
                 _ = NormalizeRepositoryPath(repositoryPath, allowEmpty: false);
                 if (spellings.TryGetValue(repositoryPath, out var existing)
                     && !string.Equals(existing, repositoryPath, StringComparison.Ordinal))
@@ -651,26 +685,11 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
                 spellings[repositoryPath] = repositoryPath;
 
-                FileAttributes attributes;
-                try
-                {
-                    attributes = File.GetAttributes(entry);
-                }
-                catch
-                {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
-                }
-
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.UnsafeObject);
-                }
-
-                if ((attributes & FileAttributes.Directory) != 0)
+                if (entry.Identity.IsDirectory)
                 {
                     if (scope.Scope.Recursive)
                     {
-                        pending.Push((entry, checked(depth + 1)));
+                        pending.Push((repositoryPath, checked(depth + 1)));
                     }
 
                     continue;
@@ -682,7 +701,9 @@ internal sealed class DocumentationScribeRepositoryToolSession
                     continue;
                 }
 
-                files.Add(new(repositoryPath, entry));
+                files.Add(new(
+                    repositoryPath,
+                    FullPath(loadedContext.RepositorySession.PhysicalRepositoryRoot, repositoryPath)));
                 ChargeFile(repositoryPath);
                 if (files.Count > limits.MaximumFilesPerCall)
                 {
@@ -766,6 +787,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
                         absences[repositoryPath] = missing;
                         throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
                     }
+
+                    throw MapReadFailure(exception, previouslyAccepted: false, required: true);
                 }
                 catch (ToolFailure)
                 {
@@ -773,7 +796,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 }
                 catch (DocumentationScribeContextReadException captureException)
                 {
-                    throw MapReadFailure(captureException, previouslyAccepted: false, required);
+                    throw MapReadFailure(captureException, previouslyAccepted: false, required: true);
                 }
             }
 
@@ -862,7 +885,12 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
 
             current = parsed;
-            if (!loadedContext.TryValidateCursor(parsed, chain.CursorScope, out position, cancellationToken))
+            if (!loadedContext.TryValidateCursor(
+                    parsed,
+                    chain.CursorScope,
+                    out position,
+                    cancellationToken,
+                    () => Check(cancellationToken)))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidCursor);
             }
@@ -906,7 +934,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
 
             VerifyFresh(cancellationToken);
-            var next = loadedContext.IssueCursor(chain.CursorScope, current, count, hasMore, cancellationToken);
+            var next = loadedContext.IssueCursor(
+                chain.CursorScope,
+                current,
+                count,
+                hasMore,
+                cancellationToken,
+                () => Check(cancellationToken));
             if (next is { } candidate
                 && (cursorChains.ContainsKey(candidate.Value)
                     || consumedCursors.Contains(candidate.Value)))
@@ -1090,7 +1124,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private void VerifyFresh(CancellationToken cancellationToken)
     {
         Check(cancellationToken);
-        if (!loadedContext.VerifyFreshness(cancellationToken))
+        if (!loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken)))
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
         }
@@ -1134,7 +1168,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
 
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken)))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
@@ -1164,15 +1198,21 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
         }
 
-        foreach (var directory in directoryObservations)
+        foreach (var directory in directoryObservations.Values)
         {
             Check(cancellationToken);
-            var fullPath = FullPath(
-                loadedContext.RepositorySession.PhysicalRepositoryRoot,
-                directory.Key == "." ? string.Empty : directory.Key);
-            if (DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(fullPath) != directory.Value)
+            try
             {
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                DocumentationScribeRepositoryDirectoryReader.Revalidate(
+                    loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                    loadedContext.RepositoryRootIdentity,
+                    directory,
+                    cancellationToken,
+                    () => Check(cancellationToken));
+            }
+            catch (DocumentationScribeContextReadException exception)
+            {
+                throw MapReadFailure(exception, previouslyAccepted: true, required: true);
             }
         }
     }
@@ -1332,7 +1372,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private void Check(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Stopwatch.GetElapsedTime(started).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
+        if (elapsed().TotalMilliseconds > limits.MaximumElapsedMilliseconds)
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Timeout);
         }
@@ -1676,6 +1716,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
         string Text,
         string ContentSha256,
         bool HasBom);
+
+    private static bool DirectoryObservationsEqual(
+        DocumentationScribeRepositoryDirectoryObservation left,
+        DocumentationScribeRepositoryDirectoryObservation right) =>
+        string.Equals(left.RepositoryPath, right.RepositoryPath, StringComparison.Ordinal)
+        && left.DirectoryIdentities.SequenceEqual(right.DirectoryIdentities)
+        && left.Entries.SequenceEqual(right.Entries);
 
     private sealed record EnumeratedFile(string RepositoryPath, string FullPath);
 
