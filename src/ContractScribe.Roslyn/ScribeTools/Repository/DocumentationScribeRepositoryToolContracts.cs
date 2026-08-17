@@ -393,6 +393,8 @@ internal enum DocumentationScribeRepositoryToolCheckpoint
     BeforeEvidencePublication,
     BeforeCursorPublication,
     AfterFreshRead,
+    BeforeBoundPathOpen,
+    AfterBoundDirectoryOpen,
 }
 
 public sealed class DocumentationScribeRepositoryToolBundle

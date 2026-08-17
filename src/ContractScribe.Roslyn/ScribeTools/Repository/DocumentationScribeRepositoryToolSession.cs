@@ -22,7 +22,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly long started = Stopwatch.GetTimestamp();
     private readonly Dictionary<(ulong Volume, ulong FileId), string> physicalPaths = [];
     private readonly Dictionary<string, Observation> observations = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, AbsenceObservation> absences = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DocumentationScribeContextPathObservation> absences = new(StringComparer.Ordinal);
+    private readonly HashSet<string> directoryAbsences = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DocumentationScribeContextPhysicalIdentity> directoryObservations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PageChain> cursorChains = new(StringComparer.Ordinal);
     private readonly HashSet<string> consumedCursors = new(StringComparer.Ordinal);
@@ -556,11 +557,24 @@ internal sealed class DocumentationScribeRepositoryToolSession
             var directoryRepositoryPath = RepositoryPath(root, directory);
             if (absences.TryGetValue(directoryRepositoryPath, out var absence))
             {
-                var currentChain = DocumentationScribeContextDirectoryChain.Read(root, Path.GetDirectoryName(directory)!);
-                if (Directory.Exists(directory) || File.Exists(directory)
-                    || !currentChain.SequenceEqual(absence.DirectoryChain))
+                try
                 {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                    DocumentationScribeContextStableFileReader.RevalidateAbsence(
+                        root,
+                        loadedContext.RepositoryRootIdentity,
+                        absence,
+                        cancellationToken,
+                        () => Check(cancellationToken));
+                }
+                catch (DocumentationScribeContextReadException exception)
+                {
+                    if (directoryAbsences.Contains(directoryRepositoryPath)
+                        && exception.Failure == DocumentationScribeContextReadFailure.Unsafe)
+                    {
+                        throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                    }
+
+                    throw MapReadFailure(exception, previouslyAccepted: true, required: false);
                 }
 
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
@@ -590,10 +604,17 @@ internal sealed class DocumentationScribeRepositoryToolSession
             {
                 if (!Directory.Exists(directory) && !File.Exists(directory))
                 {
-                    var parent = Path.GetDirectoryName(directory)!;
-                    absences[directoryRepositoryPath] = new(
-                        directory,
-                        DocumentationScribeContextDirectoryChain.Read(root, parent));
+                    var missing = DocumentationScribeContextStableFileReader.CapturePath(
+                        root,
+                        loadedContext.RepositoryRootIdentity,
+                        directoryRepositoryPath,
+                        cancellationToken,
+                        () => Check(cancellationToken));
+                    if (missing.FileIdentity is null)
+                    {
+                        absences[directoryRepositoryPath] = missing;
+                        directoryAbsences.Add(directoryRepositoryPath);
+                    }
                 }
 
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
@@ -684,56 +705,84 @@ internal sealed class DocumentationScribeRepositoryToolSession
         Check(cancellationToken);
         ChargeFile(repositoryPath);
         var root = loadedContext.RepositorySession.PhysicalRepositoryRoot;
-        var fullPath = exactFullPath ?? ResolveExactProviderPath(repositoryPath, call, cancellationToken);
-        var parent = Path.GetDirectoryName(fullPath)!;
+        _ = exactFullPath ?? ResolveExactProviderPath(repositoryPath, call, cancellationToken);
         if (absences.TryGetValue(repositoryPath, out var absence))
         {
-            var currentChain = DocumentationScribeContextDirectoryChain.Read(root, parent);
-            if (File.Exists(fullPath) || Directory.Exists(fullPath)
-                || !currentChain.SequenceEqual(absence.DirectoryChain))
+            try
             {
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                DocumentationScribeContextStableFileReader.RevalidateAbsence(
+                    root,
+                    loadedContext.RepositoryRootIdentity,
+                    absence,
+                    cancellationToken,
+                    () => Check(cancellationToken));
+            }
+            catch (DocumentationScribeContextReadException exception)
+            {
+                throw MapReadFailure(exception, previouslyAccepted: true, required: false);
             }
 
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
         }
 
-        var before = DocumentationScribeContextDirectoryChain.Read(root, parent);
-        DocumentationScribeContextStableRead read;
+        var previouslyAccepted = observations.TryGetValue(repositoryPath, out var accepted);
+        DocumentationScribeContextObservedRead observed;
         try
         {
-            read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
-                root,
-                fullPath,
-                limits.MaximumFileUtf8Bytes,
-                cancellationToken,
-                () => Check(cancellationToken));
+            observed = previouslyAccepted
+                ? DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                    root,
+                    loadedContext.RepositoryRootIdentity,
+                    accepted!.Path,
+                    limits.MaximumFileUtf8Bytes,
+                    acceptedBytes: true,
+                    cancellationToken,
+                    () => Check(cancellationToken),
+                    value => ObserveStableRead(value, cancellationToken))
+                : DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                    root,
+                    loadedContext.RepositoryRootIdentity,
+                    repositoryPath,
+                    limits.MaximumFileUtf8Bytes,
+                    cancellationToken,
+                    () => Check(cancellationToken),
+                    value => ObserveStableRead(value, cancellationToken));
         }
         catch (DocumentationScribeContextReadException exception)
         {
-            var previouslyAccepted = observations.ContainsKey(repositoryPath);
             if (!required && !previouslyAccepted
-                && exception.Failure == DocumentationScribeContextReadFailure.Stale
-                && !File.Exists(fullPath) && !Directory.Exists(fullPath))
+                && exception.Failure == DocumentationScribeContextReadFailure.Stale)
             {
-                var chain = DocumentationScribeContextDirectoryChain.Read(root, parent);
-                absences[repositoryPath] = new(fullPath, chain);
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+                try
+                {
+                    var missing = DocumentationScribeContextStableFileReader.CapturePath(
+                        root,
+                        loadedContext.RepositoryRootIdentity,
+                        repositoryPath,
+                        cancellationToken,
+                        () => Check(cancellationToken));
+                    if (missing.FileIdentity is null)
+                    {
+                        absences[repositoryPath] = missing;
+                        throw Failure(DocumentationScribeRepositoryToolFailureCodes.Unavailable);
+                    }
+                }
+                catch (ToolFailure)
+                {
+                    throw;
+                }
+                catch (DocumentationScribeContextReadException captureException)
+                {
+                    throw MapReadFailure(captureException, previouslyAccepted: false, required);
+                }
             }
 
-            throw Failure(exception.Failure switch
-            {
-                DocumentationScribeContextReadFailure.Budget when previouslyAccepted => DocumentationScribeRepositoryToolFailureCodes.Stale,
-                DocumentationScribeContextReadFailure.Budget => DocumentationScribeRepositoryToolFailureCodes.Budget,
-                DocumentationScribeContextReadFailure.Unsafe => DocumentationScribeRepositoryToolFailureCodes.UnsafeObject,
-                _ when !required && !previouslyAccepted => DocumentationScribeRepositoryToolFailureCodes.Unavailable,
-                _ => DocumentationScribeRepositoryToolFailureCodes.Stale,
-            });
+            throw MapReadFailure(exception, previouslyAccepted, required);
         }
 
+        var read = observed.Read;
         ChargeBytes(read.Bytes.Length);
-        var after = DocumentationScribeContextDirectoryChain.Read(root, parent);
-        if (!before.SequenceEqual(after) || read.Identity.LinkCount != 1)
+        if (read.Identity.LinkCount != 1)
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.UnsafeObject);
         }
@@ -747,15 +796,15 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
         physicalPaths[identity] = repositoryPath;
         var sha = Sha256(read.Bytes);
-        if (observations.TryGetValue(repositoryPath, out var accepted)
-            && (accepted.Identity != read.Identity
-                || !accepted.DirectoryChain.SequenceEqual(after)
+        if (previouslyAccepted
+            && (accepted!.Identity != read.Identity
+                || accepted.Path != observed.Observation
                 || !string.Equals(accepted.ContentSha256, sha, StringComparison.Ordinal)))
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
         }
 
-        observations[repositoryPath] = new(fullPath, repositoryPath, read.Identity, after, sha);
+        observations[repositoryPath] = new(observed.Observation, read.Identity, sha);
         string text;
         try
         {
@@ -1049,24 +1098,37 @@ internal sealed class DocumentationScribeRepositoryToolSession
         foreach (var observation in observations.Values)
         {
             Check(cancellationToken);
-            var before = DocumentationScribeContextDirectoryChain.Read(
-                loadedContext.RepositorySession.PhysicalRepositoryRoot,
-                Path.GetDirectoryName(observation.FullPath)!);
-            var read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
-                loadedContext.RepositorySession.PhysicalRepositoryRoot,
-                observation.FullPath,
-                limits.MaximumFileUtf8Bytes,
-                cancellationToken,
-                () => Check(cancellationToken));
+            DocumentationScribeContextObservedRead observed;
+            try
+            {
+                observed = DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                    loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                    loadedContext.RepositoryRootIdentity,
+                    observation.Path,
+                    limits.MaximumFileUtf8Bytes,
+                    acceptedBytes: true,
+                    cancellationToken,
+                    () => Check(cancellationToken),
+                    value =>
+                    {
+                        ObserveStableRead(value, cancellationToken);
+                        if (value.Stage == DocumentationScribeContextObservationStage.BeforeFinalObservation)
+                        {
+                            Checkpoint(
+                                DocumentationScribeRepositoryToolCheckpoint.AfterFreshRead,
+                                cancellationToken);
+                        }
+                    });
+            }
+            catch (DocumentationScribeContextReadException exception)
+            {
+                throw MapReadFailure(exception, previouslyAccepted: true, required: true);
+            }
+
+            var read = observed.Read;
             ChargeBytes(read.Bytes.Length);
-            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.AfterFreshRead, cancellationToken);
-            var after = DocumentationScribeContextDirectoryChain.Read(
-                loadedContext.RepositorySession.PhysicalRepositoryRoot,
-                Path.GetDirectoryName(observation.FullPath)!);
             if (read.Identity != observation.Identity
-                || !before.SequenceEqual(observation.DirectoryChain)
-                || !after.SequenceEqual(observation.DirectoryChain)
-                || !before.SequenceEqual(after)
+                || observed.Observation != observation.Path
                 || !string.Equals(Sha256(read.Bytes), observation.ContentSha256, StringComparison.Ordinal))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
@@ -1081,14 +1143,24 @@ internal sealed class DocumentationScribeRepositoryToolSession
         foreach (var absence in absences.Values)
         {
             Check(cancellationToken);
-            var parent = Path.GetDirectoryName(absence.FullPath)!;
-            var directories = DocumentationScribeContextDirectoryChain.Read(
-                loadedContext.RepositorySession.PhysicalRepositoryRoot,
-                parent);
-            if (File.Exists(absence.FullPath) || Directory.Exists(absence.FullPath)
-                || !directories.SequenceEqual(absence.DirectoryChain))
+            try
             {
-                throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                DocumentationScribeContextStableFileReader.RevalidateAbsence(
+                    loadedContext.RepositorySession.PhysicalRepositoryRoot,
+                    loadedContext.RepositoryRootIdentity,
+                    absence,
+                    cancellationToken,
+                    () => Check(cancellationToken));
+            }
+            catch (DocumentationScribeContextReadException exception)
+            {
+                var isDirectory = directoryAbsences.Contains(absence.RepositoryPath);
+                if (isDirectory && exception.Failure == DocumentationScribeContextReadFailure.Unsafe)
+                {
+                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
+                }
+
+                throw MapReadFailure(exception, previouslyAccepted: true, required: true);
             }
         }
 
@@ -1158,6 +1230,22 @@ internal sealed class DocumentationScribeRepositoryToolSession
     {
         checkpoint?.Invoke(value);
         Check(cancellationToken);
+    }
+
+    private void ObserveStableRead(
+        DocumentationScribeContextObservationEvent value,
+        CancellationToken cancellationToken)
+    {
+        if (value.Kind == DocumentationScribeContextObservationKind.Parent
+            && value.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen)
+        {
+            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeBoundPathOpen, cancellationToken);
+        }
+        else if (value.Stage == DocumentationScribeContextObservationStage.AfterDirectoryHandleAcquired
+            && value.SegmentIndex >= 0)
+        {
+            Checkpoint(DocumentationScribeRepositoryToolCheckpoint.AfterBoundDirectoryOpen, cancellationToken);
+        }
     }
 
     private static string Fingerprint(PageMaterialization materialization)
@@ -1478,6 +1566,23 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
     private static ToolFailure Failure(string code) => new(code);
 
+    private static ToolFailure MapReadFailure(
+        DocumentationScribeContextReadException exception,
+        bool previouslyAccepted,
+        bool required) =>
+        Failure(exception.Failure switch
+        {
+            DocumentationScribeContextReadFailure.Budget when previouslyAccepted =>
+                DocumentationScribeRepositoryToolFailureCodes.Stale,
+            DocumentationScribeContextReadFailure.Budget =>
+                DocumentationScribeRepositoryToolFailureCodes.Budget,
+            DocumentationScribeContextReadFailure.Unsafe =>
+                DocumentationScribeRepositoryToolFailureCodes.UnsafeObject,
+            _ when !required && !previouslyAccepted =>
+                DocumentationScribeRepositoryToolFailureCodes.Unavailable,
+            _ => DocumentationScribeRepositoryToolFailureCodes.Stale,
+        });
+
     private static bool TryFailure(
         Exception exception,
         out DocumentationScribeToolOutcome outcome,
@@ -1580,15 +1685,9 @@ internal sealed class DocumentationScribeRepositoryToolSession
     }
 
     private sealed record Observation(
-        string FullPath,
-        string RepositoryPath,
+        DocumentationScribeContextPathObservation Path,
         DocumentationScribeContextPhysicalIdentity Identity,
-        ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain,
         string ContentSha256);
-
-    private sealed record AbsenceObservation(
-        string FullPath,
-        ImmutableArray<DocumentationScribeContextDirectoryObservation> DirectoryChain);
 
     private sealed record NormalizedQuery(string Path, string? Literal, int PageSize);
 

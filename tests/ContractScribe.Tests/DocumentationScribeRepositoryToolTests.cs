@@ -74,38 +74,42 @@ public sealed class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
-    public void StableReaderOpensLeafFromRetainedParentHandle()
+    public async Task RepositoryToolRejectsRestoredOrdinaryParentSubstitution()
     {
-        var root = Path.Join(Path.GetTempPath(), "contract-scribe-x2-anchor-" + Guid.NewGuid().ToString("N"));
-        var docs = Path.Join(root, "docs");
-        var replacement = Path.Join(root, "replacement");
-        Directory.CreateDirectory(docs);
+        using var fixture = RepositoryToolFixture.Create();
+        var docs = Path.Join(fixture.Root, "docs");
+        var retained = Path.Join(fixture.Root, "docs-retained");
+        var replacement = Path.Join(fixture.Root, "replacement");
         Directory.CreateDirectory(replacement);
-        File.WriteAllText(Path.Join(docs, "guide.md"), "accepted\n", new UTF8Encoding(false));
         File.WriteAllText(Path.Join(replacement, "guide.md"), "replacement-secret\n", new UTF8Encoding(false));
-        try
+        var swapped = false;
+        var restored = false;
+        var bundle = fixture.Bundle(checkpoint: point =>
         {
-            var swapped = false;
-            var read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
-                root,
-                Path.Join(docs, "guide.md"),
-                1_024,
-                CancellationToken.None,
-                afterParentOpen: () =>
-                {
-                    Directory.Move(docs, docs + "-retained");
-                    Directory.Move(replacement, docs);
-                    swapped = true;
-                });
+            if (!swapped && point == DocumentationScribeRepositoryToolCheckpoint.BeforeBoundPathOpen)
+            {
+                Directory.Move(docs, retained);
+                Directory.Move(replacement, docs);
+                swapped = true;
+            }
+            else if (swapped && !restored
+                && point == DocumentationScribeRepositoryToolCheckpoint.AfterBoundDirectoryOpen)
+            {
+                Directory.Move(docs, replacement);
+                Directory.Move(retained, docs);
+                restored = true;
+            }
+        });
 
-            Assert.True(swapped);
-            Assert.Equal("accepted\n", Encoding.UTF8.GetString(read.Bytes));
-            Assert.Equal("replacement-secret\n", File.ReadAllText(Path.Join(docs, "guide.md")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        var result = await bundle.ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/guide.md"), default);
+
+        Assert.True(swapped);
+        Assert.True(restored);
+        Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
+        Assert.Null(result.Excerpt);
+        Assert.Empty(result.DynamicEvidence);
+        Assert.DoesNotContain("replacement-secret", result.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
