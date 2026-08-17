@@ -81,6 +81,7 @@ public sealed class RepositoryLoader
     {
         ResolvedRepositoryPaths? paths = null;
         IReadOnlyDictionary<string, InventoryEntry>? before = null;
+        DocumentationScribeContextPhysicalIdentity? repositoryRootIdentity = null;
         PostRegistrationResult? loaded = null;
         RegisteredToolchain? selectedToolchain = null;
         LoaderExecutionState? state = null;
@@ -91,6 +92,8 @@ public sealed class RepositoryLoader
             Observe(LoaderStage.RequestValidation, cancellationToken);
             trace?.Enter(LoaderExecutionPhase.PathResolution);
             paths = pathResolver.Resolve(request.RepositoryRoot, request.InputPath);
+            repositoryRootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(
+                paths.PhysicalRoot);
             trace?.MarkPathsResolved();
             state = new LoaderExecutionState();
             state.AddProtected(pathResolver.RelativeIdentity(paths.PhysicalRoot, paths.PhysicalInput));
@@ -121,6 +124,7 @@ public sealed class RepositoryLoader
                 generatedAuthorityComparisonObserver,
                 trace,
                 repositoryContextBytes,
+                repositoryRootIdentity,
                 cancellationToken);
             trace?.MarkSessionTransferred();
             outcome = RepositoryLoadOutcome.Success(loaded.Session, loaded.Diagnostics);
@@ -178,6 +182,18 @@ public sealed class RepositoryLoader
             {
                 if (outcome.Session is { } successfulSession)
                 {
+                    if (repositoryRootIdentity is null
+                        || DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(
+                            paths.PhysicalRoot) != repositoryRootIdentity)
+                    {
+                        successfulSession.Dispose();
+                        return RepositoryLoadOutcome.Failure(
+                            new LoaderFact("repository", "repository.protected-drift"),
+                            outcome.Toolchain,
+                            outcome.Diagnostics,
+                            outcome.SecondaryFacts);
+                    }
+
                     successfulSession.SealDocumentationPatchRepositoryPolicy(
                         DocumentationPatchRepositoryPolicy.Create(
                             paths.PhysicalRoot,
@@ -328,6 +344,7 @@ internal static class PostRegistrationLoader
         Action<int>? generatedAuthorityComparisonObserver,
         LoaderExecutionTrace? trace,
         Func<int, byte[]> repositoryContextBytes,
+        DocumentationScribeContextPhysicalIdentity repositoryRootIdentity,
         CancellationToken cancellationToken)
     {
         var identities = new GeneratedIdentityHasher(digest);
@@ -572,7 +589,8 @@ internal static class PostRegistrationLoader
                 toolchain.Identity,
                 loadedProjects,
                 ValidateGeneratedFacts(generatedFacts),
-                workspace);
+                workspace,
+                repositoryRootIdentity);
             trace?.MarkSessionConstructed();
             trace?.Enter(LoaderExecutionPhase.SessionTransfer);
             return new PostRegistrationResult(

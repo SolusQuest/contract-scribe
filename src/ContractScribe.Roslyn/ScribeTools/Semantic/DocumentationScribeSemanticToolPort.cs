@@ -112,7 +112,9 @@ public sealed class DocumentationScribeSemanticToolPort
                     DocumentationScribeSemanticFailureReason.InvalidRequest));
             }
 
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Binding, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -203,7 +205,8 @@ public sealed class DocumentationScribeSemanticToolPort
                     cursor,
                     scope,
                     out position,
-                    cancellationToken))
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Page, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -224,7 +227,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
             Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken);
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -237,10 +242,13 @@ public sealed class DocumentationScribeSemanticToolPort
                 request.Cursor,
                 count,
                 hasMore,
-                cancellationToken);
+                cancellationToken,
+                () => Check(DocumentationScribeSemanticStage.Cursor, started, cancellationToken));
 
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.FinalFreshness, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -267,7 +275,9 @@ public sealed class DocumentationScribeSemanticToolPort
 
             Check(DocumentationScribeSemanticStage.Publish, started, cancellationToken);
             ValidateFinalSources(snapshot.Validations, started, cancellationToken);
-            if (!loadedContext.VerifyFreshness(cancellationToken))
+            if (!loadedContext.VerifyFreshness(
+                    cancellationToken,
+                    () => Check(DocumentationScribeSemanticStage.Publish, started, cancellationToken)))
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,

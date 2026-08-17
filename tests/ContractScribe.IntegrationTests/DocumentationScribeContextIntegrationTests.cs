@@ -718,8 +718,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             null,
             observationObserver: observation =>
             {
-                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
                     && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 2
                     && !moved)
                 {
                     File.Move(original, alternate);
@@ -763,8 +764,9 @@ public sealed class DocumentationScribeContextIntegrationTests
             null,
             observationObserver: observation =>
             {
-                if (observation.Stage == DocumentationScribeContextObservationStage.AfterPreObservation
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
                     && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 1
                     && !moved)
                 {
                     Directory.Move(original, alternate);
@@ -874,6 +876,34 @@ public sealed class DocumentationScribeContextIntegrationTests
             {
                 Directory.Delete(replacement, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public void LoadedRootIdentityRejectsReplacementBeforeBootstrapWithIdenticalSourceBytes()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        Directory.Move(root, backup);
+        Directory.CreateDirectory(Path.Join(root, "src", "App"));
+        File.Copy(Path.Join(backup, "src", "App", "Widget.cs"), fixture.FullPath(path));
+        File.WriteAllText(Path.Join(root, "AGENTS.md"), "replacement-instruction-marker\n");
+
+        try
+        {
+            var result = fixture.Bootstrap();
+
+            Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.DoesNotContain("replacement-instruction-marker", result.ToString(), StringComparison.Ordinal);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Move(backup, root);
         }
     }
 
@@ -2198,7 +2228,8 @@ public sealed class DocumentationScribeContextIntegrationTests
                     .Where(fact => fact is not null)
                     .Cast<GeneratedSourceFact>()
                     .ToArray(),
-                workspace);
+                workspace,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
             var classified = new SymbolClassifier().ClassifySession(
                 repository,
                 TargetProfile.ExternalApi);

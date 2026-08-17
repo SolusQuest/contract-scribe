@@ -106,7 +106,9 @@ public sealed class DocumentationScribeLoadedContext
         && freshnessGuard.HasNotFailed
         && classifiedSession.RepositorySession.RepositoryContextRef == Facts.RepositoryContextRef;
 
-    internal bool VerifyFreshness(CancellationToken cancellationToken = default)
+    internal bool VerifyFreshness(
+        CancellationToken cancellationToken = default,
+        Action? checkpoint = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsCurrent)
@@ -116,7 +118,8 @@ public sealed class DocumentationScribeLoadedContext
 
         return freshnessGuard.TryExecuteIfFresh(
             cancellationToken,
-            () => IsCurrent);
+            () => IsCurrent,
+            checkpoint);
     }
 
     public DocumentationScribeContextRequestBindingResult ValidateRequestBinding(
@@ -175,7 +178,8 @@ public sealed class DocumentationScribeLoadedContext
         DocumentationScribeContextCursor? currentCursor,
         int returnedItemCount,
         bool hasMore,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? checkpoint = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (returnedItemCount < 0
@@ -215,7 +219,8 @@ public sealed class DocumentationScribeLoadedContext
                         checked(currentPosition + returnedItemCount));
                     cancellationToken.ThrowIfCancellationRequested();
                     return issued;
-                });
+                },
+                checkpoint);
         }
         catch (DocumentationScribeContextReadException exception)
         {
@@ -227,7 +232,8 @@ public sealed class DocumentationScribeLoadedContext
         DocumentationScribeContextCursor cursor,
         DocumentationScribeContextCursorScope scope,
         out int nextPosition,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? checkpoint = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         nextPosition = 0;
@@ -253,7 +259,8 @@ public sealed class DocumentationScribeLoadedContext
                     out candidatePosition);
                 cancellationToken.ThrowIfCancellationRequested();
                 return result;
-            });
+            },
+            checkpoint);
         if (isValid)
         {
             nextPosition = candidatePosition;
@@ -359,7 +366,7 @@ internal sealed class DocumentationScribeContextFreshnessGuard
             {
                 throw;
             }
-            catch
+            catch (DocumentationScribeContextReadException)
             {
                 Interlocked.Exchange(ref failed, 1);
                 throw;
@@ -376,11 +383,12 @@ internal sealed class DocumentationScribeContextFreshnessGuard
 
     internal bool TryExecuteIfFresh(
         CancellationToken cancellationToken,
-        Func<bool> operation)
+        Func<bool> operation,
+        Action? checkpoint = null)
     {
         try
         {
-            return ExecuteIfFresh(cancellationToken, operation);
+            return ExecuteIfFresh(cancellationToken, operation, checkpoint);
         }
         catch (OperationCanceledException)
         {
@@ -547,8 +555,8 @@ public sealed class DocumentationScribeContextBootstrapper
 
             Check(selection, started, cancellationToken);
             var root = classifiedSession.RepositorySession.PhysicalRepositoryRoot;
-            var rootIdentity = DocumentationScribeContextStableFileReader
-                .ReadDirectoryIdentity(root);
+            var rootIdentity = classifiedSession.RepositorySession.RepositoryRootIdentity
+                ?? throw new InvalidOperationException("context.internal.root-identity-unavailable");
             var acceptedIdentities = new Dictionary<
                 (ulong Volume, ulong FileId),
                 string>();

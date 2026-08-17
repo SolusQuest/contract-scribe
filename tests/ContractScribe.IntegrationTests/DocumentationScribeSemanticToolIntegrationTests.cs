@@ -477,6 +477,55 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
     }
 
     [Fact]
+    public async Task SemanticDeadlineExpiresInsideFreshnessEnumeration()
+    {
+        const DocumentationScribeSemanticStage targetStage =
+            DocumentationScribeSemanticStage.Binding;
+        using var fixture = SemanticFixture.Create(MethodId);
+        var armed = false;
+        var currentStage = DocumentationScribeSemanticStage.Target;
+        var slept = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            freshnessCheckpoint: () =>
+            {
+                if (armed && currentStage == targetStage && !slept)
+                {
+                    slept = true;
+                    Thread.Sleep(150);
+                }
+            });
+        var loaded = fixture.Bootstrap(bootstrapper);
+        var request = fixture.CreateRequest(loaded);
+        var limits = new DocumentationScribeSemanticToolLimits(
+            20,
+            256,
+            65_536,
+            4_194_304,
+            8_192,
+            32,
+            512,
+            500_000,
+            100);
+        var port = new DocumentationScribeSemanticToolPort(
+            loaded,
+            request,
+            limits,
+            stage => currentStage = stage,
+            null);
+        armed = true;
+
+        var result = await port.InvokeAsync(
+            DocumentationScribeSemanticToolRequest.Create(1),
+            CancellationToken.None);
+
+        Assert.True(slept);
+        Assert.Same(DocumentationScribeToolOutcome.TimedOut, result.Outcome);
+        Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, result.FailureReason);
+        Assert.Null(result.Page);
+    }
+
+    [Fact]
     public async Task RequestPageLimitFailureIsContentFree()
     {
         using var fixture = SemanticFixture.Create(MethodId);
@@ -1491,7 +1540,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 new ToolchainIdentity("test", "test", "test", "test"),
                 projects,
                 [sourceFact, toolFact],
-                workspace);
+                workspace,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
             var classified = new SymbolClassifier().ClassifySession(
                 repository,
                 TargetProfile.ExternalApi);
@@ -1520,7 +1570,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 toolGeneratedTree);
         }
 
-        public DocumentationScribeLoadedContext Bootstrap()
+        public DocumentationScribeLoadedContext Bootstrap(
+            DocumentationScribeContextBootstrapper? bootstrapper = null)
         {
             var sourcePath = targetReference.SyntaxTree.FilePath;
             var sourceBytes = File.ReadAllBytes(Path.Join(Root, sourcePath));
@@ -1535,7 +1586,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 targetReference.Span.Start,
                 targetReference.Span.End,
                 Sha(sourceBytes));
-            var result = new DocumentationScribeContextBootstrapper().Bootstrap(classified, selection);
+            var result = (bootstrapper ?? new DocumentationScribeContextBootstrapper())
+                .Bootstrap(classified, selection);
             Assert.Contains(
                 result.Status,
                 new[]
