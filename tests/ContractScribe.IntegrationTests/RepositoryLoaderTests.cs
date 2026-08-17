@@ -811,7 +811,14 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
         Assert.Equal("internal", outcome.PrimaryFailure?.Stage);
         Assert.Equal("loader.internal-error", outcome.PrimaryFailure?.Code);
-        Assert.DoesNotContain("unpublished-native-identity-marker", outcome.ToString(), StringComparison.Ordinal);
+        var publishedFields = outcome.SecondaryFacts
+            .SelectMany(fact => new[] { fact.Stage, fact.Code })
+            .Concat(outcome.Diagnostics.SelectMany(diagnostic =>
+                new[] { diagnostic.Stage, diagnostic.Code, diagnostic.Severity }))
+            .Append(outcome.PrimaryFailure!.Stage)
+            .Append(outcome.PrimaryFailure.Code);
+        Assert.DoesNotContain(publishedFields, field =>
+            field.Contains("unpublished-native-identity-marker", StringComparison.Ordinal));
         Assert.Null(outcome.Session);
     }
 
