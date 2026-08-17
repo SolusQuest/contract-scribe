@@ -718,6 +718,104 @@ public sealed class RepositoryLoaderTests
     }
 
     [Fact]
+    public async Task SuccessfulLoadRetainsTheCapturedRepositoryRootIdentity()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var expected = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(fixture.Root);
+
+        var outcome = await new RepositoryLoader().LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        await using var session = Assert.IsType<LoadedRepositorySession>(outcome.Session);
+        Assert.Equal(RepositoryLoadStatus.Success, outcome.Status);
+        Assert.Equal(expected, session.RepositoryRootIdentity);
+        Assert.Equal(
+            expected,
+            DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(fixture.Root));
+    }
+
+    [Fact]
+    public async Task IdenticalRootReplacementBeforePublicationSuppressesTheSession()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var root = fixture.Root;
+        var backup = root + ".accepted";
+        var replacement = root + ".replacement";
+        var acceptedIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root);
+        var replaced = false;
+        var loader = new RepositoryLoader(stage =>
+        {
+            if (stage != LoaderStage.TerminalValidation || replaced)
+            {
+                return;
+            }
+
+            CopyDirectoryForIdentityTest(root, replacement);
+            Directory.Move(root, backup);
+            Directory.Move(replacement, root);
+            replaced = true;
+        });
+
+        try
+        {
+            var outcome = await loader.LoadAsync(
+                new RepositoryLoadRequest(root, "App/App.csproj"));
+
+            Assert.True(replaced);
+            Assert.NotEqual(
+                acceptedIdentity,
+                DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
+            Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+            Assert.Equal("repository.protected-drift", outcome.PrimaryFailure?.Code);
+            Assert.Null(outcome.Session);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+
+            if (Directory.Exists(backup))
+            {
+                Directory.Move(backup, root);
+            }
+
+            if (Directory.Exists(replacement))
+            {
+                Directory.Delete(replacement, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UnknownFinalRootIdentityFailureIsInternalAndSuppressesTheSession()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var calls = 0;
+        var loader = CreateRootIdentityLoader(
+            root =>
+            {
+                if (calls++ == 0)
+                {
+                    return DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root);
+                }
+
+                throw new InvalidOperationException("unpublished-native-identity-marker");
+            });
+
+        var outcome = await loader.LoadAsync(
+            new RepositoryLoadRequest(fixture.Root, "App/App.csproj"));
+
+        Assert.Equal(2, calls);
+        Assert.Equal(RepositoryLoadStatus.Failure, outcome.Status);
+        Assert.Equal("internal", outcome.PrimaryFailure?.Stage);
+        Assert.Equal("loader.internal-error", outcome.PrimaryFailure?.Code);
+        Assert.DoesNotContain("unpublished-native-identity-marker", outcome.ToString(), StringComparison.Ordinal);
+        Assert.Null(outcome.Session);
+    }
+
+    [Fact]
     public async Task CancellationRemainsPrimaryWhenFinalInventoryThrows()
     {
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -1883,13 +1981,40 @@ public sealed class RepositoryLoaderTests
         Assert.Equal(firstSession.InputIdentity, secondSession.InputIdentity);
     }
 
+    private static void CopyDirectoryForIdentityTest(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Join(
+                destination,
+                Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Join(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
     private static RepositoryLoader CreateContextLoader(Func<int, byte[]> source)
+        => CreatePrivateLoader(source, DocumentationScribeContextStableFileReader.ReadDirectoryIdentity);
+
+    private static RepositoryLoader CreateRootIdentityLoader(
+        Func<string, DocumentationScribeContextPhysicalIdentity> rootIdentityReader) =>
+        CreatePrivateLoader(RandomNumberGenerator.GetBytes, rootIdentityReader);
+
+    private static RepositoryLoader CreatePrivateLoader(
+        Func<int, byte[]> repositoryContextBytes,
+        Func<string, DocumentationScribeContextPhysicalIdentity> rootIdentityReader)
     {
         var constructor = typeof(RepositoryLoader).GetConstructors(
                 BindingFlags.Instance | BindingFlags.NonPublic)
-            .Single(candidate => candidate.GetParameters().Length == 7);
+            .Single(candidate => candidate.GetParameters().Length == 8);
         return (RepositoryLoader)constructor.Invoke(
-            [null, null, null, null, null, null, source]);
+            [null, null, null, null, null, null, repositoryContextBytes, rootIdentityReader]);
     }
 }
 

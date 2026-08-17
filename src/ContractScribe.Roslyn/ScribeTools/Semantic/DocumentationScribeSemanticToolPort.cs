@@ -46,13 +46,14 @@ public sealed class DocumentationScribeSemanticToolPort
     private readonly Action<DocumentationScribeSemanticStage>? stageObserver;
     private readonly Action<DocumentationScribeContextObservationEvent>? observationObserver;
     private readonly Func<string, string> identity;
+    private readonly Func<long, TimeSpan> elapsed;
     private readonly Binding binding;
 
     public DocumentationScribeSemanticToolPort(
         DocumentationScribeLoadedContext loadedContext,
         DocumentationScribeRequest scribeRequest,
         DocumentationScribeSemanticToolLimits? limits = null)
-        : this(loadedContext, scribeRequest, limits, null, null, null)
+        : this(loadedContext, scribeRequest, limits, null, null, null, null)
     {
     }
 
@@ -62,7 +63,8 @@ public sealed class DocumentationScribeSemanticToolPort
         DocumentationScribeSemanticToolLimits? limits,
         Action<DocumentationScribeSemanticStage>? stageObserver,
         Func<string, string>? identity,
-        Action<DocumentationScribeContextObservationEvent>? observationObserver = null)
+        Action<DocumentationScribeContextObservationEvent>? observationObserver = null,
+        Func<long, TimeSpan>? elapsed = null)
     {
         this.loadedContext = loadedContext ?? throw new ArgumentNullException(nameof(loadedContext));
         this.scribeRequest = scribeRequest ?? throw new ArgumentNullException(nameof(scribeRequest));
@@ -74,6 +76,7 @@ public sealed class DocumentationScribeSemanticToolPort
         this.stageObserver = stageObserver;
         this.observationObserver = observationObserver;
         this.identity = identity ?? Sha256;
+        this.elapsed = elapsed ?? Stopwatch.GetElapsedTime;
 
         var requestBinding = loadedContext.ValidateRequestBinding(scribeRequest);
         if (!requestBinding.IsValid)
@@ -1968,7 +1971,7 @@ public sealed class DocumentationScribeSemanticToolPort
     private void Check(long started, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Stopwatch.GetElapsedTime(started).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
+        if (elapsed(started).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
         {
             throw new SemanticTimeoutException();
         }

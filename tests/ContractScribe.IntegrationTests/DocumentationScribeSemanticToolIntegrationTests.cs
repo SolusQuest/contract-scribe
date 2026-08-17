@@ -476,23 +476,29 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Null(observationTimed.Page);
     }
 
-    [Fact]
-    public async Task SemanticDeadlineExpiresInsideFreshnessEnumeration()
+    [Theory]
+    [InlineData("Binding", false)]
+    [InlineData("Page", true)]
+    [InlineData("Cursor", false)]
+    public async Task SemanticDeadlineExpiresInsideFreshnessAndCursorEnumeration(
+        string targetStageId,
+        bool validateCursor)
     {
-        const DocumentationScribeSemanticStage targetStage =
-            DocumentationScribeSemanticStage.Binding;
+        var targetStage = Enum.Parse<DocumentationScribeSemanticStage>(targetStageId);
         using var fixture = SemanticFixture.Create(MethodId);
         var armed = false;
         var currentStage = DocumentationScribeSemanticStage.Target;
-        var slept = false;
+        var expired = false;
         var bootstrapper = new DocumentationScribeContextBootstrapper(
             null,
-            freshnessCheckpoint: () =>
+            observationObserver: observation =>
             {
-                if (armed && currentStage == targetStage && !slept)
+                if (armed
+                    && currentStage == targetStage
+                    && observation.Stage
+                        == DocumentationScribeContextObservationStage.DuringNameEnumeration)
                 {
-                    slept = true;
-                    Thread.Sleep(150);
+                    expired = true;
                 }
             });
         var loaded = fixture.Bootstrap(bootstrapper);
@@ -500,26 +506,42 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var limits = new DocumentationScribeSemanticToolLimits(
             20,
             256,
-            65_536,
+            262_144,
             4_194_304,
             8_192,
             32,
             512,
             500_000,
             100);
+        DocumentationScribeContextCursor? cursor = null;
+        if (validateCursor)
+        {
+            var seed = await new DocumentationScribeSemanticToolPort(
+                loaded,
+                request,
+                limits,
+                null,
+                null,
+                elapsed: _ => TimeSpan.Zero).InvokeAsync(
+                    DocumentationScribeSemanticToolRequest.Create(2),
+                    CancellationToken.None);
+            cursor = Assert.IsType<DocumentationScribeContextCursor>(seed.Page?.NextCursor);
+        }
+
         var port = new DocumentationScribeSemanticToolPort(
             loaded,
             request,
             limits,
             stage => currentStage = stage,
-            null);
+            null,
+            elapsed: _ => expired ? TimeSpan.FromMilliseconds(101) : TimeSpan.Zero);
         armed = true;
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(1),
+            DocumentationScribeSemanticToolRequest.Create(1, cursor),
             CancellationToken.None);
 
-        Assert.True(slept);
+        Assert.True(expired);
         Assert.Same(DocumentationScribeToolOutcome.TimedOut, result.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, result.FailureReason);
         Assert.Null(result.Page);

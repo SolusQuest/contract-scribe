@@ -31,16 +31,29 @@ internal sealed record DocumentationScribeContextObservedRead(
 internal enum DocumentationScribeContextObservationStage
 {
     AfterPreObservation,
+    DuringNameEnumeration,
     BeforeRelativeOpen,
     AfterDirectoryHandleAcquired,
     AfterFirstLeafRead,
+    DuringRead,
     BeforeFinalObservation,
+}
+
+internal enum DocumentationScribeContextObservationKind
+{
+    None,
+    Parent,
+    PresenceLeaf,
+    FirstContentLeaf,
+    ReboundContentLeaf,
 }
 
 internal sealed record DocumentationScribeContextObservationEvent(
     DocumentationScribeContextObservationStage Stage,
     string RepositoryPath,
-    int SegmentIndex);
+    int SegmentIndex,
+    DocumentationScribeContextObservationKind Kind =
+        DocumentationScribeContextObservationKind.None);
 
 internal enum DocumentationScribeContextReadFailure
 {
@@ -129,7 +142,15 @@ internal static class DocumentationScribeContextStableFileReader
                    checkpoint,
                    observer))
         {
-            var leaf = InspectExactName(parent, segments[^1], cancellationToken, checkpoint);
+            var leaf = InspectExactName(
+                parent,
+                segments[^1],
+                cancellationToken,
+                checkpoint,
+                repositoryPath,
+                segments.Length - 1,
+                observer,
+                DocumentationScribeContextObservationKind.PresenceLeaf);
             RequireSpelling(leaf, allowMissing: before.FileIdentity is null);
             var identity = leaf.ExactCount == 0
                 ? null
@@ -140,7 +161,8 @@ internal static class DocumentationScribeContextStableFileReader
                     segments.Length - 1,
                     cancellationToken,
                     checkpoint,
-                    observer);
+                    observer,
+                    DocumentationScribeContextObservationKind.PresenceLeaf);
             if (identity != before.FileIdentity)
             {
                 throw Stale();
@@ -277,7 +299,15 @@ internal static class DocumentationScribeContextStableFileReader
                    observer))
         {
             RequireSpelling(
-                InspectExactName(parent, segments[^1], cancellationToken, checkpoint),
+                InspectExactName(
+                    parent,
+                    segments[^1],
+                    cancellationToken,
+                    checkpoint,
+                    observation.RepositoryPath,
+                    segments.Length - 1,
+                    observer,
+                    DocumentationScribeContextObservationKind.FirstContentLeaf),
                 allowMissing: false);
             using var stream = OpenRegularFileAfterInspection(
                 parent,
@@ -286,7 +316,8 @@ internal static class DocumentationScribeContextStableFileReader
                 segments.Length - 1,
                 cancellationToken,
                 checkpoint,
-                observer);
+                observer,
+                DocumentationScribeContextObservationKind.FirstContentLeaf);
             identity = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
             if (identity.LinkCount != 1)
             {
@@ -307,7 +338,16 @@ internal static class DocumentationScribeContextStableFileReader
                         "context.budget.file-bytes");
             }
 
-            bytes = ReadAll(stream, maximumBytes, acceptedBytes, cancellationToken, checkpoint);
+            bytes = ReadAll(
+                stream,
+                maximumBytes,
+                acceptedBytes,
+                observation.RepositoryPath,
+                segments.Length - 1,
+                DocumentationScribeContextObservationKind.FirstContentLeaf,
+                cancellationToken,
+                checkpoint,
+                observer);
             var afterFirstRead = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
             if (afterFirstRead != identity || afterFirstRead.Length != bytes.LongLength)
             {
@@ -322,7 +362,15 @@ internal static class DocumentationScribeContextStableFileReader
                 cancellationToken,
                 checkpoint);
             RequireSpelling(
-                InspectExactName(parent, segments[^1], cancellationToken, checkpoint),
+                InspectExactName(
+                    parent,
+                    segments[^1],
+                    cancellationToken,
+                    checkpoint,
+                    observation.RepositoryPath,
+                    segments.Length - 1,
+                    observer,
+                    DocumentationScribeContextObservationKind.ReboundContentLeaf),
                 allowMissing: false);
             stream.Dispose();
             using var rebound = OpenRegularFileAfterInspection(
@@ -332,14 +380,19 @@ internal static class DocumentationScribeContextStableFileReader
                 segments.Length - 1,
                 cancellationToken,
                 checkpoint,
-                observer);
+                observer,
+                DocumentationScribeContextObservationKind.ReboundContentLeaf);
             var reboundBefore = ReadIdentity(rebound.SafeFileHandle, expectDirectory: false);
             var reboundBytes = ReadAll(
                 rebound,
                 maximumBytes,
                 acceptedBytes,
+                observation.RepositoryPath,
+                segments.Length - 1,
+                DocumentationScribeContextObservationKind.ReboundContentLeaf,
                 cancellationToken,
-                checkpoint);
+                checkpoint,
+                observer);
             var reboundAfter = ReadIdentity(rebound.SafeFileHandle, expectDirectory: false);
             if (reboundBefore != identity
                 || reboundAfter != identity
@@ -397,7 +450,15 @@ internal static class DocumentationScribeContextStableFileReader
                    checkpoint,
                    observer))
         {
-            var leaf = InspectExactName(parent, segments[^1], cancellationToken, checkpoint);
+            var leaf = InspectExactName(
+                parent,
+                segments[^1],
+                cancellationToken,
+                checkpoint,
+                observation.RepositoryPath,
+                segments.Length - 1,
+                observer,
+                DocumentationScribeContextObservationKind.PresenceLeaf);
             RequireSpelling(leaf, allowMissing: observation.FileIdentity is null);
             var identity = leaf.ExactCount == 0
                 ? null
@@ -408,7 +469,8 @@ internal static class DocumentationScribeContextStableFileReader
                     segments.Length - 1,
                     cancellationToken,
                     checkpoint,
-                    observer);
+                    observer,
+                    DocumentationScribeContextObservationKind.PresenceLeaf);
             if (identity != observation.FileIdentity)
             {
                 throw Stale();
@@ -465,7 +527,8 @@ internal static class DocumentationScribeContextStableFileReader
                 segments.Length - 1,
                 cancellationToken,
                 checkpoint,
-                observer: null);
+                observer: null,
+                DocumentationScribeContextObservationKind.PresenceLeaf);
         return new(repositoryPath, directoryIdentities, fileIdentity);
     }
 
@@ -502,7 +565,8 @@ internal static class DocumentationScribeContextStableFileReader
                     index,
                     cancellationToken,
                     checkpoint,
-                    observer: null);
+                    observer: null,
+                    DocumentationScribeContextObservationKind.Parent);
                 current.Dispose();
                 current = next;
                 builder.Add(ReadIdentity(current, expectDirectory: true));
@@ -557,7 +621,11 @@ internal static class DocumentationScribeContextStableFileReader
                     current,
                     segments[index],
                     cancellationToken,
-                    checkpoint);
+                    checkpoint,
+                    repositoryPath,
+                    index,
+                    observer,
+                    DocumentationScribeContextObservationKind.Parent);
                 if (spelling.ExactCount == 0)
                 {
                     RequireSpelling(spelling, allowMissing: false);
@@ -570,7 +638,8 @@ internal static class DocumentationScribeContextStableFileReader
                     index,
                     cancellationToken,
                     checkpoint,
-                    observer);
+                    observer,
+                    DocumentationScribeContextObservationKind.Parent);
                 try
                 {
                     InvokeObserver(
@@ -612,11 +681,13 @@ internal static class DocumentationScribeContextStableFileReader
         string repositoryPath,
         int segmentIndex,
         CancellationToken cancellationToken,
-        Action? checkpoint)
+        Action? checkpoint,
+        DocumentationScribeContextObservationKind kind =
+            DocumentationScribeContextObservationKind.None)
     {
         cancellationToken.ThrowIfCancellationRequested();
         checkpoint?.Invoke();
-        observer?.Invoke(new(stage, repositoryPath, segmentIndex));
+        observer?.Invoke(new(stage, repositoryPath, segmentIndex, kind));
         checkpoint?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
     }
@@ -657,7 +728,8 @@ internal static class DocumentationScribeContextStableFileReader
         int segmentIndex,
         CancellationToken cancellationToken,
         Action? checkpoint,
-        Action<DocumentationScribeContextObservationEvent>? observer)
+        Action<DocumentationScribeContextObservationEvent>? observer,
+        DocumentationScribeContextObservationKind kind)
     {
         using var stream = OpenRegularFileAfterInspection(
             parent,
@@ -666,7 +738,8 @@ internal static class DocumentationScribeContextStableFileReader
             segmentIndex,
             cancellationToken,
             checkpoint,
-            observer);
+            observer,
+            kind);
         var identity = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
         if (identity.LinkCount != 1)
         {
@@ -683,7 +756,8 @@ internal static class DocumentationScribeContextStableFileReader
         int segmentIndex,
         CancellationToken cancellationToken,
         Action? checkpoint,
-        Action<DocumentationScribeContextObservationEvent>? observer)
+        Action<DocumentationScribeContextObservationEvent>? observer,
+        DocumentationScribeContextObservationKind kind)
     {
         InvokeObserver(
             observer,
@@ -691,14 +765,23 @@ internal static class DocumentationScribeContextStableFileReader
             repositoryPath,
             segmentIndex,
             cancellationToken,
-            checkpoint);
+            checkpoint,
+            kind);
         try
         {
             var handle = OpenDirectoryRelative(parent, name);
             try
             {
                 RequireSpelling(
-                    InspectExactName(parent, name, cancellationToken, checkpoint),
+                    InspectExactName(
+                        parent,
+                        name,
+                        cancellationToken,
+                        checkpoint,
+                        repositoryPath,
+                        segmentIndex,
+                        observer,
+                        kind),
                     allowMissing: false);
                 return handle;
             }
@@ -712,7 +795,15 @@ internal static class DocumentationScribeContextStableFileReader
             when (exception.Failure == DocumentationScribeContextReadFailure.Stale)
         {
             RequireSpelling(
-                InspectExactName(parent, name, cancellationToken, checkpoint),
+                InspectExactName(
+                    parent,
+                    name,
+                    cancellationToken,
+                    checkpoint,
+                    repositoryPath,
+                    segmentIndex,
+                    observer,
+                    kind),
                 allowMissing: false);
             throw;
         }
@@ -725,7 +816,8 @@ internal static class DocumentationScribeContextStableFileReader
         int segmentIndex,
         CancellationToken cancellationToken,
         Action? checkpoint,
-        Action<DocumentationScribeContextObservationEvent>? observer)
+        Action<DocumentationScribeContextObservationEvent>? observer,
+        DocumentationScribeContextObservationKind kind)
     {
         InvokeObserver(
             observer,
@@ -733,14 +825,23 @@ internal static class DocumentationScribeContextStableFileReader
             repositoryPath,
             segmentIndex,
             cancellationToken,
-            checkpoint);
+            checkpoint,
+            kind);
         try
         {
             var stream = OpenRegularFileRelative(parent, name);
             try
             {
                 RequireSpelling(
-                    InspectExactName(parent, name, cancellationToken, checkpoint),
+                    InspectExactName(
+                        parent,
+                        name,
+                        cancellationToken,
+                        checkpoint,
+                        repositoryPath,
+                        segmentIndex,
+                        observer,
+                        kind),
                     allowMissing: false);
                 return stream;
             }
@@ -754,7 +855,15 @@ internal static class DocumentationScribeContextStableFileReader
             when (exception.Failure == DocumentationScribeContextReadFailure.Stale)
         {
             RequireSpelling(
-                InspectExactName(parent, name, cancellationToken, checkpoint),
+                InspectExactName(
+                    parent,
+                    name,
+                    cancellationToken,
+                    checkpoint,
+                    repositoryPath,
+                    segmentIndex,
+                    observer,
+                    kind),
                 allowMissing: false);
             throw;
         }
@@ -764,12 +873,29 @@ internal static class DocumentationScribeContextStableFileReader
         SafeFileHandle parent,
         string expected,
         CancellationToken cancellationToken,
-        Action? checkpoint)
+        Action? checkpoint,
+        string? repositoryPath = null,
+        int segmentIndex = -1,
+        Action<DocumentationScribeContextObservationEvent>? observer = null,
+        DocumentationScribeContextObservationKind kind =
+            DocumentationScribeContextObservationKind.None)
     {
         var exact = 0;
         var folded = 0;
         foreach (var name in EnumerateNames(parent, cancellationToken, checkpoint))
         {
+            if (repositoryPath is not null)
+            {
+                InvokeObserver(
+                    observer,
+                    DocumentationScribeContextObservationStage.DuringNameEnumeration,
+                    repositoryPath,
+                    segmentIndex,
+                    cancellationToken,
+                    checkpoint,
+                    kind);
+            }
+
             if (!string.Equals(name, expected, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -828,8 +954,12 @@ internal static class DocumentationScribeContextStableFileReader
         FileStream stream,
         int maximumBytes,
         bool acceptedBytes,
+        string repositoryPath,
+        int segmentIndex,
+        DocumentationScribeContextObservationKind kind,
         CancellationToken cancellationToken,
-        Action? checkpoint)
+        Action? checkpoint,
+        Action<DocumentationScribeContextObservationEvent>? observer)
     {
         using var buffer = new MemoryStream();
         var chunk = new byte[64 * 1024];
@@ -842,6 +972,15 @@ internal static class DocumentationScribeContextStableFileReader
             {
                 break;
             }
+
+            InvokeObserver(
+                observer,
+                DocumentationScribeContextObservationStage.DuringRead,
+                repositoryPath,
+                segmentIndex,
+                cancellationToken,
+                checkpoint,
+                kind);
 
             if (buffer.Length + read > maximumBytes)
             {
@@ -1208,10 +1347,10 @@ internal static class DocumentationScribeContextStableFileReader
     {
         if (OperatingSystem.IsWindows())
         {
-            if (GetFileType(handle) != FileTypeDisk)
-            {
-                throw Unsafe();
-            }
+            Marshal.SetLastPInvokeError(0);
+            var fileType = GetFileType(handle);
+            var fileTypeError = Marshal.GetLastPInvokeError();
+            ValidateWindowsFileType(fileType, fileTypeError);
 
             if (!GetFileInformationByHandle(handle, out var information))
             {
@@ -1265,6 +1404,19 @@ internal static class DocumentationScribeContextStableFileReader
         }
 
         throw Unsafe();
+    }
+
+    internal static void ValidateWindowsFileType(uint fileType, int error)
+    {
+        if (fileType == 0 && error != 0)
+        {
+            throw new InvalidOperationException("context.internal.native-identity");
+        }
+
+        if (fileType != FileTypeDisk)
+        {
+            throw Unsafe();
+        }
     }
 
     private static long WindowsFileTime(

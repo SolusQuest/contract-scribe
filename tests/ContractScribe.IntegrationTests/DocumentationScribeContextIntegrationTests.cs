@@ -701,8 +701,11 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
     }
 
-    [Fact]
-    public void CaseOnlyLeafSubstitutionIsUnsafeOnWindows()
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void CaseOnlyLeafSubstitutionBetweenInspectionAndOpenIsUnsafeOnWindows(
+        string observationKindId)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -713,6 +716,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         using var fixture = ContextFixture.Create(BasicSource());
         var original = fixture.FullPath(path);
         var alternate = Path.Join(Path.GetDirectoryName(original)!, "WIDGET.CS");
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
         var moved = false;
         var bootstrapper = new DocumentationScribeContextBootstrapper(
             null,
@@ -721,6 +725,7 @@ public sealed class DocumentationScribeContextIntegrationTests
                 if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
                     && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
                     && observation.SegmentIndex == 2
+                    && observation.Kind == targetKind
                     && !moved)
                 {
                     File.Move(original, alternate);
@@ -747,6 +752,78 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
     }
 
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void DisappearingLeafBetweenInspectionAndOpenIsStale(string observationKindId)
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var original = fixture.FullPath(path);
+        var backup = original + ".accepted";
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
+        var moved = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
+                    && observation.SegmentIndex == 2
+                    && observation.Kind == targetKind
+                    && !moved)
+                {
+                    File.Move(original, backup);
+                    moved = true;
+                }
+            });
+
+        try
+        {
+            var result = fixture.Bootstrap(bootstrapper: bootstrapper);
+
+            Assert.True(moved);
+            Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
+            Assert.Null(result.Context);
+        }
+        finally
+        {
+            if (!File.Exists(original) && File.Exists(backup))
+            {
+                File.Move(backup, original);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(0u, 5, typeof(InvalidOperationException))]
+    [InlineData(0u, 0, typeof(DocumentationScribeContextReadException))]
+    [InlineData(2u, 0, typeof(DocumentationScribeContextReadException))]
+    public void WindowsFileTypeMappingSeparatesUnknownFailureFromValidNonDiskTypes(
+        uint fileType,
+        int error,
+        Type expectedException)
+    {
+        var exception = Record.Exception(() =>
+            DocumentationScribeContextStableFileReader.ValidateWindowsFileType(fileType, error));
+
+        Assert.IsType(expectedException, exception);
+        if (exception is DocumentationScribeContextReadException readFailure)
+        {
+            Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, readFailure.Failure);
+        }
+        else
+        {
+            Assert.Equal("context.internal.native-identity", exception?.Message);
+        }
+    }
+
+    [Fact]
+    public void WindowsDiskFileTypeIsAcceptedWithoutAStaleLastError()
+    {
+        DocumentationScribeContextStableFileReader.ValidateWindowsFileType(1, 5);
+    }
+
     [Fact]
     public void CaseOnlyIntermediateParentSubstitutionIsUnsafeOnWindows()
     {
@@ -767,6 +844,7 @@ public sealed class DocumentationScribeContextIntegrationTests
                 if (observation.Stage == DocumentationScribeContextObservationStage.BeforeRelativeOpen
                     && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal)
                     && observation.SegmentIndex == 1
+                    && observation.Kind == DocumentationScribeContextObservationKind.Parent
                     && !moved)
                 {
                     Directory.Move(original, alternate);
@@ -816,6 +894,39 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal("context.internal-error", result.Failure?.Code);
         Assert.DoesNotContain("unpublished-native-marker", result.ToString(), StringComparison.Ordinal);
         Assert.Null(result.Context);
+    }
+
+    [Fact]
+    public void UnknownFreshnessFaultDoesNotPermanentlyPoisonContext()
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var armed = false;
+        var injected = false;
+        var bootstrapper = new DocumentationScribeContextBootstrapper(
+            null,
+            observationObserver: observation =>
+            {
+                if (armed
+                    && !injected
+                    && observation.Stage
+                        == DocumentationScribeContextObservationStage.DuringNameEnumeration
+                    && string.Equals(observation.RepositoryPath, path, StringComparison.Ordinal))
+                {
+                    injected = true;
+                    throw new InvalidOperationException("unpublished-native-freshness-marker");
+                }
+            });
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(
+            fixture.Bootstrap(bootstrapper: bootstrapper).Context);
+        armed = true;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => loaded.VerifyFreshness());
+        Assert.Equal("unpublished-native-freshness-marker", exception.Message);
+        Assert.True(injected);
+        Assert.True(loaded.IsCurrent);
+        Assert.True(loaded.VerifyFreshness());
+        Assert.True(loaded.IsCurrent);
     }
 
     [Fact]
@@ -947,6 +1058,55 @@ public sealed class DocumentationScribeContextIntegrationTests
                 File.Delete(original);
                 File.Move(backup, original);
             }
+        }
+    }
+
+    [Theory]
+    [InlineData("FirstContentLeaf")]
+    [InlineData("ReboundContentLeaf")]
+    public void AcceptedFileGrowthDuringEitherReadIsStale(string observationKindId)
+    {
+        const string path = "src/App/Widget.cs";
+        using var fixture = ContextFixture.Create(BasicSource());
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(fixture.Bootstrap().Context);
+        var fullPath = fixture.FullPath(path);
+        var originalBytes = File.ReadAllBytes(fullPath);
+        var observation = DocumentationScribeContextStableFileReader.CapturePath(
+            fixture.Root,
+            loaded.RepositoryRootIdentity,
+            path,
+            CancellationToken.None);
+        var targetKind = Enum.Parse<DocumentationScribeContextObservationKind>(observationKindId);
+        var grown = false;
+
+        try
+        {
+            var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+                DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                    fixture.Root,
+                    loaded.RepositoryRootIdentity,
+                    observation,
+                    originalBytes.Length,
+                    acceptedBytes: true,
+                    CancellationToken.None,
+                    observer: item =>
+                    {
+                        if (!grown
+                            && item.Stage == DocumentationScribeContextObservationStage.DuringRead
+                            && item.Kind == targetKind)
+                        {
+                            File.AppendAllText(fullPath, new string('x', originalBytes.Length + 1));
+                            grown = true;
+                        }
+                    }));
+
+            Assert.True(grown);
+            Assert.Equal(DocumentationScribeContextReadFailure.Stale, exception.Failure);
+            Assert.Equal("context.stale.repository-object", exception.Code);
+        }
+        finally
+        {
+            File.WriteAllBytes(fullPath, originalBytes);
         }
     }
 
