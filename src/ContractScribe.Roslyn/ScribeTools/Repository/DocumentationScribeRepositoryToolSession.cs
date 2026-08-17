@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn;
@@ -701,7 +702,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
         DocumentationScribeContextStableRead read;
         try
         {
-            read = DocumentationScribeContextStableFileReader.ReadRegularFile(
+            read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
+                root,
                 fullPath,
                 limits.MaximumFileUtf8Bytes,
                 cancellationToken,
@@ -1050,7 +1052,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
             var before = DocumentationScribeContextDirectoryChain.Read(
                 loadedContext.RepositorySession.PhysicalRepositoryRoot,
                 Path.GetDirectoryName(observation.FullPath)!);
-            var read = DocumentationScribeContextStableFileReader.ReadRegularFile(
+            var read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
+                loadedContext.RepositorySession.PhysicalRepositoryRoot,
                 observation.FullPath,
                 limits.MaximumFileUtf8Bytes,
                 cancellationToken,
@@ -1102,7 +1105,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
     }
 
-    private static int MeasurePublication<T>(T value) => value switch
+    internal static int MeasurePublication<T>(T value) => value switch
     {
         DocumentationScribeRepositoryReadExcerptResult result => checked(
             512 + MeasureExcerpt(result.Excerpt) + MeasureRoute(result.Route)
@@ -1143,9 +1146,11 @@ internal sealed class DocumentationScribeRepositoryToolSession
             + value.ClaimCategoryIds.Sum(MeasureText));
     }
 
-    private static int MeasureText(string? value) => value is null
+    internal static int MeasureJsonStringUtf8Bytes(string? value) => value is null
         ? 4
-        : checked(StrictUtf8.GetByteCount(value) + 2);
+        : checked(JsonEncodedText.Encode(value).EncodedUtf8Bytes.Length + 2);
+
+    private static int MeasureText(string? value) => MeasureJsonStringUtf8Bytes(value);
 
     private void Checkpoint(
         DocumentationScribeRepositoryToolCheckpoint value,

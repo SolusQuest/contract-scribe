@@ -74,6 +74,66 @@ public sealed class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
+    public void StableReaderOpensLeafFromRetainedParentHandle()
+    {
+        var root = Path.Join(Path.GetTempPath(), "contract-scribe-x2-anchor-" + Guid.NewGuid().ToString("N"));
+        var docs = Path.Join(root, "docs");
+        var replacement = Path.Join(root, "replacement");
+        Directory.CreateDirectory(docs);
+        Directory.CreateDirectory(replacement);
+        File.WriteAllText(Path.Join(docs, "guide.md"), "accepted\n", new UTF8Encoding(false));
+        File.WriteAllText(Path.Join(replacement, "guide.md"), "replacement-secret\n", new UTF8Encoding(false));
+        try
+        {
+            var swapped = false;
+            var read = DocumentationScribeContextStableFileReader.ReadRegularFileAnchored(
+                root,
+                Path.Join(docs, "guide.md"),
+                1_024,
+                CancellationToken.None,
+                afterParentOpen: () =>
+                {
+                    Directory.Move(docs, docs + "-retained");
+                    Directory.Move(replacement, docs);
+                    swapped = true;
+                });
+
+            Assert.True(swapped);
+            Assert.Equal("accepted\n", Encoding.UTF8.GetString(read.Bytes));
+            Assert.Equal("replacement-secret\n", File.ReadAllText(Path.Join(docs, "guide.md")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EscapedJsonBytesCountAgainstPublicationBudget()
+    {
+        using var fixture = RepositoryToolFixture.Create();
+        var escapedContent = string.Concat(Enumerable.Repeat("\"\\\r\n", 256));
+        File.WriteAllText(Path.Join(fixture.Root, "docs", "guide.md"), escapedContent, new UTF8Encoding(false));
+        var accepted = await fixture.Bundle().ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/guide.md"), default);
+        Assert.NotNull(accepted.Excerpt);
+        var measured = DocumentationScribeRepositoryToolSession.MeasurePublication(accepted);
+        Assert.Equal(
+            JsonSerializer.SerializeToUtf8Bytes(escapedContent).Length,
+            DocumentationScribeRepositoryToolSession.MeasureJsonStringUtf8Bytes(escapedContent));
+        Assert.True(measured > Encoding.UTF8.GetByteCount(escapedContent) + 2);
+
+        var constrained = fixture.Bundle(limits: DocumentationScribeRepositoryToolLimits.Create(
+            maximumReturnedUtf8BytesPerRun: measured - 1));
+        var rejected = await constrained.ReadExcerpt.InvokeAsync(
+            new("context.instructions", "docs/guide.md"), default);
+
+        Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, rejected.Outcome);
+        Assert.Null(rejected.Excerpt);
+        Assert.Empty(rejected.DynamicEvidence);
+    }
+
+    [Fact]
     public async Task IdenticalFirstPagesCreateIndependentUsableCursorChains()
     {
         using var fixture = RepositoryToolFixture.Create();
