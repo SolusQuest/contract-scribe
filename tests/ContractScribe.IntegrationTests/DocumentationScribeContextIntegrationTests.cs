@@ -824,6 +824,121 @@ public sealed class DocumentationScribeContextIntegrationTests
         DocumentationScribeContextStableFileReader.ValidateWindowsFileType(1, 5);
     }
 
+    [Theory]
+    [InlineData(2, "Stale", "context.stale.repository-object")]
+    [InlineData(11, "Stale", "context.stale.repository-object")]
+    [InlineData(18, "Unsafe", "context.unsafe.repository-object")]
+    [InlineData(20, "Unsafe", "context.unsafe.repository-object")]
+    [InlineData(21, "Unsafe", "context.unsafe.repository-object")]
+    [InlineData(22, "Unsafe", "context.unsafe.repository-object")]
+    [InlineData(38, "Unsafe", "context.unsafe.repository-object")]
+    [InlineData(40, "Unsafe", "context.unsafe.repository-object")]
+    public void LinuxRelativeOpenFailuresUseBoundedProductClassifications(
+        int error,
+        string expectedFailure,
+        string expectedCode)
+    {
+        var exception = Assert.IsType<DocumentationScribeContextReadException>(
+            DocumentationScribeContextStableFileReader.ClassifyLinuxRelativeOpenFailure(error));
+
+        Assert.Equal(Enum.Parse<DocumentationScribeContextReadFailure>(expectedFailure), exception.Failure);
+        Assert.Equal(expectedCode, exception.Code);
+        Assert.DoesNotContain(error.ToString(), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownLinuxRelativeOpenFailureUsesBoundedInternalError()
+    {
+        const int unknownError = 12345;
+
+        var exception = Assert.IsType<InvalidOperationException>(
+            DocumentationScribeContextStableFileReader.ClassifyLinuxRelativeOpenFailure(unknownError));
+
+        Assert.Equal("context.internal.native-open", exception.Message);
+        Assert.DoesNotContain(unknownError.ToString(), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(Architecture.X64)]
+    [InlineData(Architecture.Arm64)]
+    public void LinuxOpenAt2SupportsKnownSyscallArchitectures(Architecture architecture)
+    {
+        DocumentationScribeContextStableFileReader.ValidateLinuxOpenAt2Architecture(architecture);
+    }
+
+    [Fact]
+    public void LinuxOpenAt2RejectsUnsupportedArchitectureWithoutFallback()
+    {
+        var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeContextStableFileReader.ValidateLinuxOpenAt2Architecture(Architecture.X86));
+
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, exception.Failure);
+        Assert.Equal("context.unsafe.repository-object", exception.Code);
+    }
+
+    [Fact]
+    public void LinuxChildMountIsUnsafeForCaptureAndPresenceObservation()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
+
+        var capture = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeContextStableFileReader.CaptureRegularFile(
+                "/", rootIdentity, "proc/version", 4096, CancellationToken.None));
+        var presence = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeContextStableFileReader.CapturePath(
+                "/", rootIdentity, "proc/version", CancellationToken.None));
+
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, capture.Failure);
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, presence.Failure);
+    }
+
+    [Fact]
+    public void LinuxChildMountIsUnsafeForAcceptedFileRevalidation()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
+        var procIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/proc");
+        var observation = new DocumentationScribeContextPathObservation(
+            "proc/version",
+            [rootIdentity, procIdentity],
+            procIdentity with { IsDirectory = false });
+
+        var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeContextStableFileReader.ReadCapturedFile(
+                "/", rootIdentity, observation, 4096, acceptedBytes: true, CancellationToken.None));
+
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, exception.Failure);
+    }
+
+    [Fact]
+    public void LinuxChildMountIsUnsafeForAbsenceRevalidation()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
+        var procIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/proc");
+        var observation = new DocumentationScribeContextPathObservation(
+            "proc/contract-scribe-missing", [rootIdentity, procIdentity], null);
+
+        var exception = Assert.Throws<DocumentationScribeContextReadException>(() =>
+            DocumentationScribeContextStableFileReader.RevalidateAbsence(
+                "/", rootIdentity, observation, CancellationToken.None));
+
+        Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, exception.Failure);
+    }
+
     [Fact]
     public void CaseOnlyIntermediateParentSubstitutionIsUnsafeOnWindows()
     {
