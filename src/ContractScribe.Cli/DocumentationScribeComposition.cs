@@ -559,32 +559,6 @@ internal static class DocumentationScribeComposition
             return PreflightResult.Rejected("scribe.preflight.context-mismatch");
         }
 
-        var scopes = BuildRepositoryScopes(request, context, sourceReference);
-        var nonInstructionContextCount = request.ContextReferences.Count(reference =>
-            reference.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction);
-        var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
-            maximumBytesReadPerRun: 67_108_864,
-            maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
-            maximumCallsPerOperation: checked(
-                Math.Max(1, request.Limits.MaximumToolCalls + nonInstructionContextCount)));
-        var repository = DocumentationScribeRepositoryToolBundle.Create(
-            request,
-            attemptId,
-            context,
-            scopes,
-            repositoryLimits);
-        var contextMaterialization = await MaterializeContextContentAsync(
-            request,
-            context,
-            repository,
-            cancellationToken).ConfigureAwait(false);
-        if (contextMaterialization.Failure is { } contextFailure)
-        {
-            return PreflightResult.Failed(contextFailure.Kind, contextFailure.Code);
-        }
-
-        var contextContent = contextMaterialization.Content;
-
         var capture = selection.Session.RepositorySession
             .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
         if (capture.Baseline is not { } baseline
@@ -639,6 +613,34 @@ internal static class DocumentationScribeComposition
         {
             return PreflightResult.Rejected("scribe.preflight.edit-authorization-unavailable");
         }
+
+        // Start the shared repository-tool session only after patch authorization so
+        // unrelated baseline capture and declaration resolution cannot consume its timer.
+        var scopes = BuildRepositoryScopes(request, context, sourceReference);
+        var nonInstructionContextCount = request.ContextReferences.Count(reference =>
+            reference.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction);
+        var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
+            maximumBytesReadPerRun: 67_108_864,
+            maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
+            maximumCallsPerOperation: checked(
+                Math.Max(1, request.Limits.MaximumToolCalls + nonInstructionContextCount)));
+        var repository = DocumentationScribeRepositoryToolBundle.Create(
+            request,
+            attemptId,
+            context,
+            scopes,
+            repositoryLimits);
+        var contextMaterialization = await MaterializeContextContentAsync(
+            request,
+            context,
+            repository,
+            cancellationToken).ConfigureAwait(false);
+        if (contextMaterialization.Failure is { } contextFailure)
+        {
+            return PreflightResult.Failed(contextFailure.Kind, contextFailure.Code);
+        }
+
+        var contextContent = contextMaterialization.Content;
 
         return new PreflightResult(
             context,
