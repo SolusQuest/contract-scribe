@@ -65,6 +65,50 @@ public sealed class DocumentationScribeArchitectureTests
     }
 
     [Fact]
+    public void Cli_is_the_only_production_composer_of_agent_and_patching()
+    {
+        var root = FindRepositoryRoot();
+        var cliPath = Path.Join(root, "src", "ContractScribe.Cli", "ContractScribe.Cli.csproj");
+        var cli = XDocument.Load(cliPath);
+        Assert.Equal(
+            new[]
+            {
+                "../ContractScribe.Agent/ContractScribe.Agent.csproj",
+                "../ContractScribe.Core/ContractScribe.Core.csproj",
+                "../ContractScribe.Patching/ContractScribe.Patching.csproj",
+                "../ContractScribe.Roslyn/ContractScribe.Roslyn.csproj",
+            },
+            cli.Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include")!.Value.Replace('\\', '/'))
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+
+        foreach (var projectPath in Directory.EnumerateFiles(
+            Path.Join(root, "src"),
+            "*.csproj",
+            SearchOption.AllDirectories).Where(path => !string.Equals(
+                path,
+                cliPath,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            var references = XDocument.Load(projectPath).Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include")!.Value);
+            Assert.DoesNotContain(references, reference =>
+                reference.Contains("ContractScribe.Agent", StringComparison.Ordinal));
+        }
+
+        var composition = File.ReadAllText(Path.Join(
+            root,
+            "src",
+            "ContractScribe.Cli",
+            "DocumentationScribeComposition.cs"));
+        Assert.DoesNotContain("File.Write", composition, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory.Create", composition, StringComparison.Ordinal);
+        Assert.DoesNotContain("Process.Start", composition, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", composition, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Public_agent_api_exposes_only_typed_closed_capabilities()
     {
         var assembly = typeof(DocumentationScribeRuntime).Assembly;

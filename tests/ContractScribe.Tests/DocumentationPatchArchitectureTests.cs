@@ -34,7 +34,8 @@ public sealed class DocumentationPatchArchitectureTests
             Path.Join(root, "src"),
             "*.csproj",
             SearchOption.AllDirectories).Where(path =>
-                !path.Contains("ContractScribe.Patching", StringComparison.Ordinal)))
+                !path.Contains("ContractScribe.Patching", StringComparison.Ordinal)
+                && !path.Contains("ContractScribe.Cli", StringComparison.Ordinal)))
         {
             Assert.DoesNotContain(
                 XDocument.Load(projectPath).Descendants("ProjectReference"),
@@ -42,6 +43,16 @@ public sealed class DocumentationPatchArchitectureTests
                     "ContractScribe.Patching",
                     StringComparison.Ordinal));
         }
+
+        var cli = XDocument.Load(Path.Join(
+            root,
+            "src",
+            "ContractScribe.Cli",
+            "ContractScribe.Cli.csproj"));
+        Assert.Contains(
+            cli.Descendants("ProjectReference"),
+            reference => reference.Attribute("Include")!.Value.Replace('\\', '/')
+                == "../ContractScribe.Patching/ContractScribe.Patching.csproj");
 
         AssertDirectReference(root, "ContractScribe.Tests");
         AssertDirectReference(root, "ContractScribe.IntegrationTests");

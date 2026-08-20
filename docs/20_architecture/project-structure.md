@@ -156,7 +156,7 @@ Issue #103 establishes `ContractScribe.Agent` as the owner of the narrow Scribe 
 - structured proposal submission and validation;
 - deterministic prompting and a hermetic scripted fake exchange.
 
-Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; any provider package later selected by #107 is confined to `Providers/**` and must remain unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Concrete context assembly, concrete X2/X3 tools, the real provider transport, and CLI composition remain owned by issues #104 through #108.
+Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; the provider transport selected by #107 is confined to `Providers/**` and remains unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Issues #104 through #108 place concrete context assembly, concrete X2/X3 tools, provider transport, and the internal one-target composition in their authority-owning projects without broadening Agent.
 
 It must not reference:
 
@@ -197,13 +197,15 @@ The adapter consumes a validated publication plan. It does not select audit targ
 - human diagnostics, structured run envelopes, and exit-code mapping;
 - invocation of audit, proposal, patch, campaign, and publication use cases as they become available.
 
+Issue #108 adds the internal, one-target Scribe-to-patch composition seam and the current CLI edges to Agent and Patching. The seam consumes an opaque selected-audit capability bound to the exact current classified and observed repository session, materializes only accepted context and evidence, injects a closed repository/semantic read registry plus a typed model exchange into Agent, and maps only a revalidated structured proposal into the existing M2 engine. Agent never receives the session, Patching, Roslyn concrete types, source writers, or ambient filesystem/network capabilities. Skip, stale, invalid, failed, cancelled, timed-out, and exhausted outcomes return no candidate. No public command, output envelope, live-provider invocation, or original-checkout write-back is added.
+
 It may reference every production project because it composes them. It must not become the home of product rules, provider-specific policy, GitHub reconciliation, Roslyn analysis, or patch semantics.
 
 The same CLI is the payload invoked locally, from validation workflows, and by a future GitHub Action wrapper.
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn and Agent's outbound edge to Core are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no package dependency or Roslyn/Patching edge. The CLI-to-Patching and CLI-to-Agent composition edges remain candidates until their commands are implemented; the GitHub edge likewise remains a candidate until its milestone meets the split thresholds.
+Patching's outbound edges to Core and Roslyn, Agent's outbound edge to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. The GitHub edge remains a candidate until its milestone meets the split thresholds.
 
 ```text
 ContractScribe.Cli
