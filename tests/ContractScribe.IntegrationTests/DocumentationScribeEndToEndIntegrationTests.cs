@@ -859,12 +859,26 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
     }
 
     [Theory]
-    [InlineData("context.repository-documentation")]
-    [InlineData("context.style-example")]
-    public async Task LoadedEvidenceCanSupplyEveryNonInstructionContextKind(string kind)
+    [InlineData(
+        "context.repository-documentation",
+        "RepositoryContext.md",
+        "Repository context materialization marker.")]
+    [InlineData(
+        "context.style-example",
+        "StyleExample.md",
+        "Style example materialization marker.")]
+    public async Task ConfinedFilesSupplyEveryNonInstructionContextKind(
+        string kind,
+        string repositoryPath,
+        string marker)
     {
         await using var fixture = await EndToEndFixture.CreateAsync();
-        var request = WithSourceContextReference(fixture.RequestBytes, kind);
+        var baseline = CaptureRepositoryFiles(fixture.Root);
+        var request = WithFileContextReference(
+            fixture.RequestBytes,
+            fixture.Root,
+            repositoryPath,
+            kind);
         var exchange = new CountingExchange();
 
         var outcome = await CliHarness.ExecuteAsync(
@@ -878,20 +892,56 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         var maintained = Assert.Single(
             Assert.Single(exchange.Requests).Messages,
             message => message.Kind == DocumentationScribeMessageKind.MaintainedContext);
-        Assert.Contains("zzzz.context.loaded-evidence", maintained.Content, StringComparison.Ordinal);
+        Assert.Contains("zzzz.context.confined-file", maintained.Content, StringComparison.Ordinal);
         Assert.Contains(kind, maintained.Content, StringComparison.Ordinal);
+        Assert.Contains(marker, maintained.Content, StringComparison.Ordinal);
         Assert.Null(outcome.AcceptedCandidate);
+        var after = CaptureRepositoryFiles(fixture.Root);
+        Assert.Equal(baseline.Keys, after.Keys);
+        foreach (var path in baseline.Keys)
+        {
+            Assert.Equal(baseline[path], after[path]);
+        }
     }
 
-    [Fact]
-    public async Task NonInstructionContextRequiresAnExactLoadedCommitment()
+    [Theory]
+    [InlineData("path")]
+    [InlineData("contentSha256")]
+    [InlineData("originalUtf8ByteCount")]
+    [InlineData("includedUtf8ByteCountAndTruncation")]
+    public async Task NonInstructionContextRequiresAnExactCurrentFileCommitment(
+        string substitution)
     {
         await using var fixture = await EndToEndFixture.CreateAsync();
-        var request = WithSourceContextReference(
+        var request = WithFileContextReference(
             fixture.RequestBytes,
+            fixture.Root,
+            "RepositoryContext.md",
             "context.repository-documentation");
         var root = JsonNode.Parse(request.Bytes.Span)!.AsObject();
-        root["contextReferences"]!.AsArray()[^1]!["contentSha256"] = new string('b', 64);
+        var reference = root["contextReferences"]!.AsArray()[^1]!.AsObject();
+        switch (substitution)
+        {
+            case "path":
+                reference["path"] = "StyleExample.md";
+                break;
+            case "contentSha256":
+                reference["contentSha256"] = new string('b', 64);
+                break;
+            case "originalUtf8ByteCount":
+                reference["originalUtf8ByteCount"] =
+                    reference["originalUtf8ByteCount"]!.GetValue<int>() + 1;
+                reference["isTruncated"] = true;
+                break;
+            case "includedUtf8ByteCountAndTruncation":
+                reference["includedUtf8ByteCount"] =
+                    reference["includedUtf8ByteCount"]!.GetValue<int>() - 1;
+                reference["isTruncated"] = true;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(substitution));
+        }
+
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         Assert.NotNull(DocumentationScribeValidation.ParseRequest(bytes).Request);
         var exchange = new CountingExchange();
@@ -905,6 +955,90 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal("PreflightRejected", outcome.Status);
         Assert.Equal("scribe.preflight.prompt-evidence-mismatch", outcome.Code);
         Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData("context.repository-documentation")]
+    [InlineData("context.style-example")]
+    public async Task SelectedSourceBytesCannotBeRelabeledAsNonInstructionContext(string kind)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithSourceContextReference(fixture.RequestBytes, kind);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal("scribe.preflight.prompt-evidence-mismatch", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData("context.repository-documentation", "RepositoryContext.md")]
+    [InlineData("context.style-example", "StyleExample.md")]
+    public async Task NonInstructionContextScopeCannotEscapeItsExactFile(
+        string kind,
+        string repositoryPath)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithFileContextReference(
+            fixture.RequestBytes,
+            fixture.Root,
+            repositoryPath,
+            kind);
+        var exchange = new ReadThenSkipExchange(
+            "zzzz.context.confined-file",
+            "Fixture.cs");
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("RuntimeFailure", outcome.Status);
+        Assert.Equal("scribe.failure.tool-protocol", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Empty(exchange.Completed);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData("context.repository-documentation", "RepositoryContext.md")]
+    [InlineData("context.style-example", "StyleExample.md")]
+    public async Task NonInstructionContextSearchCannotSeeAnotherFile(
+        string kind,
+        string repositoryPath)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithFileContextReference(
+            fixture.RequestBytes,
+            fixture.Root,
+            repositoryPath,
+            kind);
+        var exchange = new SearchThenSkipExchange(
+            "zzzz.context.confined-file",
+            "public sealed class Fixture");
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(2, exchange.RequestCount);
+        var completed = Assert.Single(exchange.Completed);
+        Assert.Equal(DocumentationScribeToolOutcome.Complete.Id, completed.OutcomeId);
+        using var result = JsonDocument.Parse(completed.ResultUtf8Json);
+        Assert.Empty(result.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Empty(completed.EvidenceReferences);
         Assert.Null(outcome.AcceptedCandidate);
     }
 
@@ -1263,6 +1397,32 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
     }
 
     private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request)
+        WithFileContextReference(
+            ReadOnlyMemory<byte> requestBytes,
+            string repositoryRoot,
+            string repositoryPath,
+            string kind)
+    {
+        var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
+        var fileBytes = File.ReadAllBytes(Path.Join(repositoryRoot, repositoryPath));
+        root["contextReferences"]!.AsArray().Add(new JsonObject
+        {
+            ["contextReferenceId"] = "zzzz.context.confined-file",
+            ["kind"] = kind,
+            ["repositoryContextRef"] = root["context"]!["repositoryContextRef"]!.DeepClone(),
+            ["path"] = repositoryPath,
+            ["contentSha256"] = Convert.ToHexString(SHA256.HashData(fileBytes)).ToLowerInvariant(),
+            ["originalUtf8ByteCount"] = fileBytes.Length,
+            ["includedUtf8ByteCount"] = fileBytes.Length,
+            ["isTruncated"] = false,
+        });
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        var parsed = DocumentationScribeValidation.ParseRequest(bytes);
+        Assert.True(parsed.IsValid, parsed.Failure?.Code + "|" + parsed.Failure?.Pointer);
+        return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
+    }
+
+    private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request)
         WithSourceContextReference(ReadOnlyMemory<byte> requestBytes, string kind)
     {
         var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
@@ -1270,7 +1430,7 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         var locator = source["locator"]!["repository"]!.AsObject();
         root["contextReferences"]!.AsArray().Add(new JsonObject
         {
-            ["contextReferenceId"] = "zzzz.context.loaded-evidence",
+            ["contextReferenceId"] = "zzzz.context.source-relabel",
             ["kind"] = kind,
             ["repositoryContextRef"] = source["repositoryContextRef"]!.DeepClone(),
             ["path"] = locator["path"]!.DeepClone(),
