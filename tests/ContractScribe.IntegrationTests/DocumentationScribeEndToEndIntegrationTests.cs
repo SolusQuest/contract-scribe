@@ -858,6 +858,56 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal(0, exchange.RequestCount);
     }
 
+    [Theory]
+    [InlineData("context.repository-documentation")]
+    [InlineData("context.style-example")]
+    public async Task LoadedEvidenceCanSupplyEveryNonInstructionContextKind(string kind)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithSourceContextReference(fixture.RequestBytes, kind);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(1, exchange.RequestCount);
+        var maintained = Assert.Single(
+            Assert.Single(exchange.Requests).Messages,
+            message => message.Kind == DocumentationScribeMessageKind.MaintainedContext);
+        Assert.Contains("zzzz.context.loaded-evidence", maintained.Content, StringComparison.Ordinal);
+        Assert.Contains(kind, maintained.Content, StringComparison.Ordinal);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task NonInstructionContextRequiresAnExactLoadedCommitment()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithSourceContextReference(
+            fixture.RequestBytes,
+            "context.repository-documentation");
+        var root = JsonNode.Parse(request.Bytes.Span)!.AsObject();
+        root["contextReferences"]!.AsArray()[^1]!["contentSha256"] = new string('b', 64);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        Assert.NotNull(DocumentationScribeValidation.ParseRequest(bytes).Request);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal("scribe.preflight.prompt-evidence-mismatch", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
     [Fact]
     public async Task SourceBytesCannotBeRelabeledAsPublicContractEvidence()
     {
@@ -1209,6 +1259,29 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         root["styleProfile"]!["claimPolicies"]![0]!["completeEvidenceRequired"] = true;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
+        return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
+    }
+
+    private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request)
+        WithSourceContextReference(ReadOnlyMemory<byte> requestBytes, string kind)
+    {
+        var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
+        var source = root["evidenceReferences"]!.AsArray()[0]!.AsObject();
+        var locator = source["locator"]!["repository"]!.AsObject();
+        root["contextReferences"]!.AsArray().Add(new JsonObject
+        {
+            ["contextReferenceId"] = "zzzz.context.loaded-evidence",
+            ["kind"] = kind,
+            ["repositoryContextRef"] = source["repositoryContextRef"]!.DeepClone(),
+            ["path"] = locator["path"]!.DeepClone(),
+            ["contentSha256"] = source["contentSha256"]!.DeepClone(),
+            ["originalUtf8ByteCount"] = source["originalUtf8ByteCount"]!.DeepClone(),
+            ["includedUtf8ByteCount"] = source["includedUtf8ByteCount"]!.DeepClone(),
+            ["isTruncated"] = source["isTruncated"]!.DeepClone(),
+        });
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        var parsed = DocumentationScribeValidation.ParseRequest(bytes);
+        Assert.True(parsed.IsValid, parsed.Failure?.Code + "|" + parsed.Failure?.Pointer);
         return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
     }
 
@@ -1970,11 +2043,14 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
     {
         internal int RequestCount { get; private set; }
 
+        internal List<DocumentationScribeModelRequest> Requests { get; } = [];
+
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
             RequestCount++;
+            Requests.Add(request);
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));

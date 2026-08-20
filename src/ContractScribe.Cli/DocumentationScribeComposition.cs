@@ -615,27 +615,18 @@ internal static class DocumentationScribeComposition
         var contextContent = ImmutableArray.CreateBuilder<DocumentationScribeContextContent>();
         foreach (var reference in request.ContextReferences)
         {
-            var matching = context.Facts.Instructions.Where(candidate =>
-                reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction
-                && candidate.InstructionId == reference.ContextReferenceId
-                && candidate.Commitment.RepositoryPath == reference.Path
-                && candidate.Commitment.ContentSha256 == reference.ContentSha256
-                && candidate.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
-                && candidate.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
-                && candidate.Commitment.IsTruncated == reference.IsTruncated).ToArray();
-            if (matching.Length != 1)
+            if (FindContextContent(context, reference) is not { } source)
             {
                 return null;
             }
 
-            var fact = matching[0];
             contextContent.Add(new DocumentationScribeContextContent(
                 reference.ContextReferenceId,
                 reference.Kind,
                 reference.ContentSha256,
                 reference.IncludedUtf8ByteCount,
                 reference.IsTruncated,
-                fact.Content));
+                source.Content));
         }
 
         var evidenceContent = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceContent>();
@@ -670,6 +661,36 @@ internal static class DocumentationScribeComposition
             contextContent.ToImmutable(),
             evidenceContent.ToImmutable());
     }
+
+    private static BoundContextContent? FindContextContent(
+        DocumentationScribeLoadedContext context,
+        DocumentationScribeContextReference reference)
+    {
+        if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
+        {
+            var instructions = context.Facts.Instructions.Where(candidate =>
+                candidate.InstructionId == reference.ContextReferenceId
+                && ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
+            return instructions.Length == 1
+                ? new BoundContextContent(instructions[0].Role, instructions[0].Content)
+                : null;
+        }
+
+        var evidence = context.Facts.Evidence.Where(candidate =>
+            ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
+        return evidence.Length == 1
+            ? new BoundContextContent(evidence[0].Role, evidence[0].Content)
+            : null;
+    }
+
+    private static bool ContextCommitmentMatches(
+        DocumentationScribeContextSourceCommitment commitment,
+        DocumentationScribeContextReference reference) =>
+        commitment.RepositoryPath == reference.Path
+        && commitment.ContentSha256 == reference.ContentSha256
+        && commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
+        && commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
+        && commitment.IsTruncated == reference.IsTruncated;
 
     private static string? AuditEvidenceContent(
         ImmutableArray<JsonElement> rows,
@@ -843,26 +864,32 @@ internal static class DocumentationScribeComposition
                 claimCategoryIds: sourceReference.ClaimCategoryIds));
         foreach (var reference in request.ContextReferences)
         {
-            _ = context.Facts.Instructions.Single(candidate =>
-                reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction
-                && candidate.InstructionId == reference.ContextReferenceId
-                && candidate.Commitment.RepositoryPath == reference.Path
-                && candidate.Commitment.ContentSha256 == reference.ContentSha256
-                && candidate.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
-                && candidate.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
-                && candidate.Commitment.IsTruncated == reference.IsTruncated);
-            var separator = reference.Path.LastIndexOf('/');
-            var directory = separator < 0 ? string.Empty : reference.Path[..separator];
-            scopes.Add(DocumentationScribeRepositoryToolScope.Directory(
-                reference.ContextReferenceId,
-                directory,
-                DocumentationScribeRepositoryToolOperations.ReadExcerpt
-                    | (context.Facts.Routes.Length > 0
-                        ? DocumentationScribeRepositoryToolOperations.ListFiles
-                        : DocumentationScribeRepositoryToolOperations.None)
-                    | DocumentationScribeRepositoryToolOperations.SearchText,
-                DocumentationScribeContextRole.MaintainedDocumentation,
-                extensions: [".md"]));
+            var source = FindContextContent(context, reference)
+                ?? throw new InvalidOperationException("scribe.context.content-unavailable");
+            if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
+            {
+                var separator = reference.Path.LastIndexOf('/');
+                var directory = separator < 0 ? string.Empty : reference.Path[..separator];
+                scopes.Add(DocumentationScribeRepositoryToolScope.Directory(
+                    reference.ContextReferenceId,
+                    directory,
+                    DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                        | (context.Facts.Routes.Length > 0
+                            ? DocumentationScribeRepositoryToolOperations.ListFiles
+                            : DocumentationScribeRepositoryToolOperations.None)
+                        | DocumentationScribeRepositoryToolOperations.SearchText,
+                    DocumentationScribeContextRole.MaintainedDocumentation,
+                    extensions: [".md"]));
+            }
+            else
+            {
+                scopes.Add(DocumentationScribeRepositoryToolScope.File(
+                    reference.ContextReferenceId,
+                    reference.Path,
+                    DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                        | DocumentationScribeRepositoryToolOperations.SearchText,
+                    source.Role));
+            }
         }
 
         var repository = DocumentationScribeRepositoryToolBundle.Create(
@@ -1175,6 +1202,10 @@ internal static class DocumentationScribeComposition
     }
 
     private sealed record PreflightFailure(PreflightFailureKind Kind, string Code);
+
+    private sealed record BoundContextContent(
+        DocumentationScribeContextRole Role,
+        string Content);
 
     private sealed record PreflightResult(
         DocumentationScribeLoadedContext? Context,
