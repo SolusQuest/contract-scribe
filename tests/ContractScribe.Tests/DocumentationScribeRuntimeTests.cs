@@ -862,6 +862,35 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
+    public void Prompt_blocks_preserve_crlf_in_the_committed_content_domain()
+    {
+        const string content = "first line\r\nsecond line\r\n";
+        var byteCount = Encoding.UTF8.GetByteCount(content);
+        var sha256 = Sha256(content);
+
+        var context = new DocumentationScribeContextContent(
+            "context.one",
+            DocumentationScribeContextReferenceKind.RepositoryDocumentation,
+            sha256,
+            byteCount,
+            false,
+            content);
+        var evidence = new DocumentationScribeEvidenceContent(
+            "evidence.one",
+            DocumentationScribeEvidenceAuthority.SourceDeclaration,
+            sha256,
+            byteCount,
+            false,
+            content);
+
+        Assert.Equal(content, context.Content);
+        Assert.Equal(content, evidence.Content);
+        Assert.Equal(context.Content, evidence.Content);
+        Assert.Equal(byteCount, Encoding.UTF8.GetByteCount(context.Content));
+        Assert.Equal(sha256, Sha256(context.Content));
+    }
+
+    [Fact]
     public async Task Independent_usage_and_initial_evidence_budgets_fail_at_the_crossing_response()
     {
         var inputRequest = Request(root => root["limits"]!["maximumInputTokens"] = 10);
@@ -1160,7 +1189,7 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
-    public void Non_truncated_prompt_blocks_verify_their_normalized_content_identity()
+    public void Non_truncated_prompt_blocks_verify_their_committed_content_identity()
     {
         var prompt = Prompt();
         var context = prompt.Context[0];

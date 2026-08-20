@@ -24,7 +24,7 @@ public sealed class DocumentationScribeContextContent
 
         Kind = kind;
         ContentSha256 = DocumentationScribeBoundary.ValidateSha256(contentSha256, nameof(contentSha256));
-        Content = DocumentationScribeBoundary.NormalizeText(
+        Content = DocumentationScribeBoundary.ValidateCommittedText(
             content,
             nameof(content),
             DocumentationScribeBoundary.MaximumPromptBlockUtf8Bytes);
@@ -32,15 +32,15 @@ public sealed class DocumentationScribeContextContent
         if (includedUtf8ByteCount < 0 || includedUtf8ByteCount != actualBytes)
         {
             throw new ArgumentException(
-                "The normalized content does not match its included-byte commitment.",
+                "The content does not match its included-byte commitment.",
                 nameof(includedUtf8ByteCount));
         }
 
         if (!isTruncated
-            && !DocumentationScribeBoundary.MatchesNormalizedContentSha256(Content, ContentSha256))
+            && !DocumentationScribeBoundary.MatchesContentSha256(Content, ContentSha256))
         {
             throw new ArgumentException(
-                "The normalized content does not match its SHA-256 commitment.",
+                "The content does not match its SHA-256 commitment.",
                 nameof(contentSha256));
         }
 
@@ -83,7 +83,7 @@ public sealed class DocumentationScribeEvidenceContent
 
         Authority = authority;
         ContentSha256 = DocumentationScribeBoundary.ValidateSha256(contentSha256, nameof(contentSha256));
-        Content = DocumentationScribeBoundary.NormalizeText(
+        Content = DocumentationScribeBoundary.ValidateCommittedText(
             content,
             nameof(content),
             DocumentationScribeBoundary.MaximumPromptBlockUtf8Bytes);
@@ -91,15 +91,15 @@ public sealed class DocumentationScribeEvidenceContent
         if (includedUtf8ByteCount < 0 || includedUtf8ByteCount != actualBytes)
         {
             throw new ArgumentException(
-                "The normalized content does not match its included-byte commitment.",
+                "The content does not match its included-byte commitment.",
                 nameof(includedUtf8ByteCount));
         }
 
         if (!isTruncated
-            && !DocumentationScribeBoundary.MatchesNormalizedContentSha256(Content, ContentSha256))
+            && !DocumentationScribeBoundary.MatchesContentSha256(Content, ContentSha256))
         {
             throw new ArgumentException(
-                "The normalized content does not match its SHA-256 commitment.",
+                "The content does not match its SHA-256 commitment.",
                 nameof(contentSha256));
         }
 

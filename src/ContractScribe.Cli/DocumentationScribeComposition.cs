@@ -348,10 +348,9 @@ internal static class DocumentationScribeComposition
 
             var registry = BuildRegistry(
                 request,
-                attemptId,
                 loaded,
                 preflight.SourceReference!,
-                preflight.ContextContent);
+                preflight.Repository!);
             var runtime = new DocumentationScribeRuntime(exchange, registry, runtimeOptions);
             var run = await runtime.RunAsync(
                 request,
@@ -560,10 +559,24 @@ internal static class DocumentationScribeComposition
             return PreflightResult.Rejected("scribe.preflight.context-mismatch");
         }
 
-        var contextMaterialization = await MaterializeContextContentAsync(
+        var scopes = BuildRepositoryScopes(request, context, sourceReference);
+        var nonInstructionContextCount = request.ContextReferences.Count(reference =>
+            reference.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction);
+        var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
+            maximumBytesReadPerRun: 67_108_864,
+            maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
+            maximumCallsPerOperation: checked(
+                Math.Max(1, request.Limits.MaximumToolCalls + nonInstructionContextCount)));
+        var repository = DocumentationScribeRepositoryToolBundle.Create(
             request,
             attemptId,
             context,
+            scopes,
+            repositoryLimits);
+        var contextMaterialization = await MaterializeContextContentAsync(
+            request,
+            context,
+            repository,
             cancellationToken).ConfigureAwait(false);
         if (contextMaterialization.Failure is { } contextFailure)
         {
@@ -633,6 +646,7 @@ internal static class DocumentationScribeComposition
             editKind.Value,
             sourceReference,
             contextContent,
+            repository,
             null);
     }
 
@@ -698,8 +712,8 @@ internal static class DocumentationScribeComposition
 
     private static async ValueTask<ContextMaterializationResult> MaterializeContextContentAsync(
         DocumentationScribeRequest request,
-        DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext context,
+        DocumentationScribeRepositoryToolBundle repository,
         CancellationToken cancellationToken)
     {
         var content = ImmutableArray.CreateBuilder<BoundContextContent>();
@@ -727,21 +741,6 @@ internal static class DocumentationScribeComposition
                 return ContextMaterializationResult.Rejected();
             }
 
-            var scope = DocumentationScribeRepositoryToolScope.File(
-                reference.ContextReferenceId,
-                reference.Path,
-                DocumentationScribeRepositoryToolOperations.ReadExcerpt,
-                DocumentationScribeContextRole.MaintainedDocumentation);
-            var limits = DocumentationScribeRepositoryToolLimits.Create(
-                maximumFileUtf8Bytes: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
-                maximumBytesReadPerRun: checked(DocumentationScribeContract.MaximumArtifactUtf8Bytes * 2),
-                maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes);
-            var repository = DocumentationScribeRepositoryToolBundle.Create(
-                request,
-                attemptId,
-                context,
-                [scope],
-                limits);
             var result = await repository.ReadExcerpt.InvokeAsync(
                 new DocumentationScribeRepositoryReadExcerptRequest(
                     reference.ContextReferenceId,
@@ -966,12 +965,10 @@ internal static class DocumentationScribeComposition
         return matching.Length == 1 ? matching[0] : null;
     }
 
-    private static DocumentationScribeToolRegistry BuildRegistry(
+    private static ImmutableArray<DocumentationScribeRepositoryToolScope> BuildRepositoryScopes(
         DocumentationScribeRequest request,
-        DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext context,
-        DocumentationScribeEvidenceReference sourceReference,
-        ImmutableArray<BoundContextContent> contextContent)
+        DocumentationScribeEvidenceReference sourceReference)
     {
         var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
         var requiresCompleteEvidence = sourceReference.ClaimCategoryIds.Any(category =>
@@ -998,8 +995,6 @@ internal static class DocumentationScribeComposition
                 claimCategoryIds: sourceReference.ClaimCategoryIds));
         foreach (var reference in request.ContextReferences)
         {
-            var source = contextContent.Single(candidate =>
-                BoundContextMatches(candidate, reference));
             if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
             {
                 var separator = reference.Path.LastIndexOf('/');
@@ -1022,15 +1017,19 @@ internal static class DocumentationScribeComposition
                     reference.Path,
                     DocumentationScribeRepositoryToolOperations.ReadExcerpt
                         | DocumentationScribeRepositoryToolOperations.SearchText,
-                    source.Role));
+                    DocumentationScribeContextRole.MaintainedDocumentation));
             }
         }
 
-        var repository = DocumentationScribeRepositoryToolBundle.Create(
-            request,
-            attemptId,
-            context,
-            scopes.ToImmutable());
+        return scopes.ToImmutable();
+    }
+
+    private static DocumentationScribeToolRegistry BuildRegistry(
+        DocumentationScribeRequest request,
+        DocumentationScribeLoadedContext context,
+        DocumentationScribeEvidenceReference sourceReference,
+        DocumentationScribeRepositoryToolBundle repository)
+    {
         var maximumCallsPerOperation = Math.Max(1, request.Limits.MaximumToolCalls);
         var builder = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId)
             .Add(
@@ -1373,13 +1372,14 @@ internal static class DocumentationScribeComposition
         DocumentationPatchEditKind EditKind,
         DocumentationScribeEvidenceReference? SourceReference,
         ImmutableArray<BoundContextContent> ContextContent,
+        DocumentationScribeRepositoryToolBundle? Repository,
         PreflightFailure? Failure)
     {
         internal static PreflightResult Rejected(string code) =>
             Failed(PreflightFailureKind.Rejected, code);
 
         internal static PreflightResult Failed(PreflightFailureKind kind, string code) =>
-            new(null, null, default, null, [], new PreflightFailure(kind, code));
+            new(null, null, default, null, [], null, new PreflightFailure(kind, code));
     }
 
     private abstract class RepositoryCodec<TRequest, TResult>

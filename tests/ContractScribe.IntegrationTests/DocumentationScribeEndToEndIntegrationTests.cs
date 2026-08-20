@@ -905,6 +905,74 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
     }
 
     [Theory]
+    [InlineData("context.repository-documentation", "RepositoryContext.md")]
+    [InlineData("context.style-example", "StyleExample.md")]
+    public async Task CrLfNonInstructionContextIsAcceptedInItsRawFileCommitmentDomain(
+        string kind,
+        string repositoryPath)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var path = Path.Join(fixture.Root, repositoryPath);
+        var content = ToCrLf(await File.ReadAllTextAsync(path));
+        await File.WriteAllTextAsync(path, content, new UTF8Encoding(false));
+        var request = WithFileContextReference(
+            fixture.RequestBytes,
+            fixture.Root,
+            repositoryPath,
+            kind);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(1, exchange.RequestCount);
+    }
+
+    [Fact]
+    public async Task CrLfProjectInstructionIsAcceptedInItsRawFileCommitmentDomain()
+    {
+        const string instruction = "# Fixture instructions\r\n\r\nKeep documentation concise.\r\n";
+        await using var fixture = await EndToEndFixture.CreateAsync(instructionOverride: instruction);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(1, exchange.RequestCount);
+    }
+
+    [Fact]
+    public async Task CrLfSelectedSourceTraversesScribeAndM2WithoutChangingOriginal()
+    {
+        var source = ToCrLf(FreshProcessSource);
+        await using var fixture = await EndToEndFixture.CreateAsync(source);
+        var original = await File.ReadAllBytesAsync(fixture.SourcePath);
+        var exchange = new ProposalExchange(fixture.Request);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal(2, exchange.RequestCount);
+        Assert.NotNull(outcome.PatchRequest);
+        Assert.Equal(original, await File.ReadAllBytesAsync(fixture.SourcePath));
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("PatchAccepted", outcome.Status);
+        }
+    }
+
+    [Theory]
     [InlineData("path")]
     [InlineData("contentSha256")]
     [InlineData("originalUtf8ByteCount")]
@@ -1040,6 +1108,47 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         Assert.Empty(result.RootElement.GetProperty("items").EnumerateArray());
         Assert.Empty(completed.EvidenceReferences);
         Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Theory]
+    [InlineData(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt)]
+    [InlineData(DocumentationScribeRepositoryToolOperationIds.SearchText)]
+    public async Task MaterializedContextAndRuntimeToolsShareOneRepositoryObservation(
+        string operationId)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        const string repositoryPath = "RepositoryContext.md";
+        var path = Path.Join(fixture.Root, repositoryPath);
+        var original = await File.ReadAllTextAsync(path);
+        var request = WithFileContextReference(
+            fixture.RequestBytes,
+            fixture.Root,
+            repositoryPath,
+            "context.repository-documentation");
+        var exchange = new MutateThenRepositoryToolExchange(
+            path,
+            original,
+            operationId,
+            "zzzz.context.confined-file");
+
+        try
+        {
+            var outcome = await CliHarness.ExecuteAsync(
+                fixture.SelectedAudit,
+                request.Bytes,
+                fixture.AttemptId,
+                exchange);
+
+            Assert.Equal("RuntimeFailure", outcome.Status);
+            Assert.Equal("scribe.failure.tool-protocol", outcome.Code);
+            Assert.Equal(1, exchange.RequestCount);
+            Assert.Null(outcome.AcceptedCandidate);
+            Assert.Null(outcome.PatchRequest);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(path, original, new UTF8Encoding(false));
+        }
     }
 
     [Fact]
@@ -1445,6 +1554,11 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
     }
 
+    private static string ToCrLf(string content) =>
+        content.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace("\n", "\r\n", StringComparison.Ordinal);
+
     private static PolicyDocumentV1 ParsePolicy(string decision) =>
         PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(
             $"{{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"{decision}\"}}"))
@@ -1547,7 +1661,9 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
             Directory.Delete(Root, recursive: true);
         }
 
-        internal static async Task<EndToEndFixture> CreateAsync(string? sourceOverride = null)
+        internal static async Task<EndToEndFixture> CreateAsync(
+            string? sourceOverride = null,
+            string? instructionOverride = null)
         {
             var deterministicProbe = !string.IsNullOrWhiteSpace(
                 Environment.GetEnvironmentVariable(FreshProcessOutputVariable));
@@ -1578,6 +1694,14 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
                 await File.WriteAllTextAsync(
                     Path.Join(root, "Fixture.cs"),
                     sourceOverride,
+                    new UTF8Encoding(false));
+            }
+
+            if (instructionOverride is not null)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Join(root, "AGENTS.md"),
+                    instructionOverride,
                     new UTF8Encoding(false));
             }
 
@@ -2115,6 +2239,64 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+        }
+    }
+
+    private sealed class MutateThenRepositoryToolExchange : IDocumentationScribeModelExchange
+    {
+        private readonly string path;
+        private readonly string original;
+        private readonly string operationId;
+        private readonly string scopeId;
+
+        internal MutateThenRepositoryToolExchange(
+            string path,
+            string original,
+            string operationId,
+            string scopeId)
+        {
+            this.path = path;
+            this.original = original;
+            this.operationId = operationId;
+            this.scopeId = scopeId;
+        }
+
+        internal int RequestCount { get; private set; }
+
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            if (request.ProviderRequestNumber == 1)
+            {
+                await File.WriteAllTextAsync(
+                    path,
+                    original + "changed after prompt materialization\n",
+                    new UTF8Encoding(false),
+                    cancellationToken);
+                var arguments = operationId == DocumentationScribeRepositoryToolOperationIds.ReadExcerpt
+                    ? JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        scopeId,
+                        startLine = 1,
+                        endLine = 1,
+                    })
+                    : JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        scopeId,
+                        literal = "changed after prompt materialization",
+                        pageSize = 1,
+                    });
+                return new DocumentationScribeModelResponse(
+                    [new DocumentationScribeModelToolCall(0, "call.context-after-mutation", operationId, arguments)],
+                    []);
+            }
+
+            await File.WriteAllTextAsync(path, original, new UTF8Encoding(false), cancellationToken);
+            return new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
         }
     }
 

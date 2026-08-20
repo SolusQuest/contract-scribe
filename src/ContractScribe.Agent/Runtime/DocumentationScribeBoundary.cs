@@ -27,22 +27,40 @@ internal static class DocumentationScribeBoundary
         ArgumentNullException.ThrowIfNull(value, parameterName);
         var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n');
+        ValidateStrictUtf8(normalized, parameterName, maximumUtf8Bytes, "normalized text");
+        return normalized;
+    }
+
+    internal static string ValidateCommittedText(
+        string value,
+        string parameterName,
+        int maximumUtf8Bytes)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        ValidateStrictUtf8(value, parameterName, maximumUtf8Bytes, "committed text");
+        return value;
+    }
+
+    private static void ValidateStrictUtf8(
+        string value,
+        string parameterName,
+        int maximumUtf8Bytes,
+        string description)
+    {
         int byteCount;
         try
         {
-            byteCount = StrictUtf8.GetByteCount(normalized);
+            byteCount = StrictUtf8.GetByteCount(value);
         }
         catch (EncoderFallbackException)
         {
-            throw new ArgumentException("The normalized text is outside the product boundary.", parameterName);
+            throw new ArgumentException($"The {description} is outside the product boundary.", parameterName);
         }
 
         if (byteCount > maximumUtf8Bytes)
         {
-            throw new ArgumentException("The normalized text is outside the product boundary.", parameterName);
+            throw new ArgumentException($"The {description} is outside the product boundary.", parameterName);
         }
-
-        return normalized;
     }
 
     internal static string ValidateIdentifier(string value, string parameterName)
@@ -96,7 +114,7 @@ internal static class DocumentationScribeBoundary
         return value;
     }
 
-    internal static bool MatchesNormalizedContentSha256(string content, string expectedSha256) =>
+    internal static bool MatchesContentSha256(string content, string expectedSha256) =>
         string.Equals(
             Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(content))).ToLowerInvariant(),
             expectedSha256,
