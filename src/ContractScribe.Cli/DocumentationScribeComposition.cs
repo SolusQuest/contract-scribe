@@ -324,14 +324,23 @@ internal static class DocumentationScribeComposition
                 return Reject("scribe.preflight.request-invalid");
             }
 
-            var preflight = Preflight(selection, request, configuredAgentEntrypoint, cancellationToken);
+            var preflight = await PreflightAsync(
+                selection,
+                request,
+                attemptId,
+                configuredAgentEntrypoint,
+                cancellationToken).ConfigureAwait(false);
             if (preflight.Failure is { } failure)
             {
                 return MapPreflightFailure(failure, afterProposal: false);
             }
 
             var loaded = preflight.Context!;
-            var prompt = BuildPrompt(selection, request, loaded);
+            var prompt = BuildPrompt(
+                selection,
+                request,
+                loaded,
+                preflight.ContextContent);
             if (prompt is null)
             {
                 return Reject("scribe.preflight.prompt-evidence-mismatch");
@@ -341,7 +350,8 @@ internal static class DocumentationScribeComposition
                 request,
                 attemptId,
                 loaded,
-                preflight.SourceReference!);
+                preflight.SourceReference!,
+                preflight.ContextContent);
             var runtime = new DocumentationScribeRuntime(exchange, registry, runtimeOptions);
             var run = await runtime.RunAsync(
                 request,
@@ -392,7 +402,12 @@ internal static class DocumentationScribeComposition
                     run);
             }
 
-            var postflight = Preflight(selection, request, configuredAgentEntrypoint, cancellationToken);
+            var postflight = await PreflightAsync(
+                selection,
+                request,
+                attemptId,
+                configuredAgentEntrypoint,
+                cancellationToken).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
                 var outcome = MapPreflightFailure(postflightFailure, afterProposal: true);
@@ -472,9 +487,10 @@ internal static class DocumentationScribeComposition
         }
     }
 
-    private static PreflightResult Preflight(
+    private static async Task<PreflightResult> PreflightAsync(
         DocumentationScribeSelectedAudit selection,
         DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
         CancellationToken cancellationToken)
     {
@@ -544,6 +560,18 @@ internal static class DocumentationScribeComposition
             return PreflightResult.Rejected("scribe.preflight.context-mismatch");
         }
 
+        var contextMaterialization = await MaterializeContextContentAsync(
+            request,
+            attemptId,
+            context,
+            cancellationToken).ConfigureAwait(false);
+        if (contextMaterialization.Failure is { } contextFailure)
+        {
+            return PreflightResult.Failed(contextFailure.Kind, contextFailure.Code);
+        }
+
+        var contextContent = contextMaterialization.Content;
+
         var capture = selection.Session.RepositorySession
             .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
         if (capture.Baseline is not { } baseline
@@ -604,21 +632,27 @@ internal static class DocumentationScribeComposition
             declaration,
             editKind.Value,
             sourceReference,
+            contextContent,
             null);
     }
 
     private static DocumentationScribePromptInput? BuildPrompt(
         DocumentationScribeSelectedAudit selection,
         DocumentationScribeRequest request,
-        DocumentationScribeLoadedContext context)
+        DocumentationScribeLoadedContext context,
+        ImmutableArray<BoundContextContent> contextContentSources)
     {
         var contextContent = ImmutableArray.CreateBuilder<DocumentationScribeContextContent>();
         foreach (var reference in request.ContextReferences)
         {
-            if (FindContextContent(context, reference) is not { } source)
+            var sources = contextContentSources.Where(candidate =>
+                BoundContextMatches(candidate, reference)).ToArray();
+            if (sources.Length != 1)
             {
                 return null;
             }
+
+            var source = sources[0];
 
             contextContent.Add(new DocumentationScribeContextContent(
                 reference.ContextReferenceId,
@@ -662,26 +696,125 @@ internal static class DocumentationScribeComposition
             evidenceContent.ToImmutable());
     }
 
-    private static BoundContextContent? FindContextContent(
+    private static async ValueTask<ContextMaterializationResult> MaterializeContextContentAsync(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext context,
-        DocumentationScribeContextReference reference)
+        CancellationToken cancellationToken)
     {
-        if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
+        var content = ImmutableArray.CreateBuilder<BoundContextContent>();
+        foreach (var reference in request.ContextReferences)
         {
-            var instructions = context.Facts.Instructions.Where(candidate =>
-                candidate.InstructionId == reference.ContextReferenceId
-                && ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
-            return instructions.Length == 1
-                ? new BoundContextContent(instructions[0].Role, instructions[0].Content)
-                : null;
+            if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
+            {
+                var instructions = context.Facts.Instructions.Where(candidate =>
+                    candidate.InstructionId == reference.ContextReferenceId
+                    && ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
+                if (instructions.Length != 1)
+                {
+                    return ContextMaterializationResult.Rejected();
+                }
+
+                content.Add(BindContextContent(reference, instructions[0].Role, instructions[0].Content));
+                continue;
+            }
+
+            if (context.Facts.Instructions.Any(candidate =>
+                    candidate.Commitment.RepositoryPath == reference.Path)
+                || context.Facts.Evidence.Any(candidate =>
+                    candidate.Commitment.RepositoryPath == reference.Path))
+            {
+                return ContextMaterializationResult.Rejected();
+            }
+
+            var scope = DocumentationScribeRepositoryToolScope.File(
+                reference.ContextReferenceId,
+                reference.Path,
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt,
+                DocumentationScribeContextRole.MaintainedDocumentation);
+            var limits = DocumentationScribeRepositoryToolLimits.Create(
+                maximumFileUtf8Bytes: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
+                maximumBytesReadPerRun: checked(DocumentationScribeContract.MaximumArtifactUtf8Bytes * 2),
+                maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes);
+            var repository = DocumentationScribeRepositoryToolBundle.Create(
+                request,
+                attemptId,
+                context,
+                [scope],
+                limits);
+            var result = await repository.ReadExcerpt.InvokeAsync(
+                new DocumentationScribeRepositoryReadExcerptRequest(
+                    reference.ContextReferenceId,
+                    reference.Path),
+                cancellationToken).ConfigureAwait(false);
+            if (result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted)
+            {
+                return ContextMaterializationResult.Failed(
+                    PreflightFailureKind.BudgetExhausted,
+                    "scribe.failure.budget");
+            }
+
+            if (result.Outcome == DocumentationScribeToolOutcome.TimedOut)
+            {
+                return ContextMaterializationResult.Failed(
+                    PreflightFailureKind.TimedOut,
+                    "scribe.failure.timeout");
+            }
+
+            if (result.Outcome == DocumentationScribeToolOutcome.Cancelled)
+            {
+                return ContextMaterializationResult.Failed(
+                    PreflightFailureKind.Cancelled,
+                    "scribe.cancelled.caller");
+            }
+
+            var excerpt = result.Excerpt;
+            if (excerpt is null
+                || !result.DynamicEvidence.IsEmpty
+                || result.Route is not null
+                || excerpt.RepositoryPath != reference.Path
+                || excerpt.ContentSha256 != reference.ContentSha256
+                || excerpt.OriginalUtf8ByteCount != reference.OriginalUtf8ByteCount
+                || excerpt.IncludedUtf8ByteCount != reference.IncludedUtf8ByteCount
+                || excerpt.IsTruncated != reference.IsTruncated)
+            {
+                return ContextMaterializationResult.Rejected();
+            }
+
+            content.Add(BindContextContent(
+                reference,
+                DocumentationScribeContextRole.MaintainedDocumentation,
+                excerpt.Content));
         }
 
-        var evidence = context.Facts.Evidence.Where(candidate =>
-            ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
-        return evidence.Length == 1
-            ? new BoundContextContent(evidence[0].Role, evidence[0].Content)
-            : null;
+        return ContextMaterializationResult.Accepted(content.ToImmutable());
     }
+
+    private static BoundContextContent BindContextContent(
+        DocumentationScribeContextReference reference,
+        DocumentationScribeContextRole role,
+        string content) =>
+        new(
+            reference.ContextReferenceId,
+            reference.Kind,
+            role,
+            reference.Path,
+            reference.ContentSha256,
+            reference.OriginalUtf8ByteCount,
+            reference.IncludedUtf8ByteCount,
+            reference.IsTruncated,
+            content);
+
+    private static bool BoundContextMatches(
+        BoundContextContent content,
+        DocumentationScribeContextReference reference) =>
+        content.ContextReferenceId == reference.ContextReferenceId
+        && content.Kind == reference.Kind
+        && content.RepositoryPath == reference.Path
+        && content.ContentSha256 == reference.ContentSha256
+        && content.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
+        && content.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
+        && content.IsTruncated == reference.IsTruncated;
 
     private static bool ContextCommitmentMatches(
         DocumentationScribeContextSourceCommitment commitment,
@@ -837,7 +970,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext context,
-        DocumentationScribeEvidenceReference sourceReference)
+        DocumentationScribeEvidenceReference sourceReference,
+        ImmutableArray<BoundContextContent> contextContent)
     {
         var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
         var requiresCompleteEvidence = sourceReference.ClaimCategoryIds.Any(category =>
@@ -864,8 +998,8 @@ internal static class DocumentationScribeComposition
                 claimCategoryIds: sourceReference.ClaimCategoryIds));
         foreach (var reference in request.ContextReferences)
         {
-            var source = FindContextContent(context, reference)
-                ?? throw new InvalidOperationException("scribe.context.content-unavailable");
+            var source = contextContent.Single(candidate =>
+                BoundContextMatches(candidate, reference));
             if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
             {
                 var separator = reference.Path.LastIndexOf('/');
@@ -1204,21 +1338,48 @@ internal static class DocumentationScribeComposition
     private sealed record PreflightFailure(PreflightFailureKind Kind, string Code);
 
     private sealed record BoundContextContent(
+        string ContextReferenceId,
+        DocumentationScribeContextReferenceKind Kind,
         DocumentationScribeContextRole Role,
+        string RepositoryPath,
+        string ContentSha256,
+        int OriginalUtf8ByteCount,
+        int IncludedUtf8ByteCount,
+        bool IsTruncated,
         string Content);
+
+    private sealed record ContextMaterializationResult(
+        ImmutableArray<BoundContextContent> Content,
+        PreflightFailure? Failure)
+    {
+        internal static ContextMaterializationResult Accepted(
+            ImmutableArray<BoundContextContent> content) =>
+            new(content, null);
+
+        internal static ContextMaterializationResult Rejected() =>
+            Failed(
+                PreflightFailureKind.Rejected,
+                "scribe.preflight.prompt-evidence-mismatch");
+
+        internal static ContextMaterializationResult Failed(
+            PreflightFailureKind kind,
+            string code) =>
+            new([], new PreflightFailure(kind, code));
+    }
 
     private sealed record PreflightResult(
         DocumentationScribeLoadedContext? Context,
         DocumentationPatchResolvedDeclaration? Declaration,
         DocumentationPatchEditKind EditKind,
         DocumentationScribeEvidenceReference? SourceReference,
+        ImmutableArray<BoundContextContent> ContextContent,
         PreflightFailure? Failure)
     {
         internal static PreflightResult Rejected(string code) =>
             Failed(PreflightFailureKind.Rejected, code);
 
         internal static PreflightResult Failed(PreflightFailureKind kind, string code) =>
-            new(null, null, default, null, new PreflightFailure(kind, code));
+            new(null, null, default, null, [], new PreflightFailure(kind, code));
     }
 
     private abstract class RepositoryCodec<TRequest, TResult>
