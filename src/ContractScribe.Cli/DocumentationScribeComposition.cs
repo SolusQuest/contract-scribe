@@ -819,18 +819,28 @@ internal static class DocumentationScribeComposition
         DocumentationScribeEvidenceReference sourceReference)
     {
         var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
+        var requiresCompleteEvidence = sourceReference.ClaimCategoryIds.Any(category =>
+            request.StyleProfile.ClaimPolicies.Single(policy =>
+                policy.ClaimCategoryId == category).CompleteEvidenceRequired);
+        var sourceOperations = DocumentationScribeRepositoryToolOperations.ReadExcerpt
+            | DocumentationScribeRepositoryToolOperations.SearchText;
         var scopes = ImmutableArray.CreateBuilder<DocumentationScribeRepositoryToolScope>();
-        scopes.Add(DocumentationScribeRepositoryToolScope.File(
-            sourceReference.EvidenceReferenceId,
-            locator.Path,
-            DocumentationScribeRepositoryToolOperations.ReadExcerpt
-                | DocumentationScribeRepositoryToolOperations.SearchText,
-            DocumentationScribeContextRole.SourceDeclaration,
-            subject: sourceReference.Subject,
-            kind: sourceReference.Kind,
-            relation: sourceReference.Relation,
-            authority: sourceReference.Authority,
-            claimCategoryIds: sourceReference.ClaimCategoryIds));
+        scopes.Add(requiresCompleteEvidence
+            ? DocumentationScribeRepositoryToolScope.File(
+                sourceReference.EvidenceReferenceId,
+                locator.Path,
+                sourceOperations,
+                DocumentationScribeContextRole.SourceDeclaration)
+            : DocumentationScribeRepositoryToolScope.File(
+                sourceReference.EvidenceReferenceId,
+                locator.Path,
+                sourceOperations,
+                DocumentationScribeContextRole.SourceDeclaration,
+                subject: sourceReference.Subject,
+                kind: sourceReference.Kind,
+                relation: sourceReference.Relation,
+                authority: sourceReference.Authority,
+                claimCategoryIds: sourceReference.ClaimCategoryIds));
         foreach (var reference in request.ContextReferences)
         {
             _ = context.Facts.Instructions.Single(candidate =>

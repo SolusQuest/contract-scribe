@@ -328,6 +328,66 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
     }
 
     [Fact]
+    public async Task CompleteEvidenceRequirementKeepsPartialSourceReadInformational()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithCompleteEvidenceRequirement(fixture.RequestBytes);
+        var exchange = new ReadThenSkipExchange("evidence.source");
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(2, exchange.RequestCount);
+        var completed = Assert.Single(exchange.Completed);
+        Assert.Contains(
+            completed.OutcomeId,
+            new[]
+            {
+                DocumentationScribeToolOutcome.Complete.Id,
+                DocumentationScribeToolOutcome.Incomplete.Id,
+            });
+        Assert.Empty(completed.EvidenceReferences);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+    }
+
+    [Fact]
+    public async Task CompleteEvidenceRequirementKeepsSourceSearchInformational()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var request = WithCompleteEvidenceRequirement(fixture.RequestBytes);
+        var exchange = new SearchThenSkipExchange("evidence.source", "public override void Run");
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            request.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Equal(2, exchange.RequestCount);
+        var completed = Assert.Single(exchange.Completed);
+        Assert.Contains(
+            completed.OutcomeId,
+            new[]
+            {
+                DocumentationScribeToolOutcome.Complete.Id,
+                DocumentationScribeToolOutcome.Incomplete.Id,
+            });
+        Assert.Empty(completed.EvidenceReferences);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+    }
+
+    [Fact]
     public async Task AcceptedInstructionHasAnExactInformationalReadScope()
     {
         await using var fixture = await EndToEndFixture.CreateAsync();
@@ -1142,6 +1202,16 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
     }
 
+    private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request)
+        WithCompleteEvidenceRequirement(ReadOnlyMemory<byte> requestBytes)
+    {
+        var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
+        root["styleProfile"]!["claimPolicies"]![0]!["completeEvidenceRequired"] = true;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        var parsed = DocumentationScribeValidation.ParseRequest(bytes);
+        return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
+    }
+
     private static PolicyDocumentV1 ParsePolicy(string decision) =>
         PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(
             $"{{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"{decision}\"}}"))
@@ -1732,10 +1802,13 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
 
         internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
 
+        internal int RequestCount { get; private set; }
+
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            RequestCount++;
             if (request.ProviderRequestNumber == 1)
             {
                 var arguments = new JsonObject
@@ -1756,6 +1829,51 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
                             "call.read-informational",
                             DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
                             JsonSerializer.SerializeToUtf8Bytes(arguments)),
+                    ],
+                    []));
+            }
+
+            Completed = request.CompletedToolExchanges;
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+        }
+    }
+
+    private sealed class SearchThenSkipExchange : IDocumentationScribeModelExchange
+    {
+        private readonly string scopeId;
+        private readonly string literal;
+
+        internal SearchThenSkipExchange(string scopeId, string literal)
+        {
+            this.scopeId = scopeId;
+            this.literal = literal;
+        }
+
+        internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
+
+        internal int RequestCount { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            if (request.ProviderRequestNumber == 1)
+            {
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [
+                        new DocumentationScribeModelToolCall(
+                            0,
+                            "call.search-informational",
+                            DocumentationScribeRepositoryToolOperationIds.SearchText,
+                            JsonSerializer.SerializeToUtf8Bytes(new
+                            {
+                                scopeId,
+                                literal,
+                                pageSize = 1,
+                            })),
                     ],
                     []));
             }
