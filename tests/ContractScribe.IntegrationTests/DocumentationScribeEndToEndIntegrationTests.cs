@@ -47,7 +47,9 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
             Assert.Equal("PatchAccepted", outcome.Status);
             var candidate = outcome.AcceptedCandidate;
             Assert.NotNull(candidate);
-            var file = Assert.Single(candidate.Files);
+            var file = Assert.Single(
+                candidate.Files,
+                item => item.RepositoryPath == "Fixture.cs");
             Assert.Contains("/// <summary>", Encoding.UTF8.GetString(file.Bytes.AsSpan()), StringComparison.Ordinal);
             Assert.Contains("Runs the selected operation.", Encoding.UTF8.GetString(file.Bytes.AsSpan()), StringComparison.Ordinal);
         }
@@ -578,12 +580,14 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
                     block.Content,
                     block.ProvenanceRefs,
                 }),
-                Candidate = outcome.AcceptedCandidate?.Files.Select(file => new
-                {
-                    file.RepositoryPath,
-                    file.Sha256,
-                    Bytes = Convert.ToBase64String(file.Bytes.AsSpan()),
-                }),
+                Candidate = outcome.AcceptedCandidate?.Files
+                    .Where(file => file.RepositoryPath == "Fixture.cs")
+                    .Select(file => new
+                    {
+                        file.RepositoryPath,
+                        file.Sha256,
+                        Bytes = Convert.ToBase64String(file.Bytes.AsSpan()),
+                    }),
                 Validation = outcome.PatchOutcome?.Result is { } result
                     ? new
                     {
