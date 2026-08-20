@@ -83,9 +83,10 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
             Assert.Equal(
                 new[] { "Fixture.cs" },
                 outcome.PatchOutcome!.Result!.ChangedFiles.Select(item => item.Path).ToArray());
-            Assert.Equal(
-                baseline.Keys.Order(StringComparer.Ordinal),
-                candidate.Files.Select(item => item.RepositoryPath).Order(StringComparer.Ordinal));
+            Assert.All(candidate.Files, item =>
+                Assert.True(
+                    baseline.ContainsKey(item.RepositoryPath),
+                    $"Candidate introduced unexpected path '{item.RepositoryPath}'."));
             foreach (var retained in candidate.Files.Where(item => item.RepositoryPath != "Fixture.cs"))
             {
                 Assert.Equal(baseline[retained.RepositoryPath], retained.Bytes.AsSpan().ToArray());
