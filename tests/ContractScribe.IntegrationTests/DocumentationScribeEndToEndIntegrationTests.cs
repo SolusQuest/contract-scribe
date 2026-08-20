@@ -1,0 +1,1592 @@
+using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ContractScribe.Agent.Runtime;
+using ContractScribe.Core;
+using ContractScribe.Patching;
+using ContractScribe.Roslyn;
+
+namespace ContractScribe.IntegrationTests;
+
+[Collection("Integration process lane 2")]
+public sealed class DocumentationScribeEndToEndIntegrationTests
+{
+    private const string FreshProcessOutputVariable = "CONTRACTSCRIBE_ISSUE_108_PROBE_OUTPUT";
+
+    [Fact]
+    public async Task ExactSelectedTargetTraversesRealScribeAndM2WithoutChangingOriginal()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var exchange = new ProposalExchange(fixture.Request);
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(2, exchange.CompletedToolCount);
+        Assert.Equal(
+            new[]
+            {
+                DocumentationScribeToolOutcome.Incomplete.Id,
+                DocumentationScribeToolOutcome.Complete.Id,
+            },
+            exchange.CompletedOutcomes.ToArray());
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+        Assert.DoesNotContain(fixture.Root, outcome.ToString(), StringComparison.OrdinalIgnoreCase);
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("PatchAccepted", outcome.Status);
+            var candidate = outcome.AcceptedCandidate;
+            Assert.NotNull(candidate);
+            var file = Assert.Single(candidate.Files);
+            Assert.Contains("/// <summary>", Encoding.UTF8.GetString(file.Bytes.AsSpan()), StringComparison.Ordinal);
+            Assert.Contains("Runs the selected operation.", Encoding.UTF8.GetString(file.Bytes.AsSpan()), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains(outcome.Status, new[] { "PatchRejected", "PatchStale" });
+            Assert.Null(outcome.AcceptedCandidate);
+        }
+    }
+
+    [Fact]
+    public async Task StructuredSkipReturnsNoCandidateAndNeverInvokesM2()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var exchange = new SkipExchange(fixture.Request);
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.True(
+            outcome.Status == "ProposalSkipped",
+            $"{outcome.Status}:{outcome.Code}");
+        Assert.Null(outcome.AcceptedCandidate);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+    }
+
+    [Fact]
+    public async Task CrossSessionRequestIsRejectedBeforeProviderInvocation()
+    {
+        await using var first = await EndToEndFixture.CreateAsync();
+        await using var second = await EndToEndFixture.CreateAsync();
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            first.SelectedAudit,
+            second.RequestBytes,
+            first.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+        Assert.Null(outcome.PatchOutcome);
+    }
+
+    [Fact]
+    public async Task ExactCompliantAuditOutcomeIsEligibleWithoutViolationOnlyScheduling()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var selected = fixture.SelectAuditForPolicy("optional");
+        var compliant = WithAuditOutcome(fixture.RequestBytes, "audit.outcome.compliant");
+
+        var outcome = await CliHarness.ExecuteAsync(
+            selected,
+            compliant.Bytes,
+            fixture.AttemptId,
+            new SkipExchange(compliant.Request));
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task AuditAuthorityRejectsPolicyAndAcceptedDocumentMismatch()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var required = ParsePolicy("required");
+        var extracted = new PolicyEvidenceExtractor().Extract(
+            fixture.Classified,
+            fixture.Observations,
+            required);
+        var inputs = AuditInputAssembler.Assemble(
+            fixture.Classified.Classification.ClassificationSet!,
+            required,
+            extracted);
+        var accepted = AuditAggregator.Aggregate(
+            TargetProfile.ExternalApi,
+            fixture.Classified.Classification.ClassificationSet!,
+            required,
+            inputs);
+
+        var thrown = Assert.Throws<TargetInvocationException>(() =>
+            CliHarness.CreateAuditAuthority(
+                fixture.Classified,
+                fixture.Observations,
+                ParsePolicy("optional"),
+                inputs,
+                accepted));
+
+        Assert.True(thrown.InnerException is ArgumentException or AuditValidationException);
+    }
+
+    [Fact]
+    public async Task NonMethodSelectedCapabilityIsRejectedBeforeProviderInvocation()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.NonMethodSelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task CallerCancellationReturnsStableNoCandidateOutcome()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            new CountingExchange(),
+            cancellation.Token);
+
+        Assert.Equal("Cancelled", outcome.Status);
+        Assert.Equal("scribe.cancelled.caller", outcome.Code);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task InvalidToolArgumentsStopAtTheClosedRuntimeBoundary()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            new InvalidToolExchange());
+
+        Assert.Equal("RuntimeFailure", outcome.Status);
+        Assert.Equal("scribe.failure.tool-protocol", outcome.Code);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+    }
+
+    [Fact]
+    public async Task InvalidTerminalOutputStopsBeforePatchComposition()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            new InvalidTerminalExchange());
+
+        Assert.Equal("RuntimeFailure", outcome.Status);
+        Assert.Equal("scribe.failure.validation", outcome.Code);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task ProviderFailureIsDistinctAndCreatesNoPatchCandidate()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            new ProviderFailureExchange());
+
+        Assert.Equal("ProviderFailure", outcome.Status);
+        Assert.Equal("scribe.failure.provider", outcome.Code);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task ProviderRequestBudgetStopsAfterTheLastAuthorizedToolRound()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumProviderRequests", 1);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            new ProposalExchange(limited.Request));
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task IntrinsicRequestEvidenceBudgetStopsBeforeProviderInvocation()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var root = JsonNode.Parse(fixture.RequestBytes.Span)!.AsObject();
+        var included = fixture.Request.EvidenceReferences
+            .Sum(reference => reference.IncludedUtf8ByteCount);
+        root["limits"]!["maximumEvidenceUtf8Bytes"] = included - 1;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        Assert.Null(DocumentationScribeValidation.ParseRequest(bytes).Request);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal("scribe.preflight.request-invalid", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task DynamicEvidenceReferenceBudgetStopsBeforeASecondProviderRequest()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumEvidenceReferences", 1);
+        var exchange = new ProposalExchange(limited.Request);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task SemanticHardReferenceBudgetMapsToTheGenericBudgetOutcome()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumEvidenceReferences", 1);
+        var exchange = new SemanticOnlyExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task RepositoryHardFileBudgetMapsToTheGenericBudgetOutcome()
+    {
+        var source = "// " + new string('x', 270_000) + "\n" + """
+            namespace EndToEnd;
+
+            public class BaseFixture
+            {
+                public virtual void Run()
+                {
+                }
+            }
+
+            public sealed class Fixture : BaseFixture
+            {
+                public override void Run()
+                {
+                }
+            }
+            """;
+        await using var fixture = await EndToEndFixture.CreateAsync(source);
+        var exchange = new ProposalExchange(fixture.Request);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task DynamicEvidenceByteBudgetStopsBeforeASecondProviderRequest()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var initialEvidenceBytes = fixture.Request.EvidenceReferences
+            .Sum(reference => reference.IncludedUtf8ByteCount);
+        var limited = WithLimit(
+            fixture.RequestBytes,
+            "maximumEvidenceUtf8Bytes",
+            initialEvidenceBytes);
+        var exchange = new ProposalExchange(limited.Request);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task SuccessfulExchangeByteBudgetIncludesSemanticResultsWithoutEvidencePromotion()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var initialEvidenceBytes = fixture.Request.EvidenceReferences
+            .Sum(reference => reference.IncludedUtf8ByteCount);
+        var limited = WithLimit(
+            fixture.RequestBytes,
+            "maximumEvidenceUtf8Bytes",
+            initialEvidenceBytes);
+        var exchange = new SemanticOnlyExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task SemanticSoftIncompleteRemainsUsableAndPublishesNoDynamicEvidence()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumEvidenceReferences", 2);
+        var exchange = new SemanticContinuationExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        var completed = Assert.Single(exchange.Completed);
+        Assert.Equal(DocumentationScribeToolOutcome.Incomplete.Id, completed.OutcomeId);
+        Assert.Empty(completed.EvidenceReferences);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task ElapsedBudgetMapsToTimeoutWithoutCreatingAPatchCandidate()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumElapsedMilliseconds", 1);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            limited.Bytes,
+            fixture.AttemptId,
+            new DelayedExchange());
+
+        Assert.Equal("Timeout", outcome.Status);
+        Assert.Equal("scribe.failure.timeout", outcome.Code);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task StaleSourceCommitmentStopsBeforeProviderInvocation()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        await File.AppendAllTextAsync(fixture.SourcePath, Environment.NewLine);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task SourceMutationAfterProposalReturnsPatchStaleWithoutCandidate()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var exchange = new MutatingProposalExchange(fixture.Request, fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PatchStale", outcome.Status);
+        Assert.Null(outcome.PatchOutcome);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task WellFormedExistingDocumentationUsesTheM2ReplaceAuthorization()
+    {
+        const string source = """
+            namespace EndToEnd;
+
+            public class BaseFixture
+            {
+                public virtual void Run()
+                {
+                }
+            }
+
+            public sealed class Fixture : BaseFixture
+            {
+                /// <summary>Old documentation.</summary>
+                public override void Run()
+                {
+                }
+            }
+            """;
+        await using var fixture = await EndToEndFixture.CreateAsync(source);
+        var original = File.ReadAllBytes(fixture.SourcePath);
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            new ProposalExchange(fixture.Request));
+
+        var block = Assert.Single(outcome.PatchRequest!.Blocks);
+        Assert.Equal(DocumentationPatchEditKind.Replace, block.EditKind);
+        Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
+    }
+
+    [Fact]
+    public async Task MismatchedSourceEvidenceScopeStopsBeforeProviderInvocation()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var root = JsonNode.Parse(fixture.RequestBytes.Span)!.AsObject();
+        var evidence = root["evidenceReferences"]!.AsArray()[0]!.AsObject();
+        var span = evidence["locator"]!["repository"]!["span"]!.AsObject();
+        span["start"] = span["start"]!.GetValue<int>() + 1;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        Assert.NotNull(DocumentationScribeValidation.ParseRequest(bytes).Request);
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            bytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("PreflightRejected", outcome.Status);
+        Assert.Equal("scribe.preflight.source-evidence-mismatch", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Null(outcome.AcceptedCandidate);
+    }
+
+    [Fact]
+    public async Task StableScribeAndPatchProjectionIsDeterministicAcrossFreshProcesses()
+    {
+        var childOutput = Environment.GetEnvironmentVariable(FreshProcessOutputVariable);
+        if (!string.IsNullOrWhiteSpace(childOutput))
+        {
+            await using var fixture = await EndToEndFixture.CreateAsync();
+            var exchange = new ProposalExchange(fixture.Request);
+            var outcome = await CliHarness.ExecuteAsync(
+                fixture.SelectedAudit,
+                fixture.RequestBytes,
+                fixture.AttemptId,
+                exchange);
+            var patchRequest = outcome.PatchRequest;
+            Assert.NotNull(patchRequest);
+            if (OperatingSystem.IsLinux())
+            {
+                Assert.Equal("PatchAccepted", outcome.Status);
+            }
+
+            var stable = new
+            {
+                Target = fixture.Request.Target.SymbolRef,
+                Tools = exchange.Completed.Select(item => new
+                {
+                    item.OperationId,
+                    Arguments = JsonNode.Parse(item.ArgumentsUtf8Json.Span),
+                    item.OutcomeId,
+                    Result = Scrub(JsonNode.Parse(item.ResultUtf8Json.Span)),
+                    Evidence = item.EvidenceReferences.Select(reference => Scrub(
+                        JsonSerializer.SerializeToNode(reference))),
+                }),
+                Terminal = Scrub(JsonSerializer.SerializeToNode(outcome.RunResult!.Terminal)),
+                Patch = patchRequest.Blocks.Select(block => new
+                {
+                    block.BlockId,
+                    block.SymbolRef,
+                    block.Locator,
+                    block.EditKind,
+                    block.ApplicableComponents,
+                    block.Content,
+                    block.ProvenanceRefs,
+                }),
+                Candidate = outcome.AcceptedCandidate?.Files.Select(file => new
+                {
+                    file.RepositoryPath,
+                    file.Sha256,
+                    Bytes = Convert.ToBase64String(file.Bytes.AsSpan()),
+                }),
+                Validation = outcome.PatchOutcome?.Result is { } result
+                    ? new
+                    {
+                        result.Outcome,
+                        result.ChangedDocumentationBlockCount,
+                        result.Targets,
+                        result.ChangedFiles,
+                        result.Invariants,
+                        result.Diagnostics,
+                    }
+                    : null,
+                outcome.Status,
+                outcome.Code,
+            };
+            var ephemeral = new
+            {
+                RepositoryContextRef = fixture.Session.RepositoryContextRef.Value,
+                RequestSha256 = fixture.Request.ArtifactSha256,
+                AttemptId = fixture.AttemptId.Value,
+                PatchRequestSha256 = patchRequest.ArtifactSha256,
+                ResultPatchRequestSha256 = outcome.PatchOutcome?.Result?.PatchRequestSha256,
+            };
+            await File.WriteAllTextAsync(
+                childOutput,
+                JsonSerializer.Serialize(new { Stable = stable, Ephemeral = ephemeral }),
+                new UTF8Encoding(false));
+            return;
+        }
+
+        var first = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-issue-108-probe-" + Guid.NewGuid().ToString("N") + ".json");
+        var second = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-issue-108-probe-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            await RunFreshProcessProbeAsync(first, FindRepositoryRoot());
+            await RunFreshProcessProbeAsync(second, Path.Join(FindRepositoryRoot(), "tests"));
+            using var firstDocument = JsonDocument.Parse(await File.ReadAllBytesAsync(first));
+            using var secondDocument = JsonDocument.Parse(await File.ReadAllBytesAsync(second));
+            Assert.Equal(
+                firstDocument.RootElement.GetProperty("Stable").GetRawText(),
+                secondDocument.RootElement.GetProperty("Stable").GetRawText());
+            var firstEphemeral = firstDocument.RootElement.GetProperty("Ephemeral");
+            var secondEphemeral = secondDocument.RootElement.GetProperty("Ephemeral");
+            foreach (var name in new[]
+                     {
+                         "RepositoryContextRef",
+                         "RequestSha256",
+                         "AttemptId",
+                         "PatchRequestSha256",
+                         "ResultPatchRequestSha256",
+                     })
+            {
+                var left = firstEphemeral.GetProperty(name).GetString();
+                var right = secondEphemeral.GetProperty(name).GetString();
+                if (left is not null && right is not null)
+                {
+                    Assert.NotEqual(left, right);
+                }
+            }
+        }
+        finally
+        {
+            File.Delete(first);
+            File.Delete(second);
+        }
+    }
+
+    private static JsonNode? Scrub(JsonNode? node)
+    {
+        if (node is JsonObject item)
+        {
+            var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "repositoryContextRef",
+                "correlationIdentity",
+                "evidenceReferenceId",
+                "cursor",
+                "nextCursor",
+                "artifactSha256",
+                "patchRequestSha256",
+            };
+            foreach (var name in item.Select(property => property.Key)
+                .Where(excluded.Contains)
+                .ToArray())
+            {
+                item.Remove(name);
+            }
+
+            foreach (var child in item.ToArray())
+            {
+                Scrub(child.Value);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var child in array)
+            {
+                Scrub(child);
+            }
+        }
+
+        return node;
+    }
+
+    private static async Task RunFreshProcessProbeAsync(string outputPath, string workingDirectory)
+    {
+        var root = FindRepositoryRoot();
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException("Cannot determine test configuration.");
+        var start = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        start.ArgumentList.Add("test");
+        start.ArgumentList.Add(Path.Join(
+            root,
+            "tests",
+            "ContractScribe.IntegrationTests",
+            "ContractScribe.IntegrationTests.csproj"));
+        start.ArgumentList.Add("--configuration");
+        start.ArgumentList.Add(configuration);
+        start.ArgumentList.Add("--no-build");
+        start.ArgumentList.Add("--no-restore");
+        start.ArgumentList.Add("--filter");
+        start.ArgumentList.Add(
+            "FullyQualifiedName=ContractScribe.IntegrationTests.DocumentationScribeEndToEndIntegrationTests.StableScribeAndPatchProjectionIsDeterministicAcrossFreshProcesses");
+        start.Environment[FreshProcessOutputVariable] = outputPath;
+
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException("Fresh-process Scribe probe did not start.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Fresh-process Scribe probe timed out.");
+        }
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Fresh-process Scribe probe failed.\nstdout:\n{await output}\nstderr:\n{await error}");
+        Assert.True(File.Exists(outputPath), "Fresh-process Scribe probe did not publish output.");
+    }
+
+    private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request) WithLimit(
+        ReadOnlyMemory<byte> requestBytes,
+        string name,
+        int value)
+    {
+        var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
+        root["limits"]![name] = value;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        var parsed = DocumentationScribeValidation.ParseRequest(bytes);
+        return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
+    }
+
+    private static PolicyDocumentV1 ParsePolicy(string decision) =>
+        PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(
+            $"{{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"{decision}\"}}"))
+            .Document ?? throw new InvalidOperationException("policy");
+
+    private static (ReadOnlyMemory<byte> Bytes, DocumentationScribeRequest Request) WithAuditOutcome(
+        ReadOnlyMemory<byte> requestBytes,
+        string outcome)
+    {
+        var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
+        root["context"]!["auditOutcome"] = outcome;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        return (
+            bytes,
+            Assert.IsType<DocumentationScribeRequest>(
+                DocumentationScribeValidation.ParseRequest(bytes).Request));
+    }
+
+    private sealed class EndToEndFixture : IAsyncDisposable
+    {
+        private EndToEndFixture(
+            string root,
+            string sourcePath,
+            LoadedRepositorySession session,
+            ClassifiedRepositorySession classified,
+            ObservedRepositorySession observations,
+            TargetClassification target,
+            object selectedAudit,
+            object nonMethodSelectedAudit,
+            ReadOnlyMemory<byte> requestBytes,
+            DocumentationScribeRequest request,
+            DocumentationScribeAttemptId attemptId)
+        {
+            Root = root;
+            SourcePath = sourcePath;
+            Session = session;
+            Classified = classified;
+            Observations = observations;
+            Target = target;
+            SelectedAudit = selectedAudit;
+            NonMethodSelectedAudit = nonMethodSelectedAudit;
+            RequestBytes = requestBytes;
+            Request = request;
+            AttemptId = attemptId;
+        }
+
+        internal string Root { get; }
+
+        internal string SourcePath { get; }
+
+        internal LoadedRepositorySession Session { get; }
+
+        internal ClassifiedRepositorySession Classified { get; }
+
+        internal ObservedRepositorySession Observations { get; }
+
+        internal TargetClassification Target { get; }
+
+        internal object SelectedAudit { get; }
+
+        internal object NonMethodSelectedAudit { get; }
+
+        internal ReadOnlyMemory<byte> RequestBytes { get; }
+
+        internal DocumentationScribeRequest Request { get; }
+
+        internal DocumentationScribeAttemptId AttemptId { get; }
+
+        internal object SelectAuditForPolicy(string decision)
+        {
+            var policy = PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(
+                $"{{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"{decision}\"}}"))
+                .Document ?? throw new InvalidOperationException("policy");
+            var extracted = new PolicyEvidenceExtractor().Extract(
+                Classified,
+                Observations,
+                policy);
+            var inputs = AuditInputAssembler.Assemble(
+                Classified.Classification.ClassificationSet!,
+                policy,
+                extracted);
+            var audit = AuditAggregator.Aggregate(
+                TargetProfile.ExternalApi,
+                Classified.Classification.ClassificationSet!,
+                policy,
+                inputs);
+            return CliHarness.SelectAudit(
+                CliHarness.CreateAuditAuthority(
+                    Classified,
+                    Observations,
+                    policy,
+                    inputs,
+                    audit),
+                Target);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Session.DisposeAsync();
+            Directory.Delete(Root, recursive: true);
+        }
+
+        internal static async Task<EndToEndFixture> CreateAsync(string? sourceOverride = null)
+        {
+            var root = Path.Join(
+                Path.GetTempPath(),
+                "contract-scribe-issue-108-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var fixtureRoot = Path.Join(
+                FindRepositoryRoot(),
+                "tests",
+                "fixtures",
+                "documentation-scribe",
+                "end-to-end");
+            foreach (var file in Directory.EnumerateFiles(fixtureRoot))
+            {
+                File.Copy(file, Path.Join(root, Path.GetFileName(file)));
+            }
+
+            if (sourceOverride is not null)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Join(root, "Fixture.cs"),
+                    sourceOverride,
+                    new UTF8Encoding(false));
+            }
+
+            await RestoreAsync(root);
+
+            LoadedRepositorySession? session = null;
+            try
+            {
+                var load = await new RepositoryLoader().LoadAsync(
+                    new RepositoryLoadRequest(root, "Fixture.csproj"));
+                Assert.True(
+                    load.Status == RepositoryLoadStatus.Success,
+                    $"{load.PrimaryFailure?.Stage}:{load.PrimaryFailure?.Code}");
+                session = Assert.IsType<LoadedRepositorySession>(load.Session);
+                var classified = new SymbolClassifier().ClassifySession(
+                    session,
+                    TargetProfile.ExternalApi);
+                Assert.Equal(ClassificationRunStatus.Success, classified.Classification.Status);
+                var target = Assert.Single(
+                    classified.Classification.ClassificationSet!.Targets,
+                    candidate => candidate.SymbolRef.DocumentationCommentId == "M:EndToEnd.Fixture.Run"
+                        && candidate.SupportStatus == SupportStatus.Supported);
+                var observed = new DocumentationObserver().Observe(classified);
+                Assert.Equal(DocumentationObservationRunStatus.Success, observed.Status);
+
+                var policy = PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(
+                    "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"required\"}"))
+                    .Document ?? throw new InvalidOperationException("policy");
+                var extracted = new PolicyEvidenceExtractor().Extract(classified, observed, policy);
+                Assert.Equal(PolicyEvidenceExtractionStatus.Success, extracted.Status);
+                var inputs = AuditInputAssembler.Assemble(
+                    classified.Classification.ClassificationSet,
+                    policy,
+                    extracted);
+                var audit = AuditAggregator.Aggregate(
+                    TargetProfile.ExternalApi,
+                    classified.Classification.ClassificationSet,
+                    policy,
+                    inputs);
+                using var auditJson = JsonDocument.Parse(AuditJson.Write(audit));
+                var selectedAuditOutcome = Assert.Single(
+                    auditJson.RootElement.GetProperty("results").EnumerateArray(),
+                    row => row.GetProperty("classification") is { } classification
+                        && classification.TryGetProperty("symbolRef", out var symbolRef)
+                        && symbolRef.GetProperty("documentationCommentId").GetString()
+                            == target.SymbolRef.DocumentationCommentId)
+                    .GetProperty("auditOutcome")
+                    .GetString()!;
+
+                var authority = CliHarness.CreateAuditAuthority(
+                    classified,
+                    observed,
+                    policy,
+                    inputs,
+                    audit);
+                var selected = CliHarness.SelectAudit(authority, target);
+                var nonMethodTarget = Assert.Single(
+                    classified.Classification.ClassificationSet.Targets,
+                    candidate => candidate.SymbolRef.DocumentationCommentId
+                        == "T:EndToEnd.BaseFixture");
+                var nonMethodSelected = CliHarness.SelectAudit(authority, nonMethodTarget);
+                var observation = Assert.Single(
+                    observed.ObservationSet!.Observations,
+                    item => item.Subject.ComponentKind is null
+                        && item.Subject.ParentSymbolRef == target.SymbolRef);
+                var declaration = Assert.Single(observation.Declarations);
+                var repositorySource = Assert.IsType<RepositoryDocumentationSourceIdentity>(
+                    declaration.Source);
+                var project = Assert.Single(session.Projects, item =>
+                    item.CompilationContextRef == target.SymbolRef.CompilationContextRef);
+                var symbol = Assert.Single(Microsoft.CodeAnalysis.DocumentationCommentId
+                    .GetSymbolsForDeclarationId(
+                        target.SymbolRef.DocumentationCommentId,
+                        project.Compilation));
+                var syntaxReference = Assert.Single(symbol.DeclaringSyntaxReferences);
+                var loadedSource = project.SourceTrees[syntaxReference.SyntaxTree];
+                var sourceRepositoryPath = Assert.IsType<string>(loadedSource.RepositoryPath);
+                var targetSpan = new Utf16Span(
+                    syntaxReference.Span.Start,
+                    syntaxReference.Span.End);
+                var sourcePath = Path.Join(root, sourceRepositoryPath);
+                var sourceSha256 = Sha256(File.ReadAllBytes(sourcePath));
+                var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+                    session.RepositoryContextRef,
+                    session.InputIdentity,
+                    TargetProfile.ExternalApi,
+                    target.SymbolRef,
+                    sourceRepositoryPath,
+                    targetSpan.Start,
+                    targetSpan.End,
+                    sourceSha256);
+                var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(
+                    classified,
+                    selection);
+                Assert.True(
+                    bootstrap.Status is DocumentationScribeContextBootstrapStatus.Succeeded
+                        or DocumentationScribeContextBootstrapStatus.Incomplete,
+                    $"{bootstrap.Status}:{bootstrap.Failure?.Category}:{bootstrap.Failure?.Code}");
+                var context = Assert.IsType<DocumentationScribeLoadedContext>(bootstrap.Context);
+                var requestBytes = CreateRequest(
+                    session,
+                    target,
+                    sourceRepositoryPath,
+                    targetSpan,
+                    sourceSha256,
+                    context,
+                    selectedAuditOutcome);
+                var parsed = DocumentationScribeValidation.ParseRequest(requestBytes);
+                var request = Assert.IsType<DocumentationScribeRequest>(parsed.Request);
+                Assert.True(DocumentationScribeAttemptId.TryParse(
+                    "scribe-attempt." + Guid.NewGuid().ToString("N"),
+                    out var attempt));
+                return new EndToEndFixture(
+                    root,
+                    sourcePath,
+                    session,
+                    classified,
+                    observed,
+                    target,
+                    selected,
+                    nonMethodSelected,
+                    requestBytes,
+                    request,
+                    attempt);
+            }
+            catch
+            {
+                if (session is not null)
+                {
+                    await session.DisposeAsync();
+                }
+
+                Directory.Delete(root, recursive: true);
+                throw;
+            }
+        }
+
+        private static ReadOnlyMemory<byte> CreateRequest(
+            LoadedRepositorySession session,
+            TargetClassification target,
+            string sourcePath,
+            Utf16Span targetSpan,
+            string sourceSha256,
+            DocumentationScribeLoadedContext context,
+            string auditOutcome)
+        {
+            var evidence = Assert.Single(context.Facts.Evidence, item =>
+                item.KindId == "source.target-declaration");
+            var contextReferences = new JsonArray();
+            foreach (var instruction in context.Facts.Instructions)
+            {
+                contextReferences.Add(new JsonObject
+                {
+                    ["contextReferenceId"] = instruction.InstructionId,
+                    ["kind"] = "context.project-instruction",
+                    ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                    ["path"] = instruction.Commitment.RepositoryPath,
+                    ["contentSha256"] = instruction.Commitment.ContentSha256,
+                    ["originalUtf8ByteCount"] = instruction.Commitment.OriginalUtf8ByteCount,
+                    ["includedUtf8ByteCount"] = instruction.Commitment.IncludedUtf8ByteCount,
+                    ["isTruncated"] = instruction.Commitment.IsTruncated,
+                });
+            }
+
+            var root = new JsonObject
+            {
+                ["scribeRequestVersion"] = 1,
+                ["context"] = new JsonObject
+                {
+                    ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                    ["inputIdentity"] = session.InputIdentity,
+                    ["targetProfile"] = "profile.external-api",
+                    ["auditOutcome"] = auditOutcome,
+                },
+                ["target"] = new JsonObject
+                {
+                    ["symbolRef"] = Symbol(target.SymbolRef),
+                    ["sourceCommitment"] = new JsonObject
+                    {
+                        ["locator"] = RepositoryLocator(
+                            sourcePath,
+                            targetSpan),
+                        ["contentSha256"] = sourceSha256,
+                    },
+                    ["applicableComponents"] = new JsonArray(),
+                },
+                ["styleProfile"] = new JsonObject
+                {
+                    ["styleProfileId"] = "style.public-api.v1",
+                    ["outputLanguageId"] = "language.en",
+                    ["summary"] = Policy("required", 400),
+                    ["remarks"] = Policy("forbidden", 400),
+                    ["exceptions"] = Policy("forbidden", 400),
+                    ["componentPolicies"] = new JsonArray(),
+                    ["inheritDocDisposition"] = "forbidden",
+                    ["allowedLiterals"] = new JsonArray(),
+                    ["forbiddenLiterals"] = new JsonArray(),
+                    ["claimPolicies"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["claimCategoryId"] = "claim.purpose",
+                            ["completeEvidenceRequired"] = false,
+                            ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                        },
+                    },
+                    ["maximumContentUnits"] = 8,
+                    ["maximumEvidenceRefsPerUnit"] = 4,
+                },
+                ["contextReferences"] = contextReferences,
+                ["evidenceReferences"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["evidenceReferenceId"] = "evidence.source",
+                        ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                        ["subject"] = new JsonObject { ["symbolRef"] = Symbol(target.SymbolRef) },
+                        ["kind"] = "evidence.source.declaration",
+                        ["relation"] = "evidence.declares",
+                        ["authority"] = "authority.source-declaration",
+                        ["locator"] = RepositoryLocator(
+                            sourcePath,
+                            targetSpan),
+                        ["contentSha256"] = evidence.Commitment.ContentSha256,
+                        ["originalUtf8ByteCount"] = evidence.Commitment.OriginalUtf8ByteCount,
+                        ["includedUtf8ByteCount"] = evidence.Commitment.IncludedUtf8ByteCount,
+                        ["isTruncated"] = evidence.Commitment.IsTruncated,
+                        ["claimCategoryIds"] = new JsonArray("claim.purpose"),
+                    },
+                },
+                ["evidenceConflicts"] = new JsonArray(),
+                ["toolPolicyId"] = "tool-policy.read-only.v1",
+                ["limits"] = new JsonObject
+                {
+                    ["maximumAttempts"] = 2,
+                    ["maximumContextReferences"] = 8,
+                    ["maximumContextUtf8Bytes"] = 65536,
+                    ["maximumEvidenceReferences"] = 32,
+                    ["maximumEvidenceUtf8Bytes"] = 65536,
+                    ["maximumProviderRequests"] = 8,
+                    ["maximumToolRounds"] = 4,
+                    ["maximumToolCalls"] = 16,
+                    ["maximumInputTokens"] = 65536,
+                    ["maximumUncachedInputTokens"] = 32768,
+                    ["maximumOutputTokens"] = 8192,
+                    ["maximumCostMicrounits"] = 5000000,
+                    ["maximumElapsedMilliseconds"] = 120000,
+                },
+            };
+            return JsonSerializer.SerializeToUtf8Bytes(root);
+        }
+
+        private static string Sha256(byte[] bytes) =>
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+        private static async Task RestoreAsync(string root)
+        {
+            await RunDotNetAsync(root, "restore", "Fixture.csproj", "-nodeReuse:false");
+            await RunDotNetAsync(
+                root,
+                "build",
+                "Fixture.csproj",
+                "--no-restore",
+                "-nodeReuse:false");
+        }
+
+        private static async Task RunDotNetAsync(string root, params string[] arguments)
+        {
+            var start = new ProcessStartInfo("dotnet")
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var argument in arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+            using var process = Process.Start(start)
+                ?? throw new InvalidOperationException("Fixture restore did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.True(
+                process.ExitCode == 0,
+                (await output) + Environment.NewLine + (await error));
+        }
+
+        private static JsonObject Policy(string disposition, int maximumScalars) => new()
+        {
+            ["disposition"] = disposition,
+            ["maximumScalars"] = maximumScalars,
+        };
+
+        private static JsonObject Symbol(SymbolRef symbol) => new()
+        {
+            ["compilationContextRef"] = symbol.CompilationContextRef,
+            ["documentationCommentId"] = symbol.DocumentationCommentId,
+        };
+
+        private static JsonObject RepositoryLocator(string path, Utf16Span span) => new()
+        {
+            ["repository"] = new JsonObject
+            {
+                ["path"] = path,
+                ["span"] = new JsonObject
+                {
+                    ["start"] = span.Start,
+                    ["end"] = span.End,
+                },
+            },
+        };
+    }
+
+    private sealed class ProposalExchange : IDocumentationScribeModelExchange
+    {
+        private readonly DocumentationScribeRequest request;
+
+        internal ProposalExchange(DocumentationScribeRequest request) => this.request = request;
+
+        internal int RequestCount { get; private set; }
+
+        internal int CompletedToolCount { get; private set; }
+
+        internal ImmutableArray<string> CompletedOutcomes { get; private set; } = [];
+
+        internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            if (modelRequest.ProviderRequestNumber == 1)
+            {
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [
+                        new DocumentationScribeModelToolCall(
+                            0,
+                            "call.repository",
+                            DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+                            JsonSerializer.SerializeToUtf8Bytes(new
+                            {
+                                scopeId = "evidence.source",
+                                startLine = 1,
+                                endLine = 1,
+                            })),
+                        new DocumentationScribeModelToolCall(
+                            1,
+                            "call.semantic",
+                            DocumentationScribeSemanticToolSelection.OperationId,
+                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                    ],
+                    []));
+            }
+
+            CompletedToolCount = modelRequest.CompletedToolExchanges.Length;
+            Completed = modelRequest.CompletedToolExchanges;
+            CompletedOutcomes = modelRequest.CompletedToolExchanges
+                .Select(item => item.OutcomeId)
+                .ToImmutableArray();
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
+        }
+    }
+
+    private sealed class SkipExchange : IDocumentationScribeModelExchange
+    {
+        private readonly DocumentationScribeRequest request;
+
+        internal SkipExchange(DocumentationScribeRequest request) => this.request = request;
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+    }
+
+    private sealed class MutatingProposalExchange : IDocumentationScribeModelExchange
+    {
+        private readonly DocumentationScribeRequest request;
+        private readonly string sourcePath;
+
+        internal MutatingProposalExchange(DocumentationScribeRequest request, string sourcePath)
+        {
+            this.request = request;
+            this.sourcePath = sourcePath;
+        }
+
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken)
+        {
+            if (modelRequest.ProviderRequestNumber == 1)
+            {
+                return new DocumentationScribeModelResponse(
+                    [
+                        new DocumentationScribeModelToolCall(
+                            0,
+                            "call.semantic",
+                            DocumentationScribeSemanticToolSelection.OperationId,
+                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                    ],
+                    []);
+            }
+
+            await File.AppendAllTextAsync(sourcePath, Environment.NewLine, cancellationToken);
+            return new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]);
+        }
+    }
+
+    private sealed class CountingExchange : IDocumentationScribeModelExchange
+    {
+        internal int RequestCount { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+        }
+    }
+
+    private sealed class InvalidToolExchange : IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [
+                    new DocumentationScribeModelToolCall(
+                        0,
+                        "call.invalid",
+                        DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+                        Encoding.UTF8.GetBytes(
+                            "{\"scopeId\":\"evidence.source\",\"scopeId\":\"evidence.source\"}")),
+                ],
+                []));
+    }
+
+    private sealed class SemanticOnlyExchange : IDocumentationScribeModelExchange
+    {
+        internal int RequestCount { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [
+                    new DocumentationScribeModelToolCall(
+                        0,
+                        "call.semantic",
+                        DocumentationScribeSemanticToolSelection.OperationId,
+                        JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                ],
+                []));
+        }
+    }
+
+    private sealed class SemanticContinuationExchange : IDocumentationScribeModelExchange
+    {
+        internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (request.ProviderRequestNumber == 1)
+            {
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [
+                        new DocumentationScribeModelToolCall(
+                            0,
+                            "call.semantic",
+                            DocumentationScribeSemanticToolSelection.OperationId,
+                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                    ],
+                    []));
+            }
+
+            Completed = request.CompletedToolExchanges;
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+        }
+    }
+
+    private sealed class DelayedExchange : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            return new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
+        }
+    }
+
+    private sealed class InvalidTerminalExchange : IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [
+                    new DocumentationScribeModelTerminalSubmission(Encoding.UTF8.GetBytes(
+                        "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[],\"sourceBytes\":\"forbidden\"}")),
+                ]));
+    }
+
+    private sealed class ProviderFailureExchange : IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [],
+                new DocumentationScribeModelFailure(
+                    DocumentationScribeModelFailureCode.PermanentUnavailable)));
+    }
+
+    private static ReadOnlyMemory<byte> ProposalTerminal(DocumentationScribeRequest request)
+    {
+        var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
+        return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
+        {
+            ["kind"] = "proposal",
+            ["target"] = new JsonObject
+            {
+                ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
+                ["symbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                },
+                ["sourceCommitment"] = new JsonObject
+                {
+                    ["locator"] = new JsonObject
+                    {
+                        ["repository"] = new JsonObject
+                        {
+                            ["path"] = locator.Path,
+                            ["span"] = new JsonObject
+                            {
+                                ["start"] = locator.Span!.Value.Start,
+                                ["end"] = locator.Span.Value.End,
+                            },
+                        },
+                    },
+                    ["contentSha256"] = request.Target.SourceSha256,
+                },
+            },
+            ["contentUnits"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["kind"] = "content.summary",
+                    ["lines"] = new JsonArray("Runs the selected operation."),
+                    ["claimCategoryId"] = "claim.purpose",
+                    ["evidenceReferenceIds"] = new JsonArray("evidence.source"),
+                },
+            },
+        });
+    }
+
+    private static ReadOnlyMemory<byte> SkipTerminal() =>
+        Encoding.UTF8.GetBytes(
+            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}");
+
+    private sealed record CliOutcome(
+        string Status,
+        string Code,
+        DocumentationScribeRunResult? RunResult,
+        DocumentationPatchRequest? PatchRequest,
+        DocumentationPatchExecutionOutcome? PatchOutcome,
+        DocumentationPatchAcceptedCandidate? AcceptedCandidate)
+    {
+        public override string ToString() => nameof(CliOutcome);
+    }
+
+    private static class CliHarness
+    {
+        private static readonly Assembly CliAssembly = LoadCliAssembly();
+
+        internal static object CreateAuditAuthority(
+            ClassifiedRepositorySession session,
+            ObservedRepositorySession observations,
+            PolicyDocumentV1 policy,
+            IEnumerable<AuditRecordInput> inputs,
+            AuditDocument audit)
+        {
+            var type = RequireType("ContractScribe.Cli.DocumentationScribeAuditAuthority");
+            var method = RequireMethod(type, "Create", BindingFlags.Static | BindingFlags.NonPublic);
+            return method.Invoke(null, [session, observations, policy, inputs, audit])
+                ?? throw new InvalidOperationException("CLI audit authority returned null.");
+        }
+
+        internal static object SelectAudit(object authority, TargetClassification target)
+        {
+            var method = RequireMethod(
+                authority.GetType(),
+                "Select",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            return method.Invoke(authority, [target])
+                ?? throw new InvalidOperationException("CLI selected audit returned null.");
+        }
+
+        internal static async Task<CliOutcome> ExecuteAsync(
+            object selectedAudit,
+            ReadOnlyMemory<byte> requestBytes,
+            DocumentationScribeAttemptId attemptId,
+            IDocumentationScribeModelExchange exchange,
+            CancellationToken cancellationToken = default)
+        {
+            var type = RequireType("ContractScribe.Cli.DocumentationScribeComposition");
+            var method = RequireMethod(type, "ExecuteAsync", BindingFlags.Static | BindingFlags.NonPublic);
+            var invoked = method.Invoke(null,
+            [
+                selectedAudit,
+                requestBytes,
+                attemptId,
+                null,
+                new DocumentationScribeRuntimeOptions(
+                    "provider.synthetic.v1",
+                    "model.synthetic.v1",
+                    "scribe-protocol.v1"),
+                exchange,
+                cancellationToken,
+            ]) ?? throw new InvalidOperationException("CLI composition returned null.");
+            var task = Assert.IsAssignableFrom<Task>(invoked);
+            await task;
+            var result = task.GetType().GetProperty("Result")?.GetValue(task)
+                ?? throw new InvalidOperationException("CLI composition task has no result.");
+            var status = Property(result, "Status")!.ToString()!;
+            var code = Assert.IsType<string>(Property(result, "Code"));
+            var runResult = Property(result, "RunResult") as DocumentationScribeRunResult;
+            var patchRequest = Property(result, "PatchRequest") as DocumentationPatchRequest;
+            var patchOutcome = Property(result, "PatchOutcome") as DocumentationPatchExecutionOutcome;
+            var acceptedCandidate = Property(result, "AcceptedCandidate") as DocumentationPatchAcceptedCandidate;
+            return new CliOutcome(
+                status,
+                code,
+                runResult,
+                patchRequest,
+                patchOutcome,
+                acceptedCandidate);
+        }
+
+        private static object? Property(object instance, string name) =>
+            instance.GetType().GetProperty(
+                name,
+                BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(instance);
+
+        private static Type RequireType(string name) =>
+            CliAssembly.GetType(name, throwOnError: true, ignoreCase: false)!;
+
+        private static MethodInfo RequireMethod(Type type, string name, BindingFlags flags) =>
+            type.GetMethod(name, flags)
+                ?? throw new MissingMethodException(type.FullName, name);
+
+        private static Assembly LoadCliAssembly()
+        {
+            var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+                ?? throw new InvalidOperationException("Cannot determine test configuration.");
+            var path = Path.Join(
+                FindRepositoryRoot(),
+                "src",
+                "ContractScribe.Cli",
+                "bin",
+                configuration,
+                "net10.0",
+                "ContractScribe.Cli.dll");
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException("Configuration-matched CLI assembly is missing.", path);
+            }
+
+            return AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(path));
+        }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Repository root was not found.");
+    }
+}

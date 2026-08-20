@@ -1,7 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="..\ContractScribe.Agent\ContractScribe.Agent.csproj" />
     <ProjectReference Include="..\ContractScribe.Core\ContractScribe.Core.csproj" />
+    <ProjectReference Include="..\ContractScribe.Patching\ContractScribe.Patching.csproj" />
     <ProjectReference Include="..\ContractScribe.Roslyn\ContractScribe.Roslyn.csproj" />
   </ItemGroup>
 
