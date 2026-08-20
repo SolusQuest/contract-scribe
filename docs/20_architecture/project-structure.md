@@ -156,7 +156,7 @@ Issue #103 establishes `ContractScribe.Agent` as the owner of the narrow Scribe 
 - structured proposal submission and validation;
 - deterministic prompting and a hermetic scripted fake exchange.
 
-Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; the provider package selected by #107 is confined to `Providers/**` and remains unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Issues #104 through #108 place concrete context assembly, concrete X2/X3 tools, provider transport, and the internal one-target composition in their authority-owning projects without broadening Agent.
+Agent's only production project dependency is `ContractScribe.Core`. Issue #103 adds no package dependency; the provider transport selected by #107 is confined to `Providers/**` and remains unreachable from Runtime/Prompting. Semantic tool implementations are injected through the closed public read-only Scribe-port surface, so the agent does not need a direct Roslyn dependency. Issues #104 through #108 place concrete context assembly, concrete X2/X3 tools, provider transport, and the internal one-target composition in their authority-owning projects without broadening Agent.
 
 It must not reference:
 
@@ -205,7 +205,7 @@ The same CLI is the payload invoked locally, from validation workflows, and by a
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn, Agent's outbound edge to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider package remains confined outside Runtime/Prompting. The GitHub edge remains a candidate until its milestone meets the split thresholds.
+Patching's outbound edges to Core and Roslyn, Agent's outbound edge to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. The GitHub edge remains a candidate until its milestone meets the split thresholds.
 
 ```text
 ContractScribe.Cli

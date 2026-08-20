@@ -73,15 +73,18 @@ internal sealed class DocumentationScribeAuditAuthority
     private readonly ClassifiedRepositorySession session;
     private readonly ObservedRepositorySession observations;
     private readonly ImmutableArray<SelectedRow> rows;
+    private readonly ImmutableArray<JsonElement> canonicalRows;
 
     private DocumentationScribeAuditAuthority(
         ClassifiedRepositorySession session,
         ObservedRepositorySession observations,
-        ImmutableArray<SelectedRow> rows)
+        ImmutableArray<SelectedRow> rows,
+        ImmutableArray<JsonElement> canonicalRows)
     {
         this.session = session;
         this.observations = observations;
         this.rows = rows;
+        this.canonicalRows = canonicalRows;
     }
 
     internal static DocumentationScribeAuditAuthority Create(
@@ -102,26 +105,49 @@ internal sealed class DocumentationScribeAuditAuthority
             throw new ArgumentException("scribe.audit.session-mismatch", nameof(session));
         }
 
-        var inputs = acceptedInputs.ToImmutableArray();
-        if (inputs.IsDefaultOrEmpty || inputs.Any(input => input is null))
+        var providedInputs = acceptedInputs.ToImmutableArray();
+        if (providedInputs.IsDefaultOrEmpty || providedInputs.Any(input => input is null))
         {
             throw new ArgumentException("scribe.audit.inputs-invalid", nameof(acceptedInputs));
         }
 
-        var recomputed = AuditAggregator.Aggregate(
+        var providedDocument = AuditAggregator.Aggregate(
+            classifications.TargetProfile,
+            classifications,
+            acceptedPolicy,
+            providedInputs);
+        var extraction = new PolicyEvidenceExtractor().Extract(
+            session,
+            observations,
+            acceptedPolicy);
+        if (extraction.Status != PolicyEvidenceExtractionStatus.Success)
+        {
+            throw new ArgumentException("scribe.audit.evidence-unavailable", nameof(observations));
+        }
+
+        var inputs = AuditInputAssembler.Assemble(
+            classifications,
+            acceptedPolicy,
+            extraction).ToImmutableArray();
+        var derivedDocument = AuditAggregator.Aggregate(
             classifications.TargetProfile,
             classifications,
             acceptedPolicy,
             inputs);
         var acceptedBytes = AuditJson.Write(acceptedDocument);
-        var recomputedBytes = AuditJson.Write(recomputed);
-        if (!acceptedBytes.AsSpan().SequenceEqual(recomputedBytes))
+        var providedBytes = AuditJson.Write(providedDocument);
+        var derivedBytes = AuditJson.Write(derivedDocument);
+        if (!acceptedBytes.AsSpan().SequenceEqual(providedBytes)
+            || !acceptedBytes.AsSpan().SequenceEqual(derivedBytes))
         {
             throw new ArgumentException("scribe.audit.document-mismatch", nameof(acceptedDocument));
         }
 
         using var parsed = JsonDocument.Parse(acceptedBytes);
-        var resultRows = parsed.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        var resultRows = parsed.RootElement.GetProperty("results")
+            .EnumerateArray()
+            .Select(row => row.Clone())
+            .ToImmutableArray();
         var selected = ImmutableArray.CreateBuilder<SelectedRow>();
         foreach (var target in classifications.Targets)
         {
@@ -144,7 +170,8 @@ internal sealed class DocumentationScribeAuditAuthority
         return new DocumentationScribeAuditAuthority(
             session,
             observations,
-            selected.ToImmutable());
+            selected.ToImmutable(),
+            resultRows);
     }
 
     internal DocumentationScribeSelectedAudit Select(TargetClassification target)
@@ -167,6 +194,7 @@ internal sealed class DocumentationScribeAuditAuthority
             row.Target,
             row.Input,
             row.CanonicalRow,
+            canonicalRows,
             row.Outcome);
     }
 
@@ -223,6 +251,7 @@ internal sealed class DocumentationScribeSelectedAudit
         TargetClassification target,
         TargetAuditInput input,
         JsonElement canonicalRow,
+        ImmutableArray<JsonElement> canonicalRows,
         AuditOutcome outcome)
     {
         Session = session;
@@ -230,6 +259,7 @@ internal sealed class DocumentationScribeSelectedAudit
         Target = target;
         Input = input;
         CanonicalRow = canonicalRow;
+        CanonicalRows = canonicalRows;
         Outcome = outcome;
     }
 
@@ -242,6 +272,8 @@ internal sealed class DocumentationScribeSelectedAudit
     internal TargetAuditInput Input { get; }
 
     internal JsonElement CanonicalRow { get; }
+
+    internal ImmutableArray<JsonElement> CanonicalRows { get; }
 
     internal AuditOutcome Outcome { get; }
 
@@ -293,9 +325,9 @@ internal static class DocumentationScribeComposition
             }
 
             var preflight = Preflight(selection, request, configuredAgentEntrypoint, cancellationToken);
-            if (preflight.FailureCode is { } failureCode)
+            if (preflight.Failure is { } failure)
             {
-                return Reject(failureCode);
+                return MapPreflightFailure(failure, afterProposal: false);
             }
 
             var loaded = preflight.Context!;
@@ -317,11 +349,11 @@ internal static class DocumentationScribeComposition
                 prompt,
                 cancellationToken).ConfigureAwait(false);
 
-            if (run.Terminal is DocumentationScribeCancelledTerminal)
+            if (run.Terminal is DocumentationScribeCancelledTerminal cancelled)
             {
                 return DocumentationScribeCompositionOutcome.Create(
                     DocumentationScribeCompositionStatus.Cancelled,
-                    "scribe.cancelled",
+                    DocumentationScribeVocabulary.GetId(cancelled.Code),
                     run);
             }
 
@@ -361,13 +393,20 @@ internal static class DocumentationScribeComposition
             }
 
             var postflight = Preflight(selection, request, configuredAgentEntrypoint, cancellationToken);
-            var postflightFailure = postflight.FailureCode;
-            if (postflightFailure is not null
-                || !loaded.VerifyFreshness(cancellationToken))
+            if (postflight.Failure is { } postflightFailure)
+            {
+                var outcome = MapPreflightFailure(postflightFailure, afterProposal: true);
+                return DocumentationScribeCompositionOutcome.Create(
+                    outcome.Status,
+                    outcome.Code,
+                    run);
+            }
+
+            if (!loaded.VerifyFreshness(cancellationToken))
             {
                 return DocumentationScribeCompositionOutcome.Create(
                     DocumentationScribeCompositionStatus.PatchStale,
-                    postflightFailure ?? "scribe.patch.stale-context",
+                    "scribe.patch.stale-context",
                     run);
             }
 
@@ -393,7 +432,7 @@ internal static class DocumentationScribeComposition
             if (patchOutcome.Status == DocumentationPatchExecutionStatus.HostFailure)
             {
                 return DocumentationScribeCompositionOutcome.Create(
-                    DocumentationScribeCompositionStatus.PatchRejected,
+                    DocumentationScribeCompositionStatus.RuntimeFailure,
                     patchOutcome.FailureCode ?? "scribe.patch.host-failure",
                     run,
                     patchRequest,
@@ -480,14 +519,23 @@ internal static class DocumentationScribeComposition
                 or DocumentationScribeContextBootstrapStatus.Incomplete)
             || bootstrap.Context is not { } context)
         {
+            var failureKind = bootstrap.Status switch
+            {
+                DocumentationScribeContextBootstrapStatus.Cancelled => PreflightFailureKind.Cancelled,
+                DocumentationScribeContextBootstrapStatus.TimedOut => PreflightFailureKind.TimedOut,
+                DocumentationScribeContextBootstrapStatus.BudgetExhausted => PreflightFailureKind.BudgetExhausted,
+                _ when bootstrap.Failure?.Category == DocumentationScribeContextFailureCategory.Internal =>
+                    PreflightFailureKind.Internal,
+                _ => PreflightFailureKind.Rejected,
+            };
             var code = bootstrap.Status switch
             {
-                DocumentationScribeContextBootstrapStatus.Cancelled => "scribe.preflight.cancelled",
-                DocumentationScribeContextBootstrapStatus.TimedOut => "scribe.preflight.timeout",
-                DocumentationScribeContextBootstrapStatus.BudgetExhausted => "scribe.preflight.budget",
+                DocumentationScribeContextBootstrapStatus.Cancelled => "scribe.cancelled.caller",
+                DocumentationScribeContextBootstrapStatus.TimedOut => "scribe.failure.timeout",
+                DocumentationScribeContextBootstrapStatus.BudgetExhausted => "scribe.failure.budget",
                 _ => bootstrap.Failure?.Code ?? "scribe.preflight.context-unavailable",
             };
-            return PreflightResult.Rejected(code);
+            return PreflightResult.Failed(failureKind, code);
         }
 
         if (!context.ValidateRequestBinding(request).IsValid
@@ -567,16 +615,20 @@ internal static class DocumentationScribeComposition
         var contextContent = ImmutableArray.CreateBuilder<DocumentationScribeContextContent>();
         foreach (var reference in request.ContextReferences)
         {
-            var fact = context.Facts.Instructions.SingleOrDefault(candidate =>
-                candidate.Commitment.RepositoryPath == reference.Path
+            var matching = context.Facts.Instructions.Where(candidate =>
+                reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction
+                && candidate.InstructionId == reference.ContextReferenceId
+                && candidate.Commitment.RepositoryPath == reference.Path
                 && candidate.Commitment.ContentSha256 == reference.ContentSha256
+                && candidate.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
                 && candidate.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
-                && candidate.Commitment.IsTruncated == reference.IsTruncated);
-            if (fact is null)
+                && candidate.Commitment.IsTruncated == reference.IsTruncated).ToArray();
+            if (matching.Length != 1)
             {
                 return null;
             }
 
+            var fact = matching[0];
             contextContent.Add(new DocumentationScribeContextContent(
                 reference.ContextReferenceId,
                 reference.Kind,
@@ -589,11 +641,17 @@ internal static class DocumentationScribeComposition
         var evidenceContent = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceContent>();
         foreach (var reference in request.EvidenceReferences)
         {
-            var loadedFact = context.Facts.Evidence.SingleOrDefault(candidate =>
-                candidate.Commitment.ContentSha256 == reference.ContentSha256
-                && candidate.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
-                && candidate.Commitment.IsTruncated == reference.IsTruncated);
-            var content = loadedFact?.Content ?? AuditEvidenceContent(selection.CanonicalRow, reference);
+            var loadedFacts = context.Facts.Evidence
+                .Where(candidate => ContextEvidenceMatches(candidate, reference))
+                .ToArray();
+            if (loadedFacts.Length > 1)
+            {
+                return null;
+            }
+
+            var content = loadedFacts.Length == 1
+                ? loadedFacts[0].Content
+                : AuditEvidenceContent(selection.CanonicalRows, reference);
             if (content is null)
             {
                 return null;
@@ -614,25 +672,129 @@ internal static class DocumentationScribeComposition
     }
 
     private static string? AuditEvidenceContent(
-        JsonElement row,
+        ImmutableArray<JsonElement> rows,
         DocumentationScribeEvidenceReference reference)
     {
-        if (!row.TryGetProperty("evidenceBundle", out var bundle)
-            || !bundle.TryGetProperty("items", out var items))
+        var matching = new List<JsonElement>();
+        foreach (var row in rows)
         {
-            return null;
+            if (!row.TryGetProperty("evidenceBundle", out var bundle)
+                || !bundle.TryGetProperty("items", out var items))
+            {
+                continue;
+            }
+
+            matching.AddRange(items.EnumerateArray().Where(item =>
+                AuditEvidenceMatches(item, reference)));
         }
 
-        var matching = items.EnumerateArray().Where(item =>
-            item.GetProperty("evidenceId").GetString() == reference.EvidenceReferenceId
-            && item.GetProperty("sha256").GetString() == reference.ContentSha256
-            && item.GetProperty("originalUtf8ByteCount").GetInt32()
-                == reference.OriginalUtf8ByteCount
-            && item.GetProperty("includedUtf8ByteCount").GetInt32()
-                == reference.IncludedUtf8ByteCount
-            && item.GetProperty("isTruncated").GetBoolean() == reference.IsTruncated).ToArray();
-        return matching.Length == 1 ? matching[0].GetProperty("excerpt").GetString() : null;
+        return matching.Count == 1 ? matching[0].GetProperty("excerpt").GetString() : null;
     }
+
+    private static bool ContextEvidenceMatches(
+        DocumentationScribeEvidenceContextFact fact,
+        DocumentationScribeEvidenceReference reference)
+    {
+        var expectedSubjectId = reference.Subject is TargetEvidenceSubject target
+            ? "symbol." + DocumentationScribeContextValidation.ComputeSymbolRefSha256(
+                target.ParentSymbolRef)
+            : null;
+        return expectedSubjectId is not null
+            && fact.SubjectId == expectedSubjectId
+            && fact.Authority == DocumentationScribeContextAuthority.Source
+            && fact.Role == DocumentationScribeContextRole.SourceDeclaration
+            && fact.KindId == "source.target-declaration"
+            && reference.Kind == EvidenceKind.SourceDeclaration
+            && reference.Relation == EvidenceRelation.Declares
+            && reference.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration
+            && Equals(fact.Commitment.Locator, reference.Locator)
+            && fact.Commitment.ContentSha256 == reference.ContentSha256
+            && fact.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
+            && fact.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
+            && fact.Commitment.IsTruncated == reference.IsTruncated;
+    }
+
+    private static bool AuditEvidenceMatches(
+        JsonElement item,
+        DocumentationScribeEvidenceReference reference) =>
+        item.GetProperty("evidenceId").GetString() == reference.EvidenceReferenceId
+        && item.GetProperty("kind").GetString() == EvidenceVocabulary.GetId(reference.Kind)
+        && item.GetProperty("relation").GetString() == EvidenceVocabulary.GetId(reference.Relation)
+        && AuthorityMatchesKind(reference.Authority, reference.Kind)
+        && AuditSubjectMatches(item.GetProperty("subject"), reference.Subject)
+        && AuditLocatorMatches(item.GetProperty("locator"), reference.Locator)
+        && item.GetProperty("sha256").GetString() == reference.ContentSha256
+        && item.GetProperty("originalUtf8ByteCount").GetInt32()
+            == reference.OriginalUtf8ByteCount
+        && item.GetProperty("includedUtf8ByteCount").GetInt32()
+            == reference.IncludedUtf8ByteCount
+        && item.GetProperty("isTruncated").GetBoolean() == reference.IsTruncated;
+
+    private static bool AuditSubjectMatches(JsonElement item, EvidenceSubject subject) => subject switch
+    {
+        TargetEvidenceSubject target => SymbolMatches(item, target.ParentSymbolRef),
+        ComponentEvidenceSubject component =>
+            item.TryGetProperty("parentSymbolRef", out var parent)
+            && SymbolMatches(parent, component.ParentSymbolRef)
+            && item.GetProperty("componentKind").GetString()
+                == ClassificationVocabulary.GetId(component.ComponentKind)
+            && item.GetProperty("identity").GetString() == component.Identity,
+        _ => false,
+    };
+
+    private static bool SymbolMatches(JsonElement item, SymbolRef symbol) =>
+        item.TryGetProperty("compilationContextRef", out var context)
+        && context.GetString() == symbol.CompilationContextRef
+        && item.TryGetProperty("documentationCommentId", out var documentationId)
+        && documentationId.GetString() == symbol.DocumentationCommentId;
+
+    private static bool AuditLocatorMatches(JsonElement item, EvidenceLocator locator) => locator switch
+    {
+        RepositoryEvidenceLocator repository =>
+            item.TryGetProperty("repository", out var value)
+            && value.GetProperty("path").GetString() == repository.Path
+            && SpanMatches(value, repository.Span),
+        GeneratedOutputEvidenceLocator generated =>
+            item.TryGetProperty("generatedOutput", out var value)
+            && value.GetProperty("producerKind").GetString()
+                == PolicyConfigurationVocabulary.GetId(generated.ProducerKind)
+            && value.GetProperty("producerId").GetString() == generated.ProducerId
+            && value.GetProperty("outputId").GetString() == generated.OutputId
+            && value.GetProperty("sourceSha256").GetString() == generated.SourceSha256
+            && SpanMatches(value, generated.Span),
+        MetadataEvidenceLocator metadata =>
+            item.TryGetProperty("metadata", out var value)
+            && value.GetProperty("assemblyIdentity").GetString() == metadata.AssemblyIdentity
+            && value.GetProperty("documentationCommentId").GetString()
+                == metadata.DocumentationCommentId,
+        SyntheticEvidenceLocator synthetic =>
+            item.TryGetProperty("synthetic", out var value)
+            && value.GetProperty("fixtureId").GetString() == synthetic.FixtureId,
+        _ => false,
+    };
+
+    private static bool SpanMatches(JsonElement item, Utf16Span? span) => span is { } expected
+        ? item.TryGetProperty("span", out var value)
+            && value.GetProperty("start").GetInt32() == expected.Start
+            && value.GetProperty("end").GetInt32() == expected.End
+        : !item.TryGetProperty("span", out _);
+
+    private static bool AuthorityMatchesKind(
+        DocumentationScribeEvidenceAuthority authority,
+        EvidenceKind kind) => (authority, kind) switch
+        {
+            (DocumentationScribeEvidenceAuthority.PublicContract, EvidenceKind.PublicContract) => true,
+            (DocumentationScribeEvidenceAuthority.RepositoryDocumentation,
+                EvidenceKind.RepositoryDocumentation) => true,
+            (DocumentationScribeEvidenceAuthority.SourceDeclaration, EvidenceKind.SourceDeclaration) => true,
+            (DocumentationScribeEvidenceAuthority.SourceDeclaration, EvidenceKind.SourceAttribute) => true,
+            (DocumentationScribeEvidenceAuthority.SourceImplementation,
+                EvidenceKind.SourceImplementation) => true,
+            (DocumentationScribeEvidenceAuthority.ExistingDocumentation,
+                EvidenceKind.SourceXmlDocumentation) => true,
+            (DocumentationScribeEvidenceAuthority.Test, EvidenceKind.Test) => true,
+            _ => false,
+        };
 
     private static DocumentationScribeEvidenceReference? FindSourceReference(
         DocumentationScribeRequest request,
@@ -657,7 +819,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeEvidenceReference sourceReference)
     {
         var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
-        var scope = DocumentationScribeRepositoryToolScope.File(
+        var scopes = ImmutableArray.CreateBuilder<DocumentationScribeRepositoryToolScope>();
+        scopes.Add(DocumentationScribeRepositoryToolScope.File(
             sourceReference.EvidenceReferenceId,
             locator.Path,
             DocumentationScribeRepositoryToolOperations.ReadExcerpt
@@ -667,41 +830,70 @@ internal static class DocumentationScribeComposition
             kind: sourceReference.Kind,
             relation: sourceReference.Relation,
             authority: sourceReference.Authority,
-            claimCategoryIds: sourceReference.ClaimCategoryIds);
+            claimCategoryIds: sourceReference.ClaimCategoryIds));
+        foreach (var reference in request.ContextReferences)
+        {
+            _ = context.Facts.Instructions.Single(candidate =>
+                reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction
+                && candidate.InstructionId == reference.ContextReferenceId
+                && candidate.Commitment.RepositoryPath == reference.Path
+                && candidate.Commitment.ContentSha256 == reference.ContentSha256
+                && candidate.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
+                && candidate.Commitment.IncludedUtf8ByteCount == reference.IncludedUtf8ByteCount
+                && candidate.Commitment.IsTruncated == reference.IsTruncated);
+            var separator = reference.Path.LastIndexOf('/');
+            var directory = separator < 0 ? string.Empty : reference.Path[..separator];
+            scopes.Add(DocumentationScribeRepositoryToolScope.Directory(
+                reference.ContextReferenceId,
+                directory,
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                    | (context.Facts.Routes.Length > 0
+                        ? DocumentationScribeRepositoryToolOperations.ListFiles
+                        : DocumentationScribeRepositoryToolOperations.None)
+                    | DocumentationScribeRepositoryToolOperations.SearchText,
+                DocumentationScribeContextRole.MaintainedDocumentation,
+                extensions: [".md"]));
+        }
+
         var repository = DocumentationScribeRepositoryToolBundle.Create(
             request,
             attemptId,
             context,
-            [scope]);
+            scopes.ToImmutable());
+        var maximumCallsPerOperation = Math.Max(1, request.Limits.MaximumToolCalls);
         var builder = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId)
             .Add(
                 DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor,
                 repository.ReadExcerpt,
-                new ReadCodec(),
+                new ReadCodec(sourceReference),
                 DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
                 DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
-                maximumCallsPerRun: request.Limits.MaximumToolCalls)
-            .Add(
+                maximumCallsPerRun: maximumCallsPerOperation);
+        if (context.Facts.Routes.Length > 0)
+        {
+            builder.Add(
                 DocumentationScribeRepositoryToolBundle.ListFilesDescriptor,
                 repository.ListFiles,
                 new ListCodec(),
                 DocumentationScribeRepositoryToolSchemas.ListFilesDescription,
                 DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
-                maximumCallsPerRun: request.Limits.MaximumToolCalls)
-            .Add(
+                maximumCallsPerRun: maximumCallsPerOperation);
+        }
+
+        builder.Add(
                 DocumentationScribeRepositoryToolBundle.SearchTextDescriptor,
                 repository.SearchText,
-                new SearchCodec(),
+                new SearchCodec(sourceReference),
                 DocumentationScribeRepositoryToolSchemas.SearchTextDescription,
                 DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
-                maximumCallsPerRun: request.Limits.MaximumToolCalls)
+                maximumCallsPerRun: maximumCallsPerOperation)
             .Add(
                 new DocumentationScribeSemanticToolDescriptor(),
                 new DocumentationScribeSemanticToolPort(context, request),
                 new SemanticCodec(),
                 "Read one bounded semantic evidence page for the exact selected method.",
                 SemanticInputSchema,
-                maximumCallsPerRun: request.Limits.MaximumToolCalls);
+                maximumCallsPerRun: maximumCallsPerOperation);
         return builder.Build();
     }
 
@@ -807,7 +999,7 @@ internal static class DocumentationScribeComposition
         var result = new JsonArray();
         foreach (var component in components)
         {
-            result.Add(new JsonObject
+            var value = new JsonObject
             {
                 ["kind"] = component.Kind switch
                 {
@@ -818,8 +1010,13 @@ internal static class DocumentationScribeComposition
                     _ => throw new InvalidOperationException("Unknown component kind."),
                 },
                 ["identity"] = component.Identity,
-                ["name"] = component.Name,
-            });
+            };
+            if (component.Name is { } name)
+            {
+                value["name"] = name;
+            }
+
+            result.Add(value);
         }
 
         return result;
@@ -940,15 +1137,47 @@ internal static class DocumentationScribeComposition
             DocumentationScribeCompositionStatus.PreflightRejected,
             code);
 
+    private static DocumentationScribeCompositionOutcome MapPreflightFailure(
+        PreflightFailure failure,
+        bool afterProposal)
+    {
+        var status = failure.Kind switch
+        {
+            PreflightFailureKind.Rejected when afterProposal =>
+                DocumentationScribeCompositionStatus.PatchStale,
+            PreflightFailureKind.Rejected => DocumentationScribeCompositionStatus.PreflightRejected,
+            PreflightFailureKind.Cancelled => DocumentationScribeCompositionStatus.Cancelled,
+            PreflightFailureKind.TimedOut => DocumentationScribeCompositionStatus.Timeout,
+            PreflightFailureKind.BudgetExhausted =>
+                DocumentationScribeCompositionStatus.BudgetExhausted,
+            _ => DocumentationScribeCompositionStatus.RuntimeFailure,
+        };
+        return DocumentationScribeCompositionOutcome.Create(status, failure.Code);
+    }
+
+    private enum PreflightFailureKind
+    {
+        Rejected,
+        Cancelled,
+        TimedOut,
+        BudgetExhausted,
+        Internal,
+    }
+
+    private sealed record PreflightFailure(PreflightFailureKind Kind, string Code);
+
     private sealed record PreflightResult(
         DocumentationScribeLoadedContext? Context,
         DocumentationPatchResolvedDeclaration? Declaration,
         DocumentationPatchEditKind EditKind,
         DocumentationScribeEvidenceReference? SourceReference,
-        string? FailureCode)
+        PreflightFailure? Failure)
     {
         internal static PreflightResult Rejected(string code) =>
-            new(null, null, default, null, code);
+            Failed(PreflightFailureKind.Rejected, code);
+
+        internal static PreflightResult Failed(PreflightFailureKind kind, string code) =>
+            new(null, null, default, null, new PreflightFailure(kind, code));
     }
 
     private abstract class RepositoryCodec<TRequest, TResult>
@@ -956,6 +1185,11 @@ internal static class DocumentationScribeComposition
         where TRequest : IDocumentationScribeToolRequest<TResult>
         where TResult : IDocumentationScribeToolResult
     {
+        private readonly DocumentationScribeEvidenceReference? authorizedSource;
+
+        protected RepositoryCodec(DocumentationScribeEvidenceReference? authorizedSource = null) =>
+            this.authorizedSource = authorizedSource;
+
         public abstract DocumentationScribeToolDecodeResult<TRequest> DecodeArguments(
             ReadOnlyMemory<byte> argumentsUtf8Json);
 
@@ -967,6 +1201,10 @@ internal static class DocumentationScribeComposition
                 DocumentationScribeRepositorySearchTextResult search => search.DynamicEvidence,
                 _ => [],
             };
+            if (authorizedSource is { } source)
+            {
+                evidence = evidence.Where(item => IsAuthorizedSourceRange(item, source)).ToImmutableArray();
+            }
             object projection = result switch
             {
                 DocumentationScribeRepositoryReadExcerptResult read => new
@@ -998,11 +1236,32 @@ internal static class DocumentationScribeComposition
                     JsonSerializer.SerializeToUtf8Bytes(projection, ToolJson),
                     evidence));
         }
+
+        private static bool IsAuthorizedSourceRange(
+            DocumentationScribeDynamicEvidenceInput item,
+            DocumentationScribeEvidenceReference source) =>
+            Equals(item.Subject, source.Subject)
+            && item.Kind == source.Kind
+            && item.Relation == source.Relation
+            && item.Authority == source.Authority
+            && item.ClaimCategoryIds.SequenceEqual(source.ClaimCategoryIds, StringComparer.Ordinal)
+            && item.Locator is RepositoryEvidenceLocator itemLocator
+            && source.Locator is RepositoryEvidenceLocator sourceLocator
+            && itemLocator.Path == sourceLocator.Path
+            && itemLocator.Span is { } itemSpan
+            && sourceLocator.Span is { } sourceSpan
+            && itemSpan.Start >= sourceSpan.Start
+            && itemSpan.End <= sourceSpan.End;
     }
 
     private sealed class ReadCodec
         : RepositoryCodec<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>
     {
+        internal ReadCodec(DocumentationScribeEvidenceReference authorizedSource)
+            : base(authorizedSource)
+        {
+        }
+
         public override DocumentationScribeToolDecodeResult<DocumentationScribeRepositoryReadExcerptRequest>
             DecodeArguments(ReadOnlyMemory<byte> json)
         {
@@ -1062,6 +1321,11 @@ internal static class DocumentationScribeComposition
     private sealed class SearchCodec
         : RepositoryCodec<DocumentationScribeRepositorySearchTextRequest, DocumentationScribeRepositorySearchTextResult>
     {
+        internal SearchCodec(DocumentationScribeEvidenceReference authorizedSource)
+            : base(authorizedSource)
+        {
+        }
+
         public override DocumentationScribeToolDecodeResult<DocumentationScribeRepositorySearchTextRequest>
             DecodeArguments(ReadOnlyMemory<byte> json)
         {
