@@ -483,6 +483,90 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Theory]
+    [InlineData("http-status")]
+    [InlineData("transport")]
+    public async Task Replayed_history_survives_dispatched_second_request_failure(string scenario)
+    {
+        const string contentMarker = "replayed-assistant-content-marker";
+        const string reasoningMarker = "replayed-reasoning-marker";
+        const string bodyMarker = "untrusted-failure-body-marker";
+        var responseNumber = 0;
+        Task<HttpResponseMessage> Respond(HttpRequestMessage _, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            responseNumber++;
+            if (responseNumber == 1)
+            {
+                return Task.FromResult(JsonResponse("""
+                    {"choices":[{"index":0,"message":{"role":"assistant","content":"replayed-assistant-content-marker","reasoning_content":"replayed-reasoning-marker","tool_calls":[{"id":"call.replay-failure","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                    """));
+            }
+
+            return scenario == "http-status"
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+                {
+                    Content = new StringContent(bodyMarker, Encoding.UTF8, "text/plain"),
+                })
+                : Task.FromException<HttpResponseMessage>(new HttpRequestException("transport-marker"));
+        }
+
+        var handler = new CapturingHandler(Respond);
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true),
+            handler,
+            disposeHandler: false);
+        var observer = new CostObservingExchange(transport, EvaluationCostPolicy.Unpriced);
+
+        var first = await observer.SendAsync(Request([]), CancellationToken.None);
+        var call = Assert.Single(first.ToolCalls);
+        var completed = new DocumentationScribeCompletedToolExchange(
+            call.ResponseIndex,
+            call.CallId,
+            call.OperationId,
+            call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            first.AssistantContinuation);
+        var failed = await observer.SendAsync(Request([completed]), CancellationToken.None);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(2, handler.Snapshots.Count);
+        using var replayedRequest = JsonDocument.Parse(handler.Snapshots[1].Body);
+        var replayedAssistant = replayedRequest.RootElement.GetProperty("messages")[5];
+        Assert.Equal(contentMarker, replayedAssistant.GetProperty("content").GetString());
+        Assert.Equal(reasoningMarker, replayedAssistant.GetProperty("reasoning_content").GetString());
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.HistoryReplayed,
+            failed.ContinuationObservation);
+        Assert.Equal(
+            scenario == "http-status"
+                ? DocumentationScribeModelFailureOrigin.HttpStatus
+                : DocumentationScribeModelFailureOrigin.Transport,
+            failed.Failure!.Origin);
+        Assert.Equal(scenario == "http-status" ? 422 : null, failed.Failure.HttpStatusCode);
+        Assert.True(observer.Observations[1].ToolResultContinuationRequired);
+        Assert.True(EvaluationLiveObservationMatcher.ToolResultContinuationsSatisfied(
+            observer.Observations));
+        var boundedObservationText = string.Join(' ', observer.Observations);
+        Assert.DoesNotContain(contentMarker, boundedObservationText, StringComparison.Ordinal);
+        Assert.DoesNotContain(reasoningMarker, boundedObservationText, StringComparison.Ordinal);
+        Assert.DoesNotContain(bodyMarker, boundedObservationText, StringComparison.Ordinal);
+        var reportProjection = JsonSerializer.Serialize(new EvaluationProviderFailureReport(
+            2,
+            EvaluationProviderFailureReport.CodeId(failed.Failure.Code),
+            EvaluationProviderFailureReport.OriginId(failed.Failure.Origin!.Value),
+            failed.Failure.HttpStatusCode));
+        Assert.DoesNotContain(contentMarker, reportProjection, StringComparison.Ordinal);
+        Assert.DoesNotContain(reasoningMarker, reportProjection, StringComparison.Ordinal);
+        Assert.DoesNotContain(bodyMarker, reportProjection, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Http_transport_required_continuation_fails_closed_without_another_request(bool explicitNull)

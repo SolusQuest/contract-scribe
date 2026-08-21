@@ -239,6 +239,12 @@ internal static class EvaluationLiveObservationMatcher
     { CacheObservation: not null }
     or { CachedInputTokens: not null }
     or { UncachedInputTokens: not null };
+
+    internal static bool ToolResultContinuationsSatisfied(
+        IEnumerable<EvaluationProviderObservation> observations) => observations
+        .Where(observation => observation.ToolResultContinuationRequired)
+        .All(observation => observation.ContinuationObservation.HasFlag(
+            DocumentationScribeContinuationObservation.HistoryReplayed));
 }
 
 internal sealed class EvaluationRunner
@@ -826,9 +832,7 @@ internal sealed class EvaluationRunner
                     or DocumentationScribeModelFailureOrigin.ResponseCodec),
             providerObservations.Any(observation =>
                 observation.OrdinaryToolCallObserved || observation.TerminalSubmissionObserved),
-            providerObservations.Where(observation => observation.ToolResultContinuationRequired)
-                .All(observation => observation.ContinuationObservation.HasFlag(
-                    DocumentationScribeContinuationObservation.HistoryReplayed)),
+            EvaluationLiveObservationMatcher.ToolResultContinuationsSatisfied(providerObservations),
             providerObservations.Any(observation => observation.UsageSupplied),
             usage is not null,
             providerObservations.Any(observation => observation.CacheSupplied),
