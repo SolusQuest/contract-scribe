@@ -162,7 +162,15 @@ internal sealed record EvaluationCostPolicy(
 internal sealed record EvaluationProviderObservation(
     int ProviderRequestNumber,
     EvaluationCostResult Cost,
+    bool ResponseAccepted,
+    bool OrdinaryToolCallObserved,
+    bool TerminalSubmissionObserved,
+    bool UsageSupplied,
+    bool CacheSupplied,
+    bool ToolResultContinuationRequired,
     DocumentationScribeModelFailureCode? FailureCode,
+    DocumentationScribeModelFailureOrigin? FailureOrigin,
+    int? HttpStatusCode,
     DocumentationScribeContinuationObservation ContinuationObservation);
 
 internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
@@ -203,7 +211,17 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
         observations.Add(new EvaluationProviderObservation(
             request.ProviderRequestNumber,
             result,
+            response.Failure is null,
+            !response.ToolCalls.IsEmpty,
+            !response.TerminalSubmissions.IsEmpty,
+            response.Usage is not null,
+            response.Cache is not null
+                || response.Usage?.CachedInputTokens is not null
+                || response.Usage?.UncachedInputTokens is not null,
+            !request.CompletedToolExchanges.IsEmpty,
             response.Failure?.Code,
+            response.Failure?.Origin,
+            response.Failure?.HttpStatusCode,
             response.ContinuationObservation));
         var completeCost = result.Completeness == EvaluationCostCompleteness.Complete
             && result.AmountMicrounits is { } amount

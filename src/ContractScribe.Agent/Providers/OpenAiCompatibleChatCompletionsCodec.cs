@@ -197,7 +197,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 for (var index = 0; index < callsElement.GetArrayLength(); index++)
                 {
                     var call = RequireObject(callsElement[index]);
-                    if (call.TryGetProperty("index", out _))
+                    if (call.TryGetProperty("index", out _)
+                        && (!TryGetExactInt(call, "index", out var callIndex) || callIndex != index))
                     {
                         throw Malformed();
                     }
@@ -703,7 +704,10 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
             });
             RejectDuplicateProperties(document.RootElement);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("type", out var type)
+                || type.ValueKind != JsonValueKind.String
+                || !string.Equals(type.GetString(), "object", StringComparison.Ordinal))
             {
                 throw Unsupported();
             }

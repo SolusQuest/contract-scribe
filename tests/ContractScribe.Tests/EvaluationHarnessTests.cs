@@ -166,6 +166,151 @@ public sealed class EvaluationHarnessTests
     }
 
     [Fact]
+    public async Task ProviderObserverPreservesBoundedFailureProvenanceAcrossCostDecoration()
+    {
+        var failure = new DocumentationScribeModelFailure(
+            DocumentationScribeModelFailureCode.PermanentUnavailable,
+            origin: DocumentationScribeModelFailureOrigin.HttpStatus,
+            httpStatusCode: 422);
+        var observer = new CostObservingExchange(
+            new QueuedExchange([new DocumentationScribeModelResponse([], [], failure)]),
+            EvaluationCostPolicy.Unpriced);
+
+        var response = await observer.SendAsync(Request(1), CancellationToken.None);
+
+        Assert.Same(failure, response.Failure);
+        var observation = Assert.Single(observer.Observations);
+        Assert.False(observation.ResponseAccepted);
+        Assert.Equal(DocumentationScribeModelFailureCode.PermanentUnavailable, observation.FailureCode);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.HttpStatus, observation.FailureOrigin);
+        Assert.Equal(422, observation.HttpStatusCode);
+        Assert.False(observation.OrdinaryToolCallObserved);
+        Assert.False(observation.TerminalSubmissionObserved);
+        Assert.False(observation.UsageSupplied);
+        Assert.False(observation.CacheSupplied);
+        Assert.False(observation.ToolResultContinuationRequired);
+    }
+
+    [Fact]
+    public void LiveObservationMatcherEvaluatesPredicatesAndProtocolDifferencesSeparately()
+    {
+        var expected = new[]
+        {
+            "cache-fields-when-supplied",
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        };
+        var complete = new EvaluationLiveObservationFacts(
+            RuntimeExecutionApplicable: true,
+            ContinuationObserved: true,
+            ContinuationHistoryReplayed: true,
+            ProviderResponseBounded: true,
+            ToolCallOrTerminalObserved: true,
+            ToolResultContinuationsSatisfied: true,
+            UsageSupplied: true,
+            UsageReported: true,
+            CacheSupplied: true,
+            CacheReported: true,
+            BoundedTerminal: true,
+            MissingRequiredContinuation: false,
+            MalformedResponse: false,
+            ToolProtocolRejected: false,
+            TerminalValidationRejected: false,
+            RequestPreparationRejected: false);
+
+        var matched = EvaluationLiveObservationMatcher.Match(expected, [complete]);
+        Assert.Equal("matched", matched.Status);
+        Assert.Empty(matched.MissingExpectedObservationIds);
+
+        var directTerminal = complete with
+        {
+            ContinuationObserved = false,
+            ContinuationHistoryReplayed = false,
+            ToolResultContinuationsSatisfied = true,
+            UsageSupplied = false,
+            UsageReported = false,
+            CacheSupplied = false,
+            CacheReported = false,
+        };
+        var direct = EvaluationLiveObservationMatcher.Match(expected, [directTerminal]);
+        Assert.Equal("differed", direct.Status);
+        Assert.Equal(
+            ["continuation.history-replayed", "continuation.observed"],
+            direct.MissingExpectedObservationIds);
+
+        var rejectedFacts = complete with
+        {
+            ContinuationHistoryReplayed = false,
+            ToolResultContinuationsSatisfied = false,
+            UsageSupplied = true,
+            UsageReported = false,
+            CacheSupplied = true,
+            CacheReported = false,
+            MissingRequiredContinuation = true,
+            MalformedResponse = true,
+            ToolProtocolRejected = true,
+            TerminalValidationRejected = true,
+            RequestPreparationRejected = true,
+        };
+        var rejected = EvaluationLiveObservationMatcher.Match(expected, [rejectedFacts]);
+        Assert.Equal(
+            [
+                "cache-fields-when-supplied",
+                "continuation.history-replayed",
+                "tool-result-continuation-when-requested",
+                "usage-fields-when-supplied",
+            ],
+            rejected.MissingExpectedObservationIds);
+        Assert.Equal(
+            [
+                "continuation.missing-required",
+                "request.preparation-rejected",
+                "response.malformed",
+                "terminal-validation.rejected",
+                "tool-protocol.rejected",
+            ],
+            EvaluationLiveObservationMatcher.UnexpectedProtocolObservationIds(rejectedFacts));
+
+        var preflight = complete with
+        {
+            RuntimeExecutionApplicable = false,
+            ContinuationObserved = false,
+            ContinuationHistoryReplayed = false,
+            ProviderResponseBounded = false,
+            ToolCallOrTerminalObserved = false,
+            UsageSupplied = false,
+            UsageReported = false,
+            CacheSupplied = false,
+            CacheReported = false,
+            BoundedTerminal = false,
+        };
+        var patchTerminal = directTerminal;
+        var fullDeepSeek = EvaluationLiveObservationMatcher.Match(
+            expected,
+            [preflight, complete, patchTerminal]);
+        Assert.Equal("matched", fullDeepSeek.Status);
+        Assert.Empty(fullDeepSeek.MissingExpectedObservationIds);
+
+        var preparationRejected = preflight with
+        {
+            RuntimeExecutionApplicable = true,
+            RequestPreparationRejected = true,
+        };
+        var preparationResult = EvaluationLiveObservationMatcher.Match(
+            ["request.accepted-or-bounded-provider-failure"],
+            [preparationRejected]);
+        Assert.Equal("differed", preparationResult.Status);
+        Assert.Equal(
+            ["request.preparation-rejected"],
+            EvaluationLiveObservationMatcher.UnexpectedProtocolObservationIds(preparationRejected));
+    }
+
+    [Fact]
     public void CorpusManifestAndExactSelectionAreFrozen()
     {
         var loaded = EvaluationManifestLoader.Load(CorpusRoot());
@@ -350,6 +495,70 @@ public sealed class EvaluationHarnessTests
     }
 
     [Fact]
+    public void ReportProjectsOnlyClosedProviderAndRuntimeDiagnosticFacts()
+    {
+        var report = MinimalReport("safe bounded line");
+        report = report with
+        {
+            ObservationExpectationStatus = "differed",
+            MissingExpectedObservationIds = ["continuation.history-replayed"],
+        };
+        var reportCase = report.Cases[0] with
+        {
+            UnexpectedProtocolObservationIds = ["terminal-validation.rejected"],
+            ProviderFailures =
+            [
+                new EvaluationProviderFailureReport(
+                    1,
+                    "model.failure.permanent-unavailable",
+                    "model.failure-origin.http-status",
+                    400),
+            ],
+            RuntimeDiagnostics =
+            [
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.result-rejected",
+                    "result",
+                    null,
+                    "scribe.result.invalid-shape"),
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.tool-failure",
+                    "tool",
+                    "repository.read-excerpt",
+                    null),
+            ],
+        };
+
+        var bytes = EvaluationReportWriter.Serialize(report with { Cases = [reportCase] }, null);
+        var text = Encoding.UTF8.GetString(bytes);
+        Assert.Contains("model.failure-origin.http-status", text, StringComparison.Ordinal);
+        using (var document = JsonDocument.Parse(bytes))
+        {
+            Assert.Equal(400, document.RootElement.GetProperty("cases")[0]
+                .GetProperty("providerFailures")[0].GetProperty("httpStatusCode").GetInt32());
+        }
+        Assert.Contains("scribe.result.invalid-shape", text, StringComparison.Ordinal);
+        Assert.Contains("repository.read-excerpt", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("pointer", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rawResponse", text, StringComparison.OrdinalIgnoreCase);
+
+        var hostile = reportCase with
+        {
+            RuntimeDiagnostics =
+            [
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.tool-failure",
+                    "tool",
+                    "C:\\private\\provider-error-body",
+                    null),
+            ],
+        };
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            report with { Cases = [hostile] },
+            null));
+    }
+
+    [Fact]
     public void InterruptedAndTimeoutCasesRemainExplicitPartialFailures()
     {
         var loaded = EvaluationManifestLoader.Load(CorpusRoot());
@@ -379,6 +588,26 @@ public sealed class EvaluationHarnessTests
             item => Assert.Equal("cancelled", item.Status),
             item => Assert.Equal("timeout", item.Status));
         Assert.Equal(1, EvaluationApplication.ResultExitCode(options!, report));
+
+        var liveOptions = new EvaluationOptions(
+            EvaluationMode.LiveAll,
+            CorpusRoot(),
+            Path.GetTempPath(),
+            "deepseek-primary",
+            new Uri("https://api.deepseek.com/chat/completions"),
+            "deepseek-v4-flash",
+            "CONTRACTSCRIBE_TEST_KEY",
+            EvaluationCostPolicy.Unpriced);
+        var interruptedLive = EvaluationReport.Create(
+            loaded,
+            liveOptions,
+            [cancelled],
+            selectedCaseCount: 3,
+            complete: false,
+            elapsedMilliseconds: 1);
+        Assert.Equal("partial", interruptedLive.Status);
+        Assert.Equal("not-evaluable", interruptedLive.ObservationExpectationStatus);
+        Assert.Empty(interruptedLive.MissingExpectedObservationIds);
     }
 
     [Fact]
@@ -466,6 +695,8 @@ public sealed class EvaluationHarnessTests
         new string('c', 64),
         null,
         null,
+        "not-applicable",
+        [],
         new EvaluationLatencyReport("not-measured", null),
         [
             new EvaluationCaseReport(
@@ -474,10 +705,12 @@ public sealed class EvaluationHarnessTests
                 "code",
                 "matched",
                 [],
+                [],
                 1,
                 1,
                 0,
                 0,
+                [],
                 [],
                 null,
                 new EvaluationCostReport("not-reported", null, null),
@@ -509,10 +742,12 @@ public sealed class EvaluationHarnessTests
         code,
         "differed",
         ["case.execution-differed"],
+        [],
         0,
         0,
         0,
         0,
+        [],
         [],
         null,
         new EvaluationCostReport("not-reported", null, null),

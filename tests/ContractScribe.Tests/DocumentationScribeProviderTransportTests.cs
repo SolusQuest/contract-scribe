@@ -48,6 +48,9 @@ public sealed class DocumentationScribeProviderTransportTests
                 ["cs_tool_000", "cs_tool_001", OpenAiCompatibleChatCompletionsCodec.TerminalAlias],
                 root.GetProperty("tools").EnumerateArray()
                     .Select(tool => tool.GetProperty("function").GetProperty("name").GetString()));
+            Assert.All(root.GetProperty("tools").EnumerateArray(), tool =>
+                Assert.Equal("object", tool.GetProperty("function").GetProperty("parameters")
+                    .GetProperty("type").GetString()));
         }
 
         var toolResponse = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
@@ -673,15 +676,33 @@ public sealed class DocumentationScribeProviderTransportTests
         var invalidResponse = await enabled.SendAsync(invalidRequest, CancellationToken.None);
 
         Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, invalidResponse.Failure!.Code);
+        Assert.Equal(
+            DocumentationScribeModelFailureOrigin.RequestPreparation,
+            invalidResponse.Failure.Origin);
+        Assert.Equal(0, handler.CallCount);
+
+        var rootlessRequest = Request([], tools:
+            [new DocumentationScribeModelToolDefinition(
+                "tool.rootless",
+                "Rootless.",
+                "{\"oneOf\":[{\"type\":\"object\"}]}")]);
+        var rootlessResponse = await enabled.SendAsync(rootlessRequest, CancellationToken.None);
+        Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, rootlessResponse.Failure!.Code);
+        Assert.Equal(
+            DocumentationScribeModelFailureOrigin.RequestPreparation,
+            rootlessResponse.Failure.Origin);
         Assert.Equal(0, handler.CallCount);
     }
 
     [Theory]
+    [InlineData(400, DocumentationScribeModelFailureCode.PermanentUnavailable)]
     [InlineData(401, DocumentationScribeModelFailureCode.Authentication)]
+    [InlineData(402, DocumentationScribeModelFailureCode.PermanentUnavailable)]
     [InlineData(403, DocumentationScribeModelFailureCode.Authentication)]
     [InlineData(408, DocumentationScribeModelFailureCode.TransientUnavailable)]
     [InlineData(302, DocumentationScribeModelFailureCode.Unsupported)]
     [InlineData(422, DocumentationScribeModelFailureCode.PermanentUnavailable)]
+    [InlineData(429, DocumentationScribeModelFailureCode.RateLimited)]
     [InlineData(500, DocumentationScribeModelFailureCode.TransientUnavailable)]
     [InlineData(501, DocumentationScribeModelFailureCode.PermanentUnavailable)]
     public async Task Non_success_status_wins_over_untrusted_body(
@@ -698,6 +719,8 @@ public sealed class DocumentationScribeProviderTransportTests
         var response = await exchange.SendAsync(Request([]), CancellationToken.None);
 
         Assert.Equal(expected, response.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.HttpStatus, response.Failure.Origin);
+        Assert.Equal(status, response.Failure.HttpStatusCode);
         Assert.DoesNotContain(marker, response.Failure.ToString(), StringComparison.Ordinal);
     }
 
@@ -712,6 +735,8 @@ public sealed class DocumentationScribeProviderTransportTests
         var response = await exchange.SendAsync(Request([]), CancellationToken.None);
 
         Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, response.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.ResponseCodec, response.Failure.Origin);
+        Assert.Null(response.Failure.HttpStatusCode);
         Assert.DoesNotContain(marker, response.Failure.ToString(), StringComparison.Ordinal);
     }
 
@@ -744,6 +769,8 @@ public sealed class DocumentationScribeProviderTransportTests
         using var unowned = Exchange(unownedHandler);
         var response = await unowned.SendAsync(Request([]), CancellationToken.None);
         Assert.Equal(DocumentationScribeModelFailureCode.TransientUnavailable, response.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.Transport, response.Failure.Origin);
+        Assert.Null(response.Failure.HttpStatusCode);
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -831,7 +858,7 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
-    public void Response_rejects_streaming_index_and_cross_round_call_id_before_normalization()
+    public void Response_accepts_only_exact_positional_call_indices_and_rejects_cross_round_call_id()
     {
         var completed = new DocumentationScribeCompletedToolExchange(
             0,
@@ -843,9 +870,19 @@ public sealed class DocumentationScribeProviderTransportTests
             []);
         var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model");
 
+        var valid = OpenAiCompatibleChatCompletionsCodec.ParseResponse(Encoding.UTF8.GetBytes("""
+            {"choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"index":0,"id":"call.new-a","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}},{"index":1,"id":"call.new-b","type":"function","function":{"name":"cs_tool_001","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+            """), prepared);
+        Assert.Equal([0, 1], valid.ToolCalls.Select(call => call.ResponseIndex));
+
         foreach (var body in new[]
         {
-            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call.new\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":1,\"id\":\"call.wrong\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":-1,\"id\":\"call.negative\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0.0,\"id\":\"call.fraction\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":\"0\",\"id\":\"call.string\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":null,\"id\":\"call.null\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":2147483648,\"id\":\"call.overflow\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
             "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.used\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
         })
         {

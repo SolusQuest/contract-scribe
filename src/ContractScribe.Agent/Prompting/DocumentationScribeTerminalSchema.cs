@@ -8,6 +8,7 @@ internal static class DocumentationScribeTerminalSchema
         """
         {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
           "$defs": {
             "identifier": {
               "type": "string",
@@ -272,6 +273,37 @@ internal static class DocumentationScribeTerminalSchema
                 { "$ref": "#/$defs/exceptionUnit" },
                 { "$ref": "#/$defs/inheritDocUnit" }
               ]
+            }
+          },
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["proposal", "skip"],
+              "description": "Select exactly one terminal variant."
+            },
+            "target": {
+              "$ref": "#/$defs/target",
+              "description": "For a proposal, copy terminalTarget exactly as a JSON object, not as JSON-encoded text."
+            },
+            "contentUnits": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": { "$ref": "#/$defs/contentUnit" },
+              "description": "For a proposal, emit content units as a JSON array, not as JSON-encoded text."
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "scribe.skip.insufficient-evidence",
+                "scribe.skip.unsupported-current-m3-domain"
+              ]
+            },
+            "evidenceReferenceIds": {
+              "type": "array",
+              "maxItems": 512,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/identifier" }
             }
           },
           "oneOf": [

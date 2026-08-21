@@ -142,6 +142,100 @@ internal static class EvaluationApplication
     }
 }
 
+internal sealed record EvaluationLiveObservationFacts(
+    bool RuntimeExecutionApplicable,
+    bool ContinuationObserved,
+    bool ContinuationHistoryReplayed,
+    bool ProviderResponseBounded,
+    bool ToolCallOrTerminalObserved,
+    bool ToolResultContinuationsSatisfied,
+    bool UsageSupplied,
+    bool UsageReported,
+    bool CacheSupplied,
+    bool CacheReported,
+    bool BoundedTerminal,
+    bool MissingRequiredContinuation,
+    bool MalformedResponse,
+    bool ToolProtocolRejected,
+    bool TerminalValidationRejected,
+    bool RequestPreparationRejected);
+
+internal sealed record EvaluationObservationExpectationResult(
+    string Status,
+    string[] MissingExpectedObservationIds);
+
+internal static class EvaluationLiveObservationMatcher
+{
+    internal static EvaluationObservationExpectationResult Match(
+        IEnumerable<string> expectedObservations,
+        IReadOnlyList<EvaluationLiveObservationFacts> executions)
+    {
+        var applicable = executions.Where(execution => execution.RuntimeExecutionApplicable).ToArray();
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var expected in expectedObservations)
+        {
+            var satisfied = expected switch
+            {
+                "continuation.observed" => executions.Any(execution => execution.ContinuationObserved),
+                "continuation.history-replayed" => executions.Any(execution =>
+                    execution.ContinuationHistoryReplayed),
+                "request.accepted-or-bounded-provider-failure" => executions.Any(execution =>
+                    execution.ProviderResponseBounded),
+                "tool-call-or-terminal" => executions.Any(execution =>
+                    execution.ToolCallOrTerminalObserved),
+                "tool-result-continuation-when-requested" => executions.All(execution =>
+                    execution.ToolResultContinuationsSatisfied),
+                "usage-fields-when-supplied" => executions.All(execution =>
+                    !execution.UsageSupplied || execution.UsageReported),
+                "cache-fields-when-supplied" => executions.All(execution =>
+                    !execution.CacheSupplied || execution.CacheReported),
+                "validated-proposal-or-structured-skip-or-bounded-failure" =>
+                    applicable.Length > 0 && applicable.All(execution => execution.BoundedTerminal),
+                _ => throw new InvalidDataException("evaluation.selection.expected-observation-invalid"),
+            };
+            if (!satisfied)
+            {
+                missing.Add(expected);
+            }
+        }
+
+        return new EvaluationObservationExpectationResult(
+            missing.Count == 0 ? "matched" : "differed",
+            missing.ToArray());
+    }
+
+    internal static string[] UnexpectedProtocolObservationIds(EvaluationLiveObservationFacts facts)
+    {
+        var unexpected = new SortedSet<string>(StringComparer.Ordinal);
+        if (facts.MissingRequiredContinuation)
+        {
+            unexpected.Add("continuation.missing-required");
+        }
+
+        if (facts.MalformedResponse)
+        {
+            unexpected.Add("response.malformed");
+        }
+
+        if (facts.ToolProtocolRejected)
+        {
+            unexpected.Add("tool-protocol.rejected");
+        }
+
+        if (facts.TerminalValidationRejected)
+        {
+            unexpected.Add("terminal-validation.rejected");
+        }
+
+        if (facts.RequestPreparationRejected)
+        {
+            unexpected.Add("request.preparation-rejected");
+        }
+
+        return unexpected.ToArray();
+    }
+}
+
 internal sealed class EvaluationRunner
 {
     private readonly LoadedEvaluationManifest loaded;
@@ -151,6 +245,7 @@ internal sealed class EvaluationRunner
     private readonly string? requestedOutputDirectory;
     private readonly string? preparedCorpusDirectory;
     private readonly List<EvaluationCaseReport> reports = [];
+    private readonly List<EvaluationLiveObservationFacts> liveObservationFacts = [];
     private readonly EvaluationProviderConfiguration? selectedConfiguration;
     private string? outputDirectory;
     private string[] outputForbiddenRoots = [];
@@ -293,6 +388,13 @@ internal sealed class EvaluationRunner
                         cancellationToken).ConfigureAwait(false);
                     var caseReport = CreateCaseReport(prepared, outcome, observing.Observations);
                     reports.Add(caseReport);
+                    if (options.IsLive)
+                    {
+                        liveObservationFacts.Add(LiveObservationFacts(
+                            outcome,
+                            caseReport.Usage,
+                            observing.Observations));
+                    }
                     cancelled = caseReport.Status == "cancelled";
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -336,7 +438,12 @@ internal sealed class EvaluationRunner
             reports,
             selected.Length,
             true,
-            Elapsed(stopwatch));
+            Elapsed(stopwatch),
+            observationExpectation: options.IsLive
+                ? EvaluationLiveObservationMatcher.Match(
+                    selectedConfiguration!.ExpectedObservations,
+                    liveObservationFacts)
+                : null);
         await PersistAsync(final, cancellationToken).ConfigureAwait(false);
         if (outputDirectory is not null)
         {
@@ -393,9 +500,20 @@ internal sealed class EvaluationRunner
             .Where(observation => observation.FailureCode is not null)
             .Select(observation => new EvaluationProviderFailureReport(
                 observation.ProviderRequestNumber,
-                EvaluationProviderFailureReport.CodeId(observation.FailureCode!.Value)))
+                EvaluationProviderFailureReport.CodeId(observation.FailureCode!.Value),
+                observation.FailureOrigin is { } origin
+                    ? EvaluationProviderFailureReport.OriginId(origin)
+                    : null,
+                observation.HttpStatusCode))
             .OrderBy(observation => observation.ProviderRequestNumber)
             .ToArray();
+        var runtimeDiagnostics = envelope?.Diagnostics
+            .Select(diagnostic => new EvaluationRuntimeDiagnosticReport(
+                diagnostic.Code,
+                diagnostic.Stage,
+                diagnostic.ReferenceId,
+                diagnostic.ValidationCode))
+            .ToArray() ?? [];
         var usage = envelope?.Usage is { } modelUsage
             ? new EvaluationUsageReport(
                 modelUsage.InputTokens,
@@ -435,11 +553,13 @@ internal sealed class EvaluationRunner
             outcome.Code,
             expectation.Status,
             expectation.DifferenceIds,
+            UnexpectedProtocolObservations(outcome, envelope, providerObservations),
             envelope?.AttemptNumber ?? 0,
             envelope?.ProviderRequestCount ?? 0,
             envelope?.ToolRoundCount ?? 0,
             envelope?.ToolCallCount ?? 0,
             providerFailures,
+            runtimeDiagnostics,
             usage,
             cost,
             proposal,
@@ -457,10 +577,12 @@ internal sealed class EvaluationRunner
         code,
         "differed",
         ["case.execution-differed"],
+        [],
         0,
         0,
         0,
         0,
+        [],
         [],
         null,
         new EvaluationCostReport("not-reported", null, null),
@@ -678,6 +800,67 @@ internal sealed class EvaluationRunner
     }
 
     private sealed record ExpectationResult(string Status, string[] DifferenceIds);
+
+    private static EvaluationLiveObservationFacts LiveObservationFacts(
+        EvaluationCompositionOutcome outcome,
+        EvaluationUsageReport? usage,
+        IReadOnlyList<EvaluationProviderObservation> providerObservations)
+    {
+        var envelope = outcome.RunResult?.RunEnvelope;
+        return new EvaluationLiveObservationFacts(
+            envelope?.AttemptNumber > 0,
+            providerObservations.Any(observation => observation.ContinuationObservation.HasFlag(
+                DocumentationScribeContinuationObservation.Observed)),
+            providerObservations.Any(observation => observation.ContinuationObservation.HasFlag(
+                DocumentationScribeContinuationObservation.HistoryReplayed)),
+            providerObservations.Any(observation =>
+                observation.ResponseAccepted
+                || observation.FailureOrigin is DocumentationScribeModelFailureOrigin.Transport
+                    or DocumentationScribeModelFailureOrigin.HttpStatus
+                    or DocumentationScribeModelFailureOrigin.SuccessfulResponse
+                    or DocumentationScribeModelFailureOrigin.ResponseCodec),
+            providerObservations.Any(observation =>
+                observation.OrdinaryToolCallObserved || observation.TerminalSubmissionObserved),
+            providerObservations.Where(observation => observation.ToolResultContinuationRequired)
+                .All(observation => observation.ContinuationObservation.HasFlag(
+                    DocumentationScribeContinuationObservation.HistoryReplayed)),
+            providerObservations.Any(observation => observation.UsageSupplied),
+            usage is not null,
+            providerObservations.Any(observation => observation.CacheSupplied),
+            usage?.CacheObservation is not null
+                || usage?.CachedInputTokens is not null
+                || usage?.UncachedInputTokens is not null,
+            outcome.RunResult?.Terminal is DocumentationScribeProposalTerminal
+                or DocumentationScribeSkipTerminal
+                or DocumentationScribeFailureTerminal,
+            providerObservations.Any(observation => observation.ContinuationObservation.HasFlag(
+                DocumentationScribeContinuationObservation.MissingRequired)),
+            providerObservations.Any(observation =>
+                observation.FailureCode == DocumentationScribeModelFailureCode.MalformedResponse),
+            outcome.RunResult?.Terminal is DocumentationScribeFailureTerminal terminalFailure
+                && terminalFailure.Code == DocumentationScribeFailureCode.ToolProtocol,
+            envelope?.Diagnostics.Any(diagnostic =>
+                diagnostic.Code == "scribe.diagnostic.result-rejected") == true,
+            providerObservations.Any(observation =>
+                observation.FailureOrigin == DocumentationScribeModelFailureOrigin.RequestPreparation));
+    }
+
+    private static string[] UnexpectedProtocolObservations(
+        EvaluationCompositionOutcome outcome,
+        DocumentationScribeRunEnvelope? envelope,
+        IReadOnlyList<EvaluationProviderObservation> providerObservations)
+    {
+        var facts = LiveObservationFacts(outcome, envelope?.Usage is { } usage
+            ? new EvaluationUsageReport(
+                usage.InputTokens,
+                usage.OutputTokens,
+                usage.CachedInputTokens,
+                usage.UncachedInputTokens,
+                usage.ReasoningTokens,
+                envelope.Cache is { } cache ? DocumentationScribeVocabulary.GetId(cache) : null)
+            : null, providerObservations);
+        return EvaluationLiveObservationMatcher.UnexpectedProtocolObservationIds(facts);
+    }
 
     private static string[] ObservedCoverage(
         EvaluationScenario scenario,

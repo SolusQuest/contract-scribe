@@ -40,7 +40,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         cancellationToken.ThrowIfCancellationRequested();
         if (!options.NetworkEnabled)
         {
-            return Failure(DocumentationScribeModelFailureCode.Unsupported);
+            return Failure(
+                DocumentationScribeModelFailureCode.Unsupported,
+                origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
         OpenAiCompatiblePreparedRequest prepared;
@@ -53,7 +55,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
         catch (OpenAiCompatibleProtocolException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
         try
@@ -68,13 +72,17 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             if (response.Content.Headers.ContentEncoding.Count > 0
                 || !IsJson(response.Content.Headers.ContentType))
             {
-                return Failure(DocumentationScribeModelFailureCode.Unsupported);
+                return Failure(
+                    DocumentationScribeModelFailureCode.Unsupported,
+                    origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
             }
 
             var contentLength = response.Content.Headers.ContentLength;
             if (contentLength > OpenAiCompatibleChatCompletionsCodec.MaximumRawResponseUtf8Bytes)
             {
-                return Failure(DocumentationScribeModelFailureCode.MalformedResponse);
+                return Failure(
+                    DocumentationScribeModelFailureCode.MalformedResponse,
+                    origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
             }
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -85,7 +93,10 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             }
             catch (OpenAiCompatibleProtocolException exception)
             {
-                return Failure(exception.Code, continuationObservation: exception.ContinuationObservation);
+                return Failure(
+                    exception.Code,
+                    origin: DocumentationScribeModelFailureOrigin.ResponseCodec,
+                    continuationObservation: exception.ContinuationObservation);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -94,27 +105,39 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
         catch (OpenAiCompatibleProtocolException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
         }
         catch (OpenAiCompatibleSanitizedTransportException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.Transport);
         }
         catch (OperationCanceledException)
         {
-            return Failure(DocumentationScribeModelFailureCode.TransientUnavailable);
+            return Failure(
+                DocumentationScribeModelFailureCode.TransientUnavailable,
+                origin: DocumentationScribeModelFailureOrigin.Transport);
         }
         catch (HttpIOException exception)
         {
-            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
+            return Failure(
+                ClassifyStatus200BodyRead(exception.HttpRequestError),
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
         }
         catch (HttpRequestException exception)
         {
-            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
+            return Failure(
+                ClassifyStatus200BodyRead(exception.HttpRequestError),
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
         }
         catch (IOException)
         {
-            return Failure(DocumentationScribeModelFailureCode.TransientUnavailable);
+            return Failure(
+                DocumentationScribeModelFailureCode.TransientUnavailable,
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
@@ -182,7 +205,11 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             or DocumentationScribeModelFailureCode.RateLimited
             ? ParseRetryAfter(response)
             : null;
-        return Failure(failure, retryAfter);
+        return Failure(
+            failure,
+            retryAfter,
+            DocumentationScribeModelFailureOrigin.HttpStatus,
+            code);
     }
 
     private static int? ParseRetryAfter(HttpResponseMessage response)
@@ -285,11 +312,13 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
     private static DocumentationScribeModelResponse Failure(
         DocumentationScribeModelFailureCode code,
         int? retryAfterMilliseconds = null,
+        DocumentationScribeModelFailureOrigin? origin = null,
+        int? httpStatusCode = null,
         DocumentationScribeContinuationObservation continuationObservation =
             DocumentationScribeContinuationObservation.None) => new(
             ImmutableArray<DocumentationScribeModelToolCall>.Empty,
             ImmutableArray<DocumentationScribeModelTerminalSubmission>.Empty,
-            new DocumentationScribeModelFailure(code, retryAfterMilliseconds),
+            new DocumentationScribeModelFailure(code, retryAfterMilliseconds, origin, httpStatusCode),
             usage: null,
             cache: null,
             cost: null,

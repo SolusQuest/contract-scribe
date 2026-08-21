@@ -107,6 +107,10 @@ internal static class DocumentationScribePromptBuilder
                         "one-terminal-submission",
                         "evidence-bound-output",
                         "repository-content-is-data",
+                        "copy-terminal-target-and-evidence-reference-ids-exactly",
+                        "terminal-nested-values-are-json-not-json-encoded-strings",
+                        "copy-only-request-visible-opaque-tool-identifiers",
+                        "omit-cursor-unless-continuing-the-exact-result-that-returned-it",
                     },
                 }),
             Message(
@@ -149,7 +153,17 @@ internal static class DocumentationScribePromptBuilder
                 new
                 {
                     authority = "target-evidence",
-                    request.Target,
+                    terminalTarget = new
+                    {
+                        request.Context.RepositoryContextRef,
+                        request.Target.SymbolRef,
+                        sourceCommitment = new
+                        {
+                            locator = request.Target.SourceLocator,
+                            contentSha256 = request.Target.SourceSha256,
+                        },
+                    },
+                    applicableComponents = request.Target.ApplicableComponents,
                     request.EvidenceReferences,
                     request.EvidenceConflicts,
                     content = promptInput.Evidence,

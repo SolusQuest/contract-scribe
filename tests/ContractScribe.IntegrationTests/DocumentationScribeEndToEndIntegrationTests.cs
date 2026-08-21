@@ -904,6 +904,44 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task ProviderVisibleRegistryExplainsOpaqueScopeAndCursorApplicability()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var exchange = new CountingExchange();
+
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit,
+            fixture.RequestBytes,
+            fixture.AttemptId,
+            exchange);
+
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        var request = Assert.Single(exchange.Requests);
+        var semantic = request.Tools.Single(tool =>
+            tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId);
+        using (var schema = JsonDocument.Parse(semantic.InputSchemaJson))
+        {
+            var cursor = schema.RootElement.GetProperty("properties").GetProperty("cursor")
+                .GetProperty("description").GetString();
+            Assert.Contains("Omit on the first call", cursor, StringComparison.Ordinal);
+            Assert.Contains("same operation and page size", cursor, StringComparison.Ordinal);
+            Assert.Contains("never use a repository cursor", cursor, StringComparison.Ordinal);
+        }
+
+        var search = request.Tools.Single(tool =>
+            tool.OperationId == DocumentationScribeRepositoryToolOperationIds.SearchText);
+        using var searchSchema = JsonDocument.Parse(search.InputSchemaJson);
+        var properties = searchSchema.RootElement.GetProperty("properties");
+        Assert.Contains("request-visible scope ID", properties.GetProperty("scopeId")
+            .GetProperty("description").GetString(), StringComparison.Ordinal);
+        var searchCursor = properties.GetProperty("cursor").GetProperty("description").GetString();
+        Assert.Contains("same operation", searchCursor, StringComparison.Ordinal);
+        Assert.Contains("literal", searchCursor, StringComparison.Ordinal);
+        Assert.Contains("subdirectory", searchCursor, StringComparison.Ordinal);
+        Assert.Contains("page size", searchCursor, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("context.repository-documentation", "RepositoryContext.md")]
     [InlineData("context.style-example", "StyleExample.md")]

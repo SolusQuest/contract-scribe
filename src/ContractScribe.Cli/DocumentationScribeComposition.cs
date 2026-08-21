@@ -301,7 +301,7 @@ internal static class DocumentationScribeComposition
     };
 
     private static readonly ReadOnlyMemory<byte> SemanticInputSchema = Encoding.UTF8.GetBytes(
-        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"pageSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"cursor\":{\"type\":\"string\"}}}");
+        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"pageSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"Preserve this exact value when continuing with a cursor.\"},\"cursor\":{\"type\":\"string\",\"description\":\"Omit on the first call. Use a returned semantic cursor once only with the same operation and page size; never use a repository cursor.\"}}}");
 
     internal static async Task<DocumentationScribeCompositionOutcome> ExecuteAsync(
         DocumentationScribeSelectedAudit selection,

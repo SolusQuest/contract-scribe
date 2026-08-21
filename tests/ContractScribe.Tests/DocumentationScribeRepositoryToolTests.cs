@@ -38,6 +38,37 @@ public sealed class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
+    public void ProviderSchemasDescribeExactOpaqueScopeAndCursorContinuation()
+    {
+        using var read = JsonDocument.Parse(DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json);
+        Assert.Contains("request-visible scope ID", read.RootElement.GetProperty("properties")
+            .GetProperty("scopeId").GetProperty("description").GetString(), StringComparison.Ordinal);
+
+        foreach (var schemaBytes in new[]
+        {
+            DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+            DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+        })
+        {
+            using var schema = JsonDocument.Parse(schemaBytes);
+            var properties = schema.RootElement.GetProperty("properties");
+            Assert.Contains("request-visible scope ID", properties.GetProperty("scopeId")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+            var cursor = properties.GetProperty("cursor").GetProperty("description").GetString();
+            Assert.Contains("Omit on the first call", cursor, StringComparison.Ordinal);
+            Assert.Contains("once only", cursor, StringComparison.Ordinal);
+            Assert.Contains("same operation", cursor, StringComparison.Ordinal);
+            Assert.Contains("page size", cursor, StringComparison.Ordinal);
+        }
+
+        using var search = JsonDocument.Parse(DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json);
+        var searchCursor = search.RootElement.GetProperty("properties").GetProperty("cursor")
+            .GetProperty("description").GetString();
+        Assert.Contains("literal", searchCursor, StringComparison.Ordinal);
+        Assert.Contains("subdirectory", searchCursor, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ListSearchAndReadUseVisibleAnchorAndPreserveRoles()
     {
         using var fixture = RepositoryToolFixture.Create();
