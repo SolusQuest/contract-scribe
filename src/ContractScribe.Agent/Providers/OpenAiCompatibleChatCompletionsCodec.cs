@@ -138,8 +138,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Malformed();
             }
 
+            var contentPresent = message.TryGetProperty("content", out var content);
             string? contentText = null;
-            if (message.TryGetProperty("content", out var content))
+            if (contentPresent)
             {
                 if (content.ValueKind == JsonValueKind.String)
                 {
@@ -289,7 +290,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             }
 
             var continuation = new DocumentationScribeAssistantContinuation(
-                contentText ?? string.Empty,
+                contentPresent,
+                contentText,
                 reasoningContentText);
             return Response(
                 normalized.ToImmutable(),
@@ -344,7 +346,22 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 var continuation = round[0].AssistantContinuation;
                 writer.WriteStartObject();
                 writer.WriteString("role", "assistant");
-                writer.WriteString("content", continuation?.Content ?? string.Empty);
+                if (continuation is null)
+                {
+                    writer.WriteString("content", string.Empty);
+                }
+                else if (continuation.ContentPresent)
+                {
+                    if (continuation.Content is { } content)
+                    {
+                        writer.WriteString("content", content);
+                    }
+                    else
+                    {
+                        writer.WriteNull("content");
+                    }
+                }
+
                 if (continuation?.ReasoningContent is { } reasoningContent)
                 {
                     writer.WriteString("reasoning_content", reasoningContent);

@@ -233,6 +233,53 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    [InlineData("empty")]
+    public void Assistant_content_wire_shape_is_replayed_exactly(string contentShape)
+    {
+        var contentProperty = contentShape switch
+        {
+            "missing" => string.Empty,
+            "null" => "\"content\":null,",
+            "empty" => "\"content\":\"\",",
+            _ => throw new ArgumentOutOfRangeException(nameof(contentShape)),
+        };
+        var profile = RequiredContinuationProfile();
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model", profile);
+        var response = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
+                + contentProperty
+                + "\"reasoning_content\":\"reasoning-marker\",\"tool_calls\":[{\"id\":\"call.shape\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            prepared);
+        var call = Assert.Single(response.ToolCalls);
+        var completed = new DocumentationScribeCompletedToolExchange(
+            call.ResponseIndex,
+            call.CallId,
+            call.OperationId,
+            call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            response.AssistantContinuation);
+
+        var replay = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model", profile);
+        using var replayDocument = JsonDocument.Parse(replay.BodyUtf8);
+        var assistant = replayDocument.RootElement.GetProperty("messages")[5];
+        var contentPresent = assistant.TryGetProperty("content", out var content);
+
+        Assert.Equal(contentShape != "missing", contentPresent);
+        if (contentShape == "null")
+        {
+            Assert.Equal(JsonValueKind.Null, content.ValueKind);
+        }
+        else if (contentShape == "empty")
+        {
+            Assert.Equal(string.Empty, content.GetString());
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Required_continuation_rejects_missing_or_null_but_accepts_empty(bool explicitNull)

@@ -181,6 +181,66 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         }
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    [InlineData("empty")]
+    public async Task Real_handler_replays_exact_assistant_content_wire_shape(string contentShape)
+    {
+        const string marker = "synthetic-integration-reasoning-marker";
+        var request = Request();
+        var terminal = Encoding.UTF8.GetString(ReadTerminal("skip-result.json"));
+        var contentProperty = contentShape switch
+        {
+            "missing" => string.Empty,
+            "null" => "\"content\":null,",
+            "empty" => "\"content\":\"\",",
+            _ => throw new ArgumentOutOfRangeException(nameof(contentShape)),
+        };
+        var toolResponse = Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
+            + contentProperty
+            + "\"reasoning_content\":\"" + marker + "\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\\\"referenceId\\\":\\\"one\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}");
+        var terminalResponse = ThinkingCompletion("cs_terminal", "call.terminal", terminal, "terminal-marker");
+        await using var server = new LoopbackServer(toolResponse, terminalResponse);
+        var profile = new OpenAiCompatibleChatCompletionsRequestProfile(
+            OpenAiCompatibleThinkingMode.Enabled,
+            OpenAiCompatibleReasoningEffort.High,
+            OpenAiCompatibleToolChoice.Omitted,
+            OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+            OpenAiCompatibleOutputTokenField.MaxTokens);
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                server.Endpoint,
+                "synthetic-model-v1",
+                profile,
+                networkEnabled: true));
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            Registry(request.ToolPolicyId, new SyntheticPort()),
+            new DocumentationScribeRuntimeOptions(
+                "provider.direct-http.synthetic.v1",
+                "model.synthetic.v1",
+                "scribe-protocol.openai-compatible.v1"));
+
+        var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        await server.Completion;
+
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(2, server.Requests.Length);
+        using var replay = JsonDocument.Parse(server.Requests[1].Body);
+        var assistant = replay.RootElement.GetProperty("messages")[5];
+        var contentPresent = assistant.TryGetProperty("content", out var content);
+        Assert.Equal(contentShape != "missing", contentPresent);
+        if (contentShape == "null")
+        {
+            Assert.Equal(JsonValueKind.Null, content.ValueKind);
+        }
+        else if (contentShape == "empty")
+        {
+            Assert.Equal(string.Empty, content.GetString());
+        }
+    }
+
     [Fact]
     public async Task Real_handler_returns_redirect_without_following_it()
     {

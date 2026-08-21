@@ -147,11 +147,27 @@ public sealed class DocumentationScribeCompletedToolExchange
 internal sealed class DocumentationScribeAssistantContinuation
 {
     internal DocumentationScribeAssistantContinuation(string content, string? reasoningContent)
+        : this(contentPresent: true, content, reasoningContent)
     {
-        Content = DocumentationScribeBoundary.ValidateCommittedText(
-            content,
-            nameof(content),
-            DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
+    }
+
+    internal DocumentationScribeAssistantContinuation(
+        bool contentPresent,
+        string? content,
+        string? reasoningContent)
+    {
+        if (!contentPresent && content is not null)
+        {
+            throw new ArgumentException("Absent assistant content cannot carry text.", nameof(content));
+        }
+
+        ContentPresent = contentPresent;
+        Content = content is null
+            ? null
+            : DocumentationScribeBoundary.ValidateCommittedText(
+                content,
+                nameof(content),
+                DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
         ReasoningContent = reasoningContent is null
             ? null
             : DocumentationScribeBoundary.ValidateCommittedText(
@@ -160,7 +176,9 @@ internal sealed class DocumentationScribeAssistantContinuation
                 DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
     }
 
-    internal string Content { get; }
+    internal bool ContentPresent { get; }
+
+    internal string? Content { get; }
 
     internal string? ReasoningContent { get; }
 
@@ -591,7 +609,18 @@ public sealed class DocumentationScribeModelResponse
             {
                 writer.WritePropertyName("assistantContinuation");
                 writer.WriteStartObject();
-                writer.WriteString("content", assistantContinuation.Content);
+                if (assistantContinuation.ContentPresent)
+                {
+                    if (assistantContinuation.Content is { } content)
+                    {
+                        writer.WriteString("content", content);
+                    }
+                    else
+                    {
+                        writer.WriteNull("content");
+                    }
+                }
+
                 if (assistantContinuation.ReasoningContent is { } reasoningContent)
                 {
                     writer.WriteString("reasoningContent", reasoningContent);
