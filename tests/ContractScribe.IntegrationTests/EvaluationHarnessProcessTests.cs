@@ -481,7 +481,7 @@ public sealed class EvaluationHarnessProcessTests
             Assert.False(File.Exists(Path.Join(output, "evaluation-report.json")));
             using var report = JsonDocument.Parse(await File.ReadAllBytesAsync(partial));
             Assert.Equal("partial", report.RootElement.GetProperty("status").GetString());
-            Assert.Equal("not-evaluable", report.RootElement
+            Assert.Equal("not-applicable", report.RootElement
                 .GetProperty("observationExpectationStatus").GetString());
             Assert.Empty(report.RootElement.GetProperty("missingExpectedObservationIds")
                 .EnumerateArray());
