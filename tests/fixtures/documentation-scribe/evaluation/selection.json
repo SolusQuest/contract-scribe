@@ -17,9 +17,24 @@
     "usage-fields-when-supplied",
     "validated-proposal-or-structured-skip-or-bounded-failure"
   ],
+  "liveScenarioIds": [
+    "conflicting-evidence",
+    "patch-rejection",
+    "useful-proposal"
+  ],
   "limits": {
+    "maximumAttempts": 2,
+    "maximumContextReferences": 8,
+    "maximumContextUtf8Bytes": 65536,
+    "maximumEvidenceReferences": 32,
+    "maximumEvidenceUtf8Bytes": 65536,
     "maximumProviderRequests": 8,
     "maximumToolRounds": 4,
-    "maximumToolCalls": 16
+    "maximumToolCalls": 16,
+    "maximumInputTokens": 65536,
+    "maximumUncachedInputTokens": 32768,
+    "maximumOutputTokens": 8192,
+    "maximumCostMicrounits": 5000000,
+    "maximumElapsedMilliseconds": 120000
   }
 }

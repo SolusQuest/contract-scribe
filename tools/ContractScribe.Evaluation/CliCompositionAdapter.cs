@@ -85,6 +85,20 @@ internal sealed class ProductionCompositionAdapter
                 "Compilation");
     }
 
+    internal static IDisposable InstallSignals(CancellationTokenSource cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(cancellation);
+        var assembly = Assembly.Load("ContractScribe.Cli");
+        var registrationType = RequireType(assembly, "ContractScribe.Cli.AuditSignalRegistration");
+        var install = RequireMethod(
+            registrationType,
+            "Install",
+            BindingFlags.Static | BindingFlags.Public,
+            [typeof(CancellationTokenSource)]);
+        return install.Invoke(null, [cancellation]) as IDisposable
+            ?? throw new InvalidOperationException("evaluation.cli.signal-registration-null");
+    }
+
     internal object CreateAuthority(
         ClassifiedRepositorySession session,
         ObservedRepositorySession observations,

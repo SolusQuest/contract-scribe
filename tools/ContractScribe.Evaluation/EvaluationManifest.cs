@@ -37,13 +37,25 @@ internal sealed record EvaluationScenario
 
     public required string Script { get; init; }
 
-    public required string[] ExpectedStatuses { get; init; }
+    public required string ExecutionDomain { get; init; }
+
+    public required string ExpectedStatus { get; init; }
+
+    public required string ExpectedCode { get; init; }
 
     public required string[] Coverage { get; init; }
 
     public string? ProposalLine { get; init; }
 
     public bool AddEvidenceConflict { get; init; }
+
+    public string? RequiredPlatform { get; init; }
+
+    public string? NonRequiredPlatformStatus { get; init; }
+
+    public string? NonRequiredPlatformCode { get; init; }
+
+    public int? MaximumElapsedMillisecondsOverride { get; init; }
 }
 
 internal sealed record EvaluationSelection
@@ -64,21 +76,44 @@ internal sealed record EvaluationSelection
 
     public required string[] ExpectedObservations { get; init; }
 
+    public required string[] LiveScenarioIds { get; init; }
+
     public required EvaluationSelectionLimits Limits { get; init; }
 }
 
 internal sealed record EvaluationSelectionLimits
 {
+    public required int MaximumAttempts { get; init; }
+
+    public required int MaximumContextReferences { get; init; }
+
+    public required int MaximumContextUtf8Bytes { get; init; }
+
+    public required int MaximumEvidenceReferences { get; init; }
+
+    public required int MaximumEvidenceUtf8Bytes { get; init; }
+
     public required int MaximumProviderRequests { get; init; }
 
     public required int MaximumToolRounds { get; init; }
 
     public required int MaximumToolCalls { get; init; }
+
+    public required int MaximumInputTokens { get; init; }
+
+    public required int MaximumUncachedInputTokens { get; init; }
+
+    public required int MaximumOutputTokens { get; init; }
+
+    public required long MaximumCostMicrounits { get; init; }
+
+    public required int MaximumElapsedMilliseconds { get; init; }
 }
 
 internal sealed record LoadedEvaluationManifest(
     string CorpusDirectory,
     string CorpusIdentity,
+    string SelectionIdentity,
     EvaluationManifest Manifest,
     EvaluationSelection Selection);
 
@@ -120,13 +155,32 @@ internal static class EvaluationManifestLoader
         }
 
         var selectionPath = ResolveFile(root, manifest.SelectionFile);
+        var selectionBytes = File.ReadAllBytes(selectionPath);
+        if (Sha256(selectionBytes) != manifest.Files.Single(file =>
+                file.Path == manifest.SelectionFile).Sha256)
+        {
+            throw new InvalidDataException("evaluation.manifest.file-mismatch");
+        }
+
         var selection = JsonSerializer.Deserialize<EvaluationSelection>(
-            File.ReadAllBytes(selectionPath),
+            selectionBytes,
             JsonOptions) ?? throw new InvalidDataException("evaluation.selection.invalid");
         ValidateSelection(selection);
+        if (!selection.LiveScenarioIds.All(id => manifest.Scenarios.Any(scenario =>
+                scenario.Id == id && scenario.ExecutionDomain == "live-and-offline"))
+            || !selection.LiveScenarioIds.Contains(manifest.SafetyGateCaseId, StringComparer.Ordinal))
+        {
+            throw new InvalidDataException("evaluation.selection.invalid");
+        }
+
         var identityBytes = Encoding.UTF8.GetBytes(
             Sha256(manifestBytes) + "\n" + string.Join("\n", identities));
-        return new LoadedEvaluationManifest(root, Sha256(identityBytes), manifest, selection);
+        return new LoadedEvaluationManifest(
+            root,
+            Sha256(identityBytes),
+            Sha256(selectionBytes),
+            manifest,
+            selection);
     }
 
     private static void ValidateManifest(EvaluationManifest manifest)
@@ -168,18 +222,27 @@ internal static class EvaluationManifestLoader
             if (!IsId(scenario.Id)
                 || string.IsNullOrEmpty(scenario.TargetDocumentationId)
                 || !KnownScript(scenario.Script)
-                || scenario.ExpectedStatuses.Length == 0
+                || scenario.ExecutionDomain is not ("offline-only" or "live-and-offline")
+                || !IsId(scenario.ExpectedStatus)
+                || !IsId(scenario.ExpectedCode)
                 || scenario.Coverage.Length == 0
-                || scenario.ExpectedStatuses.Any(status => !IsId(status))
                 || scenario.Coverage.Any(coverage => !IsId(coverage))
-                || !scenario.ExpectedStatuses.SequenceEqual(
-                    scenario.ExpectedStatuses.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
-                    StringComparer.Ordinal)
                 || !scenario.Coverage.SequenceEqual(
                     scenario.Coverage.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
                     StringComparer.Ordinal)
                 || scenario.ProposalLine is { } line
-                    && (line.Length == 0 || line.Length > 400 || line.Any(char.IsControl)))
+                    && (line.Length == 0 || line.Length > 400 || line.Any(char.IsControl))
+                || scenario.RequiredPlatform is not (null or "linux" or "windows" or "macos")
+                || (scenario.RequiredPlatform is null)
+                    != (scenario.NonRequiredPlatformStatus is null)
+                || (scenario.RequiredPlatform is null)
+                    != (scenario.NonRequiredPlatformCode is null)
+                || scenario.NonRequiredPlatformStatus is { } platformStatus
+                    && !IsId(platformStatus)
+                || scenario.NonRequiredPlatformCode is { } platformCode
+                    && !IsId(platformCode)
+                || scenario.MaximumElapsedMillisecondsOverride is { } maximumElapsed
+                    && maximumElapsed is < 1 or > 120_000)
             {
                 throw new InvalidDataException("evaluation.manifest.invalid");
             }
@@ -211,9 +274,24 @@ internal static class EvaluationManifestLoader
             || !selection.ExpectedObservations.SequenceEqual(
                 selection.ExpectedObservations.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
                 StringComparer.Ordinal)
+            || selection.LiveScenarioIds.Length == 0
+            || selection.LiveScenarioIds.Any(id => !IsId(id))
+            || !selection.LiveScenarioIds.SequenceEqual(
+                selection.LiveScenarioIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
+                StringComparer.Ordinal)
+            || selection.Limits.MaximumAttempts != 2
+            || selection.Limits.MaximumContextReferences != 8
+            || selection.Limits.MaximumContextUtf8Bytes != 65_536
+            || selection.Limits.MaximumEvidenceReferences != 32
+            || selection.Limits.MaximumEvidenceUtf8Bytes != 65_536
             || selection.Limits.MaximumProviderRequests != 8
             || selection.Limits.MaximumToolRounds != 4
-            || selection.Limits.MaximumToolCalls != 16)
+            || selection.Limits.MaximumToolCalls != 16
+            || selection.Limits.MaximumInputTokens != 65_536
+            || selection.Limits.MaximumUncachedInputTokens != 32_768
+            || selection.Limits.MaximumOutputTokens != 8_192
+            || selection.Limits.MaximumCostMicrounits != 5_000_000
+            || selection.Limits.MaximumElapsedMilliseconds != 120_000)
         {
             throw new InvalidDataException("evaluation.selection.invalid");
         }
@@ -308,7 +386,7 @@ internal static class EvaluationManifestLoader
 
     private static bool KnownScript(string value) => value is
         "tool-proposal" or "proposal" or "skip" or "invalid-tool" or "malformed-output"
-        or "rate-limited" or "unavailable" or "budget-exhausted";
+        or "rate-limited" or "unavailable" or "budget-exhausted" or "timeout";
 
     private static string Sha256(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

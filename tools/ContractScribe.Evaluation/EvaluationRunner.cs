@@ -45,14 +45,6 @@ internal static class EvaluationApplication
                 return 2;
             }
 
-            string? outputDirectory = null;
-            if (options.OutputDirectory is not null
-                && !EvaluationOutput.TryResolveDirectory(options.OutputDirectory, out outputDirectory))
-            {
-                await standardError.WriteLineAsync("evaluation.output.invalid").ConfigureAwait(false);
-                return 2;
-            }
-
             using var liveExchange = options.IsLive
                 ? new OpenAiCompatibleHttpModelExchange(new OpenAiCompatibleHttpTransportOptions(
                     options.Endpoint!,
@@ -65,21 +57,12 @@ internal static class EvaluationApplication
                 options,
                 liveExchange is null ? null : _ => liveExchange,
                 marker,
-                outputDirectory);
+                options.OutputDirectory);
             var report = await runner.RunAsync(cancellationToken).ConfigureAwait(false);
             var bytes = EvaluationReportWriter.Serialize(
                 report,
                 marker,
-                loaded.CorpusDirectory,
-                outputDirectory ?? string.Empty);
-            if (outputDirectory is not null)
-            {
-                await EvaluationOutput.WriteAtomicAsync(
-                    outputDirectory,
-                    "evaluation-report.json",
-                    bytes,
-                    cancellationToken).ConfigureAwait(false);
-            }
+                loaded.CorpusDirectory);
 
             if (options.IsLive)
             {
@@ -90,7 +73,7 @@ internal static class EvaluationApplication
                 await standardOutput.WriteAsync(System.Text.Encoding.UTF8.GetString(bytes)).ConfigureAwait(false);
             }
 
-            return 0;
+            return ResultExitCode(options, report);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -103,6 +86,9 @@ internal static class EvaluationApplication
             return 1;
         }
     }
+
+    internal static int ResultExitCode(EvaluationOptions options, EvaluationReport report) =>
+        !options.IsLive && report.Aggregate.ExpectedDifferedCount != 0 ? 1 : 0;
 
     private static string FailureCode(Exception exception)
     {
@@ -122,40 +108,44 @@ internal sealed class EvaluationRunner
     private readonly EvaluationOptions options;
     private readonly Func<PreparedEvaluationCase, IDocumentationScribeModelExchange>? liveExchangeFactory;
     private readonly SensitiveMarker? credentialMarker;
-    private readonly string? outputDirectory;
+    private readonly string? requestedOutputDirectory;
     private readonly string? preparedCorpusDirectory;
     private readonly List<EvaluationCaseReport> reports = [];
+    private string? outputDirectory;
+    private string[] outputForbiddenRoots = [];
 
     internal EvaluationRunner(
         LoadedEvaluationManifest loaded,
         EvaluationOptions options,
         Func<PreparedEvaluationCase, IDocumentationScribeModelExchange>? liveExchangeFactory,
         SensitiveMarker? credentialMarker,
-        string? outputDirectory,
+        string? requestedOutputDirectory,
         string? preparedCorpusDirectory = null)
     {
         this.loaded = loaded;
         this.options = options;
         this.liveExchangeFactory = liveExchangeFactory;
         this.credentialMarker = credentialMarker;
-        this.outputDirectory = outputDirectory;
+        this.requestedOutputDirectory = requestedOutputDirectory;
         this.preparedCorpusDirectory = preparedCorpusDirectory;
     }
 
     internal async Task<EvaluationReport> RunAsync(CancellationToken cancellationToken)
     {
-        var selected = options.Mode == EvaluationMode.LiveSafetyGate
-            ? loaded.Manifest.Scenarios.Where(scenario =>
-                scenario.Id == loaded.Manifest.SafetyGateCaseId).ToArray()
-            : loaded.Manifest.Scenarios;
-        await PersistAsync(
-            EvaluationReport.Create(loaded, options, reports, selected.Length, false, null),
-            cancellationToken).ConfigureAwait(false);
+        var liveIds = loaded.Selection.LiveScenarioIds.ToHashSet(StringComparer.Ordinal);
+        var selected = options.Mode switch
+        {
+            EvaluationMode.LiveSafetyGate => loaded.Manifest.Scenarios.Where(scenario =>
+                scenario.Id == loaded.Manifest.SafetyGateCaseId).ToArray(),
+            EvaluationMode.LiveAll => loaded.Manifest.Scenarios.Where(scenario =>
+                liveIds.Contains(scenario.Id)).ToArray(),
+            _ => loaded.Manifest.Scenarios,
+        };
         var stopwatch = options.IsLive ? Stopwatch.StartNew() : null;
         var adapter = new ProductionCompositionAdapter();
         var preparedPathFile = Path.Join(AppContext.BaseDirectory, "evaluation-corpus-path.txt");
         var preparedPath = preparedCorpusDirectory ?? File.ReadAllText(preparedPathFile).Trim();
-        if (!EvaluationOutput.TryResolveDirectory(preparedPath, out var preparedDirectory)
+        if (!EvaluationOutput.TryResolveExistingTemporaryDirectory(preparedPath, out var preparedDirectory)
             || preparedDirectory is null)
         {
             throw new InvalidDataException("evaluation.corpus.prepared-path-invalid");
@@ -167,56 +157,143 @@ internal sealed class EvaluationRunner
             throw new InvalidDataException("evaluation.corpus.prepared-mismatch");
         }
 
-        await using var repository = await EvaluationRepositorySession.CreateAsync(
-            preparedCorpus,
-            adapter,
-            cancellationToken).ConfigureAwait(false);
-        foreach (var scenario in selected)
+        var preparedRepository = Path.GetDirectoryName(Path.Join(
+            preparedDirectory,
+            preparedCorpus.Manifest.RepositoryProject))
+            ?? throw new InvalidDataException("evaluation.repository.path-invalid");
+        var checkout = FindCheckoutRoot();
+        outputForbiddenRoots =
+        [
+            loaded.CorpusDirectory,
+            preparedDirectory,
+            preparedRepository,
+            checkout,
+        ];
+        if (requestedOutputDirectory is not null
+            && !EvaluationOutput.TryResolveDirectory(
+                requestedOutputDirectory,
+                outputForbiddenRoots,
+                out outputDirectory))
         {
-            try
+            throw new InvalidDataException("evaluation.output.invalid");
+        }
+
+        await PersistAsync(
+            EvaluationReport.Create(
+                loaded,
+                options,
+                reports,
+                selected.Length,
+                false,
+                null),
+            CancellationToken.None).ConfigureAwait(false);
+
+        EvaluationRepositorySession repository;
+        try
+        {
+            repository = await EvaluationRepositorySession.CreateAsync(
+                preparedCorpus,
+                adapter,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested
+            && selected.FirstOrDefault() is { } interrupted)
+        {
+            reports.Add(FailedCase(interrupted, "cancelled", "evaluation.case.cancelled"));
+            await PersistAsync(
+                EvaluationReport.Create(
+                    loaded,
+                    options,
+                    reports,
+                    selected.Length,
+                    false,
+                    Elapsed(stopwatch),
+                    interrupted.Id),
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        await using (repository.ConfigureAwait(false))
+        {
+            foreach (var scenario in selected)
             {
-                var prepared = repository.Prepare(loaded, scenario);
-                var baseExchange = liveExchangeFactory?.Invoke(prepared)
-                    ?? new ScriptedEvaluationExchange(prepared);
-                var observing = new CostObservingExchange(baseExchange, options.CostPolicy);
-                var outcome = await adapter.ExecuteAsync(
-                    prepared.SelectedAudit,
-                    prepared.RequestBytes,
-                    prepared.AttemptId,
-                    RuntimeOptions(),
-                    observing,
-                    cancellationToken).ConfigureAwait(false);
-                reports.Add(CreateCaseReport(prepared, outcome, observing.Observations));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                reports.Add(FailedCase(scenario, "cancelled", "evaluation.case.cancelled"));
+                await PersistAsync(
+                    EvaluationReport.Create(
+                        loaded,
+                        options,
+                        reports,
+                        selected.Length,
+                        false,
+                        Elapsed(stopwatch),
+                        scenario.Id),
+                    CancellationToken.None).ConfigureAwait(false);
+                var cancelled = false;
+                try
+                {
+                    var prepared = repository.Prepare(loaded, scenario);
+                    var baseExchange = liveExchangeFactory?.Invoke(prepared)
+                        ?? new ScriptedEvaluationExchange(prepared);
+                    var observing = new CostObservingExchange(baseExchange, options.CostPolicy);
+                    var outcome = await adapter.ExecuteAsync(
+                        prepared.SelectedAudit,
+                        prepared.RequestBytes,
+                        prepared.AttemptId,
+                        RuntimeOptions(),
+                        observing,
+                        cancellationToken).ConfigureAwait(false);
+                    var caseReport = CreateCaseReport(prepared, outcome, observing.Observations);
+                    reports.Add(caseReport);
+                    cancelled = caseReport.Status == "cancelled";
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    reports.Add(FailedCase(scenario, "cancelled", "evaluation.case.cancelled"));
+                    cancelled = true;
+                }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                {
+                    reports.Add(FailedCase(
+                        scenario,
+                        "failed",
+                        SafeCaseCode(exception)));
+                }
+
+                if (cancelled)
+                {
+                    await PersistAsync(
+                        EvaluationReport.Create(
+                            loaded,
+                            options,
+                            reports,
+                            selected.Length,
+                            false,
+                            Elapsed(stopwatch),
+                            scenario.Id),
+                        CancellationToken.None).ConfigureAwait(false);
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
                 await PersistAsync(
                     EvaluationReport.Create(loaded, options, reports, selected.Length, false, Elapsed(stopwatch)),
-                    CancellationToken.None).ConfigureAwait(false);
-                throw;
+                    cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-            {
-                reports.Add(FailedCase(
-                    scenario,
-                    "failed",
-                    SafeCaseCode(exception)));
-            }
-
-            await PersistAsync(
-                EvaluationReport.Create(loaded, options, reports, selected.Length, false, Elapsed(stopwatch)),
-                cancellationToken).ConfigureAwait(false);
         }
 
         stopwatch?.Stop();
-        return EvaluationReport.Create(
+        var final = EvaluationReport.Create(
             loaded,
             options,
             reports,
             selected.Length,
             true,
             Elapsed(stopwatch));
+        await PersistAsync(final, cancellationToken).ConfigureAwait(false);
+        if (outputDirectory is not null)
+        {
+            EvaluationOutput.DeleteOwnedPartial(outputDirectory, outputForbiddenRoots);
+        }
+
+        return final;
     }
 
     private async Task PersistAsync(EvaluationReport report, CancellationToken cancellationToken)
@@ -226,15 +303,13 @@ internal sealed class EvaluationRunner
             return;
         }
 
-        var bytes = EvaluationReportWriter.Serialize(
-            report,
-            credentialMarker,
-            loaded.CorpusDirectory,
-            outputDirectory);
+        var forbiddenValues = outputForbiddenRoots.Append(outputDirectory).ToArray();
+        var bytes = EvaluationReportWriter.Serialize(report, credentialMarker, forbiddenValues);
         await EvaluationOutput.WriteAtomicAsync(
             outputDirectory,
             report.Status == "complete" ? "evaluation-report.json" : "evaluation-partial.json",
             bytes,
+            outputForbiddenRoots,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -248,19 +323,20 @@ internal sealed class EvaluationRunner
             "model.synthetic.v1",
             "scribe-protocol.v1");
 
-    private static EvaluationCaseReport CreateCaseReport(
+    private EvaluationCaseReport CreateCaseReport(
         PreparedEvaluationCase prepared,
         EvaluationCompositionOutcome outcome,
         IReadOnlyList<EvaluationCostObservation> costObservations)
     {
         var status = Status(outcome.Status);
+        var expectation = Expectation(prepared.Scenario, status, outcome.Code);
         var envelope = outcome.RunResult?.RunEnvelope;
         var cost = AggregateCost(costObservations);
         return new EvaluationCaseReport(
             prepared.Scenario.Id,
             status,
             outcome.Code,
-            prepared.Scenario.ExpectedStatuses.Contains(status, StringComparer.Ordinal),
+            expectation,
             envelope?.AttemptNumber ?? 0,
             envelope?.ProviderRequestCount ?? 0,
             envelope?.ToolRoundCount ?? 0,
@@ -280,7 +356,14 @@ internal sealed class EvaluationRunner
                 status,
                 prepared.Scenario.ProposalLine),
             "passed",
-            prepared.Scenario.Coverage.Order(StringComparer.Ordinal).ToArray());
+            prepared.Scenario.Coverage.Order(StringComparer.Ordinal).ToArray(),
+            ObservedCoverage(
+                prepared.Scenario,
+                options.IsLive,
+                status,
+                outcome.Code,
+                envelope,
+                outcome.RunResult));
     }
 
     private static EvaluationCaseReport FailedCase(
@@ -290,7 +373,7 @@ internal sealed class EvaluationRunner
         scenario.Id,
         status,
         code,
-        scenario.ExpectedStatuses.Contains(status, StringComparer.Ordinal),
+        "differed",
         0,
         0,
         0,
@@ -299,7 +382,8 @@ internal sealed class EvaluationRunner
         new EvaluationCostReport("not-reported", null, null),
         null,
         "passed",
-        scenario.Coverage.Order(StringComparer.Ordinal).ToArray());
+        scenario.Coverage.Order(StringComparer.Ordinal).ToArray(),
+        [code, status]);
 
     private static EvaluationCostReport AggregateCost(
         IReadOnlyList<EvaluationCostObservation> observations)
@@ -327,6 +411,102 @@ internal sealed class EvaluationRunner
                 ? "complete"
                 : "partial";
         return new EvaluationCostReport(status, currencies[0], amount);
+    }
+
+    private static string Expectation(EvaluationScenario scenario, string status, string code)
+    {
+        if (scenario.ExpectedStatus == status && scenario.ExpectedCode == code)
+        {
+            return "matched";
+        }
+
+        return scenario.RequiredPlatform is { } platform
+            && platform != PlatformId()
+            && scenario.NonRequiredPlatformStatus == status
+            && scenario.NonRequiredPlatformCode == code
+            ? "platform-not-observed"
+            : "differed";
+    }
+
+    private static string[] ObservedCoverage(
+        EvaluationScenario scenario,
+        bool isLive,
+        string status,
+        string code,
+        DocumentationScribeRunEnvelope? envelope,
+        DocumentationScribeRunResult? runResult)
+    {
+        var observed = new HashSet<string>(StringComparer.Ordinal) { status, code };
+        if (envelope?.ProviderRequestCount > 0)
+        {
+            observed.Add("provider-request");
+        }
+
+        if (envelope?.ToolCallCount > 0)
+        {
+            observed.Add("tool-call");
+        }
+
+        if (envelope?.Usage is not null)
+        {
+            observed.Add("usage-observed");
+        }
+
+        if (envelope?.Cache is { } cache)
+        {
+            observed.Add(DocumentationScribeVocabulary.GetId(cache));
+        }
+
+        if (runResult?.Terminal is DocumentationScribeProposalTerminal)
+        {
+            observed.Add("proposal-validated");
+        }
+
+        if (!isLive && envelope?.ProviderRequestCount > 0)
+        {
+            foreach (var item in scenario.Script switch
+            {
+                "tool-proposal" => new[] { "tool-loop", "useful-proposal" },
+                "skip" when scenario.Id == "structured-skip" => ["structured-skip"],
+                "skip" => ["evidence-insufficient"],
+                "invalid-tool" => ["tool-invalid", "tool-unsupported"],
+                "malformed-output" => ["model-output-malformed"],
+                "rate-limited" => ["provider-rate-limit", "retry"],
+                "unavailable" => ["provider-unavailable"],
+                "budget-exhausted" => ["budget-exhausted"],
+                "timeout" => ["timeout"],
+                _ => [],
+            })
+            {
+                observed.Add(item);
+            }
+        }
+
+        return observed.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static string PlatformId() => OperatingSystem.IsLinux()
+        ? "linux"
+        : OperatingSystem.IsWindows()
+            ? "windows"
+            : OperatingSystem.IsMacOS()
+                ? "macos"
+                : "other";
+
+    private static string FindCheckoutRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new InvalidDataException("evaluation.checkout.not-found");
     }
 
     private static string Status(string value) => value switch

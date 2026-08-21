@@ -39,7 +39,7 @@
     },
     {
       "path": "selection.json",
-      "sha256": "4c392b960af36a403234204c74adede2cf016229dbc157b73e50fd0688f173f4"
+      "sha256": "c5f1d63cce165b10a99290b0b56c484180aa61df6ef5913d7c527940dc7f20c8"
     }
   ],
   "scenarios": [
@@ -47,29 +47,40 @@
       "id": "useful-proposal",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "tool-proposal",
-      "expectedStatuses": ["patch-accepted", "patch-stale", "runtime-failure"],
+      "executionDomain": "live-and-offline",
+      "expectedStatus": "patch-accepted",
+      "expectedCode": "scribe.patch.accepted",
       "coverage": ["m2-acceptance", "nested-instructions", "prompt-injection", "tool-loop", "usage-cache", "useful-proposal"],
-      "proposalLine": "Runs the selected operation."
+      "proposalLine": "Runs the selected operation.",
+      "requiredPlatform": "linux",
+      "nonRequiredPlatformStatus": "runtime-failure",
+      "nonRequiredPlatformCode": "patch.host.environment-failure"
     },
     {
       "id": "structured-skip",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "skip",
-      "expectedStatuses": ["proposal-skipped"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "proposal-skipped",
+      "expectedCode": "scribe.proposal.skipped",
       "coverage": ["structured-skip"]
     },
     {
       "id": "insufficient-evidence",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "skip",
-      "expectedStatuses": ["proposal-skipped"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "proposal-skipped",
+      "expectedCode": "scribe.proposal.skipped",
       "coverage": ["evidence-insufficient"]
     },
     {
       "id": "conflicting-evidence",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "skip",
-      "expectedStatuses": ["preflight-rejected"],
+      "executionDomain": "live-and-offline",
+      "expectedStatus": "preflight-rejected",
+      "expectedCode": "scribe.preflight.prompt-evidence-mismatch",
       "coverage": ["evidence-conflict"],
       "addEvidenceConflict": true
     },
@@ -77,21 +88,27 @@
       "id": "invalid-tool",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "invalid-tool",
-      "expectedStatuses": ["runtime-failure"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "runtime-failure",
+      "expectedCode": "scribe.failure.tool-protocol",
       "coverage": ["tool-invalid", "tool-unsupported"]
     },
     {
       "id": "malformed-output",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "malformed-output",
-      "expectedStatuses": ["runtime-failure"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "runtime-failure",
+      "expectedCode": "scribe.failure.validation",
       "coverage": ["model-output-malformed", "proposal-validation"]
     },
     {
       "id": "patch-rejection",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.AlreadyDocumented",
       "script": "proposal",
-      "expectedStatuses": ["patch-rejected", "patch-stale", "runtime-failure"],
+      "executionDomain": "live-and-offline",
+      "expectedStatus": "patch-rejected",
+      "expectedCode": "scribe.patch.rejected",
       "coverage": ["m2-rejection", "proposal-validation"],
       "proposalLine": "Does nothing."
     },
@@ -99,22 +116,38 @@
       "id": "rate-limited",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "rate-limited",
-      "expectedStatuses": ["provider-failure"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "provider-failure",
+      "expectedCode": "scribe.failure.provider",
       "coverage": ["partial-run", "provider-rate-limit", "retry"]
     },
     {
       "id": "provider-unavailable",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "unavailable",
-      "expectedStatuses": ["provider-failure"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "provider-failure",
+      "expectedCode": "scribe.failure.provider",
       "coverage": ["partial-run", "provider-unavailable"]
     },
     {
       "id": "budget-exhausted",
       "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
       "script": "budget-exhausted",
-      "expectedStatuses": ["budget-exhausted"],
+      "executionDomain": "offline-only",
+      "expectedStatus": "budget-exhausted",
+      "expectedCode": "scribe.failure.budget",
       "coverage": ["budget-exhausted", "partial-run"]
+    },
+    {
+      "id": "timeout",
+      "targetDocumentationId": "M:EvaluationCorpus.Fixture.Run",
+      "script": "timeout",
+      "executionDomain": "offline-only",
+      "expectedStatus": "timeout",
+      "expectedCode": "scribe.failure.timeout",
+      "coverage": ["partial-run", "timeout"],
+      "maximumElapsedMillisecondsOverride": 50
     }
   ]
 }

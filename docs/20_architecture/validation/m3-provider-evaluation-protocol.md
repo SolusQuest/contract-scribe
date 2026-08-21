@@ -23,7 +23,7 @@ Run the deterministic offline corpus without a secret or network:
 dotnet run --project tools/ContractScribe.Evaluation/ContractScribe.Evaluation.csproj -- --offline --corpus tests/fixtures/documentation-scribe/evaluation
 ```
 
-Omitting `--offline` selects the same offline default. Offline mode uses deterministic model exchanges but still traverses production composition, real closed tools, terminal validation, proposal projection, and M2. Its persisted report uses `latency.status = not-measured`; complete report bytes must remain stable across fresh processes, working directories, cultures, and time zones.
+Omitting `--offline` selects the same offline default. Offline mode uses deterministic model exchanges but still traverses production composition, real closed tools, terminal validation, proposal projection, and M2. Its eleven cases freeze one exact status and code each, including a production-runtime timeout. Required Ubuntu validation must match all eleven. The Linux-only candidate workspace means Windows records the useful proposal as `platform-not-observed` rather than treating its bounded host failure as an accepted semantic outcome. A true exact-platform difference makes the command fail. The persisted report uses `latency.status = not-measured`; complete report bytes must remain stable across fresh processes, working directories, cultures, and time zones.
 
 ## Frozen live selection
 
@@ -37,6 +37,10 @@ The official [GPT-4.1 mini model record](https://developers.openai.com/api/docs/
 
 Selection means only that M3-P4 may test this exact configuration. Real request acceptance, tool-loop behavior, field availability, proposal usefulness, latency, cache reporting, and practical cost remain observations from the authorized exact-revision run.
 
+The selection freezes the complete Scribe execution-control set: attempts; context and evidence counts and byte ceilings; provider requests, tool rounds, and tool calls; total and uncached input plus output token ceilings; maximum cost; and elapsed time. Its hash is emitted as `selectionIdentity`. Caller-reviewed pricing remains a separate runtime input identified by `costConfigurationIdentity`.
+
+Only `conflicting-evidence`, `patch-rejection`, and `useful-proposal` are live-eligible. They carry distinct production inputs. Synthetic transport cases for structured skip, insufficient evidence, invalid tool/output, rate limit, unavailability, budget exhaustion, and timeout remain offline-only and cannot add paid requests or claim live evidence. Live reports separate declarative `intendedCoverage` from outcome-derived `observedCoverage`.
+
 ## Live invocation and safety gate
 
 Live execution must launch the already-built artifact directly. Do not use `dotnet run`, `dotnet test`, restore, or build with a credential present.
@@ -48,7 +52,7 @@ set CONTRACTSCRIBE_EVALUATION_API_KEY=<operator-injected-value>
 dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evaluation.dll --live --safety-gate --corpus tests/fixtures/documentation-scribe/evaluation --endpoint https://api.openai.com/v1/chat/completions --model gpt-4.1-mini-2025-04-14 --secret-env CONTRACTSCRIBE_EVALUATION_API_KEY --output <ignored-directory-below-os-temp> --currency <currency-id> --cached-input-rate <microunits-per-million> --uncached-input-rate <microunits-per-million> --output-rate <microunits-per-million>
 ```
 
-The safety gate executes exactly `manifest.safetyGateCaseId` to a terminal disposition under its normal provider-request and tool-call limits. It can make request 1, execute a real tool, and make request 2 before terminal completion; it stops before initializing or sending any request for corpus case 2. The report records denominator 1, actual request/tool counts, `executionPurpose = safety-gate`, and `fullCorpusComplete = false`.
+The safety gate executes exactly `manifest.safetyGateCaseId` to a terminal disposition under its normal provider-request and tool-call limits. It can make request 1, execute a real tool, and make request 2 before terminal completion; it stops before initializing or sending any request for live case 2. The report records denominator 1, actual request/tool counts, `executionPurpose = safety-gate`, and `fullCorpusComplete = false`.
 
 After human inspection of that local report, M3-P4 may execute the full selected corpus only under its separate authorization:
 
@@ -65,7 +69,9 @@ Argument parsing reads only enough syntax to identify live mode and the named en
 
 After credential acquisition the evaluator contains no process-launch, shell, Git, build, restore, test, or external MSBuild API. The already-prepared corpus is loaded by the reviewed in-process production loader only after the environment entry is absent. The secret is never an argument, prompt field, report field, exception message, or child environment value.
 
-Missing opt-in, selector, endpoint/model match, secret name/value, caller cost configuration, or confined output directory fails before any provider request. The endpoint and model must exactly match the frozen selection.
+Missing opt-in, selector, endpoint/model match, secret name/value, complete caller cost configuration, or confined output directory fails before any provider request. Live mode requires currency plus all three rates; only offline replay can be unpriced. The endpoint and model must exactly match the frozen selection.
+
+The executable installs the same cooperative Ctrl+C/SIGTERM lifetime pattern used by the product CLI and passes that token through repository preparation, the production composition, provider transport, tools, patching, and report publication. A handled signal persists the active case as canceled in the partial report, suppresses the complete report, and exits with a bounded error code.
 
 ## Cost observations
 
@@ -77,10 +83,10 @@ Products and sums use checked `Int128`; the combined response numerator is ceili
 
 ## Report and sanitization contract
 
-Live output requires an operator-selected physical directory below the operating-system temporary root. Symlink, junction, reparse, checkout, corpus, and non-temporary destinations are rejected. Reports are same-directory atomic replacements. A partial allowlisted report is written before the first case and after each disposition; only the selected denominator can become complete. Partial, interrupted, canceled, timeout, budget, rate-limit, malformed, unavailable, validation, and M2 outcomes stay explicit and are never called passed or compatible.
+Live output requires an operator-selected physical directory below the operating-system temporary root. Symlink, junction, reparse, non-temporary destinations, prior evaluation report files, and any equality or ancestor/descendant overlap with the checkout, caller corpus, prepared corpus, or analyzed repository are rejected before publication or provider invocation. The same physical non-overlap check runs immediately before every same-directory atomic replacement. A partial allowlisted report names the active case before its initialization and is updated after each disposition; only the selected denominator can become complete, and successful final publication removes the partial file. Partial, interrupted, canceled, timeout, budget, rate-limit, malformed, unavailable, validation, and M2 outcomes stay explicit and are never called passed or compatible.
 
 The report allowlist contains corpus/selection/cost/source identities; bounded case IDs, status codes, counts, usage/cache/cost completeness, and live elapsed time; proposal-validation and M2 outcomes; and production-validated bounded content units with claim category and sorted evidence IDs for local human review. Expected-line differences are bounded IDs.
 
-Reports exclude credentials, private source, complete prompts, complete tool transcripts, raw requests/responses, hidden reasoning, complete diffs, absolute paths, exception messages/graphs/stacks, and unvalidated provider prose. A fail-closed scan covers the credential fingerprint, checkout/corpus/output paths, bearer/header tokens, forbidden payload names, and the hostile fixture marker. Detection suppresses the new report payload and emits only a bounded failure code.
+Reports exclude credentials, private source, complete prompts, complete tool transcripts, raw requests/responses, hidden reasoning, complete diffs, absolute paths, exception messages/graphs/stacks, and unvalidated provider prose. A fail-closed scan covers the credential fingerprint, exact checkout/source/prepared/output paths, general POSIX rooted paths, Windows drive roots, UNC/device roots, JSON-escaped forms, bearer/header tokens, forbidden payload names, and the hostile fixture marker. URI handling remains distinct from filesystem paths. Detection suppresses the new report payload and emits only a bounded failure code.
 
 M3-P4 owns human review of proposal usefulness, unsupported claims, material quality failures, request/tool/terminal behavior, usage/cache/latency/cost observations, and exact-revision Issue evidence. Nothing in the evaluator edits tracked files, posts to GitHub, or copies live output into the repository.

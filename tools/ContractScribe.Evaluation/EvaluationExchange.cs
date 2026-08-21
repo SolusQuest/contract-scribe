@@ -15,12 +15,23 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
     internal ScriptedEvaluationExchange(PreparedEvaluationCase prepared) =>
         this.prepared = prepared ?? throw new ArgumentNullException(nameof(prepared));
 
-    public ValueTask<DocumentationScribeModelResponse> SendAsync(
+    public async ValueTask<DocumentationScribeModelResponse> SendAsync(
         DocumentationScribeModelRequest request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(prepared.Scenario.Script switch
+        if (prepared.Scenario.Script == "timeout")
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("evaluation.timeout.unreachable");
+        }
+
+        if (prepared.Scenario.Script == "tool-proposal" && request.ProviderRequestNumber == 1)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
+
+        return prepared.Scenario.Script switch
         {
             "tool-proposal" => ToolProposal(request),
             "proposal" => Proposal(),
@@ -31,7 +42,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
             "unavailable" => Failure(DocumentationScribeModelFailureCode.PermanentUnavailable),
             "budget-exhausted" => BudgetExhausted(),
             _ => throw new InvalidOperationException("evaluation.script.unknown"),
-        });
+        };
     }
 
     private DocumentationScribeModelResponse ToolProposal(DocumentationScribeModelRequest request)

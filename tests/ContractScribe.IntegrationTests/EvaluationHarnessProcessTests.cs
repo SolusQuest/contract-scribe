@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using ContractScribe.Evaluation;
@@ -31,7 +32,7 @@ public sealed class EvaluationHarnessProcessTests
             new Uri(loaded.Selection.Endpoint),
             loaded.Selection.Model,
             "UNUSED_TEST_SECRET",
-            EvaluationCostPolicy.Unpriced);
+            new EvaluationCostPolicy("usd", 1, 1, 1));
         var factoryCalls = 0;
         var runner = new EvaluationRunner(
             loaded,
@@ -53,9 +54,59 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(2, result.ProviderRequestCount);
         Assert.Equal(1, result.ToolRoundCount);
         Assert.Equal(1, result.ToolCallCount);
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("patch-accepted", result.Status);
+            Assert.Equal("scribe.patch.accepted", result.Code);
+            Assert.Equal("patch-accepted", result.Proposal?.PatchStatus);
+        }
         Assert.False(report.FullCorpusComplete);
         Assert.Equal("safety-gate", report.ExecutionPurpose);
         Assert.Equal(1, report.Aggregate.SelectedCaseCount);
+    }
+
+    [Fact]
+    public async Task LiveAllUsesFrozenSubsetAndSeparatesIntendedFromObservedCoverage()
+    {
+        var root = FindRepositoryRoot();
+        var loaded = EvaluationManifestLoader.Load(CorpusRoot(root));
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException();
+        var prepared = File.ReadAllText(Path.Join(
+            root,
+            "tools",
+            "ContractScribe.Evaluation",
+            "bin",
+            configuration,
+            "net10.0",
+            "evaluation-corpus-path.txt")).Trim();
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveAll,
+            CorpusRoot(root),
+            null,
+            new Uri(loaded.Selection.Endpoint),
+            loaded.Selection.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new ScriptedEvaluationExchange(evaluationCase),
+            null,
+            null,
+            prepared);
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        Assert.Equal(
+            ["conflicting-evidence", "patch-rejection", "useful-proposal"],
+            report.Cases.Select(item => item.CaseId).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(3, report.Aggregate.SelectedCaseCount);
+        Assert.DoesNotContain(report.Cases, item => item.CaseId == "invalid-tool");
+        var useful = Assert.Single(report.Cases, item => item.CaseId == "useful-proposal");
+        Assert.Contains("prompt-injection", useful.IntendedCoverage);
+        Assert.DoesNotContain("prompt-injection", useful.ObservedCoverage);
+        Assert.Contains("tool-call", useful.ObservedCoverage);
     }
 
     [Fact]
@@ -85,7 +136,35 @@ public sealed class EvaluationHarnessProcessTests
         using var report = JsonDocument.Parse(first.StandardOutput);
         Assert.Equal("complete", report.RootElement.GetProperty("status").GetString());
         Assert.Equal("not-measured", report.RootElement.GetProperty("latency").GetProperty("status").GetString());
-        Assert.Equal(10, report.RootElement.GetProperty("cases").GetArrayLength());
+        var cases = report.RootElement.GetProperty("cases").EnumerateArray().ToArray();
+        Assert.Equal(11, cases.Length);
+        Assert.Equal(
+            new Dictionary<string, (string Status, string Code)>(StringComparer.Ordinal)
+            {
+                ["useful-proposal"] = (OperatingSystem.IsLinux() ? "patch-accepted" : "runtime-failure", OperatingSystem.IsLinux() ? "scribe.patch.accepted" : "patch.host.environment-failure"),
+                ["structured-skip"] = ("proposal-skipped", "scribe.proposal.skipped"),
+                ["insufficient-evidence"] = ("proposal-skipped", "scribe.proposal.skipped"),
+                ["conflicting-evidence"] = ("preflight-rejected", "scribe.preflight.prompt-evidence-mismatch"),
+                ["invalid-tool"] = ("runtime-failure", "scribe.failure.tool-protocol"),
+                ["malformed-output"] = ("runtime-failure", "scribe.failure.validation"),
+                ["patch-rejection"] = ("patch-rejected", "scribe.patch.rejected"),
+                ["rate-limited"] = ("provider-failure", "scribe.failure.provider"),
+                ["provider-unavailable"] = ("provider-failure", "scribe.failure.provider"),
+                ["budget-exhausted"] = ("budget-exhausted", "scribe.failure.budget"),
+                ["timeout"] = ("timeout", "scribe.failure.timeout"),
+            },
+            cases.ToDictionary(
+                item => item.GetProperty("caseId").GetString()!,
+                item => (
+                    item.GetProperty("status").GetString()!,
+                    item.GetProperty("code").GetString()!),
+                StringComparer.Ordinal));
+        var aggregate = report.RootElement.GetProperty("aggregate");
+        Assert.Equal(OperatingSystem.IsLinux() ? 11 : 10, aggregate.GetProperty("expectedMatchCount").GetInt32());
+        Assert.Equal(0, aggregate.GetProperty("expectedDifferedCount").GetInt32());
+        Assert.Equal(OperatingSystem.IsLinux() ? 0 : 1, aggregate.GetProperty("platformNotObservedCount").GetInt32());
+        var timeout = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "timeout");
+        Assert.Equal("matched", timeout.GetProperty("expectationStatus").GetString());
     }
 
     [Fact]
@@ -127,6 +206,47 @@ public sealed class EvaluationHarnessProcessTests
     }
 
     [Fact]
+    public async Task OfflineOutputRejectsCorpusAndPreparedCorpusAliasesBeforePublication()
+    {
+        var root = FindRepositoryRoot();
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException();
+        var prepared = File.ReadAllText(Path.Join(
+            root,
+            "tools",
+            "ContractScribe.Evaluation",
+            "bin",
+            configuration,
+            "net10.0",
+            "evaluation-corpus-path.txt")).Trim();
+        var candidates = new[]
+        {
+            CorpusRoot(root),
+            Path.Join(CorpusRoot(root), "nested-output"),
+            prepared,
+            Path.Join(prepared, "repository", "bin"),
+            Path.Join(prepared, "repository", "obj"),
+        };
+        foreach (var candidate in candidates)
+        {
+            var result = await RunAsync(root,
+            [
+                "--offline",
+                "--corpus", CorpusRoot(root),
+                "--output", candidate,
+            ]);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Empty(result.StandardOutput);
+            Assert.Equal(
+                "evaluation.output.invalid" + Environment.NewLine,
+                Encoding.UTF8.GetString(result.StandardError));
+            Assert.False(File.Exists(Path.Join(candidate, "evaluation-partial.json")));
+            Assert.False(File.Exists(Path.Join(candidate, "evaluation-report.json")));
+        }
+    }
+
+    [Fact]
     public async Task LiveArtifactFailsBeforeNetworkWhenSecretIsMissing()
     {
         var root = FindRepositoryRoot();
@@ -154,6 +274,91 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Empty(result.StandardOutput);
         Assert.Equal("evaluation.credential.missing" + Environment.NewLine, Encoding.UTF8.GetString(result.StandardError));
         Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public async Task LiveArtifactRequiresCallerCostPolicyBeforeCredentialOrNetworkUse()
+    {
+        var root = FindRepositoryRoot();
+        var output = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-evaluation-live-cost-test",
+            Guid.NewGuid().ToString("N"));
+        var secretName = "CONTRACTSCRIBE_EVALUATION_PRESENT_" + Guid.NewGuid().ToString("N");
+        var result = await RunAsync(root,
+        [
+            "--live",
+            "--safety-gate",
+            "--corpus", CorpusRoot(root),
+            "--endpoint", "https://api.openai.com/v1/chat/completions",
+            "--model", "gpt-4.1-mini-2025-04-14",
+            "--secret-env", secretName,
+            "--output", output,
+        ], new Dictionary<string, string?> { [secretName] = "test-secret-never-used" });
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StandardOutput);
+        Assert.Equal("evaluation.arguments.invalid" + Environment.NewLine, Encoding.UTF8.GetString(result.StandardError));
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public async Task DirectArtifactSignalPersistsCurrentCaseCancellation()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var output = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-evaluation-cancel-test",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(output);
+        using var process = Start(root,
+        [
+            "--offline",
+            "--corpus", CorpusRoot(root),
+            "--output", output,
+        ]);
+        var stdout = CopyAsync(process.StandardOutput.BaseStream);
+        var stderr = CopyAsync(process.StandardError.BaseStream);
+        var partial = Path.Join(output, "evaluation-partial.json");
+        try
+        {
+            await WaitForActiveCaseAsync(
+                partial,
+                "useful-proposal",
+                process,
+                TimeSpan.FromMinutes(1));
+            Assert.Equal(0, Kill(process.Id, 15));
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(1, process.ExitCode);
+            Assert.Empty(await stdout);
+            Assert.Equal(
+                "evaluation.cancelled" + Environment.NewLine,
+                Encoding.UTF8.GetString(await stderr));
+            Assert.False(File.Exists(Path.Join(output, "evaluation-report.json")));
+            using var report = JsonDocument.Parse(await File.ReadAllBytesAsync(partial));
+            Assert.Equal("partial", report.RootElement.GetProperty("status").GetString());
+            Assert.Equal("useful-proposal", report.RootElement.GetProperty("activeCaseId").GetString());
+            var cancelled = Assert.Single(report.RootElement.GetProperty("cases").EnumerateArray());
+            Assert.Equal("cancelled", cancelled.GetProperty("status").GetString());
+            Assert.Equal("differed", cancelled.GetProperty("expectationStatus").GetString());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            if (Directory.Exists(output))
+            {
+                Directory.Delete(output, recursive: true);
+            }
+        }
     }
 
     private static async Task<ProcessResult> RunAsync(
@@ -223,6 +428,94 @@ public sealed class EvaluationHarnessProcessTests
         return new ProcessResult(process.ExitCode, output.ToArray(), error.ToArray());
     }
 
+    private static Process Start(string workingDirectory, string[] arguments)
+    {
+        var start = StartInfo(workingDirectory, arguments);
+        return Process.Start(start) ?? throw new InvalidOperationException("Evaluation process did not start.");
+    }
+
+    private static ProcessStartInfo StartInfo(string workingDirectory, string[] arguments)
+    {
+        var root = FindRepositoryRoot();
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException("Cannot determine configuration.");
+        var artifact = Path.Join(
+            root,
+            "tools",
+            "ContractScribe.Evaluation",
+            "bin",
+            configuration,
+            "net10.0",
+            "ContractScribe.Evaluation.dll");
+        var start = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        start.ArgumentList.Add(artifact);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        return start;
+    }
+
+    private static async Task<byte[]> CopyAsync(Stream stream)
+    {
+        await using var output = new MemoryStream();
+        await stream.CopyToAsync(output);
+        return output.ToArray();
+    }
+
+    private static async Task WaitForActiveCaseAsync(
+        string path,
+        string caseId,
+        Process process,
+        TimeSpan timeout)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            if (process.HasExited)
+            {
+                throw new Xunit.Sdk.XunitException($"Evaluation exited before cancellation marker: {process.ExitCode}");
+            }
+
+            if (elapsed.Elapsed > timeout)
+            {
+                throw new TimeoutException("Evaluation cancellation marker was not published.");
+            }
+
+            if (File.Exists(path))
+            {
+                try
+                {
+                    using var report = JsonDocument.Parse(await File.ReadAllBytesAsync(path));
+                    if (report.RootElement.TryGetProperty("activeCaseId", out var active)
+                        && active.GetString() == caseId)
+                    {
+                        return;
+                    }
+                }
+                catch (IOException)
+                {
+                    // Atomic replacement can race this observation; retry the bounded read.
+                }
+                catch (JsonException)
+                {
+                    // Atomic replacement can race this observation; retry the bounded read.
+                }
+            }
+
+            await Task.Delay(25);
+        }
+    }
+
     private static string CorpusRoot(string root) => Path.Join(
         root,
         "tests",
@@ -247,4 +540,7 @@ public sealed class EvaluationHarnessProcessTests
     }
 
     private sealed record ProcessResult(int ExitCode, byte[] StandardOutput, byte[] StandardError);
+
+    [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
+    private static extern int Kill(int processId, int signal);
 }

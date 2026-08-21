@@ -30,7 +30,7 @@ public sealed class EvaluationHarnessTests
     [Fact]
     public void LiveOptionsRequireExactlyOneManifestBoundSelector()
     {
-        var common = new[]
+        var unpriced = new[]
         {
             "--live",
             "--corpus", "corpus",
@@ -39,6 +39,18 @@ public sealed class EvaluationHarnessTests
             "--secret-env", "EVALUATION_TEST_SECRET",
             "--output", Path.Join(Path.GetTempPath(), "evaluation-output"),
         };
+        Assert.False(EvaluationOptions.TryParse(
+            [.. unpriced, "--safety-gate"],
+            out _,
+            out _));
+        string[] common =
+        [
+            .. unpriced,
+            "--currency", "usd",
+            "--cached-input-rate", "1",
+            "--uncached-input-rate", "1",
+            "--output-rate", "1",
+        ];
         Assert.True(EvaluationOptions.TryParse(
             [.. common, "--safety-gate"],
             out var safety,
@@ -121,8 +133,12 @@ public sealed class EvaluationHarnessTests
         Assert.Equal("useful-proposal", loaded.Manifest.SafetyGateCaseId);
         Assert.Equal("https://api.openai.com/v1/chat/completions", loaded.Selection.Endpoint);
         Assert.Equal("gpt-4.1-mini-2025-04-14", loaded.Selection.Model);
-        Assert.Equal(10, loaded.Manifest.Scenarios.Length);
+        Assert.Equal(11, loaded.Manifest.Scenarios.Length);
+        Assert.Equal(
+            ["conflicting-evidence", "patch-rejection", "useful-proposal"],
+            loaded.Selection.LiveScenarioIds);
         Assert.Equal(64, loaded.CorpusIdentity.Length);
+        Assert.Equal(64, loaded.SelectionIdentity.Length);
     }
 
     [Fact]
@@ -166,10 +182,41 @@ public sealed class EvaluationHarnessTests
     [Fact]
     public void OutputConfinementAcceptsOnlyPhysicalTemporaryDescendants()
     {
-        var allowed = Path.Join(Path.GetTempPath(), "contract-scribe-evaluation-test", Guid.NewGuid().ToString("N"));
-        Assert.True(EvaluationOutput.TryResolveDirectory(allowed, out var resolved));
-        Assert.Equal(Path.GetFullPath(allowed), resolved);
-        Assert.False(EvaluationOutput.TryResolveDirectory(CorpusRoot(), out _));
+        var temporary = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-evaluation-test",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var checkout = Path.Join(temporary, "checkout");
+            var prepared = Path.Join(temporary, "prepared");
+            Directory.CreateDirectory(checkout);
+            Directory.CreateDirectory(Path.Join(prepared, "repository", "bin"));
+            Directory.CreateDirectory(Path.Join(prepared, "repository", "obj"));
+            var forbidden = new[] { checkout, prepared };
+            Assert.False(EvaluationOutput.TryResolveDirectory(checkout, forbidden, out _));
+            Assert.False(EvaluationOutput.TryResolveDirectory(
+                Path.Join(checkout, "output"), forbidden, out _));
+            Assert.False(EvaluationOutput.TryResolveDirectory(temporary, forbidden, out _));
+            Assert.False(EvaluationOutput.TryResolveDirectory(
+                Path.Join(prepared, "repository", "bin", "output"), forbidden, out _));
+            Assert.False(EvaluationOutput.TryResolveDirectory(
+                Path.Join(prepared, "repository", "obj", "output"), forbidden, out _));
+
+            var allowed = Path.Join(temporary, "unrelated-output");
+            Assert.True(EvaluationOutput.TryResolveDirectory(allowed, forbidden, out var resolved));
+            Assert.Equal(Path.GetFullPath(allowed), resolved);
+            File.WriteAllText(Path.Join(allowed, "evaluation-report.json"), "stale");
+            Assert.False(EvaluationOutput.TryResolveDirectory(allowed, forbidden, out _));
+            Assert.False(EvaluationOutput.TryResolveDirectory(CorpusRoot(), forbidden, out _));
+        }
+        finally
+        {
+            if (Directory.Exists(temporary))
+            {
+                Directory.Delete(temporary, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -186,6 +233,19 @@ public sealed class EvaluationHarnessTests
             "safe bounded line"));
         var bytes = EvaluationReportWriter.Serialize(safe, null);
         Assert.DoesNotContain("rawResponse", Encoding.UTF8.GetString(bytes), StringComparison.OrdinalIgnoreCase);
+        _ = EvaluationReportWriter.Serialize(MinimalReport("See https://example.com/reference."), null);
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read /home/alice/private/contract.cs before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read C:\\Users\\Alice\\source\\Contract.cs before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read \\\\server\\share\\Contract.cs before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read file:///home/alice/private/contract.cs before use."),
+            null));
     }
 
     [Fact]
@@ -203,7 +263,7 @@ public sealed class EvaluationHarnessTests
             loaded,
             options!,
             [cancelled, timedOut],
-            selectedCaseCount: 10,
+            selectedCaseCount: 11,
             complete: false,
             elapsedMilliseconds: null);
 
@@ -211,11 +271,13 @@ public sealed class EvaluationHarnessTests
         Assert.False(report.FullCorpusComplete);
         Assert.Equal(2, report.Aggregate.CompletedCaseCount);
         Assert.Equal(0, report.Aggregate.ExpectedMatchCount);
+        Assert.Equal(2, report.Aggregate.ExpectedDifferedCount);
         Assert.Equal(2, report.Aggregate.FailedCaseCount);
         Assert.Collection(
             report.Cases,
             item => Assert.Equal("cancelled", item.Status),
             item => Assert.Equal("timeout", item.Status));
+        Assert.Equal(1, EvaluationApplication.ResultExitCode(options!, report));
     }
 
     [Fact]
@@ -299,6 +361,8 @@ public sealed class EvaluationHarnessTests
         new string('a', 64),
         "selection",
         new string('b', 64),
+        new string('c', 64),
+        null,
         null,
         new EvaluationLatencyReport("not-measured", null),
         [
@@ -306,7 +370,7 @@ public sealed class EvaluationHarnessTests
                 "case",
                 "patch-accepted",
                 "code",
-                true,
+                "matched",
                 1,
                 1,
                 0,
@@ -321,12 +385,15 @@ public sealed class EvaluationHarnessTests
                     [],
                     [new EvaluationContentUnitReport("content.summary", null, null, [line], "claim.purpose", ["evidence.source"])]),
                 "passed",
-                ["coverage"]),
+                ["coverage"],
+                ["patch-accepted"]),
         ],
         new EvaluationAggregateReport(
             1,
             1,
             1,
+            0,
+            0,
             0,
             1,
             0,
@@ -336,7 +403,7 @@ public sealed class EvaluationHarnessTests
         caseId,
         status,
         code,
-        false,
+        "differed",
         0,
         0,
         0,
@@ -345,7 +412,8 @@ public sealed class EvaluationHarnessTests
         new EvaluationCostReport("not-reported", null, null),
         null,
         "passed",
-        ["interruption"]);
+        ["interruption"],
+        [code, status]);
 
     private static string CorpusRoot() => Path.Join(
         FindRepositoryRoot(),

@@ -43,7 +43,7 @@ internal sealed record EvaluationCaseReport(
     string CaseId,
     string Status,
     string Code,
-    bool ExpectationMatched,
+    string ExpectationStatus,
     int AttemptCount,
     int ProviderRequestCount,
     int ToolRoundCount,
@@ -52,12 +52,15 @@ internal sealed record EvaluationCaseReport(
     EvaluationCostReport Cost,
     EvaluationProposalReport? Proposal,
     string SensitiveDataStatus,
-    string[] Coverage);
+    string[] IntendedCoverage,
+    string[] ObservedCoverage);
 
 internal sealed record EvaluationAggregateReport(
     int SelectedCaseCount,
     int CompletedCaseCount,
     int ExpectedMatchCount,
+    int ExpectedDifferedCount,
+    int PlatformNotObservedCount,
     int FailedCaseCount,
     int ProviderRequestCount,
     int ToolCallCount,
@@ -74,8 +77,10 @@ internal sealed record EvaluationReport(
     string CorpusId,
     string CorpusIdentity,
     string SelectionId,
+    string SelectionIdentity,
     string CostConfigurationIdentity,
     string? SelectedCaseId,
+    string? ActiveCaseId,
     EvaluationLatencyReport Latency,
     EvaluationCaseReport[] Cases,
     EvaluationAggregateReport Aggregate)
@@ -86,7 +91,8 @@ internal sealed record EvaluationReport(
         IReadOnlyList<EvaluationCaseReport> cases,
         int selectedCaseCount,
         bool complete,
-        int? elapsedMilliseconds)
+        int? elapsedMilliseconds,
+        string? activeCaseId = null)
     {
         var costRows = cases.Select(item => item.Cost)
             .Where(item => item.AmountMicrounits is not null)
@@ -123,8 +129,10 @@ internal sealed record EvaluationReport(
             loaded.Manifest.CorpusId,
             loaded.CorpusIdentity,
             loaded.Selection.SelectionId,
+            loaded.SelectionIdentity,
             options.CostPolicy.Identity,
             options.Mode == EvaluationMode.LiveSafetyGate ? loaded.Manifest.SafetyGateCaseId : null,
+            activeCaseId,
             options.IsLive
                 ? new EvaluationLatencyReport("observed", elapsedMilliseconds)
                 : new EvaluationLatencyReport("not-measured", null),
@@ -132,7 +140,9 @@ internal sealed record EvaluationReport(
             new EvaluationAggregateReport(
                 selectedCaseCount,
                 cases.Count,
-                cases.Count(item => item.ExpectationMatched),
+                cases.Count(item => item.ExpectationStatus == "matched"),
+                cases.Count(item => item.ExpectationStatus == "differed"),
+                cases.Count(item => item.ExpectationStatus == "platform-not-observed"),
                 cases.Count(item => item.Status is not ("patch-accepted" or "patch-rejected" or "proposal-skipped")),
                 cases.Sum(item => item.ProviderRequestCount),
                 cases.Sum(item => item.ToolCallCount),
@@ -221,18 +231,90 @@ internal static class EvaluationReportWriter
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(report, JsonOptions);
         var text = Encoding.UTF8.GetString(bytes);
+        using var document = JsonDocument.Parse(bytes);
         if (ForbiddenTokens.Any(token => text.Contains(token, StringComparison.OrdinalIgnoreCase))
             || forbiddenValues.Where(value => !string.IsNullOrEmpty(value))
                 .Any(value => text.Contains(value, StringComparison.OrdinalIgnoreCase)
                     || text.Contains(
                         value.Replace("\\", "\\\\", StringComparison.Ordinal),
                         StringComparison.OrdinalIgnoreCase))
+            || EnumerateStrings(document.RootElement).Any(ContainsAbsolutePath)
             || credentialMarker?.IsPresent(bytes) == true)
         {
             throw new InvalidDataException("evaluation.report.sensitive-data");
         }
 
         return [.. bytes, (byte)'\n'];
+    }
+
+    private static IEnumerable<string> EnumerateStrings(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            yield return element.GetString()!;
+            yield break;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                foreach (var value in EnumerateStrings(property.Value))
+                {
+                    yield return value;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var value in EnumerateStrings(item))
+                {
+                    yield return value;
+                }
+            }
+        }
+    }
+
+    private static bool ContainsAbsolutePath(string value)
+    {
+        if (value.Contains("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (index + 2 < value.Length
+                && char.IsAsciiLetter(value[index])
+                && value[index + 1] == ':'
+                && value[index + 2] is '/' or '\\'
+                && (index == 0 || !char.IsAsciiLetterOrDigit(value[index - 1])))
+            {
+                return true;
+            }
+
+            if (index + 2 < value.Length
+                && value[index] == '\\'
+                && value[index + 1] == '\\'
+                && !char.IsWhiteSpace(value[index + 2]))
+            {
+                return true;
+            }
+
+            if (value[index] == '/'
+                && index + 1 < value.Length
+                && value[index + 1] != '/'
+                && !char.IsWhiteSpace(value[index + 1])
+                && (index == 0 || char.IsWhiteSpace(value[index - 1])
+                    || value[index - 1] is '"' or '\'' or '(' or '[' or '{' or '=' or ':' or ',' or ';'))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static EvaluationProposalReport? ProjectProposal(

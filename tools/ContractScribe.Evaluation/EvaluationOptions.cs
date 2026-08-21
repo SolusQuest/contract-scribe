@@ -87,7 +87,8 @@ internal sealed record EvaluationOptions(
             return false;
         }
 
-        if (!TryCost(values, out var costPolicy))
+        if (!TryCost(values, out var costPolicy)
+            || live && costPolicy?.IsPriced != true)
         {
             return false;
         }

@@ -196,7 +196,8 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
             bootstrap.Context,
             auditOutcome,
             scenario.AddEvidenceConflict,
-            loaded.Selection.Limits);
+            loaded.Selection.Limits,
+            scenario.MaximumElapsedMillisecondsOverride);
         var parsed = DocumentationScribeValidation.ParseRequest(requestBytes);
         if (!parsed.IsValid || parsed.Request is null)
         {
@@ -243,7 +244,8 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
         DocumentationScribeLoadedContext context,
         string auditOutcome,
         bool addEvidenceConflict,
-        EvaluationSelectionLimits selectedLimits)
+        EvaluationSelectionLimits selectedLimits,
+        int? maximumElapsedMillisecondsOverride)
     {
         var evidence = context.Facts.Evidence.Single(item =>
             item.KindId == "source.target-declaration");
@@ -409,19 +411,20 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
             ["toolPolicyId"] = "tool-policy.read-only.v1",
             ["limits"] = new JsonObject
             {
-                ["maximumAttempts"] = 2,
-                ["maximumContextReferences"] = 8,
-                ["maximumContextUtf8Bytes"] = 65536,
-                ["maximumEvidenceReferences"] = 32,
-                ["maximumEvidenceUtf8Bytes"] = 65536,
+                ["maximumAttempts"] = selectedLimits.MaximumAttempts,
+                ["maximumContextReferences"] = selectedLimits.MaximumContextReferences,
+                ["maximumContextUtf8Bytes"] = selectedLimits.MaximumContextUtf8Bytes,
+                ["maximumEvidenceReferences"] = selectedLimits.MaximumEvidenceReferences,
+                ["maximumEvidenceUtf8Bytes"] = selectedLimits.MaximumEvidenceUtf8Bytes,
                 ["maximumProviderRequests"] = selectedLimits.MaximumProviderRequests,
                 ["maximumToolRounds"] = selectedLimits.MaximumToolRounds,
                 ["maximumToolCalls"] = selectedLimits.MaximumToolCalls,
-                ["maximumInputTokens"] = 65536,
-                ["maximumUncachedInputTokens"] = 32768,
-                ["maximumOutputTokens"] = 8192,
-                ["maximumCostMicrounits"] = 5000000,
-                ["maximumElapsedMilliseconds"] = 120000,
+                ["maximumInputTokens"] = selectedLimits.MaximumInputTokens,
+                ["maximumUncachedInputTokens"] = selectedLimits.MaximumUncachedInputTokens,
+                ["maximumOutputTokens"] = selectedLimits.MaximumOutputTokens,
+                ["maximumCostMicrounits"] = selectedLimits.MaximumCostMicrounits,
+                ["maximumElapsedMilliseconds"] = maximumElapsedMillisecondsOverride
+                    ?? selectedLimits.MaximumElapsedMilliseconds,
             },
         };
         return JsonSerializer.SerializeToUtf8Bytes(root);
