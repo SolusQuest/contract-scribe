@@ -138,7 +138,8 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
 
     internal PreparedEvaluationCase Prepare(
         LoadedEvaluationManifest loaded,
-        EvaluationScenario scenario)
+        EvaluationScenario scenario,
+        EvaluationSelectionLimits selectedLimits)
     {
         var classifications = classified.Classification.ClassificationSet
             ?? throw new InvalidOperationException("evaluation.repository.session-stale");
@@ -196,7 +197,7 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
             bootstrap.Context,
             auditOutcome,
             scenario.AddEvidenceConflict,
-            loaded.Selection.Limits,
+            selectedLimits,
             scenario.MaximumElapsedMillisecondsOverride);
         var parsed = DocumentationScribeValidation.ParseRequest(requestBytes);
         if (!parsed.IsValid || parsed.Request is null)

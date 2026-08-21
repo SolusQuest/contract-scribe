@@ -46,7 +46,7 @@ audit target
 
 One run handles one documentation target or a small batch of targets sharing the same containing-type context. The initial runtime is short-lived and does not depend on restoring a complete model conversation. Campaign resume restores deterministic work and context identities and starts a new bounded model run.
 
-Multiple Scribe runs may share immutable repository and scope context snapshots and the same underlying read-only indexes. They do not share hidden reasoning, mutable conversation history, target-specific tool results, or provider session identity.
+Multiple Scribe runs may share immutable repository and scope context snapshots and the same underlying read-only indexes. They do not share hidden reasoning, mutable conversation history, target-specific tool results, or provider session identity. Within one attempt only, the runtime may retain and replay the provider's bounded opaque assistant continuation required to complete that attempt's tool loop; it is discarded at attempt and run boundaries.
 
 ## Relationship to audit evidence
 
@@ -177,7 +177,7 @@ Before implementation claims compatibility, an M3 provider-validation issue must
 - stable failure and unsupported-capability classifications;
 - bounded evidence required for any compatibility or support statement.
 
-The request and tool-call path remains shared unless executable evidence demonstrates a real protocol difference. Usage response shapes are expected normalization inputs, but this baseline does not assert that usage accounting is the only provider divergence. Provider-reported fields are preserved, supported observations are mapped into ContractScribe-owned metrics, and every newly observed difference is recorded and reviewed before it creates a provider-specific branch or product-contract claim. Fallback between providers or models is explicit and recorded.
+The request and tool-call path remains shared unless executable evidence demonstrates a real protocol difference. A configuration-bound request profile selects thinking, reasoning effort, tool choice, continuation policy, and one output-token field without provider-name branching. For a nonterminal tool response, exact assistant `content` and optional `reasoning_content` form one bounded opaque continuation envelope per response round. It is replayed only on that round's reconstructed assistant message within the same attempt and never interpreted as evidence. Usage response shapes are expected normalization inputs, but this baseline does not assert that usage accounting is the only provider divergence. Supported content-free observations are mapped into ContractScribe-owned metrics, and every newly observed difference is recorded and reviewed before it creates a provider-specific branch or product-contract claim. Fallback between providers or models is explicit and recorded.
 
 ContractScribe owns normalized runtime behavior for:
 
@@ -190,7 +190,7 @@ ContractScribe owns normalized runtime behavior for:
 
 A deterministic test runtime is mandatory. M3 requires live, synthetic evaluation against DeepSeek and compatibility validation against MiMo. The selected provider/model configuration is recorded in run provenance.
 
-The initial implementation does not attempt a complete provider compatibility matrix or require separate assemblies per provider. Using `Microsoft.Extensions.AI`, an OpenAI-compatible SDK, or direct HTTP is an implementation decision. The selected transport may not reorder or obscure product messages and tools, hide provider response fields required by the frozen validation corpus and accepted normalization rules, insert unstable prefix content, or own the product contracts.
+The initial implementation does not attempt a complete provider compatibility matrix or require separate assemblies per provider. It uses the selected direct HTTP/JSON transport. That transport may not reorder or obscure product messages and tools, drop opaque continuation required for the current attempt, expose continuation outside its private wire/runtime boundary, insert unstable prefix content, or own the product contracts.
 
 ## Prompt-prefix economics
 
@@ -270,6 +270,6 @@ M3 validation includes:
 - total and uncached input, cache reuse, output, cost, latency, and tool-call observations;
 - sensitive-data and publication-boundary scans of requests, results, diagnostics, and evidence.
 
-The checked-in validation corpus may contain reviewed synthetic system and Scribe protocol templates, canonical ordered-message and tool-call vectors, adversarial prompt-injection strings, and minimized or synthetic provider-response shapes. Those artifacts are stable, commit-pinned test inputs, not captured live conversations. The corpus excludes private repository content, live-run prompts, complete tool transcripts, hidden reasoning, credentials, and raw provider responses. Live evaluation publishes only bounded provenance, field-shape observations, metrics, and sanitized outcomes needed to justify compatibility claims.
+The checked-in validation corpus may contain reviewed synthetic system and Scribe protocol templates, canonical ordered-message and tool-call vectors, adversarial prompt-injection strings, and minimized synthetic provider-response shapes. A fixed credential-free reasoning marker may appear only in a synthetic inbound response and its exact outbound replay assertion. Those artifacts are stable, commit-pinned test inputs, not captured live conversations. The corpus excludes private repository content, live-run prompts, complete tool transcripts, captured live assistant continuation, hidden reasoning, credentials, and raw provider responses. Live evaluation publishes only bounded provenance, closed continuation observations, field-shape observations, metrics, and sanitized outcomes needed to justify compatibility claims.
 
 The fake runtime proves orchestration mechanics. Real-provider evaluation determines which request, tool, response, normalization, and failure paths are evidenced; claims remain limited to that executed corpus. It also tests whether the product can produce useful documentation under the same bounded-output contract and whether its request layout has measurable economic behavior. Live provider credentials remain explicit opt-in and are not required by ordinary CI.

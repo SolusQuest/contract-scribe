@@ -118,6 +118,70 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     }
 
     [Fact]
+    public async Task Thinking_continuation_replays_within_one_attempt_and_transport_reuse_starts_clean()
+    {
+        const string marker = "synthetic-integration-reasoning-marker";
+        var request = Request();
+        var terminal = Encoding.UTF8.GetString(ReadTerminal("skip-result.json"));
+        var toolResponse = ThinkingCompletion(
+            "cs_tool_000",
+            "call.one",
+            "{\"referenceId\":\"one\"}",
+            marker);
+        var terminalResponse = ThinkingCompletion("cs_terminal", "call.terminal", terminal, "terminal-marker");
+        await using var server = new LoopbackServer(
+            toolResponse,
+            terminalResponse,
+            toolResponse,
+            terminalResponse);
+        var profile = new OpenAiCompatibleChatCompletionsRequestProfile(
+            OpenAiCompatibleThinkingMode.Enabled,
+            OpenAiCompatibleReasoningEffort.High,
+            OpenAiCompatibleToolChoice.Omitted,
+            OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+            OpenAiCompatibleOutputTokenField.MaxTokens);
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                server.Endpoint,
+                "synthetic-model-v1",
+                profile,
+                networkEnabled: true));
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            Registry(request.ToolPolicyId, new SyntheticPort()),
+            new DocumentationScribeRuntimeOptions(
+                "provider.direct-http.synthetic.v1",
+                "model.synthetic.v1",
+                "scribe-protocol.openai-compatible.v1"));
+
+        var first = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        var second = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        await server.Completion;
+
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, first.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, second.Terminal.Kind);
+        Assert.Equal(4, server.Requests.Length);
+        foreach (var index in new[] { 0, 2 })
+        {
+            using var initial = JsonDocument.Parse(server.Requests[index].Body);
+            Assert.Equal(5, initial.RootElement.GetProperty("messages").GetArrayLength());
+            Assert.DoesNotContain(
+                marker,
+                Encoding.UTF8.GetString(server.Requests[index].Body),
+                StringComparison.Ordinal);
+        }
+
+        foreach (var index in new[] { 1, 3 })
+        {
+            using var replay = JsonDocument.Parse(server.Requests[index].Body);
+            var messages = replay.RootElement.GetProperty("messages");
+            Assert.Equal(7, messages.GetArrayLength());
+            Assert.Equal(marker, messages[5].GetProperty("reasoning_content").GetString());
+            Assert.Single(messages[5].GetProperty("tool_calls").EnumerateArray());
+        }
+    }
+
+    [Fact]
     public async Task Real_handler_returns_redirect_without_following_it()
     {
         await using var server = new LoopbackServer(
@@ -320,6 +384,38 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                     message = new
                     {
                         role = "assistant",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                id = callId,
+                                type = "function",
+                                function = new { name = alias, arguments },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+        });
+
+    private static byte[] ThinkingCompletion(
+        string alias,
+        string callId,
+        string arguments,
+        string reasoningContent) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        content = string.Empty,
+                        reasoning_content = reasoningContent,
                         tool_calls = new[]
                         {
                             new
@@ -665,10 +761,15 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         internal LoopbackServer(
             byte[] first,
             byte[]? second = null,
+            byte[]? third = null,
+            byte[]? fourth = null,
             string statusLine = "HTTP/1.1 200 OK",
             string extraHeaders = "")
         {
-            responses = second is null ? [first] : [first, second];
+            responses = new[] { first, second, third, fourth }
+                .Where(response => response is not null)
+                .Select(response => response!)
+                .ToImmutableArray();
             this.statusLine = statusLine;
             this.extraHeaders = extraHeaders;
             listener.Start();

@@ -28,12 +28,15 @@ public sealed class EvaluationHarnessProcessTests
             "net10.0",
             "evaluation-corpus-path.txt");
         var prepared = File.ReadAllText(marker).Trim();
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
         var options = new EvaluationOptions(
             EvaluationMode.LiveSafetyGate,
             CorpusRoot(root),
             null,
-            new Uri(loaded.Selection.Endpoint),
-            loaded.Selection.Model,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
             "UNUSED_TEST_SECRET",
             new EvaluationCostPolicy("usd", 1, 1, 1));
         var factoryCalls = 0;
@@ -65,7 +68,41 @@ public sealed class EvaluationHarnessProcessTests
         }
         Assert.False(report.FullCorpusComplete);
         Assert.Equal("safety-gate", report.ExecutionPurpose);
+        Assert.Equal("deepseek-primary", report.ConfigurationId);
         Assert.Equal(1, report.Aggregate.SelectedCaseCount);
+    }
+
+    [Fact]
+    public async Task MiMoSafetyGateIsItsCompleteOneCaseDenominator()
+    {
+        var root = FindRepositoryRoot();
+        var loaded = EvaluationManifestLoader.Load(CorpusRoot(root));
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "mimo-compatibility");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            CorpusRoot(root),
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new ScriptedEvaluationExchange(evaluationCase),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        Assert.True(report.FullCorpusComplete);
+        Assert.Equal("mimo-compatibility", report.ConfigurationId);
+        Assert.Equal(1, report.Aggregate.SelectedCaseCount);
+        var result = Assert.Single(report.Cases);
+        Assert.Equal("useful-proposal", result.CaseId);
     }
 
     [Fact]
@@ -83,12 +120,15 @@ public sealed class EvaluationHarnessProcessTests
             configuration,
             "net10.0",
             "evaluation-corpus-path.txt")).Trim();
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
         var options = new EvaluationOptions(
             EvaluationMode.LiveAll,
             CorpusRoot(root),
             null,
-            new Uri(loaded.Selection.Endpoint),
-            loaded.Selection.Model,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
             "UNUSED_TEST_SECRET",
             new EvaluationCostPolicy("usd", 1, 1, 1));
         var runner = new EvaluationRunner(
@@ -357,8 +397,9 @@ public sealed class EvaluationHarnessProcessTests
             "--live",
             "--safety-gate",
             "--corpus", CorpusRoot(root),
-            "--endpoint", "https://api.openai.com/v1/chat/completions",
-            "--model", "gpt-4.1-mini-2025-04-14",
+            "--configuration", "deepseek-primary",
+            "--endpoint", "https://api.deepseek.com/chat/completions",
+            "--model", "deepseek-v4-flash",
             "--secret-env", secretName,
             "--output", output,
             "--currency", "usd",
@@ -387,8 +428,9 @@ public sealed class EvaluationHarnessProcessTests
             "--live",
             "--safety-gate",
             "--corpus", CorpusRoot(root),
-            "--endpoint", "https://api.openai.com/v1/chat/completions",
-            "--model", "gpt-4.1-mini-2025-04-14",
+            "--configuration", "deepseek-primary",
+            "--endpoint", "https://api.deepseek.com/chat/completions",
+            "--model", "deepseek-v4-flash",
             "--secret-env", secretName,
             "--output", output,
         ], new Dictionary<string, string?> { [secretName] = "test-secret-never-used" });

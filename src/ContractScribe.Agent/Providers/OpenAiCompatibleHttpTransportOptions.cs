@@ -10,20 +10,38 @@ public sealed class OpenAiCompatibleHttpTransportOptions
     internal const int MaximumModelUtf8Bytes = 256;
     internal const int MaximumCredentialBytes = 8_192;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly OpenAiCompatibleChatCompletionsRequestProfile NonThinkingProfile = new(
+        OpenAiCompatibleThinkingMode.Disabled,
+        reasoningEffort: null,
+        OpenAiCompatibleToolChoice.Required,
+        OpenAiCompatibleContinuationPolicy.Optional,
+        OpenAiCompatibleOutputTokenField.MaxTokens);
 
     public OpenAiCompatibleHttpTransportOptions(
         Uri endpoint,
         string model,
         bool networkEnabled,
         string? credential = null)
+        : this(endpoint, model, NonThinkingProfile, networkEnabled, credential)
+    {
+    }
+
+    public OpenAiCompatibleHttpTransportOptions(
+        Uri endpoint,
+        string model,
+        OpenAiCompatibleChatCompletionsRequestProfile requestProfile,
+        bool networkEnabled,
+        string? credential = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(requestProfile);
         ValidateEndpoint(endpoint, credential);
         ValidateModel(model);
         ValidateCredential(credential);
         Endpoint = endpoint;
         Model = model;
+        RequestProfile = requestProfile;
         NetworkEnabled = networkEnabled;
         Credential = credential;
     }
@@ -31,6 +49,8 @@ public sealed class OpenAiCompatibleHttpTransportOptions
     public Uri Endpoint { get; }
 
     public string Model { get; }
+
+    public OpenAiCompatibleChatCompletionsRequestProfile RequestProfile { get; }
 
     public bool NetworkEnabled { get; }
 

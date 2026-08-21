@@ -103,8 +103,14 @@ public sealed class DocumentationScribeCompletedToolExchange
         ImmutableArray<byte> argumentsUtf8Json,
         string outcomeId,
         ImmutableArray<byte> resultUtf8Json,
-        ImmutableArray<DocumentationScribeEvidenceReference> evidenceReferences)
+        ImmutableArray<DocumentationScribeEvidenceReference> evidenceReferences,
+        DocumentationScribeAssistantContinuation? assistantContinuation = null)
     {
+        if (assistantContinuation is not null && responseIndex != 0)
+        {
+            throw new ArgumentException("Assistant continuation must be anchored exactly once per response round.");
+        }
+
         ResponseIndex = responseIndex;
         CallId = callId;
         OperationId = operationId;
@@ -112,6 +118,7 @@ public sealed class DocumentationScribeCompletedToolExchange
         OutcomeId = outcomeId;
         ResultUtf8JsonStorage = resultUtf8Json;
         EvidenceReferences = evidenceReferences;
+        AssistantContinuation = assistantContinuation;
     }
 
     public int ResponseIndex { get; }
@@ -132,7 +139,32 @@ public sealed class DocumentationScribeCompletedToolExchange
 
     internal ImmutableArray<byte> ResultUtf8JsonStorage { get; }
 
+    internal DocumentationScribeAssistantContinuation? AssistantContinuation { get; }
+
     public override string ToString() => nameof(DocumentationScribeCompletedToolExchange);
+}
+
+internal sealed class DocumentationScribeAssistantContinuation
+{
+    internal DocumentationScribeAssistantContinuation(string content, string? reasoningContent)
+    {
+        Content = DocumentationScribeBoundary.ValidateCommittedText(
+            content,
+            nameof(content),
+            DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
+        ReasoningContent = reasoningContent is null
+            ? null
+            : DocumentationScribeBoundary.ValidateCommittedText(
+                reasoningContent,
+                nameof(reasoningContent),
+                DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes);
+    }
+
+    internal string Content { get; }
+
+    internal string? ReasoningContent { get; }
+
+    public override string ToString() => nameof(DocumentationScribeAssistantContinuation);
 }
 
 public sealed class DocumentationScribeModelRequest
@@ -364,6 +396,20 @@ public sealed class DocumentationScribeModelResponse
         DocumentationScribeModelUsage? usage = null,
         DocumentationScribeCacheObservation? cache = null,
         DocumentationScribeModelCost? cost = null)
+        : this(toolCalls, terminalSubmissions, failure, usage, cache, cost, null,
+            DocumentationScribeContinuationObservation.None)
+    {
+    }
+
+    internal DocumentationScribeModelResponse(
+        ImmutableArray<DocumentationScribeModelToolCall> toolCalls,
+        ImmutableArray<DocumentationScribeModelTerminalSubmission> terminalSubmissions,
+        DocumentationScribeModelFailure? failure,
+        DocumentationScribeModelUsage? usage,
+        DocumentationScribeCacheObservation? cache,
+        DocumentationScribeModelCost? cost,
+        DocumentationScribeAssistantContinuation? assistantContinuation,
+        DocumentationScribeContinuationObservation continuationObservation)
     {
         if (toolCalls.IsDefault || toolCalls.Length > DocumentationScribeBoundary.MaximumToolCallsPerResponse
             || toolCalls.Any(call => call is null))
@@ -383,6 +429,16 @@ public sealed class DocumentationScribeModelResponse
         if (cache is { } cacheValue && !Enum.IsDefined(cacheValue))
         {
             throw new ArgumentOutOfRangeException(nameof(cache));
+        }
+
+        const DocumentationScribeContinuationObservation knownObservations =
+            DocumentationScribeContinuationObservation.Observed
+            | DocumentationScribeContinuationObservation.HistoryReplayed
+            | DocumentationScribeContinuationObservation.MissingRequired;
+        if ((continuationObservation & ~knownObservations) != 0
+            || assistantContinuation is not null && toolCalls.IsEmpty)
+        {
+            throw new ArgumentException("The continuation observation is outside the product boundary.");
         }
 
         long payloadBytes = 0;
@@ -410,7 +466,9 @@ public sealed class DocumentationScribeModelResponse
                 failure,
                 usage,
                 cache,
-                cost) > DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes)
+                cost,
+                assistantContinuation,
+                continuationObservation) > DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes)
         {
             throw new ArgumentException("The normalized response is outside the product boundary.");
         }
@@ -421,6 +479,8 @@ public sealed class DocumentationScribeModelResponse
         Usage = usage;
         Cache = cache;
         Cost = cost;
+        AssistantContinuation = assistantContinuation;
+        ContinuationObservation = continuationObservation;
     }
 
     public ImmutableArray<DocumentationScribeModelToolCall> ToolCalls { get; }
@@ -435,6 +495,20 @@ public sealed class DocumentationScribeModelResponse
 
     public DocumentationScribeModelCost? Cost { get; }
 
+    public DocumentationScribeContinuationObservation ContinuationObservation { get; }
+
+    internal DocumentationScribeAssistantContinuation? AssistantContinuation { get; }
+
+    public DocumentationScribeModelResponse WithCost(DocumentationScribeModelCost? cost) => new(
+        ToolCalls,
+        TerminalSubmissions,
+        Failure,
+        Usage,
+        Cache,
+        cost,
+        AssistantContinuation,
+        ContinuationObservation);
+
     public override string ToString() => nameof(DocumentationScribeModelResponse);
 
     internal static int MeasureNormalizedResponse(
@@ -443,7 +517,10 @@ public sealed class DocumentationScribeModelResponse
         DocumentationScribeModelFailure? failure,
         DocumentationScribeModelUsage? usage,
         DocumentationScribeCacheObservation? cache,
-        DocumentationScribeModelCost? cost)
+        DocumentationScribeModelCost? cost,
+        DocumentationScribeAssistantContinuation? assistantContinuation = null,
+        DocumentationScribeContinuationObservation continuationObservation =
+            DocumentationScribeContinuationObservation.None)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
@@ -510,6 +587,24 @@ public sealed class DocumentationScribeModelResponse
                 writer.WriteEndObject();
             }
 
+            if (assistantContinuation is not null)
+            {
+                writer.WritePropertyName("assistantContinuation");
+                writer.WriteStartObject();
+                writer.WriteString("content", assistantContinuation.Content);
+                if (assistantContinuation.ReasoningContent is { } reasoningContent)
+                {
+                    writer.WriteString("reasoningContent", reasoningContent);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            if (continuationObservation != DocumentationScribeContinuationObservation.None)
+            {
+                writer.WriteNumber("continuationObservation", (int)continuationObservation);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -523,4 +618,13 @@ public sealed class DocumentationScribeModelResponse
             writer.WriteNumber(propertyName, present);
         }
     }
+}
+
+[Flags]
+public enum DocumentationScribeContinuationObservation
+{
+    None = 0,
+    Observed = 1,
+    HistoryReplayed = 2,
+    MissingRequired = 4,
 }

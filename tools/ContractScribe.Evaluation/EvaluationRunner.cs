@@ -37,9 +37,14 @@ internal static class EvaluationApplication
         try
         {
             var loaded = EvaluationManifestLoader.Load(options.CorpusDirectory);
+            var configuration = options.IsLive
+                ? loaded.Selection.Configurations.SingleOrDefault(item =>
+                    item.ConfigurationId == options.ConfigurationId)
+                : null;
             if (options.IsLive
-                && (options.Endpoint!.AbsoluteUri != loaded.Selection.Endpoint
-                    || options.Model != loaded.Selection.Model))
+                && (configuration is null
+                    || options.Endpoint!.AbsoluteUri != configuration.Endpoint
+                    || options.Model != configuration.Model))
             {
                 await standardError.WriteLineAsync("evaluation.selection.mismatch").ConfigureAwait(false);
                 return 2;
@@ -49,8 +54,9 @@ internal static class EvaluationApplication
                 ? new OpenAiCompatibleHttpModelExchange(new OpenAiCompatibleHttpTransportOptions(
                     options.Endpoint!,
                     options.Model!,
+                    RequestProfile(configuration!),
                     networkEnabled: true,
-                    credential!.Take()))
+                    credential: credential!.Take()))
                 : null;
             var runner = new EvaluationRunner(
                 loaded,
@@ -87,6 +93,40 @@ internal static class EvaluationApplication
         }
     }
 
+    private static OpenAiCompatibleChatCompletionsRequestProfile RequestProfile(
+        EvaluationProviderConfiguration configuration) => new(
+            configuration.RequestProfile.Thinking switch
+            {
+                "enabled" => OpenAiCompatibleThinkingMode.Enabled,
+                "disabled" => OpenAiCompatibleThinkingMode.Disabled,
+                _ => throw new InvalidDataException("evaluation.selection.invalid"),
+            },
+            configuration.RequestProfile.ReasoningEffort switch
+            {
+                null => null,
+                "high" => OpenAiCompatibleReasoningEffort.High,
+                _ => throw new InvalidDataException("evaluation.selection.invalid"),
+            },
+            configuration.RequestProfile.ToolChoice switch
+            {
+                "omitted" => OpenAiCompatibleToolChoice.Omitted,
+                "auto" => OpenAiCompatibleToolChoice.Auto,
+                "required" => OpenAiCompatibleToolChoice.Required,
+                _ => throw new InvalidDataException("evaluation.selection.invalid"),
+            },
+            configuration.RequestProfile.Continuation switch
+            {
+                "optional" => OpenAiCompatibleContinuationPolicy.Optional,
+                "required-for-tool-calls" => OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+                _ => throw new InvalidDataException("evaluation.selection.invalid"),
+            },
+            configuration.RequestProfile.OutputTokenField switch
+            {
+                "max_tokens" => OpenAiCompatibleOutputTokenField.MaxTokens,
+                "max_completion_tokens" => OpenAiCompatibleOutputTokenField.MaxCompletionTokens,
+                _ => throw new InvalidDataException("evaluation.selection.invalid"),
+            });
+
     internal static int ResultExitCode(EvaluationOptions options, EvaluationReport report) =>
         !options.IsLive && report.Aggregate.ExpectedDifferedCount != 0 ? 1 : 0;
 
@@ -111,6 +151,7 @@ internal sealed class EvaluationRunner
     private readonly string? requestedOutputDirectory;
     private readonly string? preparedCorpusDirectory;
     private readonly List<EvaluationCaseReport> reports = [];
+    private readonly EvaluationProviderConfiguration? selectedConfiguration;
     private string? outputDirectory;
     private string[] outputForbiddenRoots = [];
 
@@ -128,15 +169,21 @@ internal sealed class EvaluationRunner
         this.credentialMarker = credentialMarker;
         this.requestedOutputDirectory = requestedOutputDirectory;
         this.preparedCorpusDirectory = preparedCorpusDirectory;
+        selectedConfiguration = options.IsLive
+            ? loaded.Selection.Configurations.SingleOrDefault(item =>
+                item.ConfigurationId == options.ConfigurationId)
+                ?? throw new InvalidDataException("evaluation.selection.mismatch")
+            : null;
     }
 
     internal async Task<EvaluationReport> RunAsync(CancellationToken cancellationToken)
     {
-        var liveIds = loaded.Selection.LiveScenarioIds.ToHashSet(StringComparer.Ordinal);
+        var liveIds = selectedConfiguration?.LiveScenarioIds.ToHashSet(StringComparer.Ordinal)
+            ?? [];
         var selected = options.Mode switch
         {
             EvaluationMode.LiveSafetyGate => loaded.Manifest.Scenarios.Where(scenario =>
-                scenario.Id == loaded.Manifest.SafetyGateCaseId).ToArray(),
+                scenario.Id == selectedConfiguration!.SafetyGateCaseId).ToArray(),
             EvaluationMode.LiveAll => loaded.Manifest.Scenarios.Where(scenario =>
                 liveIds.Contains(scenario.Id)).ToArray(),
             _ => loaded.Manifest.Scenarios,
@@ -230,7 +277,10 @@ internal sealed class EvaluationRunner
                 var cancelled = false;
                 try
                 {
-                    var prepared = repository.Prepare(loaded, scenario);
+                    var prepared = repository.Prepare(
+                        loaded,
+                        scenario,
+                        (selectedConfiguration ?? loaded.Selection.Configurations[0]).Limits);
                     var baseExchange = liveExchangeFactory?.Invoke(prepared)
                         ?? new ScriptedEvaluationExchange(prepared);
                     var observing = new CostObservingExchange(baseExchange, options.CostPolicy);
@@ -314,10 +364,18 @@ internal sealed class EvaluationRunner
     }
 
     private DocumentationScribeRuntimeOptions RuntimeOptions() => options.IsLive
-        ? new DocumentationScribeRuntimeOptions(
-            "provider.openai.v1",
-            "model.gpt-4-1-mini-2025-04-14",
-            "scribe-protocol.v1")
+        ? selectedConfiguration!.ConfigurationId switch
+        {
+            "deepseek-primary" => new DocumentationScribeRuntimeOptions(
+                "provider.deepseek.v1",
+                "model.deepseek-v4-flash",
+                "scribe-protocol.v1"),
+            "mimo-compatibility" => new DocumentationScribeRuntimeOptions(
+                "provider.mimo.v1",
+                "model.mimo-v2-5",
+                "scribe-protocol.v1"),
+            _ => throw new InvalidDataException("evaluation.selection.invalid"),
+        }
         : new DocumentationScribeRuntimeOptions(
             "provider.synthetic.v1",
             "model.synthetic.v1",
@@ -658,6 +716,24 @@ internal sealed class EvaluationRunner
 
         foreach (var observation in providerObservations)
         {
+            if (observation.ContinuationObservation.HasFlag(
+                    DocumentationScribeContinuationObservation.Observed))
+            {
+                observed.Add("continuation.observed");
+            }
+
+            if (observation.ContinuationObservation.HasFlag(
+                    DocumentationScribeContinuationObservation.HistoryReplayed))
+            {
+                observed.Add("continuation.history-replayed");
+            }
+
+            if (observation.ContinuationObservation.HasFlag(
+                    DocumentationScribeContinuationObservation.MissingRequired))
+            {
+                observed.Add("continuation.missing-required");
+            }
+
             var coverage = observation.FailureCode switch
             {
                 DocumentationScribeModelFailureCode.TransientUnavailable

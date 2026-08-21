@@ -27,38 +27,43 @@ Omitting `--offline` selects the same offline default. Offline mode uses determi
 
 ## Frozen live selection
 
-The sole M3-P4 target is recorded in `tests/fixtures/documentation-scribe/evaluation/selection.json`:
+`tests/fixtures/documentation-scribe/evaluation/selection.json` freezes two exact configuration-bound profiles, both with evidence date `2026-08-21`:
 
-- Endpoint: `https://api.openai.com/v1/chat/completions`
-- Model snapshot: `gpt-4.1-mini-2025-04-14`
-- Evidence date: `2026-08-21`
+| Configuration | Endpoint and model | Request policy | Live denominator | Safety gate |
+| --- | --- | --- | --- | --- |
+| `deepseek-primary` | `https://api.deepseek.com/chat/completions`, `deepseek-v4-flash` | thinking enabled, `reasoning_effort: high`, omit `tool_choice`, `max_tokens` | `conflicting-evidence`, `patch-rejection`, `useful-proposal` | `useful-proposal` |
+| `mimo-compatibility` | `https://api.xiaomimimo.com/v1/chat/completions`, `mimo-v2.5` | thinking enabled, no reasoning-effort field, `tool_choice: auto`, `max_completion_tokens` | `useful-proposal` only | `useful-proposal` |
 
-The official [GPT-4.1 mini model record](https://developers.openai.com/api/docs/models/gpt-4.1-mini) identifies the exact snapshot, Chat Completions and function-calling support, and operation without a reasoning step. The official [Chat Completions reference](https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions) defines function tools, required tool selection, assistant tool calls, correlated tool-result messages, parallel tool calls, and non-streaming completions. That is the smallest current documented shape matching the fixed production codec; the evaluator does not add a provider-specific branch or a fallback matrix.
+Both profiles omit sampling overrides, `parallel_tool_calls`, and `n`. The shared parser still accepts multiple validated tool calls in one assistant response. The official [DeepSeek thinking-mode guide](https://api-docs.deepseek.com/guides/thinking_mode/), [DeepSeek Chat Completions reference](https://api-docs.deepseek.com/api/create-chat-completion/), [MiMo pass-back guide](https://mimo.mi.com/docs/en-US/usage-guide/passing-back-reasoning_content), and [MiMo OpenAI-compatible API reference](https://mimo.mi.com/docs/en-US/api/chat/openai-api) define the selected request and continuation fields.
 
-Selection means only that M3-P4 may test this exact configuration. Real request acceptance, tool-loop behavior, field availability, proposal usefulness, latency, cache reporting, and practical cost remain observations from the authorized exact-revision run.
+Selection means only that M3-P4 may test one explicitly named exact configuration. It is not fallback authority, a Kimi claim, or a broader provider-support claim. Real request acceptance, continuation/tool-loop behavior, proposal usefulness, latency, usage/cache reporting, and practical cost remain observations from the authorized exact-revision run.
 
 The selection freezes the complete Scribe execution-control set: attempts; context and evidence counts and byte ceilings; provider requests, tool rounds, and tool calls; total and uncached input plus output token ceilings; maximum cost; and elapsed time. Its hash is emitted as `selectionIdentity`. Caller-reviewed pricing remains a separate runtime input identified by `costConfigurationIdentity`.
 
-Only `conflicting-evidence`, `patch-rejection`, and `useful-proposal` are live-eligible. They carry distinct production inputs. Synthetic transport cases for structured skip, insufficient evidence, invalid tool/output, rate limit, unavailability, budget exhaustion, and timeout remain offline-only and cannot add paid requests or claim live evidence. Live reports separate declarative `intendedCoverage` from outcome-derived `observedCoverage`.
+The complete live-eligible denominator for `deepseek-primary` is exactly `conflicting-evidence`, `patch-rejection`, and `useful-proposal`. The complete denominator for `mimo-compatibility` is exactly `useful-proposal`. Synthetic transport cases for structured skip, insufficient evidence, invalid tool/output, rate limit, unavailability, budget exhaustion, and timeout remain offline-only and cannot add paid requests or claim live evidence. Live reports separate declarative `intendedCoverage` from outcome-derived `observedCoverage`.
+
+For a nonterminal thinking-mode tool response, the transport retains one bounded opaque assistant continuation containing exact `content` plus exact decoded `reasoning_content`. The runtime anchors it once to response index zero even when the response contains parallel calls and replays it only on the matching assistant message in later requests of the same attempt. Missing or null required `reasoning_content` fails closed; a present empty string is replayable. Attempt restart and every terminal run boundary discard it. Continuation shares the existing 1 MiB normalized-response and 32 MiB logical-request ceilings and never enters product messages, evidence, tools, proposals, patches, diagnostics, logs, durable state, or reports. Evaluation sees only the closed observations `continuation.observed`, `continuation.history-replayed`, and `continuation.missing-required`.
 
 ## Live invocation and safety gate
 
 Live execution must launch the already-built artifact directly. Do not use `dotnet run`, `dotnet test`, restore, or build with a credential present.
 
-First execute the manifest-designated safety case:
+First execute the selected configuration's manifest-designated safety case. For DeepSeek:
 
 ```text
 set CONTRACTSCRIBE_EVALUATION_API_KEY=<operator-injected-value>
-dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evaluation.dll --live --safety-gate --corpus tests/fixtures/documentation-scribe/evaluation --endpoint https://api.openai.com/v1/chat/completions --model gpt-4.1-mini-2025-04-14 --secret-env CONTRACTSCRIBE_EVALUATION_API_KEY --output <ignored-directory-below-os-temp> --currency <currency-id> --cached-input-rate <microunits-per-million> --uncached-input-rate <microunits-per-million> --output-rate <microunits-per-million>
+dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evaluation.dll --live --safety-gate --corpus tests/fixtures/documentation-scribe/evaluation --configuration deepseek-primary --endpoint https://api.deepseek.com/chat/completions --model deepseek-v4-flash --secret-env CONTRACTSCRIBE_EVALUATION_API_KEY --output <ignored-directory-below-os-temp> --currency <currency-id> --cached-input-rate <microunits-per-million> --uncached-input-rate <microunits-per-million> --output-rate <microunits-per-million>
 ```
 
-The safety gate executes exactly `manifest.safetyGateCaseId` to a terminal disposition under its normal provider-request and tool-call limits. It can make request 1, execute a real tool, and make request 2 before terminal completion; it stops before initializing or sending any request for live case 2. The report records denominator 1, actual request/tool counts, `executionPurpose = safety-gate`, and `fullCorpusComplete = false`.
+For MiMo, use a separately authorized secret/output/cost invocation and replace the configuration-specific arguments with `--configuration mimo-compatibility --endpoint https://api.xiaomimimo.com/v1/chat/completions --model mimo-v2.5`.
+
+The safety gate executes exactly the selected configuration's `safetyGateCaseId` to a terminal disposition under its normal provider-request and tool-call limits. It can make request 1, execute a real tool, and make request 2 before terminal completion. DeepSeek then stops before case 2 and reports `fullCorpusComplete = false`. MiMo's one-case gate is its complete selected denominator, so successful completion reports `fullCorpusComplete = true` and does not authorize a second MiMo case or the DeepSeek configuration.
 
 After human inspection of that local report, M3-P4 may execute the full selected corpus only under its separate authorization:
 
 ```text
 set CONTRACTSCRIBE_EVALUATION_API_KEY=<operator-injected-value>
-dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evaluation.dll --live --all --corpus tests/fixtures/documentation-scribe/evaluation --endpoint https://api.openai.com/v1/chat/completions --model gpt-4.1-mini-2025-04-14 --secret-env CONTRACTSCRIBE_EVALUATION_API_KEY --output <ignored-directory-below-os-temp> --currency <currency-id> --cached-input-rate <microunits-per-million> --uncached-input-rate <microunits-per-million> --output-rate <microunits-per-million>
+dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evaluation.dll --live --all --corpus tests/fixtures/documentation-scribe/evaluation --configuration deepseek-primary --endpoint https://api.deepseek.com/chat/completions --model deepseek-v4-flash --secret-env CONTRACTSCRIBE_EVALUATION_API_KEY --output <ignored-directory-below-os-temp> --currency <currency-id> --cached-input-rate <microunits-per-million> --uncached-input-rate <microunits-per-million> --output-rate <microunits-per-million>
 ```
 
 Full mode starts again from case 1. There is no checkpoint, resume ledger, or cache-derived correctness state.
@@ -69,7 +74,7 @@ Argument parsing reads only enough syntax to identify live mode and the named en
 
 After credential acquisition the evaluator contains no process-launch, shell, Git, build, restore, test, or external MSBuild API. The already-prepared corpus is loaded by the reviewed in-process production loader only after the environment entry is absent. The secret is never an argument, prompt field, report field, exception message, or child environment value.
 
-Missing opt-in, selector, endpoint/model match, secret name/value, complete caller cost configuration, or confined output directory fails before any provider request. Live mode requires currency plus all three rates; only offline replay can be unpriced. The endpoint and model must exactly match the frozen selection.
+Missing opt-in, selector, exact configuration/endpoint/model match, secret name/value, complete caller cost configuration, or confined output directory fails before any provider request. Live mode requires currency plus all three rates; only offline replay can be unpriced. One configuration's gate or credential does not authorize the other configuration.
 
 The executable installs the same cooperative Ctrl+C/SIGTERM lifetime pattern used by the product CLI and passes that token through repository preparation, the production composition, provider transport, tools, patching, and report publication. A handled signal persists the active case as canceled in the partial report, suppresses the complete report, and exits with a bounded error code.
 
@@ -83,7 +88,7 @@ Products and sums use checked `Int128`; the combined response numerator is ceili
 
 ## Report and sanitization contract
 
-Live output requires an operator-selected physical directory below the operating-system temporary root. Symlink, junction, reparse, non-temporary destinations, prior evaluation report files, and any equality or ancestor/descendant overlap with the checkout, caller corpus, prepared corpus, or analyzed repository are rejected before publication or provider invocation. The same physical non-overlap check runs immediately before every same-directory atomic replacement. A partial allowlisted report names the active case before its initialization and is updated after each disposition; only the selected denominator can become complete, and successful final publication removes the partial file. Partial, interrupted, canceled, timeout, budget, rate-limit, malformed, unavailable, validation, and M2 outcomes stay explicit and are never called passed or compatible. Every provider response failure is retained as an ordered request number plus one closed `model.failure.*` classification in `providerFailures`, including a transient failure followed by a successful retry; provider prose and raw responses remain excluded.
+Live output requires an operator-selected physical directory below the operating-system temporary root. Symlink, junction, reparse, non-temporary destinations, prior evaluation report files, and any equality or ancestor/descendant overlap with the checkout, caller corpus, prepared corpus, or analyzed repository are rejected before publication or provider invocation. The same physical non-overlap check runs immediately before every same-directory atomic replacement. A partial allowlisted report names the active case before its initialization and is updated after each disposition; only the selected denominator can become complete, and successful final publication removes the partial file. Partial, interrupted, canceled, timeout, budget, rate-limit, malformed, unavailable, validation, and M2 outcomes stay explicit and are never called passed or compatible. Every provider response failure is retained as an ordered request number plus one closed `model.failure.*` classification in `providerFailures`, including a transient failure followed by a successful retry. Continuation behavior contributes only closed observation IDs; provider prose, raw responses, assistant content, and reasoning content remain excluded.
 
 The report allowlist contains corpus/selection/cost/source identities; bounded case IDs, status codes, counts, usage/cache/cost completeness, case-level expectation status and difference IDs, and live elapsed time; proposal-validation and M2 outcomes; and production-validated bounded content units with claim category and sorted evidence IDs for local human review. Offline differences cover the frozen outcome and observation oracle rather than treating deterministic byte equality or declarative input-coverage labels as semantic conformance.
 
