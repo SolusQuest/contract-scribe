@@ -176,7 +176,19 @@ public sealed class EvaluationHarnessTests
         Assert.Equal("deepseek-primary", deepSeek.ConfigurationId);
         Assert.Equal("https://api.deepseek.com/chat/completions", deepSeek.Endpoint);
         Assert.Equal("deepseek-v4-flash", deepSeek.Model);
+        Assert.Equal("2026-08-21", deepSeek.EvidenceDate);
         Assert.Equal("max_tokens", deepSeek.RequestProfile.OutputTokenField);
+        Assert.Equal(
+        [
+            "cache-fields-when-supplied",
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        ], deepSeek.ExpectedObservations);
         Assert.Equal(11, loaded.Manifest.Scenarios.Length);
         Assert.Equal(
             ["conflicting-evidence", "patch-rejection", "useful-proposal"],
@@ -185,8 +197,19 @@ public sealed class EvaluationHarnessTests
         Assert.Equal("mimo-compatibility", miMo.ConfigurationId);
         Assert.Equal("https://api.xiaomimimo.com/v1/chat/completions", miMo.Endpoint);
         Assert.Equal("mimo-v2.5", miMo.Model);
+        Assert.Equal("2026-08-21", miMo.EvidenceDate);
         Assert.Equal(["useful-proposal"], miMo.LiveScenarioIds);
         Assert.Equal("max_completion_tokens", miMo.RequestProfile.OutputTokenField);
+        Assert.Equal(
+        [
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        ], miMo.ExpectedObservations);
         Assert.Equal(64, loaded.CorpusIdentity.Length);
         Assert.Equal(64, loaded.SelectionIdentity.Length);
     }

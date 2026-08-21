@@ -386,6 +386,7 @@ internal static class EvaluationManifestLoader
         {
             "deepseek-primary" => configuration.Endpoint == "https://api.deepseek.com/chat/completions"
                 && configuration.Model == "deepseek-v4-flash"
+                && configuration.EvidenceDate == "2026-08-21"
                 && configuration.Documentation.SequenceEqual(
                 [
                     "https://api-docs.deepseek.com/api/create-chat-completion/",
@@ -398,6 +399,17 @@ internal static class EvaluationManifestLoader
                 && configuration.RequestProfile.ToolChoice == "omitted"
                 && configuration.RequestProfile.Continuation == "required-for-tool-calls"
                 && configuration.RequestProfile.OutputTokenField == "max_tokens"
+                && configuration.ExpectedObservations.SequenceEqual(
+                [
+                    "cache-fields-when-supplied",
+                    "continuation.history-replayed",
+                    "continuation.observed",
+                    "request.accepted-or-bounded-provider-failure",
+                    "tool-call-or-terminal",
+                    "tool-result-continuation-when-requested",
+                    "usage-fields-when-supplied",
+                    "validated-proposal-or-structured-skip-or-bounded-failure",
+                ], StringComparer.Ordinal)
                 && configuration.LiveScenarioIds.SequenceEqual(
                     ["conflicting-evidence", "patch-rejection", "useful-proposal"],
                     StringComparer.Ordinal)
@@ -405,6 +417,7 @@ internal static class EvaluationManifestLoader
             "mimo-compatibility" =>
                 configuration.Endpoint == "https://api.xiaomimimo.com/v1/chat/completions"
                 && configuration.Model == "mimo-v2.5"
+                && configuration.EvidenceDate == "2026-08-21"
                 && configuration.Documentation.SequenceEqual(
                 [
                     "https://mimo.mi.com/docs/en-US/api/chat/openai-api",
@@ -416,24 +429,23 @@ internal static class EvaluationManifestLoader
                 && configuration.RequestProfile.ToolChoice == "auto"
                 && configuration.RequestProfile.Continuation == "required-for-tool-calls"
                 && configuration.RequestProfile.OutputTokenField == "max_completion_tokens"
+                && configuration.ExpectedObservations.SequenceEqual(
+                [
+                    "continuation.history-replayed",
+                    "continuation.observed",
+                    "request.accepted-or-bounded-provider-failure",
+                    "tool-call-or-terminal",
+                    "tool-result-continuation-when-requested",
+                    "usage-fields-when-supplied",
+                    "validated-proposal-or-structured-skip-or-bounded-failure",
+                ], StringComparer.Ordinal)
                 && configuration.LiveScenarioIds.SequenceEqual(["useful-proposal"], StringComparer.Ordinal)
                 && configuration.SafetyGateCaseId == "useful-proposal",
             _ => false,
         };
         return known
-            && DateOnly.TryParseExact(
-                configuration.EvidenceDate,
-                "yyyy-MM-dd",
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None,
-                out _)
             && !string.IsNullOrWhiteSpace(configuration.Reason)
             && configuration.Reason.Length <= 1_024
-            && configuration.ExpectedObservations.Length > 0
-            && configuration.ExpectedObservations.All(IsId)
-            && configuration.ExpectedObservations.SequenceEqual(
-                configuration.ExpectedObservations.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
-                StringComparer.Ordinal)
             && configuration.LiveScenarioIds.Length > 0
             && configuration.LiveScenarioIds.All(IsId)
             && configuration.LiveScenarioIds.SequenceEqual(

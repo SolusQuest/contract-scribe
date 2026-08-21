@@ -432,6 +432,39 @@ public sealed class DocumentationScribeProviderTransportTests
         Assert.DoesNotContain(marker, string.Join(' ', observer.Observations), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Http_transport_required_continuation_fails_closed_without_another_request(bool explicitNull)
+    {
+        var reasoning = explicitNull ? ",\"reasoning_content\":null" : string.Empty;
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"opaque-content\""
+            + reasoning
+            + ",\"tool_calls\":[{\"id\":\"call.required\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}")));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+
+        var response = await transport.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, response.Failure!.Code);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.MissingRequired,
+            response.ContinuationObservation);
+        Assert.Null(response.AssistantContinuation);
+        Assert.Empty(response.ToolCalls);
+        Assert.Empty(response.TerminalSubmissions);
+        Assert.DoesNotContain("opaque-content", response.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Null_refusal_is_absent_semantically_but_non_null_refusal_fails_closed()
     {
