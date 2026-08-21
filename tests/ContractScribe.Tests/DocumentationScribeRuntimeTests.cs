@@ -45,8 +45,15 @@ public sealed class DocumentationScribeRuntimeTests
         var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
         var registry = Registry(("tool.zeta", port), ("tool.alpha", port));
         var exchange = Script(
-            ToolResponse(Call(0, "call.z", "tool.zeta", "z"), Call(1, "call.a", "tool.alpha", "a")),
-            ToolResponse(Call(0, "call.a2", "tool.alpha", "a2")),
+            ToolResponseWithContinuation(
+                "first-content",
+                "first-reasoning-marker",
+                Call(0, "call.z", "tool.zeta", "z"),
+                Call(1, "call.a", "tool.alpha", "a")),
+            ToolResponseWithContinuation(
+                "second-content",
+                "second-reasoning-marker",
+                Call(0, "call.a2", "tool.alpha", "a2")),
             TerminalResponse(ReadTerminal("proposal-result.json")));
 
         var result = await CreateRuntime(exchange, registry).RunAsync(Request(), Attempt(), Prompt());
@@ -59,6 +66,11 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(new[] { "tool.alpha", "tool.zeta" }, exchange.Requests[0].Tools.Select(tool => tool.OperationId));
         Assert.Equal(new[] { "call.z", "call.a" }, exchange.Requests[1].CompletedToolExchanges.Select(item => item.CallId));
         Assert.Equal(new[] { "call.z", "call.a", "call.a2" }, exchange.Requests[2].CompletedToolExchanges.Select(item => item.CallId));
+        Assert.Equal("first-reasoning-marker",
+            exchange.Requests[1].CompletedToolExchanges[0].AssistantContinuation!.ReasoningContent);
+        Assert.Null(exchange.Requests[1].CompletedToolExchanges[1].AssistantContinuation);
+        Assert.Equal("second-reasoning-marker",
+            exchange.Requests[2].CompletedToolExchanges[2].AssistantContinuation!.ReasoningContent);
         Assert.Single(result.DynamicEvidenceReferences);
         Assert.All(
             exchange.Requests.Skip(1).SelectMany(request => request.CompletedToolExchanges),
@@ -478,8 +490,11 @@ public sealed class DocumentationScribeRuntimeTests
         string secondReference,
         DocumentationScribeFailureCode expectedFailure)
     {
+        const string continuationMarker = "aborted-tool-round-reasoning-marker";
         var result = await CreateRuntime(
-            Script(ToolResponse(
+            Script(ToolResponseWithContinuation(
+                "aborted-content",
+                continuationMarker,
                 Call(0, "call.valid", "tool.read", "valid"),
                 Call(1, "call.second", "tool.read", secondReference))),
             RegistryWithCodec(new OutcomeByReferencePort(), new SyntheticCodec()))
@@ -489,6 +504,7 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Empty(result.DynamicEvidenceReferences);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+        Assert.DoesNotContain(continuationMarker, result.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -496,8 +512,11 @@ public sealed class DocumentationScribeRuntimeTests
     {
         var port = new HoldSecondPort();
         using var cancellation = new CancellationTokenSource();
+        const string continuationMarker = "cancelled-tool-round-reasoning-marker";
         var pending = CreateRuntime(
-            Script(ToolResponse(
+            Script(ToolResponseWithContinuation(
+                "cancelled-content",
+                continuationMarker,
                 Call(0, "call.valid", "tool.read", "valid"),
                 Call(1, "call.wait", "tool.read", "wait"))),
             RegistryWithCodec(port, new SyntheticCodec()))
@@ -512,6 +531,7 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Empty(result.DynamicEvidenceReferences);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(2, result.RunEnvelope.ToolCallCount);
+        Assert.DoesNotContain(continuationMarker, result.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -520,7 +540,10 @@ public sealed class DocumentationScribeRuntimeTests
         var request = Request(root => root["limits"]!["maximumEvidenceReferences"] = 4);
         var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
         var exchange = Script(
-            ToolResponse(Call(0, "call.one", "tool.read", "one")),
+            ToolResponseWithContinuation(
+                "retry-content",
+                "retry-reasoning-marker",
+                Call(0, "call.one", "tool.read", "one")),
             FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable),
             ToolResponse(Call(0, "call.two", "tool.read", "two")));
 
@@ -531,6 +554,8 @@ public sealed class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
         Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.Equal("retry-reasoning-marker",
+            exchange.Requests[1].CompletedToolExchanges[0].AssistantContinuation!.ReasoningContent);
         Assert.Empty(exchange.Requests[2].CompletedToolExchanges);
         Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(2, result.RunEnvelope.ToolRoundCount);
@@ -1434,6 +1459,19 @@ public sealed class DocumentationScribeRuntimeTests
 
     private static DocumentationScribeModelResponse ToolResponse(
         params DocumentationScribeModelToolCall[] calls) => new([.. calls], []);
+
+    private static DocumentationScribeModelResponse ToolResponseWithContinuation(
+        string content,
+        string reasoningContent,
+        params DocumentationScribeModelToolCall[] calls) => new(
+            [.. calls],
+            [],
+            failure: null,
+            usage: null,
+            cache: null,
+            cost: null,
+            new DocumentationScribeAssistantContinuation(content, reasoningContent),
+            DocumentationScribeContinuationObservation.Observed);
 
     private static DocumentationScribeModelResponse TerminalResponse(byte[] terminal) =>
         new([], [new DocumentationScribeModelTerminalSubmission(terminal)]);

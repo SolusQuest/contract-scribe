@@ -13,6 +13,7 @@ internal sealed record EvaluationOptions(
     EvaluationMode Mode,
     string CorpusDirectory,
     string? OutputDirectory,
+    string? ConfigurationId,
     Uri? Endpoint,
     string? Model,
     string? SecretEnvironmentVariable,
@@ -40,7 +41,7 @@ internal sealed record EvaluationOptions(
                 continue;
             }
 
-            if (argument is not ("--corpus" or "--output" or "--endpoint" or "--model"
+            if (argument is not ("--corpus" or "--output" or "--configuration" or "--endpoint" or "--model"
                 or "--secret-env" or "--currency" or "--cached-input-rate"
                 or "--uncached-input-rate" or "--output-rate")
                 || index + 1 >= args.Length
@@ -67,12 +68,15 @@ internal sealed record EvaluationOptions(
                 : EvaluationMode.LiveAll;
         Uri? endpoint = null;
         string? model = null;
+        string? configurationId = null;
         string? secretName = null;
         string? output = values.GetValueOrDefault("--output");
         if (live)
         {
             if (!values.TryGetValue("--endpoint", out var endpointText)
                 || !Uri.TryCreate(endpointText, UriKind.Absolute, out endpoint)
+                || !values.TryGetValue("--configuration", out configurationId)
+                || !IsId(configurationId)
                 || !values.TryGetValue("--model", out model)
                 || string.IsNullOrWhiteSpace(model)
                 || !values.TryGetValue("--secret-env", out secretName)
@@ -82,7 +86,7 @@ internal sealed record EvaluationOptions(
                 return false;
             }
         }
-        else if (values.Keys.Any(key => key is "--endpoint" or "--model" or "--secret-env"))
+        else if (values.Keys.Any(key => key is "--configuration" or "--endpoint" or "--model" or "--secret-env"))
         {
             return false;
         }
@@ -97,6 +101,7 @@ internal sealed record EvaluationOptions(
             mode,
             corpus,
             output,
+            configurationId,
             endpoint,
             model,
             secretName,
@@ -140,4 +145,13 @@ internal sealed record EvaluationOptions(
         && value.Length <= 128
         && (char.IsAsciiLetter(value[0]) || value[0] == '_')
         && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '_');
+
+    private static bool IsId(string value) =>
+        !string.IsNullOrEmpty(value)
+        && value.Length <= 128
+        && value[0] is >= 'a' and <= 'z'
+        && value[^1] is not ('.' or '-')
+        && value.All(character => character is >= 'a' and <= 'z'
+            || character is >= '0' and <= '9'
+            || character is '.' or '-');
 }

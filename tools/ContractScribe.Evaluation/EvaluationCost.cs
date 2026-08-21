@@ -162,7 +162,8 @@ internal sealed record EvaluationCostPolicy(
 internal sealed record EvaluationProviderObservation(
     int ProviderRequestNumber,
     EvaluationCostResult Cost,
-    DocumentationScribeModelFailureCode? FailureCode);
+    DocumentationScribeModelFailureCode? FailureCode,
+    DocumentationScribeContinuationObservation ContinuationObservation);
 
 internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
 {
@@ -202,19 +203,14 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
         observations.Add(new EvaluationProviderObservation(
             request.ProviderRequestNumber,
             result,
-            response.Failure?.Code));
+            response.Failure?.Code,
+            response.ContinuationObservation));
         var completeCost = result.Completeness == EvaluationCostCompleteness.Complete
             && result.AmountMicrounits is { } amount
             && result.CurrencyId is { } currency
                 ? new DocumentationScribeModelCost(currency, amount)
                 : null;
-        return new DocumentationScribeModelResponse(
-            response.ToolCalls,
-            response.TerminalSubmissions,
-            response.Failure,
-            response.Usage,
-            response.Cache,
-            completeCost);
+        return response.WithCost(completeCost);
     }
 
     public override string ToString() => nameof(CostObservingExchange);

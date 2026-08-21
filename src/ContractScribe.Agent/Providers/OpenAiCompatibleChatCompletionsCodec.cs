@@ -19,13 +19,25 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             * (6 * DocumentationScribeBoundary.MaximumCorrelationIdUtf8Bytes + 512)
         + 65_536);
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly OpenAiCompatibleChatCompletionsRequestProfile DefaultProfile = new(
+        OpenAiCompatibleThinkingMode.Disabled,
+        reasoningEffort: null,
+        OpenAiCompatibleToolChoice.Required,
+        OpenAiCompatibleContinuationPolicy.Optional,
+        OpenAiCompatibleOutputTokenField.MaxTokens);
 
     internal static OpenAiCompatiblePreparedRequest Prepare(
         DocumentationScribeModelRequest request,
-        string model)
+        string model) => Prepare(request, model, DefaultProfile);
+
+    internal static OpenAiCompatiblePreparedRequest Prepare(
+        DocumentationScribeModelRequest request,
+        string model,
+        OpenAiCompatibleChatCompletionsRequestProfile profile)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrEmpty(model);
+        ArgumentNullException.ThrowIfNull(profile);
         EnsureStrict(model);
 
         try
@@ -56,7 +68,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
             ValidateSchema(request.Terminal.SchemaJson);
             var rounds = ReconstructRounds(request.CompletedToolExchanges, operationToAlias);
-            var body = WriteBody(request, model, orderedTools, operationToAlias, rounds);
+            var body = WriteBody(request, model, profile, orderedTools, operationToAlias, rounds);
             if (body.Length > DocumentationScribeBoundary.MaximumLogicalRequestUtf8Bytes)
             {
                 throw Unsupported();
@@ -69,13 +81,16 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 aliasToOperation.ToImmutable(),
                 request.CompletedToolExchanges.Select(exchange => exchange.CallId)
                     .ToImmutableHashSet(StringComparer.Ordinal),
-                request.OutputLimits);
+                request.OutputLimits,
+                profile,
+                rounds.Any(round => round[0].AssistantContinuation is not null));
         }
         catch (OpenAiCompatibleProtocolException)
         {
             throw;
         }
         catch (Exception exception) when (exception is JsonException
+            or InvalidOperationException
             or DecoderFallbackException
             or EncoderFallbackException
             or ArgumentException
@@ -123,8 +138,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Malformed();
             }
 
+            var contentPresent = message.TryGetProperty("content", out var content);
             string? contentText = null;
-            if (message.TryGetProperty("content", out var content))
+            if (contentPresent)
             {
                 if (content.ValueKind == JsonValueKind.String)
                 {
@@ -137,6 +153,21 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     EnsureStrict(contentText);
                 }
                 else if (content.ValueKind != JsonValueKind.Null)
+                {
+                    throw Malformed();
+                }
+            }
+
+            var reasoningContentPresent = message.TryGetProperty("reasoning_content", out var reasoningContent);
+            string? reasoningContentText = null;
+            if (reasoningContentPresent)
+            {
+                if (reasoningContent.ValueKind == JsonValueKind.String)
+                {
+                    reasoningContentText = reasoningContent.GetString() ?? throw Malformed();
+                    EnsureStrict(reasoningContentText);
+                }
+                else if (reasoningContent.ValueKind != JsonValueKind.Null)
                 {
                     throw Malformed();
                 }
@@ -209,7 +240,6 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             }
 
             if ((hasRefusal && refusal.ValueKind != JsonValueKind.Null)
-                || !string.IsNullOrEmpty(contentText)
                 || calls.Count == 0)
             {
                 throw Malformed();
@@ -226,7 +256,16 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 return Response(
                     [],
                     [new DocumentationScribeModelTerminalSubmission(terminal.Arguments)],
-                    observations);
+                    observations,
+                    continuation: null,
+                    Observation(request, reasoningContentPresent && reasoningContentText is not null));
+            }
+
+            if (request.Profile.ContinuationPolicy
+                    == OpenAiCompatibleContinuationPolicy.RequiredForToolCalls
+                && (!reasoningContentPresent || reasoningContentText is null))
+            {
+                throw MissingRequiredContinuation(request);
             }
 
             if (calls.Count > request.OutputLimits.MaximumToolCalls)
@@ -250,13 +289,23 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     call.Arguments));
             }
 
-            return Response(normalized.ToImmutable(), [], observations);
+            var continuation = new DocumentationScribeAssistantContinuation(
+                contentPresent,
+                contentText,
+                reasoningContentText);
+            return Response(
+                normalized.ToImmutable(),
+                [],
+                observations,
+                continuation,
+                Observation(request, reasoningContentPresent && reasoningContentText is not null));
         }
         catch (OpenAiCompatibleProtocolException)
         {
             throw;
         }
         catch (Exception exception) when (exception is JsonException
+            or InvalidOperationException
             or DecoderFallbackException
             or EncoderFallbackException
             or ArgumentException
@@ -272,6 +321,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
     private static byte[] WriteBody(
         DocumentationScribeModelRequest request,
         string model,
+        OpenAiCompatibleChatCompletionsRequestProfile profile,
         ImmutableArray<DocumentationScribeModelToolDefinition> tools,
         IReadOnlyDictionary<string, string> aliases,
         ImmutableArray<ImmutableArray<DocumentationScribeCompletedToolExchange>> rounds)
@@ -293,8 +343,30 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
             foreach (var round in rounds)
             {
+                var continuation = round[0].AssistantContinuation;
                 writer.WriteStartObject();
                 writer.WriteString("role", "assistant");
+                if (continuation is null)
+                {
+                    writer.WriteString("content", string.Empty);
+                }
+                else if (continuation.ContentPresent)
+                {
+                    if (continuation.Content is { } content)
+                    {
+                        writer.WriteString("content", content);
+                    }
+                    else
+                    {
+                        writer.WriteNull("content");
+                    }
+                }
+
+                if (continuation?.ReasoningContent is { } reasoningContent)
+                {
+                    writer.WriteString("reasoning_content", reasoningContent);
+                }
+
                 writer.WritePropertyName("tool_calls");
                 writer.WriteStartArray();
                 foreach (var exchange in round)
@@ -332,11 +404,41 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
             WriteTool(writer, TerminalAlias, "Submit one structured terminal result.", request.Terminal.SchemaJson);
             writer.WriteEndArray();
-            writer.WriteString("tool_choice", "required");
-            writer.WriteBoolean("parallel_tool_calls", true);
-            writer.WriteNumber("max_tokens", request.OutputLimits.MaximumOutputTokens);
+            writer.WritePropertyName("thinking");
+            writer.WriteStartObject();
+            writer.WriteString("type", profile.ThinkingMode switch
+            {
+                OpenAiCompatibleThinkingMode.Enabled => "enabled",
+                OpenAiCompatibleThinkingMode.Disabled => "disabled",
+                _ => throw Unsupported(),
+            });
+            writer.WriteEndObject();
+            if (profile.ReasoningEffort is { } reasoningEffort)
+            {
+                writer.WriteString("reasoning_effort", reasoningEffort switch
+                {
+                    OpenAiCompatibleReasoningEffort.High => "high",
+                    _ => throw Unsupported(),
+                });
+            }
+
+            if (profile.ToolChoice != OpenAiCompatibleToolChoice.Omitted)
+            {
+                writer.WriteString("tool_choice", profile.ToolChoice switch
+                {
+                    OpenAiCompatibleToolChoice.Auto => "auto",
+                    OpenAiCompatibleToolChoice.Required => "required",
+                    _ => throw Unsupported(),
+                });
+            }
+
+            writer.WriteNumber(profile.OutputTokenField switch
+            {
+                OpenAiCompatibleOutputTokenField.MaxTokens => "max_tokens",
+                OpenAiCompatibleOutputTokenField.MaxCompletionTokens => "max_completion_tokens",
+                _ => throw Unsupported(),
+            }, request.OutputLimits.MaximumOutputTokens);
             writer.WriteBoolean("stream", false);
-            writer.WriteNumber("n", 1);
             writer.WriteEndObject();
         }
 
@@ -474,6 +576,11 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Unsupported();
             }
 
+            if (exchange.ResponseIndex != 0 && exchange.AssistantContinuation is not null)
+            {
+                throw Unsupported();
+            }
+
             current.Add(exchange);
         }
 
@@ -552,11 +659,29 @@ internal static class OpenAiCompatibleChatCompletionsCodec
     private static DocumentationScribeModelResponse Response(
         ImmutableArray<DocumentationScribeModelToolCall> calls,
         ImmutableArray<DocumentationScribeModelTerminalSubmission> terminals,
-        UsageObservations observations) => new(
+        UsageObservations observations,
+        DocumentationScribeAssistantContinuation? continuation,
+        DocumentationScribeContinuationObservation continuationObservation) => new(
             calls,
             terminals,
-            usage: observations.Usage,
-            cache: observations.Cache);
+            failure: null,
+            observations.Usage,
+            observations.Cache,
+            cost: null,
+            continuation,
+            continuationObservation);
+
+    private static DocumentationScribeContinuationObservation Observation(
+        OpenAiCompatiblePreparedRequest request,
+        bool observed)
+    {
+        var result = observed
+            ? DocumentationScribeContinuationObservation.Observed
+            : DocumentationScribeContinuationObservation.None;
+        return request.HistoryReplayed
+            ? result | DocumentationScribeContinuationObservation.HistoryReplayed
+            : result;
+    }
 
     private static string Role(DocumentationScribeMessageKind kind) => kind switch
     {
@@ -660,6 +785,12 @@ internal static class OpenAiCompatibleChatCompletionsCodec
     private static OpenAiCompatibleProtocolException Malformed() => new(
         DocumentationScribeModelFailureCode.MalformedResponse);
 
+    private static OpenAiCompatibleProtocolException MissingRequiredContinuation(
+        OpenAiCompatiblePreparedRequest request) => new(
+        DocumentationScribeModelFailureCode.MalformedResponse,
+        Observation(request, observed: false)
+            | DocumentationScribeContinuationObservation.MissingRequired);
+
     private readonly record struct ParsedCall(
         int ResponseIndex,
         string CallId,
@@ -678,13 +809,17 @@ internal sealed class OpenAiCompatiblePreparedRequest
         byte[] productProjectionUtf8,
         ImmutableDictionary<string, string> aliasToOperation,
         ImmutableHashSet<string> completedCallIds,
-        DocumentationScribeModelOutputLimits outputLimits)
+        DocumentationScribeModelOutputLimits outputLimits,
+        OpenAiCompatibleChatCompletionsRequestProfile profile,
+        bool historyReplayed)
     {
         BodyUtf8 = bodyUtf8;
         ProductProjectionUtf8 = productProjectionUtf8;
         AliasToOperation = aliasToOperation;
         CompletedCallIds = completedCallIds;
         OutputLimits = outputLimits;
+        Profile = profile;
+        HistoryReplayed = historyReplayed;
     }
 
     internal byte[] BodyUtf8 { get; }
@@ -696,12 +831,25 @@ internal sealed class OpenAiCompatiblePreparedRequest
     internal ImmutableHashSet<string> CompletedCallIds { get; }
 
     internal DocumentationScribeModelOutputLimits OutputLimits { get; }
+
+    internal OpenAiCompatibleChatCompletionsRequestProfile Profile { get; }
+
+    internal bool HistoryReplayed { get; }
 }
 
 internal sealed class OpenAiCompatibleProtocolException : Exception
 {
-    internal OpenAiCompatibleProtocolException(DocumentationScribeModelFailureCode code)
-        : base("The selected provider protocol rejected an exchange.") => Code = code;
+    internal OpenAiCompatibleProtocolException(
+        DocumentationScribeModelFailureCode code,
+        DocumentationScribeContinuationObservation continuationObservation =
+            DocumentationScribeContinuationObservation.None)
+        : base("The selected provider protocol rejected an exchange.")
+    {
+        Code = code;
+        ContinuationObservation = continuationObservation;
+    }
 
     internal DocumentationScribeModelFailureCode Code { get; }
+
+    internal DocumentationScribeContinuationObservation ContinuationObservation { get; }
 }

@@ -98,6 +98,13 @@ internal sealed record EvaluationSelection
 
     public required string SelectionId { get; init; }
 
+    public required EvaluationProviderConfiguration[] Configurations { get; init; }
+}
+
+internal sealed record EvaluationProviderConfiguration
+{
+    public required string ConfigurationId { get; init; }
+
     public required string Endpoint { get; init; }
 
     public required string Model { get; init; }
@@ -108,11 +115,28 @@ internal sealed record EvaluationSelection
 
     public required string Reason { get; init; }
 
+    public required EvaluationRequestProfile RequestProfile { get; init; }
+
     public required string[] ExpectedObservations { get; init; }
 
     public required string[] LiveScenarioIds { get; init; }
 
+    public required string SafetyGateCaseId { get; init; }
+
     public required EvaluationSelectionLimits Limits { get; init; }
+}
+
+internal sealed record EvaluationRequestProfile
+{
+    public required string Thinking { get; init; }
+
+    public required string? ReasoningEffort { get; init; }
+
+    public required string ToolChoice { get; init; }
+
+    public required string Continuation { get; init; }
+
+    public required string OutputTokenField { get; init; }
 }
 
 internal sealed record EvaluationSelectionLimits
@@ -200,9 +224,12 @@ internal static class EvaluationManifestLoader
             selectionBytes,
             JsonOptions) ?? throw new InvalidDataException("evaluation.selection.invalid");
         ValidateSelection(selection);
-        if (!selection.LiveScenarioIds.All(id => manifest.Scenarios.Any(scenario =>
-                scenario.Id == id && scenario.ExecutionDomain == "live-and-offline"))
-            || !selection.LiveScenarioIds.Contains(manifest.SafetyGateCaseId, StringComparer.Ordinal))
+        if (selection.Configurations.Any(configuration =>
+                !configuration.LiveScenarioIds.All(id => manifest.Scenarios.Any(scenario =>
+                    scenario.Id == id && scenario.ExecutionDomain == "live-and-offline"))
+                || !configuration.LiveScenarioIds.Contains(
+                    configuration.SafetyGateCaseId,
+                    StringComparer.Ordinal)))
         {
             throw new InvalidDataException("evaluation.selection.invalid");
         }
@@ -342,50 +369,105 @@ internal static class EvaluationManifestLoader
     private static void ValidateSelection(EvaluationSelection selection)
     {
         if (selection.SchemaVersion != 1
-            || !IsId(selection.SelectionId)
-            || selection.Endpoint != "https://api.openai.com/v1/chat/completions"
-            || selection.Model != "gpt-4.1-mini-2025-04-14"
-            || !DateOnly.TryParseExact(
-                selection.EvidenceDate,
-                "yyyy-MM-dd",
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None,
-                out _)
-            || selection.Documentation.Length == 0
-            || !selection.Documentation.SequenceEqual(
-            [
-                "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
-                "https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions",
-            ], StringComparer.Ordinal)
-            || string.IsNullOrWhiteSpace(selection.Reason)
-            || selection.Reason.Length > 1_024
-            || selection.ExpectedObservations.Length == 0
-            || selection.ExpectedObservations.Any(observation => !IsId(observation))
-            || !selection.ExpectedObservations.SequenceEqual(
-                selection.ExpectedObservations.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
+            || selection.SelectionId != "deepseek-mimo.chat-completions-thinking.v1"
+            || selection.Configurations.Length != 2
+            || !selection.Configurations.Select(item => item.ConfigurationId).SequenceEqual(
+                ["deepseek-primary", "mimo-compatibility"],
                 StringComparer.Ordinal)
-            || selection.LiveScenarioIds.Length == 0
-            || selection.LiveScenarioIds.Any(id => !IsId(id))
-            || !selection.LiveScenarioIds.SequenceEqual(
-                selection.LiveScenarioIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
-                StringComparer.Ordinal)
-            || selection.Limits.MaximumAttempts != 2
-            || selection.Limits.MaximumContextReferences != 8
-            || selection.Limits.MaximumContextUtf8Bytes != 65_536
-            || selection.Limits.MaximumEvidenceReferences != 32
-            || selection.Limits.MaximumEvidenceUtf8Bytes != 65_536
-            || selection.Limits.MaximumProviderRequests != 8
-            || selection.Limits.MaximumToolRounds != 4
-            || selection.Limits.MaximumToolCalls != 16
-            || selection.Limits.MaximumInputTokens != 65_536
-            || selection.Limits.MaximumUncachedInputTokens != 32_768
-            || selection.Limits.MaximumOutputTokens != 8_192
-            || selection.Limits.MaximumCostMicrounits != 5_000_000
-            || selection.Limits.MaximumElapsedMilliseconds != 120_000)
+            || selection.Configurations.Any(configuration => !ValidateConfiguration(configuration)))
         {
             throw new InvalidDataException("evaluation.selection.invalid");
         }
     }
+
+    private static bool ValidateConfiguration(EvaluationProviderConfiguration configuration)
+    {
+        var known = configuration.ConfigurationId switch
+        {
+            "deepseek-primary" => configuration.Endpoint == "https://api.deepseek.com/chat/completions"
+                && configuration.Model == "deepseek-v4-flash"
+                && configuration.EvidenceDate == "2026-08-21"
+                && configuration.Documentation.SequenceEqual(
+                [
+                    "https://api-docs.deepseek.com/api/create-chat-completion/",
+                    "https://api-docs.deepseek.com/guides/thinking_mode/",
+                    "https://api-docs.deepseek.com/quick_start/agent_integrations/oh_my_pi/",
+                    "https://api-docs.deepseek.com/quick_start/pricing/",
+                ], StringComparer.Ordinal)
+                && configuration.RequestProfile.Thinking == "enabled"
+                && configuration.RequestProfile.ReasoningEffort == "high"
+                && configuration.RequestProfile.ToolChoice == "omitted"
+                && configuration.RequestProfile.Continuation == "required-for-tool-calls"
+                && configuration.RequestProfile.OutputTokenField == "max_tokens"
+                && configuration.ExpectedObservations.SequenceEqual(
+                [
+                    "cache-fields-when-supplied",
+                    "continuation.history-replayed",
+                    "continuation.observed",
+                    "request.accepted-or-bounded-provider-failure",
+                    "tool-call-or-terminal",
+                    "tool-result-continuation-when-requested",
+                    "usage-fields-when-supplied",
+                    "validated-proposal-or-structured-skip-or-bounded-failure",
+                ], StringComparer.Ordinal)
+                && configuration.LiveScenarioIds.SequenceEqual(
+                    ["conflicting-evidence", "patch-rejection", "useful-proposal"],
+                    StringComparer.Ordinal)
+                && configuration.SafetyGateCaseId == "useful-proposal",
+            "mimo-compatibility" =>
+                configuration.Endpoint == "https://api.xiaomimimo.com/v1/chat/completions"
+                && configuration.Model == "mimo-v2.5"
+                && configuration.EvidenceDate == "2026-08-21"
+                && configuration.Documentation.SequenceEqual(
+                [
+                    "https://mimo.mi.com/docs/en-US/api/chat/openai-api",
+                    "https://mimo.mi.com/docs/en-US/quick-start/model",
+                    "https://mimo.mi.com/docs/en-US/usage-guide/passing-back-reasoning_content",
+                ], StringComparer.Ordinal)
+                && configuration.RequestProfile.Thinking == "enabled"
+                && configuration.RequestProfile.ReasoningEffort is null
+                && configuration.RequestProfile.ToolChoice == "auto"
+                && configuration.RequestProfile.Continuation == "required-for-tool-calls"
+                && configuration.RequestProfile.OutputTokenField == "max_completion_tokens"
+                && configuration.ExpectedObservations.SequenceEqual(
+                [
+                    "continuation.history-replayed",
+                    "continuation.observed",
+                    "request.accepted-or-bounded-provider-failure",
+                    "tool-call-or-terminal",
+                    "tool-result-continuation-when-requested",
+                    "usage-fields-when-supplied",
+                    "validated-proposal-or-structured-skip-or-bounded-failure",
+                ], StringComparer.Ordinal)
+                && configuration.LiveScenarioIds.SequenceEqual(["useful-proposal"], StringComparer.Ordinal)
+                && configuration.SafetyGateCaseId == "useful-proposal",
+            _ => false,
+        };
+        return known
+            && !string.IsNullOrWhiteSpace(configuration.Reason)
+            && configuration.Reason.Length <= 1_024
+            && configuration.LiveScenarioIds.Length > 0
+            && configuration.LiveScenarioIds.All(IsId)
+            && configuration.LiveScenarioIds.SequenceEqual(
+                configuration.LiveScenarioIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
+                StringComparer.Ordinal)
+            && ValidateLimits(configuration.Limits);
+    }
+
+    private static bool ValidateLimits(EvaluationSelectionLimits limits) =>
+        limits.MaximumAttempts == 2
+        && limits.MaximumContextReferences == 8
+        && limits.MaximumContextUtf8Bytes == 65_536
+        && limits.MaximumEvidenceReferences == 32
+        && limits.MaximumEvidenceUtf8Bytes == 65_536
+        && limits.MaximumProviderRequests == 8
+        && limits.MaximumToolRounds == 4
+        && limits.MaximumToolCalls == 16
+        && limits.MaximumInputTokens == 65_536
+        && limits.MaximumUncachedInputTokens == 32_768
+        && limits.MaximumOutputTokens == 8_192
+        && limits.MaximumCostMicrounits == 5_000_000
+        && limits.MaximumElapsedMilliseconds == 120_000;
 
     private static string ResolveFile(string root, string relative)
     {

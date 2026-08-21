@@ -35,8 +35,9 @@ public sealed class EvaluationHarnessTests
         {
             "--live",
             "--corpus", "corpus",
-            "--endpoint", "https://api.openai.com/v1/chat/completions",
-            "--model", "gpt-4.1-mini-2025-04-14",
+            "--configuration", "deepseek-primary",
+            "--endpoint", "https://api.deepseek.com/chat/completions",
+            "--model", "deepseek-v4-flash",
             "--secret-env", "EVALUATION_TEST_SECRET",
             "--output", Path.Join(Path.GetTempPath(), "evaluation-output"),
         };
@@ -169,12 +170,46 @@ public sealed class EvaluationHarnessTests
     {
         var loaded = EvaluationManifestLoader.Load(CorpusRoot());
         Assert.Equal("useful-proposal", loaded.Manifest.SafetyGateCaseId);
-        Assert.Equal("https://api.openai.com/v1/chat/completions", loaded.Selection.Endpoint);
-        Assert.Equal("gpt-4.1-mini-2025-04-14", loaded.Selection.Model);
+        Assert.Equal("deepseek-mimo.chat-completions-thinking.v1", loaded.Selection.SelectionId);
+        Assert.Equal(2, loaded.Selection.Configurations.Length);
+        var deepSeek = loaded.Selection.Configurations[0];
+        Assert.Equal("deepseek-primary", deepSeek.ConfigurationId);
+        Assert.Equal("https://api.deepseek.com/chat/completions", deepSeek.Endpoint);
+        Assert.Equal("deepseek-v4-flash", deepSeek.Model);
+        Assert.Equal("2026-08-21", deepSeek.EvidenceDate);
+        Assert.Equal("max_tokens", deepSeek.RequestProfile.OutputTokenField);
+        Assert.Equal(
+        [
+            "cache-fields-when-supplied",
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        ], deepSeek.ExpectedObservations);
         Assert.Equal(11, loaded.Manifest.Scenarios.Length);
         Assert.Equal(
             ["conflicting-evidence", "patch-rejection", "useful-proposal"],
-            loaded.Selection.LiveScenarioIds);
+            deepSeek.LiveScenarioIds);
+        var miMo = loaded.Selection.Configurations[1];
+        Assert.Equal("mimo-compatibility", miMo.ConfigurationId);
+        Assert.Equal("https://api.xiaomimimo.com/v1/chat/completions", miMo.Endpoint);
+        Assert.Equal("mimo-v2.5", miMo.Model);
+        Assert.Equal("2026-08-21", miMo.EvidenceDate);
+        Assert.Equal(["useful-proposal"], miMo.LiveScenarioIds);
+        Assert.Equal("max_completion_tokens", miMo.RequestProfile.OutputTokenField);
+        Assert.Equal(
+        [
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        ], miMo.ExpectedObservations);
         Assert.Equal(64, loaded.CorpusIdentity.Length);
         Assert.Equal(64, loaded.SelectionIdentity.Length);
     }
@@ -306,6 +341,12 @@ public sealed class EvaluationHarnessTests
         Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
             MinimalReport("Read file:///home/alice/private/contract.cs before use."),
             null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("reasoning_content"),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("assistantContinuation"),
+            null));
     }
 
     [Fact]
@@ -421,6 +462,7 @@ public sealed class EvaluationHarnessTests
         new string('a', 64),
         "selection",
         new string('b', 64),
+        null,
         new string('c', 64),
         null,
         null,

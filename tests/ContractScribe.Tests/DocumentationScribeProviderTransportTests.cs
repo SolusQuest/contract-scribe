@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
+using ContractScribe.Evaluation;
 
 namespace ContractScribe.Tests;
 
@@ -38,7 +39,7 @@ public sealed class DocumentationScribeProviderTransportTests
         {
             var root = wire.RootElement;
             Assert.Equal(
-                ["model", "messages", "tools", "tool_choice", "parallel_tool_calls", "max_tokens", "stream", "n"],
+                ["model", "messages", "tools", "thinking", "tool_choice", "max_tokens", "stream"],
                 root.EnumerateObject().Select(property => property.Name));
             Assert.Equal(
                 ["system", "user", "user", "system", "user"],
@@ -88,17 +89,427 @@ public sealed class DocumentationScribeProviderTransportTests
         Assert.Equal("skip", JsonDocument.Parse(terminal.TerminalUtf8Json).RootElement.GetProperty("kind").GetString());
 
         Assert.Equal(
-            "1b7104759b372c99e31178b4f2381cfe98a280410808c4fe8a5af24b85ca1761",
+            "68781078e22df92791bdc62253fe1437f684ba8af78dd8373d7d70d7a98eeda2",
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.BodyUtf8));
         Assert.Equal(
             "d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8",
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.ProductProjectionUtf8));
         Assert.Equal(
-            "dcd885ddbece7e432e0544c06f4305a1807419d200cc224f53f7a43a0d594132",
+            "08882feee6b85b27af5dd0610e42f76252e2003f7ef6a107087e0330ad873199",
             OpenAiCompatibleChatCompletionsCodec.Digest(second.BodyUtf8));
         Assert.Equal(
             "057dd9c7ad1e0819cc2708520eda78ed8fb9f5fe3355330049b65de7aa067e51",
             OpenAiCompatibleChatCompletionsCodec.Digest(second.ProductProjectionUtf8));
+    }
+
+    [Fact]
+    public void Selected_provider_profiles_emit_only_their_documented_request_fields()
+    {
+        var deepSeek = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]),
+            "deepseek-v4-flash",
+            new OpenAiCompatibleChatCompletionsRequestProfile(
+                OpenAiCompatibleThinkingMode.Enabled,
+                OpenAiCompatibleReasoningEffort.High,
+                OpenAiCompatibleToolChoice.Omitted,
+                OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+                OpenAiCompatibleOutputTokenField.MaxTokens));
+        using (var document = JsonDocument.Parse(deepSeek.BodyUtf8))
+        {
+            var root = document.RootElement;
+            Assert.Equal(
+                ["model", "messages", "tools", "thinking", "reasoning_effort", "max_tokens", "stream"],
+                root.EnumerateObject().Select(property => property.Name));
+            Assert.Equal("enabled", root.GetProperty("thinking").GetProperty("type").GetString());
+            Assert.Equal("high", root.GetProperty("reasoning_effort").GetString());
+            Assert.False(root.TryGetProperty("tool_choice", out _));
+            Assert.False(root.TryGetProperty("max_completion_tokens", out _));
+            Assert.False(root.TryGetProperty("parallel_tool_calls", out _));
+            Assert.False(root.TryGetProperty("n", out _));
+        }
+
+        var miMo = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]),
+            "mimo-v2.5",
+            new OpenAiCompatibleChatCompletionsRequestProfile(
+                OpenAiCompatibleThinkingMode.Enabled,
+                reasoningEffort: null,
+                OpenAiCompatibleToolChoice.Auto,
+                OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+                OpenAiCompatibleOutputTokenField.MaxCompletionTokens));
+        using var miMoDocument = JsonDocument.Parse(miMo.BodyUtf8);
+        var miMoRoot = miMoDocument.RootElement;
+        Assert.Equal(
+            ["model", "messages", "tools", "thinking", "tool_choice", "max_completion_tokens", "stream"],
+            miMoRoot.EnumerateObject().Select(property => property.Name));
+        Assert.Equal("auto", miMoRoot.GetProperty("tool_choice").GetString());
+        Assert.False(miMoRoot.TryGetProperty("reasoning_effort", out _));
+        Assert.False(miMoRoot.TryGetProperty("max_tokens", out _));
+    }
+
+    [Fact]
+    public void Reasoning_continuation_is_replayed_exactly_once_with_parallel_tool_calls()
+    {
+        const string content = "assistant-content-marker";
+        const string reasoning = "reasoning-\u4e2d-\ud83d\ude80-marker";
+        var profile = RequiredContinuationProfile();
+        var first = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model", profile);
+        var response = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":"assistant-content-marker","reasoning_content":"reasoning-\u4e2d-\ud83d\ude80-marker","tool_calls":[{"id":"call.alpha","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}},{"id":"call.zeta","type":"function","function":{"name":"cs_tool_001","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                """),
+            first);
+
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.Observed,
+            response.ContinuationObservation);
+        Assert.Equal(content, response.AssistantContinuation!.Content);
+        Assert.Equal(reasoning, response.AssistantContinuation.ReasoningContent);
+
+        var completed = response.ToolCalls.Select(call => new DocumentationScribeCompletedToolExchange(
+            call.ResponseIndex,
+            call.CallId,
+            call.OperationId,
+            call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            call.ResponseIndex == 0 ? response.AssistantContinuation : null)).ToImmutableArray();
+        var second = OpenAiCompatibleChatCompletionsCodec.Prepare(Request(completed), "model", profile);
+        using var document = JsonDocument.Parse(second.BodyUtf8);
+        var assistant = document.RootElement.GetProperty("messages")[5];
+        Assert.Equal(content, assistant.GetProperty("content").GetString());
+        Assert.Equal(reasoning, assistant.GetProperty("reasoning_content").GetString());
+        Assert.Equal(2, assistant.GetProperty("tool_calls").GetArrayLength());
+        Assert.Single(
+            document.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.TryGetProperty("reasoning_content", out _));
+        Assert.DoesNotContain(reasoning, Encoding.UTF8.GetString(second.ProductProjectionUtf8), StringComparison.Ordinal);
+
+        var missingAfterReplay = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                Encoding.UTF8.GetBytes("""
+                    {"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call.missing-after-replay","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                    """),
+                second));
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.HistoryReplayed
+                | DocumentationScribeContinuationObservation.MissingRequired,
+            missingAfterReplay.ContinuationObservation);
+
+        var nextResponse = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"next","tool_calls":[{"id":"call.next","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                """),
+            second);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.Observed
+                | DocumentationScribeContinuationObservation.HistoryReplayed,
+            nextResponse.ContinuationObservation);
+
+        var nextCall = Assert.Single(nextResponse.ToolCalls);
+        var nextCompleted = new DocumentationScribeCompletedToolExchange(
+            nextCall.ResponseIndex,
+            nextCall.CallId,
+            nextCall.OperationId,
+            nextCall.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            nextResponse.AssistantContinuation);
+        var third = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([.. completed, nextCompleted]),
+            "model",
+            profile);
+        using var thirdDocument = JsonDocument.Parse(third.BodyUtf8);
+        var thirdMessages = thirdDocument.RootElement.GetProperty("messages");
+        Assert.Equal(10, thirdMessages.GetArrayLength());
+        Assert.Equal(reasoning, thirdMessages[5].GetProperty("reasoning_content").GetString());
+        Assert.Equal("next", thirdMessages[8].GetProperty("reasoning_content").GetString());
+        Assert.Equal(
+            2,
+            thirdMessages.EnumerateArray().Count(message =>
+                message.TryGetProperty("reasoning_content", out _)));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    [InlineData("empty")]
+    public void Assistant_content_wire_shape_is_replayed_exactly(string contentShape)
+    {
+        var contentProperty = contentShape switch
+        {
+            "missing" => string.Empty,
+            "null" => "\"content\":null,",
+            "empty" => "\"content\":\"\",",
+            _ => throw new ArgumentOutOfRangeException(nameof(contentShape)),
+        };
+        var profile = RequiredContinuationProfile();
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model", profile);
+        var response = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
+                + contentProperty
+                + "\"reasoning_content\":\"reasoning-marker\",\"tool_calls\":[{\"id\":\"call.shape\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            prepared);
+        var call = Assert.Single(response.ToolCalls);
+        var completed = new DocumentationScribeCompletedToolExchange(
+            call.ResponseIndex,
+            call.CallId,
+            call.OperationId,
+            call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            response.AssistantContinuation);
+
+        var replay = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([completed]), "model", profile);
+        using var replayDocument = JsonDocument.Parse(replay.BodyUtf8);
+        var assistant = replayDocument.RootElement.GetProperty("messages")[5];
+        var contentPresent = assistant.TryGetProperty("content", out var content);
+
+        Assert.Equal(contentShape != "missing", contentPresent);
+        if (contentShape == "null")
+        {
+            Assert.Equal(JsonValueKind.Null, content.ValueKind);
+        }
+        else if (contentShape == "empty")
+        {
+            Assert.Equal(string.Empty, content.GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Required_continuation_rejects_missing_or_null_but_accepts_empty(bool explicitNull)
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]), "model", RequiredContinuationProfile());
+        var reasoning = explicitNull ? ",\"reasoning_content\":null" : string.Empty;
+        var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":null"
+                    + reasoning
+                    + ",\"tool_calls\":[{\"id\":\"call.required\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+                prepared));
+
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.MissingRequired,
+            exception.ContinuationObservation);
+
+        var accepted = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":"","tool_calls":[{"id":"call.empty","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+                """),
+            prepared);
+        Assert.Equal(string.Empty, accepted.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(DocumentationScribeContinuationObservation.Observed, accepted.ContinuationObservation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Optional_continuation_accepts_missing_or_null(bool explicitNull)
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var reasoning = explicitNull ? ",\"reasoning_content\":null" : string.Empty;
+        var response = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":null"
+                + reasoning
+                + ",\"tool_calls\":[{\"id\":\"call.optional\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            prepared);
+
+        Assert.Null(response.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(DocumentationScribeContinuationObservation.None, response.ContinuationObservation);
+    }
+
+    [Fact]
+    public void Continuation_fails_closed_for_wrong_type_duplicate_invalid_scalar_and_normalized_overflow()
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        var malformed = new[]
+        {
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"reasoning_content\":{},\"tool_calls\":[{\"id\":\"call.type\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"reasoning_content\":\"one\",\"reasoning_content\":\"two\",\"tool_calls\":[{\"id\":\"call.duplicate\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"reasoning_content\":\"\\uD800\",\"tool_calls\":[{\"id\":\"call.scalar\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+        };
+
+        foreach (var body in malformed)
+        {
+            Assert.Equal(
+                DocumentationScribeModelFailureCode.MalformedResponse,
+                Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                    OpenAiCompatibleChatCompletionsCodec.ParseResponse(Encoding.UTF8.GetBytes(body), prepared)).Code);
+        }
+
+        var call = new DocumentationScribeModelToolCall(
+            0, "call.overflow", "tool.alpha", Encoding.UTF8.GetBytes("{}"));
+        var continuation = new DocumentationScribeAssistantContinuation(
+            new string('x', DocumentationScribeBoundary.MaximumNormalizedResponseUtf8Bytes),
+            reasoningContent: null);
+        Assert.Throws<ArgumentException>(() => new DocumentationScribeModelResponse(
+            [call],
+            [],
+            failure: null,
+            usage: null,
+            cache: null,
+            cost: null,
+            continuation,
+            DocumentationScribeContinuationObservation.None));
+    }
+
+    [Fact]
+    public void Cost_transformation_preserves_opaque_continuation_and_closed_observations()
+    {
+        var continuation = new DocumentationScribeAssistantContinuation("content", "reasoning-marker");
+        var response = new DocumentationScribeModelResponse(
+            [new DocumentationScribeModelToolCall(0, "call.cost", "tool.alpha", Encoding.UTF8.GetBytes("{}"))],
+            [],
+            failure: null,
+            usage: new DocumentationScribeModelUsage(inputTokens: 1),
+            cache: null,
+            cost: null,
+            continuation,
+            DocumentationScribeContinuationObservation.Observed
+                | DocumentationScribeContinuationObservation.HistoryReplayed);
+
+        var transformed = response.WithCost(new DocumentationScribeModelCost("usd", 1));
+
+        Assert.Same(continuation, transformed.AssistantContinuation);
+        Assert.Equal(response.ContinuationObservation, transformed.ContinuationObservation);
+        Assert.Equal(1, transformed.Cost!.AmountMicrounits);
+        Assert.DoesNotContain("reasoning-marker", transformed.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("complete")]
+    [InlineData("partial")]
+    [InlineData("unpriced")]
+    public async Task Cost_observer_preserves_opaque_continuation_for_every_cost_completeness(string scenario)
+    {
+        var continuation = new DocumentationScribeAssistantContinuation(
+            string.Empty,
+            "cost-observer-reasoning-marker");
+        var usage = scenario == "partial"
+            ? new DocumentationScribeModelUsage(inputTokens: 1)
+            : new DocumentationScribeModelUsage(inputTokens: 1, outputTokens: 1);
+        var response = new DocumentationScribeModelResponse(
+            [new DocumentationScribeModelToolCall(0, "call.observer", "tool.alpha", Encoding.UTF8.GetBytes("{}"))],
+            [],
+            failure: null,
+            usage,
+            cache: null,
+            cost: null,
+            continuation,
+            DocumentationScribeContinuationObservation.Observed);
+        var policy = scenario == "unpriced"
+            ? EvaluationCostPolicy.Unpriced
+            : new EvaluationCostPolicy("usd", 1, 1, 1);
+        var observer = new CostObservingExchange(new StaticExchange(response), policy);
+
+        var transformed = await observer.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Same(continuation, transformed.AssistantContinuation);
+        Assert.Equal(
+            scenario switch
+            {
+                "complete" => EvaluationCostCompleteness.Complete,
+                "partial" => EvaluationCostCompleteness.Partial,
+                _ => EvaluationCostCompleteness.NotReported,
+            },
+            Assert.Single(observer.Observations).Cost.Completeness);
+        Assert.Equal(scenario == "complete", transformed.Cost is not null);
+    }
+
+    [Fact]
+    public async Task Http_transport_and_cost_observer_preserve_exact_continuation_into_the_next_wire_request()
+    {
+        const string marker = "synthetic-reasoning-pass-back-marker";
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            JsonResponse("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"synthetic-reasoning-pass-back-marker","tool_calls":[{"id":"call.chain","type":"function","function":{"name":"cs_tool_000","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}
+                """),
+            JsonResponse("""
+                {"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"terminal-reasoning-is-not-retained","tool_calls":[{"id":"call.terminal","type":"function","function":{"name":"cs_terminal","arguments":"{\"kind\":\"skip\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}
+                """),
+        ]);
+        var handler = new CapturingHandler((_, _) => Task.FromResult(responses.Dequeue()));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+        var observer = new CostObservingExchange(
+            transport,
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+
+        var first = await observer.SendAsync(Request([]), CancellationToken.None);
+        var call = Assert.Single(first.ToolCalls);
+        var completed = new DocumentationScribeCompletedToolExchange(
+            call.ResponseIndex,
+            call.CallId,
+            call.OperationId,
+            call.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            [],
+            first.AssistantContinuation);
+        var terminal = await observer.SendAsync(Request([completed]), CancellationToken.None);
+
+        Assert.Single(terminal.TerminalSubmissions);
+        Assert.Equal(2, handler.Snapshots.Count);
+        Assert.DoesNotContain(marker, handler.Snapshots[0].Body, StringComparison.Ordinal);
+        using var replay = JsonDocument.Parse(handler.Snapshots[1].Body);
+        var assistant = replay.RootElement.GetProperty("messages")[5];
+        Assert.Equal(marker, assistant.GetProperty("reasoning_content").GetString());
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.Observed,
+            observer.Observations[0].ContinuationObservation);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.Observed
+                | DocumentationScribeContinuationObservation.HistoryReplayed,
+            observer.Observations[1].ContinuationObservation);
+        Assert.DoesNotContain(marker, string.Join(' ', observer.Observations), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Http_transport_required_continuation_fails_closed_without_another_request(bool explicitNull)
+    {
+        var reasoning = explicitNull ? ",\"reasoning_content\":null" : string.Empty;
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"opaque-content\""
+            + reasoning
+            + ",\"tool_calls\":[{\"id\":\"call.required\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}")));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+
+        var response = await transport.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, response.Failure!.Code);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.MissingRequired,
+            response.ContinuationObservation);
+        Assert.Null(response.AssistantContinuation);
+        Assert.Empty(response.ToolCalls);
+        Assert.Empty(response.TerminalSubmissions);
+        Assert.DoesNotContain("opaque-content", response.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -720,6 +1131,31 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
+    public void Cumulative_continuation_history_is_rejected_at_the_logical_request_bound()
+    {
+        var reasoning = new string('r', 1_048_000);
+        var completed = Enumerable.Range(0, 33)
+            .Select(index => new DocumentationScribeCompletedToolExchange(
+                0,
+                $"call.round-{index:D2}",
+                "tool.alpha",
+                Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+                DocumentationScribeToolOutcome.Complete.Id,
+                Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+                [],
+                new DocumentationScribeAssistantContinuation(string.Empty, reasoning)))
+            .ToImmutableArray();
+
+        var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.Prepare(
+                Request(completed),
+                "model",
+                RequiredContinuationProfile()));
+
+        Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, exception.Code);
+    }
+
+    [Fact]
     public void Completed_transcript_reconstructs_two_rounds_without_double_encoding()
     {
         static DocumentationScribeCompletedToolExchange Completed(
@@ -950,6 +1386,13 @@ public sealed class DocumentationScribeProviderTransportTests
         handler,
         disposeHandler: false);
 
+    private static OpenAiCompatibleChatCompletionsRequestProfile RequiredContinuationProfile() => new(
+        OpenAiCompatibleThinkingMode.Enabled,
+        OpenAiCompatibleReasoningEffort.High,
+        OpenAiCompatibleToolChoice.Omitted,
+        OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+        OpenAiCompatibleOutputTokenField.MaxTokens);
+
     private static HttpResponseMessage JsonResponse(string body) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(body, Encoding.UTF8, "application/json"),
@@ -1097,6 +1540,8 @@ public sealed class DocumentationScribeProviderTransportTests
 
         internal RequestSnapshot? Snapshot { get; private set; }
 
+        internal List<RequestSnapshot> Snapshots { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1118,6 +1563,7 @@ public sealed class DocumentationScribeProviderTransportTests
                     .Select(header => header.Key)
                     .ToImmutableArray(),
                 body);
+            Snapshots.Add(Snapshot);
             return await response(request, cancellationToken);
         }
     }
@@ -1133,6 +1579,14 @@ public sealed class DocumentationScribeProviderTransportTests
         string? UserAgent,
         ImmutableArray<string> TraceHeaders,
         string Body);
+
+    private sealed class StaticExchange(DocumentationScribeModelResponse response) :
+        IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken) => ValueTask.FromResult(response);
+    }
 
     private sealed class HoldingHandler(string marker) : HttpMessageHandler
     {

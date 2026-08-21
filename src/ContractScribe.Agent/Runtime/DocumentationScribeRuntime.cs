@@ -223,6 +223,7 @@ public sealed class DocumentationScribeRuntime
             {
                 var roundResult = await ProcessToolRoundAsync(
                     response.ToolCalls,
+                    response.AssistantContinuation,
                     state,
                     reducer,
                     cancellationToken).ConfigureAwait(false);
@@ -249,6 +250,7 @@ public sealed class DocumentationScribeRuntime
 
     private async Task<DocumentationScribeRunResult?> ProcessToolRoundAsync(
         ImmutableArray<DocumentationScribeModelToolCall> calls,
+        DocumentationScribeAssistantContinuation? assistantContinuation,
         RunState state,
         DocumentationScribeTerminalReducer reducer,
         CancellationToken cancellationToken)
@@ -442,7 +444,8 @@ public sealed class DocumentationScribeRuntime
                 toolCall.Call.ArgumentsUtf8JsonStorage,
                 invocation.Outcome.Id,
                 invocation.ResultUtf8Json,
-                orderedCallReferences);
+                orderedCallReferences,
+                toolCall.Call.ResponseIndex == 0 ? assistantContinuation : null);
             if (!state.TryChargeSuccessfulToolExchange(
                     DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completedExchange)))
             {

@@ -46,7 +46,10 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         OpenAiCompatiblePreparedRequest prepared;
         try
         {
-            prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(request, options.Model);
+            prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(
+                request,
+                options.Model,
+                options.RequestProfile);
         }
         catch (OpenAiCompatibleProtocolException exception)
         {
@@ -82,7 +85,7 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             }
             catch (OpenAiCompatibleProtocolException exception)
             {
-                return Failure(exception.Code);
+                return Failure(exception.Code, continuationObservation: exception.ContinuationObservation);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -281,10 +284,17 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
 
     private static DocumentationScribeModelResponse Failure(
         DocumentationScribeModelFailureCode code,
-        int? retryAfterMilliseconds = null) => new(
+        int? retryAfterMilliseconds = null,
+        DocumentationScribeContinuationObservation continuationObservation =
+            DocumentationScribeContinuationObservation.None) => new(
             ImmutableArray<DocumentationScribeModelToolCall>.Empty,
             ImmutableArray<DocumentationScribeModelTerminalSubmission>.Empty,
-            new DocumentationScribeModelFailure(code, retryAfterMilliseconds));
+            new DocumentationScribeModelFailure(code, retryAfterMilliseconds),
+            usage: null,
+            cache: null,
+            cost: null,
+            assistantContinuation: null,
+            continuationObservation);
 
     private sealed class SanitizingHandler : DelegatingHandler
     {

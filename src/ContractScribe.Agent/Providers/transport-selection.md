@@ -40,7 +40,7 @@ ContractScribe already owns the exchange interface, ordered product messages, cl
 
 ## Exact selected request subset
 
-The selected root property order is `model`, `messages`, `tools`, `tool_choice`, `parallel_tool_calls`, `max_tokens`, `stream`, and `n`. `tool_choice` is `required`, parallel calls are enabled, streaming is disabled, and `n` is one.
+Issue [#109](https://github.com/SolusQuest/contract-scribe/issues/109) extends the original generic non-thinking vector with configuration-bound profiles while retaining this direct HTTP/JSON transport. Every request emits `model`, `messages`, `tools`, `thinking`, exactly one configured output-token field, and `stream: false`. A profile may emit documented `reasoning_effort` and `tool_choice`; omitted fields are not synthesized. The selected DeepSeek profile uses thinking enabled, `reasoning_effort: high`, no `tool_choice`, and `max_tokens`. The selected MiMo profile uses thinking enabled, `tool_choice: auto`, no reasoning-effort field, and `max_completion_tokens`. Neither emits sampling overrides, `parallel_tool_calls`, or `n`; the parser still validates ordered multiple calls returned by one assistant response.
 
 The five product blocks stay separate and ordered:
 
@@ -52,7 +52,7 @@ The five product blocks stay separate and ordered:
 | `RunPolicy` | `system` |
 | `TargetEvidence` | `user` |
 
-Ordinary product operations sort by ordinal product ID and map request-locally to `cs_tool_000` through `cs_tool_126`. The terminal maps to `cs_terminal` and remains last. The aliases never cross back into product values. Prior rounds reconstruct from each contiguous `ResponseIndex` sequence beginning at zero; each round emits one assistant tool-call message and its ordered tool-result messages. Tool-result content is the canonical object `{ "outcome": ..., "result": ..., "evidenceReferences": [...] }` encoded once as the protocol string. Product-owned trusted evidence stays separate from opaque tool result JSON, and the deterministic product projection commits to the same ordered rows.
+Ordinary product operations sort by ordinal product ID and map request-locally to `cs_tool_000` through `cs_tool_126`. The terminal maps to `cs_terminal` and remains last. The aliases never cross back into product values. Prior rounds reconstruct from each contiguous `ResponseIndex` sequence beginning at zero; each round emits one assistant tool-call message and its ordered tool-result messages. When configured, that assistant message replays the round's exact bounded opaque `content` and `reasoning_content`, anchored once at response index zero rather than copied per parallel call. Tool-result content is the canonical object `{ "outcome": ..., "result": ..., "evidenceReferences": [...] }` encoded once as the protocol string. Product-owned trusted evidence stays separate from opaque tool result JSON and assistant continuation, and the deterministic product projection commits only to the product-owned ordered rows.
 
 The full JSON body vector contains a fixed synthetic model and the exact RunPolicy content, including artifact identity, attempt identity/number, context, style, and limits. The separately hashed product-correctness projection excludes model, endpoint, credential, HTTP headers, aliases, timestamps, transport-generated request IDs, and the separately held provider-request counter. Changing caller configuration therefore cannot change product correctness.
 
@@ -81,7 +81,7 @@ The probe first passed with:
 dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~DocumentationScribeProviderTransportTests
 ```
 
-- full fixed-input wire SHA-256: `1b7104759b372c99e31178b4f2381cfe98a280410808c4fe8a5af24b85ca1761`;
+- full fixed-input generic non-thinking wire SHA-256: `68781078e22df92791bdc62253fe1437f684ba8af78dd8373d7d70d7a98eeda2`;
 - caller-isolated product projection SHA-256: `d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8`.
 
 The vector retained every required field without a provider branch, hidden field, or unstable ordering, so the direct BCL selection passed its implementation gate.
