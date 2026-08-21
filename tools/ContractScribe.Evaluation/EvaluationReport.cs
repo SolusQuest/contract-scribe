@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 
 namespace ContractScribe.Evaluation;
@@ -22,6 +23,29 @@ internal sealed record EvaluationCostReport(
     string Status,
     string? CurrencyId,
     long? AmountMicrounits);
+
+internal sealed record EvaluationProviderFailureReport(
+    int ProviderRequestNumber,
+    string Code)
+{
+    internal static string CodeId(DocumentationScribeModelFailureCode code) =>
+        code switch
+        {
+            DocumentationScribeModelFailureCode.TransientUnavailable =>
+                "model.failure.transient-unavailable",
+            DocumentationScribeModelFailureCode.RateLimited =>
+                "model.failure.rate-limited",
+            DocumentationScribeModelFailureCode.PermanentUnavailable =>
+                "model.failure.permanent-unavailable",
+            DocumentationScribeModelFailureCode.Authentication =>
+                "model.failure.authentication",
+            DocumentationScribeModelFailureCode.Unsupported =>
+                "model.failure.unsupported",
+            DocumentationScribeModelFailureCode.MalformedResponse =>
+                "model.failure.malformed-response",
+            _ => throw new ArgumentOutOfRangeException(nameof(code)),
+        };
+}
 
 internal sealed record EvaluationContentUnitReport(
     string Kind,
@@ -49,6 +73,7 @@ internal sealed record EvaluationCaseReport(
     int ProviderRequestCount,
     int ToolRoundCount,
     int ToolCallCount,
+    EvaluationProviderFailureReport[] ProviderFailures,
     EvaluationUsageReport? Usage,
     EvaluationCostReport Cost,
     EvaluationProposalReport? Proposal,

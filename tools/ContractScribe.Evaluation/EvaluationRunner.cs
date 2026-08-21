@@ -326,11 +326,18 @@ internal sealed class EvaluationRunner
     private EvaluationCaseReport CreateCaseReport(
         PreparedEvaluationCase prepared,
         EvaluationCompositionOutcome outcome,
-        IReadOnlyList<EvaluationCostObservation> costObservations)
+        IReadOnlyList<EvaluationProviderObservation> providerObservations)
     {
         var status = Status(outcome.Status);
         var envelope = outcome.RunResult?.RunEnvelope;
-        var cost = AggregateCost(costObservations);
+        var cost = AggregateCost(providerObservations);
+        var providerFailures = providerObservations
+            .Where(observation => observation.FailureCode is not null)
+            .Select(observation => new EvaluationProviderFailureReport(
+                observation.ProviderRequestNumber,
+                EvaluationProviderFailureReport.CodeId(observation.FailureCode!.Value)))
+            .OrderBy(observation => observation.ProviderRequestNumber)
+            .ToArray();
         var usage = envelope?.Usage is { } modelUsage
             ? new EvaluationUsageReport(
                 modelUsage.InputTokens,
@@ -350,7 +357,8 @@ internal sealed class EvaluationRunner
             status,
             outcome.Code,
             envelope,
-            outcome.RunResult);
+            outcome.RunResult,
+            providerObservations);
         var expectation = Expectation(
             prepared.Scenario,
             options.IsLive,
@@ -373,6 +381,7 @@ internal sealed class EvaluationRunner
             envelope?.ProviderRequestCount ?? 0,
             envelope?.ToolRoundCount ?? 0,
             envelope?.ToolCallCount ?? 0,
+            providerFailures,
             usage,
             cost,
             proposal,
@@ -394,6 +403,7 @@ internal sealed class EvaluationRunner
         0,
         0,
         0,
+        [],
         null,
         new EvaluationCostReport("not-reported", null, null),
         null,
@@ -402,16 +412,16 @@ internal sealed class EvaluationRunner
         [code, status]);
 
     private static EvaluationCostReport AggregateCost(
-        IReadOnlyList<EvaluationCostObservation> observations)
+        IReadOnlyList<EvaluationProviderObservation> observations)
     {
         if (observations.Count == 0
-            || observations.All(item => item.Result.Completeness == EvaluationCostCompleteness.NotReported))
+            || observations.All(item => item.Cost.Completeness == EvaluationCostCompleteness.NotReported))
         {
             return new EvaluationCostReport("not-reported", null, null);
         }
 
-        var priced = observations.Where(item => item.Result.AmountMicrounits is not null).ToArray();
-        var currencies = priced.Select(item => item.Result.CurrencyId)
+        var priced = observations.Where(item => item.Cost.AmountMicrounits is not null).ToArray();
+        var currencies = priced.Select(item => item.Cost.CurrencyId)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         if (currencies.Length != 1)
@@ -421,9 +431,9 @@ internal sealed class EvaluationRunner
 
         var amount = priced.Aggregate(
             0L,
-            (sum, item) => checked(sum + item.Result.AmountMicrounits!.Value));
+            (sum, item) => checked(sum + item.Cost.AmountMicrounits!.Value));
         var status = observations.All(item =>
-            item.Result.Completeness == EvaluationCostCompleteness.Complete)
+            item.Cost.Completeness == EvaluationCostCompleteness.Complete)
                 ? "complete"
                 : "partial";
         return new EvaluationCostReport(status, currencies[0], amount);
@@ -617,7 +627,8 @@ internal sealed class EvaluationRunner
         string status,
         string code,
         DocumentationScribeRunEnvelope? envelope,
-        DocumentationScribeRunResult? runResult)
+        DocumentationScribeRunResult? runResult,
+        IReadOnlyList<EvaluationProviderObservation> providerObservations)
     {
         var observed = new HashSet<string>(StringComparer.Ordinal) { status, code };
         if (envelope?.ProviderRequestCount > 0)
@@ -645,6 +656,25 @@ internal sealed class EvaluationRunner
             observed.Add("proposal-validated");
         }
 
+        foreach (var observation in providerObservations)
+        {
+            var coverage = observation.FailureCode switch
+            {
+                DocumentationScribeModelFailureCode.TransientUnavailable
+                    or DocumentationScribeModelFailureCode.PermanentUnavailable => "provider-unavailable",
+                DocumentationScribeModelFailureCode.RateLimited => "provider-rate-limit",
+                DocumentationScribeModelFailureCode.Authentication => "provider-authentication",
+                DocumentationScribeModelFailureCode.Unsupported => "provider-unsupported",
+                DocumentationScribeModelFailureCode.MalformedResponse => "provider-malformed-response",
+                null => null,
+                _ => throw new ArgumentOutOfRangeException(nameof(providerObservations)),
+            };
+            if (coverage is not null)
+            {
+                observed.Add(coverage);
+            }
+        }
+
         if (!isLive && envelope?.ProviderRequestCount > 0)
         {
             foreach (var item in scenario.Script switch
@@ -654,8 +684,7 @@ internal sealed class EvaluationRunner
                 "skip" => ["evidence-insufficient"],
                 "invalid-tool" => ["tool-invalid", "tool-unsupported"],
                 "malformed-output" => ["model-output-malformed"],
-                "rate-limited" => ["provider-rate-limit", "retry"],
-                "unavailable" => ["provider-unavailable"],
+                "rate-limited" => ["retry"],
                 "budget-exhausted" => ["budget-exhausted"],
                 "timeout" => ["timeout"],
                 _ => [],

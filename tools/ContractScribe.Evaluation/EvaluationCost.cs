@@ -159,15 +159,16 @@ internal sealed record EvaluationCostPolicy(
     public override string ToString() => nameof(EvaluationCostPolicy);
 }
 
-internal sealed record EvaluationCostObservation(
+internal sealed record EvaluationProviderObservation(
     int ProviderRequestNumber,
-    EvaluationCostResult Result);
+    EvaluationCostResult Cost,
+    DocumentationScribeModelFailureCode? FailureCode);
 
 internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
 {
     private readonly IDocumentationScribeModelExchange inner;
     private readonly EvaluationCostPolicy policy;
-    private readonly List<EvaluationCostObservation> observations = [];
+    private readonly List<EvaluationProviderObservation> observations = [];
 
     internal CostObservingExchange(
         IDocumentationScribeModelExchange inner,
@@ -177,7 +178,7 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
         this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
     }
 
-    internal IReadOnlyList<EvaluationCostObservation> Observations => observations;
+    internal IReadOnlyList<EvaluationProviderObservation> Observations => observations;
 
     public async ValueTask<DocumentationScribeModelResponse> SendAsync(
         DocumentationScribeModelRequest request,
@@ -198,7 +199,10 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
                 new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.MalformedResponse));
         }
 
-        observations.Add(new EvaluationCostObservation(request.ProviderRequestNumber, result));
+        observations.Add(new EvaluationProviderObservation(
+            request.ProviderRequestNumber,
+            result,
+            response.Failure?.Code));
         var completeCost = result.Completeness == EvaluationCostCompleteness.Complete
             && result.AmountMicrounits is { } amount
             && result.CurrencyId is { } currency

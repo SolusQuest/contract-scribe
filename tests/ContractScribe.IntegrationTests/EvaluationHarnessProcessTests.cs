@@ -166,6 +166,26 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(OperatingSystem.IsLinux() ? 11 : 10, aggregate.GetProperty("expectedMatchCount").GetInt32());
         Assert.Equal(0, aggregate.GetProperty("expectedDifferedCount").GetInt32());
         Assert.Equal(OperatingSystem.IsLinux() ? 0 : 1, aggregate.GetProperty("platformNotObservedCount").GetInt32());
+        var rateLimited = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "rate-limited");
+        Assert.Equal(
+            [(1, "model.failure.rate-limited"), (2, "model.failure.rate-limited")],
+            rateLimited.GetProperty("providerFailures").EnumerateArray()
+                .Select(item => (
+                    item.GetProperty("providerRequestNumber").GetInt32(),
+                    item.GetProperty("code").GetString()!)));
+        var unavailable = Assert.Single(
+            cases,
+            item => item.GetProperty("caseId").GetString() == "provider-unavailable");
+        var unavailableFailure = Assert.Single(
+            unavailable.GetProperty("providerFailures").EnumerateArray());
+        Assert.Equal(1, unavailableFailure.GetProperty("providerRequestNumber").GetInt32());
+        Assert.Equal(
+            "model.failure.permanent-unavailable",
+            unavailableFailure.GetProperty("code").GetString());
+        Assert.All(
+            cases.Where(item => item.GetProperty("caseId").GetString() is not (
+                "rate-limited" or "provider-unavailable")),
+            item => Assert.Empty(item.GetProperty("providerFailures").EnumerateArray()));
         var timeout = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "timeout");
         Assert.Equal("matched", timeout.GetProperty("expectationStatus").GetString());
         Assert.All(cases, item => Assert.Empty(item.GetProperty("differenceIds").EnumerateArray()));

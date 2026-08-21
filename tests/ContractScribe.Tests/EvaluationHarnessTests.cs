@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -124,6 +125,43 @@ public sealed class EvaluationHarnessTests
             out var large));
         Assert.Throws<OverflowException>(() => large!.Calculate(
             new DocumentationScribeModelUsage(16_777_216, 1_048_576)));
+    }
+
+    [Fact]
+    public async Task ProviderObserverPreservesEveryFailureClassificationAcrossLaterSuccess()
+    {
+        var codes = Enum.GetValues<DocumentationScribeModelFailureCode>();
+        var responses = codes
+            .Select(code => new DocumentationScribeModelResponse(
+                [],
+                [],
+                new DocumentationScribeModelFailure(code)))
+            .Append(new DocumentationScribeModelResponse([], []));
+        var observer = new CostObservingExchange(
+            new QueuedExchange(responses),
+            EvaluationCostPolicy.Unpriced);
+
+        for (var index = 0; index <= codes.Length; index++)
+        {
+            var response = await observer.SendAsync(Request(index + 1), CancellationToken.None);
+            Assert.Equal(index < codes.Length ? codes[index] : null, response.Failure?.Code);
+        }
+
+        Assert.Equal(codes.Length + 1, observer.Observations.Count);
+        Assert.Equal(
+            [
+                "model.failure.transient-unavailable",
+                "model.failure.rate-limited",
+                "model.failure.permanent-unavailable",
+                "model.failure.authentication",
+                "model.failure.unsupported",
+                "model.failure.malformed-response",
+            ],
+            observer.Observations
+                .Where(observation => observation.FailureCode is not null)
+                .Select(observation => EvaluationProviderFailureReport.CodeId(
+                    observation.FailureCode!.Value)));
+        Assert.Null(observer.Observations[^1].FailureCode);
     }
 
     [Fact]
@@ -398,6 +436,7 @@ public sealed class EvaluationHarnessTests
                 1,
                 0,
                 0,
+                [],
                 null,
                 new EvaluationCostReport("not-reported", null, null),
                 new EvaluationProposalReport(
@@ -432,6 +471,7 @@ public sealed class EvaluationHarnessTests
         0,
         0,
         0,
+        [],
         null,
         new EvaluationCostReport("not-reported", null, null),
         null,
@@ -445,6 +485,32 @@ public sealed class EvaluationHarnessTests
         "fixtures",
         "documentation-scribe",
         "evaluation");
+
+    private static DocumentationScribeModelRequest Request(int providerRequestNumber) => new(
+        1,
+        providerRequestNumber,
+        ImmutableArray<DocumentationScribeModelMessage>.Empty,
+        ImmutableArray<DocumentationScribeModelToolDefinition>.Empty,
+        new DocumentationScribeTerminalDefinition("submit", "{}"),
+        ImmutableArray<DocumentationScribeCompletedToolExchange>.Empty,
+        new DocumentationScribeModelOutputLimits(1, 1, 1, 1, 1),
+        ImmutableArray<byte>.Empty);
+
+    private sealed class QueuedExchange : IDocumentationScribeModelExchange
+    {
+        private readonly Queue<DocumentationScribeModelResponse> responses;
+
+        internal QueuedExchange(IEnumerable<DocumentationScribeModelResponse> responses) =>
+            this.responses = new Queue<DocumentationScribeModelResponse>(responses);
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(responses.Dequeue());
+        }
+    }
 
     private static string FindRepositoryRoot()
     {
