@@ -45,6 +45,8 @@ internal sealed record EvaluationScenario
 
     public required string[] Coverage { get; init; }
 
+    public required EvaluationOfflineExpectation OfflineExpectation { get; init; }
+
     public string? ProposalLine { get; init; }
 
     public bool AddEvidenceConflict { get; init; }
@@ -56,6 +58,38 @@ internal sealed record EvaluationScenario
     public string? NonRequiredPlatformCode { get; init; }
 
     public int? MaximumElapsedMillisecondsOverride { get; init; }
+}
+
+internal sealed record EvaluationOfflineExpectation
+{
+    public required int AttemptCount { get; init; }
+
+    public required int ProviderRequestCount { get; init; }
+
+    public required int ToolRoundCount { get; init; }
+
+    public required int ToolCallCount { get; init; }
+
+    public required string ProposalStatus { get; init; }
+
+    public EvaluationUsageExpectation? Usage { get; init; }
+
+    public required string[] ObservationIds { get; init; }
+}
+
+internal sealed record EvaluationUsageExpectation
+{
+    public required int? InputTokens { get; init; }
+
+    public required int? OutputTokens { get; init; }
+
+    public required int? CachedInputTokens { get; init; }
+
+    public required int? UncachedInputTokens { get; init; }
+
+    public required int? ReasoningTokens { get; init; }
+
+    public required string? CacheObservation { get; init; }
 }
 
 internal sealed record EvaluationSelection
@@ -230,6 +264,7 @@ internal static class EvaluationManifestLoader
                 || !scenario.Coverage.SequenceEqual(
                     scenario.Coverage.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
                     StringComparer.Ordinal)
+                || !ValidOfflineExpectation(scenario)
                 || scenario.ProposalLine is { } line
                     && (line.Length == 0 || line.Length > 400 || line.Any(char.IsControl))
                 || scenario.RequiredPlatform is not (null or "linux" or "windows" or "macos")
@@ -247,6 +282,61 @@ internal static class EvaluationManifestLoader
                 throw new InvalidDataException("evaluation.manifest.invalid");
             }
         }
+    }
+
+    private static bool ValidOfflineExpectation(EvaluationScenario scenario)
+    {
+        if (scenario.OfflineExpectation is not { } expected)
+        {
+            return false;
+        }
+
+        if (expected.AttemptCount is < 0 or > 2
+            || expected.ProviderRequestCount is < 0 or > 8
+            || expected.ToolRoundCount is < 0 or > 4
+            || expected.ToolCallCount is < 0 or > 16
+            || expected.ProposalStatus is not ("validated" or "not-reported")
+            || (scenario.ProposalLine is null) != (expected.ProposalStatus == "not-reported")
+            || expected.ObservationIds.Any(observation => !IsId(observation))
+            || !expected.ObservationIds.SequenceEqual(
+                expected.ObservationIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
+                StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        if (expected.Usage is not { } usage)
+        {
+            return !expected.ObservationIds.Contains("usage-observed", StringComparer.Ordinal)
+                && !expected.ObservationIds.Any(observation => observation.StartsWith(
+                    "cache.",
+                    StringComparison.Ordinal));
+        }
+
+        return new[]
+            {
+                usage.InputTokens,
+                usage.OutputTokens,
+                usage.CachedInputTokens,
+                usage.UncachedInputTokens,
+                usage.ReasoningTokens,
+            }.Any(value => value is not null)
+            && new[]
+            {
+                usage.InputTokens,
+                usage.CachedInputTokens,
+                usage.UncachedInputTokens,
+            }.All(value => value is null or >= 0 and <= 65_536)
+            && new[]
+            {
+                usage.OutputTokens,
+                usage.ReasoningTokens,
+            }.All(value => value is null or >= 0 and <= 8_192)
+            && usage.CacheObservation is null or "cache.hit" or "cache.miss" or "cache.mixed"
+                or "cache.not-reported"
+            && expected.ObservationIds.Contains("usage-observed", StringComparer.Ordinal)
+            && (usage.CacheObservation is null
+                || expected.ObservationIds.Contains(usage.CacheObservation, StringComparer.Ordinal));
     }
 
     private static void ValidateSelection(EvaluationSelection selection)

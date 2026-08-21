@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using ContractScribe.Agent.Runtime;
+using ContractScribe.Core;
 using ContractScribe.Evaluation;
 
 namespace ContractScribe.IntegrationTests;
@@ -165,6 +168,80 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(OperatingSystem.IsLinux() ? 0 : 1, aggregate.GetProperty("platformNotObservedCount").GetInt32());
         var timeout = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "timeout");
         Assert.Equal("matched", timeout.GetProperty("expectationStatus").GetString());
+        Assert.All(cases, item => Assert.Empty(item.GetProperty("differenceIds").EnumerateArray()));
+        var useful = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "useful-proposal");
+        Assert.Equal(1, useful.GetProperty("attemptCount").GetInt32());
+        Assert.Equal(2, useful.GetProperty("providerRequestCount").GetInt32());
+        Assert.Equal(1, useful.GetProperty("toolRoundCount").GetInt32());
+        Assert.Equal(1, useful.GetProperty("toolCallCount").GetInt32());
+        var usage = useful.GetProperty("usage");
+        Assert.Equal(220, usage.GetProperty("inputTokens").GetInt32());
+        Assert.Equal(60, usage.GetProperty("outputTokens").GetInt32());
+        Assert.Equal(80, usage.GetProperty("cachedInputTokens").GetInt32());
+        Assert.Equal(140, usage.GetProperty("uncachedInputTokens").GetInt32());
+        Assert.Equal("cache.mixed", usage.GetProperty("cacheObservation").GetString());
+        var proposal = useful.GetProperty("proposal");
+        Assert.Equal("matched", proposal.GetProperty("expectationStatus").GetString());
+        Assert.Empty(proposal.GetProperty("differenceIds").EnumerateArray());
+        Assert.Contains(
+            proposal.GetProperty("contentUnits").EnumerateArray()
+                .SelectMany(unit => unit.GetProperty("lines").EnumerateArray())
+                .Select(line => line.GetString()),
+            line => line == "Runs the selected operation.");
+    }
+
+    [Theory]
+    [InlineData("proposal-line", "proposal.expected-line-differed")]
+    [InlineData("usage", "usage.missing")]
+    [InlineData("cache", "usage.cache-observation-differed")]
+    [InlineData("request-count", "provider-request-count-differed")]
+    public async Task OfflineExpectedObservationRegressionsFailValidation(
+        string perturbation,
+        string expectedDifferenceId)
+    {
+        var root = FindRepositoryRoot();
+        var loaded = EvaluationManifestLoader.Load(CorpusRoot(root));
+        if (perturbation == "request-count")
+        {
+            loaded = loaded with
+            {
+                Manifest = loaded.Manifest with
+                {
+                    Scenarios = loaded.Manifest.Scenarios.Select(scenario =>
+                        scenario.Id == "useful-proposal"
+                            ? scenario with
+                            {
+                                OfflineExpectation = scenario.OfflineExpectation with
+                                {
+                                    ProviderRequestCount = scenario.OfflineExpectation.ProviderRequestCount + 1,
+                                },
+                            }
+                            : scenario).ToArray(),
+                },
+            };
+        }
+
+        Assert.True(EvaluationOptions.TryParse(
+            ["--offline", "--corpus", CorpusRoot(root)],
+            out var options,
+            out _));
+        var runner = new EvaluationRunner(
+            loaded,
+            options!,
+            prepared => prepared.Scenario.Id == "useful-proposal" && perturbation != "request-count"
+                ? new PerturbingExchange(new ScriptedEvaluationExchange(prepared), perturbation)
+                : new ScriptedEvaluationExchange(prepared),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var useful = Assert.Single(report.Cases, item => item.CaseId == "useful-proposal");
+        Assert.Equal("differed", useful.ExpectationStatus);
+        Assert.Contains(expectedDifferenceId, useful.DifferenceIds);
+        Assert.Equal(1, report.Aggregate.ExpectedDifferedCount);
+        Assert.Equal(1, EvaluationApplication.ResultExitCode(options!, report));
     }
 
     [Fact]
@@ -516,6 +593,20 @@ public sealed class EvaluationHarnessProcessTests
         }
     }
 
+    private static string PreparedCorpusRoot(string root)
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException();
+        return File.ReadAllText(Path.Join(
+            root,
+            "tools",
+            "ContractScribe.Evaluation",
+            "bin",
+            configuration,
+            "net10.0",
+            "evaluation-corpus-path.txt")).Trim();
+    }
+
     private static string CorpusRoot(string root) => Path.Join(
         root,
         "tests",
@@ -540,6 +631,54 @@ public sealed class EvaluationHarnessProcessTests
     }
 
     private sealed record ProcessResult(int ExitCode, byte[] StandardOutput, byte[] StandardError);
+
+    private sealed class PerturbingExchange(
+        IDocumentationScribeModelExchange inner,
+        string perturbation) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return perturbation switch
+            {
+                "proposal-line" when request.ProviderRequestNumber == 2 => WithDifferentProposal(response),
+                "usage" => Clone(response, null, response.Cache),
+                "cache" => Clone(response, response.Usage, null),
+                _ => response,
+            };
+        }
+
+        private static DocumentationScribeModelResponse WithDifferentProposal(
+            DocumentationScribeModelResponse response)
+        {
+            var terminal = Assert.Single(response.TerminalSubmissions);
+            var document = JsonNode.Parse(terminal.TerminalUtf8Json.Span)
+                ?? throw new InvalidDataException();
+            document["contentUnits"]!.AsArray()[0]!["lines"]!.AsArray()[0] =
+                "Performs the selected operation.";
+            return new DocumentationScribeModelResponse(
+                response.ToolCalls,
+                [new DocumentationScribeModelTerminalSubmission(
+                    JsonSerializer.SerializeToUtf8Bytes(document))],
+                response.Failure,
+                response.Usage,
+                response.Cache,
+                response.Cost);
+        }
+
+        private static DocumentationScribeModelResponse Clone(
+            DocumentationScribeModelResponse response,
+            DocumentationScribeModelUsage? usage,
+            DocumentationScribeCacheObservation? cache) => new(
+                response.ToolCalls,
+                response.TerminalSubmissions,
+                response.Failure,
+                usage,
+                cache,
+                response.Cost);
+    }
 
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     private static extern int Kill(int processId, int signal);

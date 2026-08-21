@@ -329,41 +329,56 @@ internal sealed class EvaluationRunner
         IReadOnlyList<EvaluationCostObservation> costObservations)
     {
         var status = Status(outcome.Status);
-        var expectation = Expectation(prepared.Scenario, status, outcome.Code);
         var envelope = outcome.RunResult?.RunEnvelope;
         var cost = AggregateCost(costObservations);
-        return new EvaluationCaseReport(
-            prepared.Scenario.Id,
+        var usage = envelope?.Usage is { } modelUsage
+            ? new EvaluationUsageReport(
+                modelUsage.InputTokens,
+                modelUsage.OutputTokens,
+                modelUsage.CachedInputTokens,
+                modelUsage.UncachedInputTokens,
+                modelUsage.ReasoningTokens,
+                envelope.Cache is { } cache ? DocumentationScribeVocabulary.GetId(cache) : null)
+            : null;
+        var proposal = EvaluationReportWriter.ProjectProposal(
+            outcome.RunResult,
+            status,
+            prepared.Scenario.ProposalLine);
+        var observedCoverage = ObservedCoverage(
+            prepared.Scenario,
+            options.IsLive,
             status,
             outcome.Code,
-            expectation,
+            envelope,
+            outcome.RunResult);
+        var expectation = Expectation(
+            prepared.Scenario,
+            options.IsLive,
+            status,
+            outcome.Code,
             envelope?.AttemptNumber ?? 0,
             envelope?.ProviderRequestCount ?? 0,
             envelope?.ToolRoundCount ?? 0,
             envelope?.ToolCallCount ?? 0,
-            envelope?.Usage is { } usage
-                ? new EvaluationUsageReport(
-                    usage.InputTokens,
-                    usage.OutputTokens,
-                    usage.CachedInputTokens,
-                    usage.UncachedInputTokens,
-                    usage.ReasoningTokens,
-                    envelope.Cache is { } cache ? DocumentationScribeVocabulary.GetId(cache) : null)
-                : null,
+            usage,
+            proposal,
+            observedCoverage);
+        return new EvaluationCaseReport(
+            prepared.Scenario.Id,
+            status,
+            outcome.Code,
+            expectation.Status,
+            expectation.DifferenceIds,
+            envelope?.AttemptNumber ?? 0,
+            envelope?.ProviderRequestCount ?? 0,
+            envelope?.ToolRoundCount ?? 0,
+            envelope?.ToolCallCount ?? 0,
+            usage,
             cost,
-            EvaluationReportWriter.ProjectProposal(
-                outcome.RunResult,
-                status,
-                prepared.Scenario.ProposalLine),
+            proposal,
             "passed",
             prepared.Scenario.Coverage.Order(StringComparer.Ordinal).ToArray(),
-            ObservedCoverage(
-                prepared.Scenario,
-                options.IsLive,
-                status,
-                outcome.Code,
-                envelope,
-                outcome.RunResult));
+            observedCoverage);
     }
 
     private static EvaluationCaseReport FailedCase(
@@ -374,6 +389,7 @@ internal sealed class EvaluationRunner
         status,
         code,
         "differed",
+        ["case.execution-differed"],
         0,
         0,
         0,
@@ -413,20 +429,187 @@ internal sealed class EvaluationRunner
         return new EvaluationCostReport(status, currencies[0], amount);
     }
 
-    private static string Expectation(EvaluationScenario scenario, string status, string code)
+    private static ExpectationResult Expectation(
+        EvaluationScenario scenario,
+        bool isLive,
+        string status,
+        string code,
+        int attemptCount,
+        int providerRequestCount,
+        int toolRoundCount,
+        int toolCallCount,
+        EvaluationUsageReport? usage,
+        EvaluationProposalReport? proposal,
+        string[] observedCoverage)
     {
-        if (scenario.ExpectedStatus == status && scenario.ExpectedCode == code)
-        {
-            return "matched";
-        }
-
-        return scenario.RequiredPlatform is { } platform
+        var exactOutcome = scenario.ExpectedStatus == status && scenario.ExpectedCode == code;
+        var platformNotObserved = !exactOutcome
+            && scenario.RequiredPlatform is { } platform
             && platform != PlatformId()
             && scenario.NonRequiredPlatformStatus == status
-            && scenario.NonRequiredPlatformCode == code
-            ? "platform-not-observed"
-            : "differed";
+            && scenario.NonRequiredPlatformCode == code;
+        var differences = new SortedSet<string>(StringComparer.Ordinal);
+        if (!exactOutcome && !platformNotObserved)
+        {
+            if (scenario.ExpectedStatus != status)
+            {
+                differences.Add("outcome.status-differed");
+            }
+
+            if (scenario.ExpectedCode != code)
+            {
+                differences.Add("outcome.code-differed");
+            }
+        }
+
+        if (!isLive)
+        {
+            AddOfflineDifferences(
+                scenario,
+                attemptCount,
+                providerRequestCount,
+                toolRoundCount,
+                toolCallCount,
+                usage,
+                proposal,
+                observedCoverage,
+                status,
+                code,
+                differences);
+        }
+
+        var differenceIds = differences.ToArray();
+        return new ExpectationResult(
+            differenceIds.Length != 0
+                ? "differed"
+                : platformNotObserved
+                    ? "platform-not-observed"
+                    : "matched",
+            differenceIds);
     }
+
+    private static void AddOfflineDifferences(
+        EvaluationScenario scenario,
+        int attemptCount,
+        int providerRequestCount,
+        int toolRoundCount,
+        int toolCallCount,
+        EvaluationUsageReport? usage,
+        EvaluationProposalReport? proposal,
+        string[] observedCoverage,
+        string status,
+        string code,
+        ISet<string> differences)
+    {
+        var expected = scenario.OfflineExpectation;
+        AddCountDifference(expected.AttemptCount, attemptCount, "attempt-count-differed", differences);
+        AddCountDifference(
+            expected.ProviderRequestCount,
+            providerRequestCount,
+            "provider-request-count-differed",
+            differences);
+        AddCountDifference(expected.ToolRoundCount, toolRoundCount, "tool-round-count-differed", differences);
+        AddCountDifference(expected.ToolCallCount, toolCallCount, "tool-call-count-differed", differences);
+
+        var proposalStatus = proposal?.ValidationStatus ?? "not-reported";
+        if (expected.ProposalStatus != proposalStatus)
+        {
+            differences.Add("proposal.validation-status-differed");
+        }
+
+        if (proposal is not null)
+        {
+            foreach (var difference in proposal.DifferenceIds)
+            {
+                differences.Add(difference);
+            }
+        }
+
+        AddUsageDifferences(expected.Usage, usage, differences);
+        var actualObservations = observedCoverage
+            .Where(observation => observation != status && observation != code)
+            .ToHashSet(StringComparer.Ordinal);
+        var expectedObservations = expected.ObservationIds.ToHashSet(StringComparer.Ordinal);
+        if (!expectedObservations.IsSubsetOf(actualObservations))
+        {
+            differences.Add("observation.missing");
+        }
+
+        if (!actualObservations.IsSubsetOf(expectedObservations))
+        {
+            differences.Add("observation.unexpected");
+        }
+    }
+
+    private static void AddCountDifference(
+        int expected,
+        int actual,
+        string differenceId,
+        ISet<string> differences)
+    {
+        if (expected != actual)
+        {
+            differences.Add(differenceId);
+        }
+    }
+
+    private static void AddUsageDifferences(
+        EvaluationUsageExpectation? expected,
+        EvaluationUsageReport? actual,
+        ISet<string> differences)
+    {
+        if (expected is null)
+        {
+            if (actual is not null)
+            {
+                differences.Add("usage.unexpected");
+            }
+
+            return;
+        }
+
+        if (actual is null)
+        {
+            differences.Add("usage.missing");
+            return;
+        }
+
+        AddUsageDifference(expected.InputTokens, actual.InputTokens, "usage.input-tokens-differed", differences);
+        AddUsageDifference(expected.OutputTokens, actual.OutputTokens, "usage.output-tokens-differed", differences);
+        AddUsageDifference(
+            expected.CachedInputTokens,
+            actual.CachedInputTokens,
+            "usage.cached-input-tokens-differed",
+            differences);
+        AddUsageDifference(
+            expected.UncachedInputTokens,
+            actual.UncachedInputTokens,
+            "usage.uncached-input-tokens-differed",
+            differences);
+        AddUsageDifference(
+            expected.ReasoningTokens,
+            actual.ReasoningTokens,
+            "usage.reasoning-tokens-differed",
+            differences);
+        if (expected.CacheObservation != actual.CacheObservation)
+        {
+            differences.Add("usage.cache-observation-differed");
+        }
+    }
+
+    private static void AddUsageDifference(
+        int? expected,
+        int? actual,
+        string differenceId,
+        ISet<string> differences)
+    {
+        if (expected != actual)
+        {
+            differences.Add(differenceId);
+        }
+    }
+
+    private sealed record ExpectationResult(string Status, string[] DifferenceIds);
 
     private static string[] ObservedCoverage(
         EvaluationScenario scenario,

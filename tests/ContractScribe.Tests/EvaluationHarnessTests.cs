@@ -234,14 +234,36 @@ public sealed class EvaluationHarnessTests
         var bytes = EvaluationReportWriter.Serialize(safe, null);
         Assert.DoesNotContain("rawResponse", Encoding.UTF8.GetString(bytes), StringComparison.OrdinalIgnoreCase);
         _ = EvaluationReportWriter.Serialize(MinimalReport("See https://example.com/reference."), null);
+        _ = EvaluationReportWriter.Serialize(MinimalReport("Use the input/output projection."), null);
         Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
             MinimalReport("Read /home/alice/private/contract.cs before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read `/home/alice/private/contract.cs` before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("> /home/alice/private/contract.cs"),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport(">/home/alice/private/contract.cs"),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("- /home/alice/private/contract.cs"),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read //server/share/Contract.cs before use."),
             null));
         Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
             MinimalReport("Read C:\\Users\\Alice\\source\\Contract.cs before use."),
             null));
         Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read `C:/Users/Alice/source/Contract.cs` before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
             MinimalReport("Read \\\\server\\share\\Contract.cs before use."),
+            null));
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            MinimalReport("Read \\\\?\\C:\\private\\Contract.cs before use."),
             null));
         Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
             MinimalReport("Read file:///home/alice/private/contract.cs before use."),
@@ -371,6 +393,7 @@ public sealed class EvaluationHarnessTests
                 "patch-accepted",
                 "code",
                 "matched",
+                [],
                 1,
                 1,
                 0,
@@ -404,6 +427,7 @@ public sealed class EvaluationHarnessTests
         status,
         code,
         "differed",
+        ["case.execution-differed"],
         0,
         0,
         0,

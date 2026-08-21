@@ -44,6 +44,7 @@ internal sealed record EvaluationCaseReport(
     string Status,
     string Code,
     string ExpectationStatus,
+    string[] DifferenceIds,
     int AttemptCount,
     int ProviderRequestCount,
     int ToolRoundCount,
@@ -290,31 +291,66 @@ internal static class EvaluationReportWriter
                 && char.IsAsciiLetter(value[index])
                 && value[index + 1] == ':'
                 && value[index + 2] is '/' or '\\'
-                && (index == 0 || !char.IsAsciiLetterOrDigit(value[index - 1])))
+                && IsRootBoundary(value, index))
             {
                 return true;
             }
 
-            if (index + 2 < value.Length
+            if (index + 1 < value.Length
                 && value[index] == '\\'
                 && value[index + 1] == '\\'
-                && !char.IsWhiteSpace(value[index + 2]))
+                && (index + 2 == value.Length || !char.IsWhiteSpace(value[index + 2]))
+                && IsRootBoundary(value, index))
             {
                 return true;
             }
 
             if (value[index] == '/'
                 && index + 1 < value.Length
-                && value[index + 1] != '/'
-                && !char.IsWhiteSpace(value[index + 1])
-                && (index == 0 || char.IsWhiteSpace(value[index - 1])
-                    || value[index - 1] is '"' or '\'' or '(' or '[' or '{' or '=' or ':' or ',' or ';'))
+                && IsRootBoundary(value, index))
             {
-                return true;
+                if (value[index + 1] == '/')
+                {
+                    if (!HasUriScheme(value, index)
+                        && index + 2 < value.Length
+                        && !char.IsWhiteSpace(value[index + 2]))
+                    {
+                        return true;
+                    }
+                }
+                else if (!char.IsWhiteSpace(value[index + 1]))
+                {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    private static bool IsRootBoundary(string value, int index) => index == 0
+        || !IsPortablePathCharacter(value[index - 1]);
+
+    private static bool IsPortablePathCharacter(char value) => char.IsAsciiLetterOrDigit(value)
+        || value is '_' or '-' or '.' or '/' or '\\';
+
+    private static bool HasUriScheme(string value, int slashIndex)
+    {
+        if (slashIndex == 0 || value[slashIndex - 1] != ':')
+        {
+            return false;
+        }
+
+        var start = slashIndex - 2;
+        while (start >= 0 && (char.IsAsciiLetterOrDigit(value[start])
+            || value[start] is '+' or '-' or '.'))
+        {
+            start--;
+        }
+
+        start++;
+        return start < slashIndex - 1
+            && char.IsAsciiLetter(value[start]);
     }
 
     internal static EvaluationProposalReport? ProjectProposal(

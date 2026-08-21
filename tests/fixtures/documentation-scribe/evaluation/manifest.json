@@ -51,6 +51,22 @@
       "expectedStatus": "patch-accepted",
       "expectedCode": "scribe.patch.accepted",
       "coverage": ["m2-acceptance", "nested-instructions", "prompt-injection", "tool-loop", "usage-cache", "useful-proposal"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 2,
+        "toolRoundCount": 1,
+        "toolCallCount": 1,
+        "proposalStatus": "validated",
+        "usage": {
+          "inputTokens": 220,
+          "outputTokens": 60,
+          "cachedInputTokens": 80,
+          "uncachedInputTokens": 140,
+          "reasoningTokens": null,
+          "cacheObservation": "cache.mixed"
+        },
+        "observationIds": ["cache.mixed", "proposal-validated", "provider-request", "tool-call", "tool-loop", "usage-observed", "useful-proposal"]
+      },
       "proposalLine": "Runs the selected operation.",
       "requiredPlatform": "linux",
       "nonRequiredPlatformStatus": "runtime-failure",
@@ -63,7 +79,23 @@
       "executionDomain": "offline-only",
       "expectedStatus": "proposal-skipped",
       "expectedCode": "scribe.proposal.skipped",
-      "coverage": ["structured-skip"]
+      "coverage": ["structured-skip"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": {
+          "inputTokens": 64,
+          "outputTokens": 8,
+          "cachedInputTokens": null,
+          "uncachedInputTokens": null,
+          "reasoningTokens": null,
+          "cacheObservation": null
+        },
+        "observationIds": ["provider-request", "structured-skip", "usage-observed"]
+      }
     },
     {
       "id": "insufficient-evidence",
@@ -72,7 +104,23 @@
       "executionDomain": "offline-only",
       "expectedStatus": "proposal-skipped",
       "expectedCode": "scribe.proposal.skipped",
-      "coverage": ["evidence-insufficient"]
+      "coverage": ["evidence-insufficient"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": {
+          "inputTokens": 64,
+          "outputTokens": 8,
+          "cachedInputTokens": null,
+          "uncachedInputTokens": null,
+          "reasoningTokens": null,
+          "cacheObservation": null
+        },
+        "observationIds": ["evidence-insufficient", "provider-request", "usage-observed"]
+      }
     },
     {
       "id": "conflicting-evidence",
@@ -82,6 +130,15 @@
       "expectedStatus": "preflight-rejected",
       "expectedCode": "scribe.preflight.prompt-evidence-mismatch",
       "coverage": ["evidence-conflict"],
+      "offlineExpectation": {
+        "attemptCount": 0,
+        "providerRequestCount": 0,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": []
+      },
       "addEvidenceConflict": true
     },
     {
@@ -91,7 +148,16 @@
       "executionDomain": "offline-only",
       "expectedStatus": "runtime-failure",
       "expectedCode": "scribe.failure.tool-protocol",
-      "coverage": ["tool-invalid", "tool-unsupported"]
+      "coverage": ["tool-invalid", "tool-unsupported"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["provider-request", "tool-invalid", "tool-unsupported"]
+      }
     },
     {
       "id": "malformed-output",
@@ -100,7 +166,16 @@
       "executionDomain": "offline-only",
       "expectedStatus": "runtime-failure",
       "expectedCode": "scribe.failure.validation",
-      "coverage": ["model-output-malformed", "proposal-validation"]
+      "coverage": ["model-output-malformed", "proposal-validation"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["model-output-malformed", "provider-request"]
+      }
     },
     {
       "id": "patch-rejection",
@@ -110,6 +185,22 @@
       "expectedStatus": "patch-rejected",
       "expectedCode": "scribe.patch.rejected",
       "coverage": ["m2-rejection", "proposal-validation"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "validated",
+        "usage": {
+          "inputTokens": 80,
+          "outputTokens": 24,
+          "cachedInputTokens": null,
+          "uncachedInputTokens": 80,
+          "reasoningTokens": null,
+          "cacheObservation": "cache.miss"
+        },
+        "observationIds": ["cache.miss", "proposal-validated", "provider-request", "usage-observed"]
+      },
       "proposalLine": "Does nothing."
     },
     {
@@ -119,7 +210,16 @@
       "executionDomain": "offline-only",
       "expectedStatus": "provider-failure",
       "expectedCode": "scribe.failure.provider",
-      "coverage": ["partial-run", "provider-rate-limit", "retry"]
+      "coverage": ["partial-run", "provider-rate-limit", "retry"],
+      "offlineExpectation": {
+        "attemptCount": 2,
+        "providerRequestCount": 2,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["provider-rate-limit", "provider-request", "retry"]
+      }
     },
     {
       "id": "provider-unavailable",
@@ -128,7 +228,16 @@
       "executionDomain": "offline-only",
       "expectedStatus": "provider-failure",
       "expectedCode": "scribe.failure.provider",
-      "coverage": ["partial-run", "provider-unavailable"]
+      "coverage": ["partial-run", "provider-unavailable"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["provider-request", "provider-unavailable"]
+      }
     },
     {
       "id": "budget-exhausted",
@@ -137,7 +246,16 @@
       "executionDomain": "offline-only",
       "expectedStatus": "budget-exhausted",
       "expectedCode": "scribe.failure.budget",
-      "coverage": ["budget-exhausted", "partial-run"]
+      "coverage": ["budget-exhausted", "partial-run"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["provider-request"]
+      }
     },
     {
       "id": "timeout",
@@ -147,6 +265,15 @@
       "expectedStatus": "timeout",
       "expectedCode": "scribe.failure.timeout",
       "coverage": ["partial-run", "timeout"],
+      "offlineExpectation": {
+        "attemptCount": 1,
+        "providerRequestCount": 1,
+        "toolRoundCount": 0,
+        "toolCallCount": 0,
+        "proposalStatus": "not-reported",
+        "usage": null,
+        "observationIds": ["provider-request"]
+      },
       "maximumElapsedMillisecondsOverride": 50
     }
   ]
