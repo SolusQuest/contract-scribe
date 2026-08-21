@@ -503,10 +503,9 @@ public sealed class DocumentationScribeProviderTransportTests
             }
 
             return scenario == "http-status"
-                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
-                {
-                    Content = new StringContent(bodyMarker, Encoding.UTF8, "text/plain"),
-                })
+                ? Task.FromResult(TextResponse(
+                    HttpStatusCode.UnprocessableEntity,
+                    bodyMarker))
                 : Task.FromException<HttpResponseMessage>(new HttpRequestException("transport-marker"));
         }
 
@@ -1517,6 +1516,11 @@ public sealed class DocumentationScribeProviderTransportTests
     private static HttpResponseMessage JsonResponse(string body) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(body, Encoding.UTF8, "application/json"),
+    };
+
+    private static HttpResponseMessage TextResponse(HttpStatusCode status, string body) => new(status)
+    {
+        Content = new StringContent(body, Encoding.UTF8, "text/plain"),
     };
 
     private static byte[] TerminalResponse(string callId, string arguments) =>
