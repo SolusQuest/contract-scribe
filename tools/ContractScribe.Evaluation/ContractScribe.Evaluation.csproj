@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ContractScribe.Agent/ContractScribe.Agent.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Core/ContractScribe.Core.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Patching/ContractScribe.Patching.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
+    <ProjectReference Include="../../src/ContractScribe.Cli/ContractScribe.Cli.csproj" />
+    <ProjectReference Include="../../tests/fixtures/documentation-scribe/evaluation/repository/ContractScribe.EvaluationFixture.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Tasks.Core" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <Target Name="PrepareEvaluationCorpus" AfterTargets="Build">
+    <PropertyGroup>
+      <EvaluationCorpusSource>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../tests/fixtures/documentation-scribe/evaluation'))</EvaluationCorpusSource>
+      <EvaluationCorpusInstance>$([MSBuild]::StableStringHash('$(MSBuildProjectFullPath)'))</EvaluationCorpusInstance>
+      <EvaluationCorpusOutput>$([System.IO.Path]::Combine($([System.IO.Path]::GetTempPath()), 'contract-scribe-evaluation-build', '$(EvaluationCorpusInstance)', '$(Configuration)'))</EvaluationCorpusOutput>
+    </PropertyGroup>
+    <ItemGroup>
+      <EvaluationCorpusFile Include="$(EvaluationCorpusSource)/**/*"
+                            Exclude="$(EvaluationCorpusSource)/**/bin/**/*;$(EvaluationCorpusSource)/**/obj/**/*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(EvaluationCorpusOutput)" />
+    <Copy SourceFiles="@(EvaluationCorpusFile)"
+          DestinationFiles="@(EvaluationCorpusFile->'$(EvaluationCorpusOutput)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <MSBuild Projects="$(EvaluationCorpusOutput)/repository/ContractScribe.EvaluationFixture.csproj"
+             Targets="Restore;Build"
+             BuildInParallel="false"
+             Properties="Configuration=Debug;RestoreIgnoreFailedSources=false" />
+    <WriteLinesToFile File="$(TargetDir)/evaluation-corpus-path.txt"
+                      Lines="$(EvaluationCorpusOutput)"
+                      Overwrite="true"
+                      Encoding="UTF-8" />
+  </Target>
+</Project>

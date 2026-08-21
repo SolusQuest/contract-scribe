@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "currency": "usd",
+  "ratesPerMillionMicrounits": {
+    "cachedInput": 0,
+    "uncachedInput": 0,
+    "output": 0
+  },
+  "note": "Replace placeholder rates with caller-reviewed current values at execution time; prices are not frozen by the corpus."
+}

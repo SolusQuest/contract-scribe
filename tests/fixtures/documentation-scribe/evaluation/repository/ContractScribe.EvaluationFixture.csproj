@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>ContractScribe.EvaluationFixture</AssemblyName>
+    <RootNamespace>EvaluationCorpus</RootNamespace>
+  </PropertyGroup>
+</Project>

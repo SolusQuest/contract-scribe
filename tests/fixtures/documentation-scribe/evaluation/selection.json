@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "selectionId": "openai.gpt-4-1-mini-2025-04-14.chat-completions.v1",
+  "endpoint": "https://api.openai.com/v1/chat/completions",
+  "model": "gpt-4.1-mini-2025-04-14",
+  "evidenceDate": "2026-08-21",
+  "documentation": [
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions"
+  ],
+  "reason": "One pinned non-reasoning model is the smallest current documented target that supports Chat Completions function tools and the fixed production tool-call/tool-result continuation shape.",
+  "expectedObservations": [
+    "cache-fields-when-supplied",
+    "request.accepted-or-bounded-provider-failure",
+    "tool-call-or-terminal",
+    "tool-result-continuation-when-requested",
+    "usage-fields-when-supplied",
+    "validated-proposal-or-structured-skip-or-bounded-failure"
+  ],
+  "liveScenarioIds": [
+    "conflicting-evidence",
+    "patch-rejection",
+    "useful-proposal"
+  ],
+  "limits": {
+    "maximumAttempts": 2,
+    "maximumContextReferences": 8,
+    "maximumContextUtf8Bytes": 65536,
+    "maximumEvidenceReferences": 32,
+    "maximumEvidenceUtf8Bytes": 65536,
+    "maximumProviderRequests": 8,
+    "maximumToolRounds": 4,
+    "maximumToolCalls": 16,
+    "maximumInputTokens": 65536,
+    "maximumUncachedInputTokens": 32768,
+    "maximumOutputTokens": 8192,
+    "maximumCostMicrounits": 5000000,
+    "maximumElapsedMilliseconds": 120000
+  }
+}
