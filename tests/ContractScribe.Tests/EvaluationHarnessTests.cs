@@ -296,6 +296,14 @@ public sealed class EvaluationHarnessTests
         Assert.Equal("matched", fullDeepSeek.Status);
         Assert.Empty(fullDeepSeek.MissingExpectedObservationIds);
 
+        Assert.False(EvaluationLiveObservationMatcher.HasReportedCache(null));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, 1, null, null, null)));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, null, 1, null, null)));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, null, null, null, "cache.hit")));
+
         var preparationRejected = preflight with
         {
             RuntimeExecutionApplicable = true,

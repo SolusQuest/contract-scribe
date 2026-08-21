@@ -234,6 +234,11 @@ internal static class EvaluationLiveObservationMatcher
 
         return unexpected.ToArray();
     }
+
+    internal static bool HasReportedCache(EvaluationUsageReport? usage) => usage is
+    { CacheObservation: not null }
+    or { CachedInputTokens: not null }
+    or { UncachedInputTokens: not null };
 }
 
 internal sealed class EvaluationRunner
@@ -827,9 +832,7 @@ internal sealed class EvaluationRunner
             providerObservations.Any(observation => observation.UsageSupplied),
             usage is not null,
             providerObservations.Any(observation => observation.CacheSupplied),
-            usage?.CacheObservation is not null
-                || usage?.CachedInputTokens is not null
-                || usage?.UncachedInputTokens is not null,
+            EvaluationLiveObservationMatcher.HasReportedCache(usage),
             outcome.RunResult?.Terminal is DocumentationScribeProposalTerminal
                 or DocumentationScribeSkipTerminal
                 or DocumentationScribeFailureTerminal,
