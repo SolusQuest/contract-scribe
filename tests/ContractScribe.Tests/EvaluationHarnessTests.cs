@@ -500,6 +500,10 @@ public sealed class EvaluationHarnessTests
             "validated-proposal-or-structured-skip-or-bounded-failure",
         ], deepSeek.ExpectedObservations);
         Assert.Equal(11, loaded.Manifest.Scenarios.Length);
+        var usefulProposal = Assert.Single(
+            loaded.Manifest.Scenarios,
+            scenario => scenario.Id == "useful-proposal");
+        Assert.Equal("Performs no operation.", usefulProposal.ProposalLine);
         Assert.Equal(
             ["conflicting-evidence", "patch-rejection", "useful-proposal"],
             deepSeek.LiveScenarioIds);
@@ -520,8 +524,12 @@ public sealed class EvaluationHarnessTests
             "usage-fields-when-supplied",
             "validated-proposal-or-structured-skip-or-bounded-failure",
         ], miMo.ExpectedObservations);
-        Assert.Equal(64, loaded.CorpusIdentity.Length);
-        Assert.Equal(64, loaded.SelectionIdentity.Length);
+        Assert.Equal(
+            "f8bcd817f9ffdf64bfd65b502adae632ffcdef959980376ee58b3d57f8aa3760",
+            loaded.CorpusIdentity);
+        Assert.Equal(
+            "44005e7eed4c8871190396f4043392f60454640c3a43f2520c537d7a134b72df",
+            loaded.SelectionIdentity);
     }
 
     [Fact]

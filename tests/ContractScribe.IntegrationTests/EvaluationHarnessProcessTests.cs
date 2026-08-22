@@ -10,6 +10,10 @@ using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 using ContractScribe.Evaluation;
+using ContractScribe.Roslyn;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.IntegrationTests;
 
@@ -20,7 +24,34 @@ public sealed class EvaluationHarnessProcessTests
     public async Task LiveSafetyGateRunsOneCompleteMultiRequestCaseAndStopsBeforeCaseTwo()
     {
         var root = FindRepositoryRoot();
-        var loaded = EvaluationManifestLoader.Load(CorpusRoot(root));
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var usefulScenario = loaded.Manifest.Scenarios.Single(scenario =>
+            scenario.Id == "useful-proposal");
+        Assert.Equal("Performs no operation.", usefulScenario.ProposalLine);
+        var structuredSkip = loaded.Manifest.Scenarios.Single(scenario =>
+            scenario.Id == "structured-skip");
+        Assert.Equal(0, structuredSkip.OfflineExpectation.ToolCallCount);
+
+        var source = await File.ReadAllTextAsync(Path.Join(
+            corpus,
+            "repository",
+            "src",
+            "Fixture.cs"));
+        var tree = CSharpSyntaxTree.ParseText(source);
+        var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(candidate => candidate.Identifier.ValueText == "Run");
+        var compilation = CSharpCompilation.Create(
+            "EvaluationCorpusOracle",
+            [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var symbol = compilation.GetSemanticModel(tree).GetDeclaredSymbol(method);
+        Assert.NotNull(symbol);
+        Assert.Equal(usefulScenario.TargetDocumentationId, symbol.GetDocumentationCommentId());
+        Assert.NotNull(method.Body);
+        Assert.Empty(method.Body.Statements);
+
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
             ?? throw new InvalidOperationException();
         var marker = Path.Join(
@@ -36,7 +67,7 @@ public sealed class EvaluationHarnessProcessTests
             item.ConfigurationId == "deepseek-primary");
         var options = new EvaluationOptions(
             EvaluationMode.LiveSafetyGate,
-            CorpusRoot(root),
+            corpus,
             null,
             selected.ConfigurationId,
             new Uri(selected.Endpoint),
@@ -44,13 +75,17 @@ public sealed class EvaluationHarnessProcessTests
             "UNUSED_TEST_SECRET",
             new EvaluationCostPolicy("usd", 1, 1, 1));
         var factoryCalls = 0;
+        PreparedEvaluationCase? preparedCase = null;
+        RecordingExchange? recording = null;
         var runner = new EvaluationRunner(
             loaded,
             options,
             evaluationCase =>
             {
                 factoryCalls++;
-                return new ScriptedEvaluationExchange(evaluationCase);
+                preparedCase = evaluationCase;
+                recording = new RecordingExchange(new ScriptedEvaluationExchange(evaluationCase));
+                return recording;
             },
             null,
             null,
@@ -74,6 +109,49 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("safety-gate", report.ExecutionPurpose);
         Assert.Equal("deepseek-primary", report.ConfigurationId);
         Assert.Equal(1, report.Aggregate.SelectedCaseCount);
+
+        Assert.NotNull(preparedCase);
+        var sourceEvidence = preparedCase.Request.EvidenceReferences.Single(reference =>
+            reference.EvidenceReferenceId == "evidence.source");
+        Assert.Equal(DocumentationScribeEvidenceAuthority.SourceDeclaration, sourceEvidence.Authority);
+        Assert.NotNull(result.Proposal);
+        var contentUnit = Assert.Single(result.Proposal.ContentUnits);
+        Assert.Equal(["evidence.source"], contentUnit.EvidenceReferenceIds);
+
+        Assert.NotNull(recording);
+        var firstRequest = Assert.Single(recording.Requests, request =>
+            request.ProviderRequestNumber == 1);
+        const string instruction =
+            "Before submitting a documentation proposal for `M:EvaluationCorpus.Fixture.Run`, "
+            + "make exactly one call to the provided repository tool described as "
+            + "\"Search for one ordinal literal inside an authorized repository scope.\" "
+            + "Use it to verify the declaration with the literal `public void Run`. "
+            + "This rule does not apply to a structured skip or any other target.";
+        var repositoryMessage = Assert.Single(firstRequest.Messages, message =>
+            message.Kind == DocumentationScribeMessageKind.RepositoryInstructions);
+        using var repositoryInstructions = JsonDocument.Parse(repositoryMessage.Content);
+        Assert.Contains(
+            repositoryInstructions.RootElement.GetProperty("content").EnumerateArray(),
+            item => item.GetProperty("content").GetString()!.Contains(
+                instruction,
+                StringComparison.Ordinal));
+        var searchTool = Assert.Single(firstRequest.Tools, tool =>
+            tool.Description == DocumentationScribeRepositoryToolSchemas.SearchTextDescription);
+        Assert.Equal(DocumentationScribeRepositoryToolOperationIds.SearchText, searchTool.OperationId);
+        using var schema = JsonDocument.Parse(searchTool.InputSchemaJson);
+        var parameters = schema.RootElement;
+        Assert.Equal("object", parameters.GetProperty("type").GetString());
+        Assert.Equal(
+            ["scopeId", "literal"],
+            parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            parameters.GetProperty("properties").GetProperty("scopeId")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()),
+            scopeId => scopeId == "evidence.source");
+        Assert.Equal(
+            "string",
+            parameters.GetProperty("properties").GetProperty("literal")
+                .GetProperty("type").GetString());
     }
 
     [Fact]
@@ -443,7 +521,7 @@ public sealed class EvaluationHarnessProcessTests
             proposal.GetProperty("contentUnits").EnumerateArray()
                 .SelectMany(unit => unit.GetProperty("lines").EnumerateArray())
                 .Select(line => line.GetString()),
-            line => line == "Runs the selected operation.");
+            line => line == "Performs no operation.");
     }
 
     [Theory]
@@ -906,6 +984,20 @@ public sealed class EvaluationHarnessProcessTests
     }
 
     private sealed record ProcessResult(int ExitCode, byte[] StandardOutput, byte[] StandardError);
+
+    private sealed class RecordingExchange(
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        internal List<DocumentationScribeModelRequest> Requests { get; } = [];
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return inner.SendAsync(request, cancellationToken);
+        }
+    }
 
     private sealed class PerturbingExchange(
         IDocumentationScribeModelExchange inner,

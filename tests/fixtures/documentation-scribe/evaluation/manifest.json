@@ -31,7 +31,7 @@
     },
     {
       "path": "repository/src/AGENTS.md",
-      "sha256": "72d50fab63bdcb3a5d933ff9464a1271fd6cb245b7b6131b19115a4599e4f56b"
+      "sha256": "a5ee7763094eb0f2a52c3cdfe52cf74b49e0b18726afc4216986404c3db86fd8"
     },
     {
       "path": "repository/src/Fixture.cs",
@@ -67,7 +67,7 @@
         },
         "observationIds": ["cache.mixed", "proposal-validated", "provider-request", "tool-call", "tool-loop", "usage-observed", "useful-proposal"]
       },
-      "proposalLine": "Runs the selected operation.",
+      "proposalLine": "Performs no operation.",
       "requiredPlatform": "linux",
       "nonRequiredPlatformStatus": "runtime-failure",
       "nonRequiredPlatformCode": "patch.host.environment-failure"
