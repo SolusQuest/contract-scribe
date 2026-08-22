@@ -115,6 +115,9 @@ internal static class DocumentationScribePromptBuilder
                         "skip-terminal-root-has-only-kind-reason-evidenceReferenceIds",
                         "content-unit-components-use-componentIdentity-never-identity",
                         "applicableComponents-is-guidance-not-a-terminal-property",
+                        "proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root",
+                        "omit-both-read-line-bounds-unless-an-exact-valid-range-is-known",
+                        "tool-pageSize-never-exceeds-the-schema-maximum",
                     },
                 }),
             Message(
@@ -173,7 +176,21 @@ internal static class DocumentationScribePromptBuilder
                         proposalRootProperties = new[] { "kind", "target", "contentUnits" },
                         skipRootProperties = new[] { "kind", "reason", "evidenceReferenceIds" },
                         componentIdentityProperty = "componentIdentity",
-                        forbiddenTerminalProperties = new[] { "applicableComponents", "identity" },
+                        proposalForbiddenRootProperties = new[]
+                        {
+                            "reason",
+                            "evidenceReferenceIds",
+                            "applicableComponents",
+                            "identity",
+                        },
+                        skipForbiddenRootProperties = new[]
+                        {
+                            "target",
+                            "contentUnits",
+                            "applicableComponents",
+                            "identity",
+                        },
+                        proposalEvidenceReferenceLocation = "contentUnits[].evidenceReferenceIds",
                     },
                     request.EvidenceReferences,
                     request.EvidenceConflicts,

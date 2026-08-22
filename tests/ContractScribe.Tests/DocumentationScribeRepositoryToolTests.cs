@@ -106,7 +106,11 @@ public sealed class DocumentationScribeRepositoryToolTests
             Assert.Contains("once only", cursor, StringComparison.Ordinal);
             Assert.Contains("same operation", cursor, StringComparison.Ordinal);
             Assert.Contains("page size", cursor, StringComparison.Ordinal);
+            Assert.Equal(64, properties.GetProperty("pageSize").GetProperty("maximum").GetInt32());
         }
+
+        Assert.Contains("Omit both startLine and endLine", read.RootElement.GetProperty("properties")
+            .GetProperty("startLine").GetProperty("description").GetString(), StringComparison.Ordinal);
 
         using var search = JsonDocument.Parse(DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json);
         var searchCursor = search.RootElement.GetProperty("properties").GetProperty("cursor")

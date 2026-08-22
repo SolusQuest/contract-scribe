@@ -671,6 +671,10 @@ public sealed class DocumentationScribeRuntimeTests
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("content-unit-components-use-componentIdentity-never-identity", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root", systemPolicy
+            .RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("omit-both-read-line-bounds-unless-an-exact-valid-range-is-known", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         var terminalContract = targetEvidence.RootElement.GetProperty("terminalContract");
         Assert.Equal(
             ["kind", "target", "contentUnits"],
@@ -678,9 +682,11 @@ public sealed class DocumentationScribeRuntimeTests
                 .Select(item => item.GetString()!).ToArray());
         Assert.Equal("componentIdentity", terminalContract.GetProperty("componentIdentityProperty").GetString());
         Assert.Equal(
-            ["applicableComponents", "identity"],
-            terminalContract.GetProperty("forbiddenTerminalProperties").EnumerateArray()
+            ["reason", "evidenceReferenceIds", "applicableComponents", "identity"],
+            terminalContract.GetProperty("proposalForbiddenRootProperties").EnumerateArray()
                 .Select(item => item.GetString()!).ToArray());
+        Assert.Equal("contentUnits[].evidenceReferenceIds", terminalContract
+            .GetProperty("proposalEvidenceReferenceLocation").GetString());
         var parameterEvidence = targetEvidence.RootElement.GetProperty("evidenceReferences")[0];
         Assert.Equal("repoctx-11111111111111111111111111111111", parameterEvidence
             .GetProperty("repositoryContextRef").GetString());
@@ -1408,7 +1414,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "cb43287bf421e2da046b99950b64e0e90f4a2d3625ffc5de3dd9a7dec575927a",
+                "a0081dac88276456d1950a8892129ae182b14a0ad917acf5c5df2957600bd870",
                 digest);
         }
         finally
