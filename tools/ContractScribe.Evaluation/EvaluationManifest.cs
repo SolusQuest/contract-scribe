@@ -47,6 +47,8 @@ internal sealed record EvaluationScenario
 
     public required EvaluationOfflineExpectation OfflineExpectation { get; init; }
 
+    public EvaluationLiveToolExpectation? LiveToolExpectation { get; init; }
+
     public string? ProposalLine { get; init; }
 
     public bool AddEvidenceConflict { get; init; }
@@ -58,6 +60,22 @@ internal sealed record EvaluationScenario
     public string? NonRequiredPlatformCode { get; init; }
 
     public int? MaximumElapsedMillisecondsOverride { get; init; }
+}
+
+internal sealed record EvaluationLiveToolExpectation
+{
+    public required int CallCount { get; init; }
+
+    public required string OperationId { get; init; }
+
+    public required EvaluationLiveToolArguments Arguments { get; init; }
+}
+
+internal sealed record EvaluationLiveToolArguments
+{
+    public required string ScopeId { get; init; }
+
+    public required string Literal { get; init; }
 }
 
 internal sealed record EvaluationOfflineExpectation
@@ -292,6 +310,7 @@ internal static class EvaluationManifestLoader
                     scenario.Coverage.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
                     StringComparer.Ordinal)
                 || !ValidOfflineExpectation(scenario)
+                || !ValidLiveToolExpectation(scenario)
                 || scenario.ProposalLine is { } line
                     && (line.Length == 0 || line.Length > 400 || line.Any(char.IsControl))
                 || scenario.RequiredPlatform is not (null or "linux" or "windows" or "macos")
@@ -310,6 +329,26 @@ internal static class EvaluationManifestLoader
             }
         }
     }
+
+    private static bool ValidLiveToolExpectation(EvaluationScenario scenario)
+    {
+        if (scenario.LiveToolExpectation is not { } expected)
+        {
+            return true;
+        }
+
+        return scenario.ExecutionDomain == "live-and-offline"
+            && scenario.ProposalLine is not null
+            && expected.CallCount is >= 1 and <= 16
+            && IsId(expected.OperationId)
+            && expected.Arguments is not null
+            && IsBoundedText(expected.Arguments.ScopeId)
+            && IsBoundedText(expected.Arguments.Literal);
+    }
+
+    private static bool IsBoundedText(string value) => !string.IsNullOrEmpty(value)
+        && value.Length <= 400
+        && !value.Any(char.IsControl);
 
     private static bool ValidOfflineExpectation(EvaluationScenario scenario)
     {

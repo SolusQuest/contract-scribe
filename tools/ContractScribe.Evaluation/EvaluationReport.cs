@@ -102,6 +102,7 @@ internal sealed record EvaluationCaseReport(
     string Code,
     string ExpectationStatus,
     string[] DifferenceIds,
+    string SafetyToolExpectationStatus,
     string[] UnexpectedProtocolObservationIds,
     int AttemptCount,
     int ProviderRequestCount,
