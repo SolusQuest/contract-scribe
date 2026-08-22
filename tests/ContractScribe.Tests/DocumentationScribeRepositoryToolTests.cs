@@ -107,6 +107,10 @@ public sealed class DocumentationScribeRepositoryToolTests
             Assert.Contains("same operation", cursor, StringComparison.Ordinal);
             Assert.Contains("page size", cursor, StringComparison.Ordinal);
             Assert.Equal(64, properties.GetProperty("pageSize").GetProperty("maximum").GetInt32());
+            Assert.Contains("Omit to query the selected scope root", properties.GetProperty("subdirectory")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+            Assert.Contains("never use dot", properties.GetProperty("subdirectory")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
         }
 
         Assert.Contains("Omit both startLine and endLine", read.RootElement.GetProperty("properties")

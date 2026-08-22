@@ -675,6 +675,10 @@ public sealed class DocumentationScribeRuntimeTests
             .RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("omit-both-read-line-bounds-unless-an-exact-valid-range-is-known", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-target-is-the-terminalTarget-object-never-a-string", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("omit-subdirectory-to-query-the-selected-scope-root", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         var terminalContract = targetEvidence.RootElement.GetProperty("terminalContract");
         Assert.Equal(
             ["kind", "target", "contentUnits"],
@@ -687,6 +691,12 @@ public sealed class DocumentationScribeRuntimeTests
                 .Select(item => item.GetString()!).ToArray());
         Assert.Equal("contentUnits[].evidenceReferenceIds", terminalContract
             .GetProperty("proposalEvidenceReferenceLocation").GetString());
+        Assert.Equal("terminalTarget", terminalContract.GetProperty("proposalTargetSource").GetString());
+        Assert.Equal("object", terminalContract.GetProperty("proposalTargetType").GetString());
+        Assert.Equal(
+            ["repositoryContextRef", "symbolRef", "sourceCommitment"],
+            terminalContract.GetProperty("proposalTargetProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
         var parameterEvidence = targetEvidence.RootElement.GetProperty("evidenceReferences")[0];
         Assert.Equal("repoctx-11111111111111111111111111111111", parameterEvidence
             .GetProperty("repositoryContextRef").GetString());
@@ -1414,7 +1424,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "a0081dac88276456d1950a8892129ae182b14a0ad917acf5c5df2957600bd870",
+                "650c6041b2401f3b87603969125b88f2c043b3987bf02733c25940e1e14fba44",
                 digest);
         }
         finally

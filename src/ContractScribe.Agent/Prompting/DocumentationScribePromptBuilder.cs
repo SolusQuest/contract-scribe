@@ -116,7 +116,9 @@ internal static class DocumentationScribePromptBuilder
                         "content-unit-components-use-componentIdentity-never-identity",
                         "applicableComponents-is-guidance-not-a-terminal-property",
                         "proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root",
+                        "proposal-target-is-the-terminalTarget-object-never-a-string",
                         "omit-both-read-line-bounds-unless-an-exact-valid-range-is-known",
+                        "omit-subdirectory-to-query-the-selected-scope-root",
                         "tool-pageSize-never-exceeds-the-schema-maximum",
                     },
                 }),
@@ -175,6 +177,14 @@ internal static class DocumentationScribePromptBuilder
                     {
                         proposalRootProperties = new[] { "kind", "target", "contentUnits" },
                         skipRootProperties = new[] { "kind", "reason", "evidenceReferenceIds" },
+                        proposalTargetSource = "terminalTarget",
+                        proposalTargetType = "object",
+                        proposalTargetProperties = new[]
+                        {
+                            "repositoryContextRef",
+                            "symbolRef",
+                            "sourceCommitment",
+                        },
                         componentIdentityProperty = "componentIdentity",
                         proposalForbiddenRootProperties = new[]
                         {
