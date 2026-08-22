@@ -1,9 +1,12 @@
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 
 namespace ContractScribe.Evaluation;
 
 internal static class EvaluationOutput
 {
+    private const uint PrivateDirectoryCreateMode = 0x1C0;
+
     internal static bool TryResolveDirectory(
         string value,
         IReadOnlyCollection<string> forbiddenRoots,
@@ -12,11 +15,8 @@ internal static class EvaluationOutput
         directory = null;
         try
         {
-            var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
-            var candidate = Path.GetFullPath(value);
-            if (!IsStrictDescendant(temporaryRoot, candidate)
-                || forbiddenRoots.Select(Path.GetFullPath).Any(root => Overlaps(root, candidate))
-                || ContainsReparsePoint(temporaryRoot, candidate))
+            if (!TryValidateDirectory(value, forbiddenRoots, out var candidate)
+                || candidate is null)
             {
                 return false;
             }
@@ -38,6 +38,137 @@ internal static class EvaluationOutput
             or UnauthorizedAccessException)
         {
             return false;
+        }
+    }
+
+    internal static bool TryValidateDirectory(
+        string value,
+        IReadOnlyCollection<string> forbiddenRoots,
+        out string? directory)
+    {
+        directory = null;
+        try
+        {
+            var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+            var candidate = Path.GetFullPath(value);
+            if (!IsStrictDescendant(temporaryRoot, candidate)
+                || forbiddenRoots.Select(Path.GetFullPath).Any(root => Overlaps(root, candidate))
+                || ContainsReparsePoint(temporaryRoot, candidate)
+                || File.Exists(candidate)
+                || File.Exists(Path.Join(candidate, "evaluation-report.json"))
+                || File.Exists(Path.Join(candidate, "evaluation-partial.json")))
+            {
+                return false;
+            }
+
+            directory = candidate;
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or NotSupportedException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryValidateNewPrivateDirectory(
+        string value,
+        IReadOnlyCollection<string> forbiddenRoots,
+        out string? directory)
+    {
+        directory = null;
+        if (!TryValidateDirectory(value, forbiddenRoots, out var candidate)
+            || candidate is null)
+        {
+            return false;
+        }
+
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+        var parent = Path.GetDirectoryName(candidate);
+        if (!Directory.Exists(temporaryRoot)
+            || new DirectoryInfo(temporaryRoot).LinkTarget is not null
+            || parent is null
+            || !SamePath(temporaryRoot, parent)
+            || !EntryIsAbsentWithoutFollowing(candidate))
+        {
+            return false;
+        }
+
+        directory = candidate;
+        return true;
+    }
+
+    internal static bool TryResolveNewPrivateDirectory(
+        string value,
+        IReadOnlyCollection<string> forbiddenRoots,
+        out string? directory)
+    {
+        directory = null;
+        if (!TryValidateNewPrivateDirectory(value, forbiddenRoots, out var candidate)
+            || candidate is null)
+        {
+            return false;
+        }
+
+        var created = false;
+        try
+        {
+            if (!OperatingSystem.IsLinux()
+                || MakeDirectory(candidate, PrivateDirectoryCreateMode) != 0)
+            {
+                return false;
+            }
+
+            created = true;
+            var expectedMode = UnixFileMode.UserRead
+                | UnixFileMode.UserWrite
+                | UnixFileMode.UserExecute;
+            if (!IsSafeDirectory(candidate, forbiddenRoots)
+                || File.GetUnixFileMode(candidate) != expectedMode)
+            {
+                return false;
+            }
+
+            directory = candidate;
+            created = false;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (created)
+            {
+                DeleteEmptyPrivateDirectory(candidate);
+            }
+        }
+    }
+
+    internal static void DeleteEmptyPrivateDirectory(string value)
+    {
+        try
+        {
+            var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+            var candidate = Path.GetFullPath(value);
+            if (SamePath(temporaryRoot, Path.GetDirectoryName(candidate) ?? string.Empty)
+                && Directory.Exists(candidate)
+                && !ContainsReparsePoint(temporaryRoot, candidate)
+                && !Directory.EnumerateFileSystemEntries(candidate).Any())
+            {
+                Directory.Delete(candidate);
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or NotSupportedException
+            or UnauthorizedAccessException)
+        {
+            return;
         }
     }
 
@@ -164,5 +295,67 @@ internal static class EvaluationOutput
         }
 
         return false;
+    }
+
+    private static bool EntryIsAbsentWithoutFollowing(string candidate)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            if (LStat(candidate, out _) == 0)
+            {
+                return false;
+            }
+
+            return Marshal.GetLastPInvokeError() == 2;
+        }
+
+        try
+        {
+            _ = File.GetAttributes(candidate);
+            return false;
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStat(string path, out LinuxStat value);
+
+    [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
+    private static extern int MakeDirectory(string path, uint mode);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStat
+    {
+        internal ulong Device;
+        internal ulong Inode;
+        internal ulong HardLinkCount;
+        internal uint Mode;
+        internal uint UserId;
+        internal uint GroupId;
+        internal int Padding;
+        internal ulong RawDevice;
+        internal long Size;
+        internal long BlockSize;
+        internal long Blocks;
+        internal LinuxTimespec AccessTime;
+        internal LinuxTimespec ModificationTime;
+        internal LinuxTimespec ChangeTime;
+        internal long Reserved0;
+        internal long Reserved1;
+        internal long Reserved2;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxTimespec
+    {
+        internal long Seconds;
+        internal long Nanoseconds;
     }
 }

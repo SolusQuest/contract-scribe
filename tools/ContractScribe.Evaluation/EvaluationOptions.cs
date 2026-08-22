@@ -21,6 +21,14 @@ internal sealed record EvaluationOptions(
 {
     internal bool IsLive => Mode is EvaluationMode.LiveSafetyGate or EvaluationMode.LiveAll;
 
+    internal string? ProviderResponseCaptureDirectory { get; init; }
+
+    internal string? DiagnosticModel { get; init; }
+
+    internal bool IsPrivateResponseDiagnostic => ProviderResponseCaptureDirectory is not null;
+
+    internal string? EffectiveModel => DiagnosticModel ?? Model;
+
     internal static bool TryParse(string[] args, out EvaluationOptions? options, out string code)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -43,7 +51,8 @@ internal sealed record EvaluationOptions(
 
             if (argument is not ("--corpus" or "--output" or "--configuration" or "--endpoint" or "--model"
                 or "--secret-env" or "--currency" or "--cached-input-rate"
-                or "--uncached-input-rate" or "--output-rate")
+                or "--uncached-input-rate" or "--output-rate"
+                or "--unsafe-capture-provider-response" or "--diagnostic-model")
                 || index + 1 >= args.Length
                 || !values.TryAdd(argument, args[++index]))
             {
@@ -91,6 +100,21 @@ internal sealed record EvaluationOptions(
             return false;
         }
 
+        var captureDirectory = values.GetValueOrDefault("--unsafe-capture-provider-response");
+        var diagnosticModel = values.GetValueOrDefault("--diagnostic-model");
+        if (captureDirectory is not null
+            && (mode != EvaluationMode.LiveSafetyGate
+                || !Path.IsPathFullyQualified(captureDirectory))
+            || diagnosticModel is not null
+                && (captureDirectory is null
+                    || configurationId != "mimo-compatibility"
+                    || model != "mimo-v2.5"
+                    || diagnosticModel != "mimo-v2.5-pro")
+            || captureDirectory is null && diagnosticModel is not null)
+        {
+            return false;
+        }
+
         if (!TryCost(values, out var costPolicy)
             || live && costPolicy?.IsPriced != true)
         {
@@ -105,7 +129,11 @@ internal sealed record EvaluationOptions(
             endpoint,
             model,
             secretName,
-            costPolicy!);
+            costPolicy!)
+        {
+            ProviderResponseCaptureDirectory = captureDirectory,
+            DiagnosticModel = diagnosticModel,
+        };
         code = string.Empty;
         return true;
     }

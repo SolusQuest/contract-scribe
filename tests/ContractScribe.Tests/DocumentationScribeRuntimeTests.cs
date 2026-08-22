@@ -650,14 +650,53 @@ public sealed class DocumentationScribeRuntimeTests
 
         using var targetEvidence = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
-        var target = targetEvidence.RootElement.GetProperty("target");
+        Assert.False(targetEvidence.RootElement.TryGetProperty("target", out _));
+        var target = targetEvidence.RootElement.GetProperty("terminalTarget");
+        Assert.Equal("repoctx-11111111111111111111111111111111", target
+            .GetProperty("repositoryContextRef").GetString());
         var source = target.GetProperty("sourceCommitment");
         Assert.Equal("src/Synthetic/Widget.cs", source.GetProperty("locator")
             .GetProperty("repository").GetProperty("path").GetString());
         Assert.Equal(100, source.GetProperty("locator").GetProperty("repository")
             .GetProperty("span").GetProperty("start").GetInt32());
-        Assert.Equal("parameter", target.GetProperty("applicableComponents")[0]
+        Assert.Equal("parameter", targetEvidence.RootElement.GetProperty("applicableComponents")[0]
             .GetProperty("kind").GetString());
+        using var systemPolicy = JsonDocument.Parse(modelRequest.Messages.Single(message =>
+            message.Kind == DocumentationScribeMessageKind.SystemPolicy).Content);
+        Assert.Contains("terminal-nested-values-are-json-not-json-encoded-strings", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("omit-cursor-unless-continuing-the-exact-result-that-returned-it", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-terminal-root-has-only-kind-target-contentUnits", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("content-unit-components-use-componentIdentity-never-identity", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root", systemPolicy
+            .RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("omit-both-read-line-bounds-unless-an-exact-valid-range-is-known", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-target-is-the-terminalTarget-object-never-a-string", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("omit-subdirectory-to-query-the-selected-scope-root", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        var terminalContract = targetEvidence.RootElement.GetProperty("terminalContract");
+        Assert.Equal(
+            ["kind", "target", "contentUnits"],
+            terminalContract.GetProperty("proposalRootProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
+        Assert.Equal("componentIdentity", terminalContract.GetProperty("componentIdentityProperty").GetString());
+        Assert.Equal(
+            ["reason", "evidenceReferenceIds", "applicableComponents", "identity"],
+            terminalContract.GetProperty("proposalForbiddenRootProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
+        Assert.Equal("contentUnits[].evidenceReferenceIds", terminalContract
+            .GetProperty("proposalEvidenceReferenceLocation").GetString());
+        Assert.Equal("terminalTarget", terminalContract.GetProperty("proposalTargetSource").GetString());
+        Assert.Equal("object", terminalContract.GetProperty("proposalTargetType").GetString());
+        Assert.Equal(
+            ["repositoryContextRef", "symbolRef", "sourceCommitment"],
+            terminalContract.GetProperty("proposalTargetProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
         var parameterEvidence = targetEvidence.RootElement.GetProperty("evidenceReferences")[0];
         Assert.Equal("repoctx-11111111111111111111111111111111", parameterEvidence
             .GetProperty("repositoryContextRef").GetString());
@@ -741,6 +780,20 @@ public sealed class DocumentationScribeRuntimeTests
         var definition = Assert.Single(exchange.Requests).Terminal;
         Assert.Equal("scribe.submit-terminal", definition.OperationId);
         var schema = JsonSchema.FromText(definition.SchemaJson);
+        using (var schemaDocument = JsonDocument.Parse(definition.SchemaJson))
+        {
+            var root = schemaDocument.RootElement;
+            Assert.Equal("object", root.GetProperty("type").GetString());
+            Assert.False(root.GetProperty("additionalProperties").GetBoolean());
+            Assert.Contains("proposal has only kind, target, and contentUnits", root
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+            var properties = root.GetProperty("properties");
+            Assert.Equal("string", properties.GetProperty("kind").GetProperty("type").GetString());
+            Assert.Equal("array", properties.GetProperty("contentUnits").GetProperty("type").GetString());
+            Assert.Equal("string", properties.GetProperty("reason").GetProperty("type").GetString());
+            Assert.Equal("array", properties.GetProperty("evidenceReferenceIds").GetProperty("type").GetString());
+            Assert.Equal("#/$defs/target", properties.GetProperty("target").GetProperty("$ref").GetString());
+        }
 
         using var proposal = JsonDocument.Parse(ReadTerminal("proposal-result.json"));
         using var skip = JsonDocument.Parse(ReadTerminal("skip-result.json"));
@@ -753,6 +806,23 @@ public sealed class DocumentationScribeRuntimeTests
         var extra = JsonNode.Parse(ReadTerminal("skip-result.json"))!.AsObject();
         extra["unexpected"] = true;
         Assert.False(schema.Evaluate(JsonDocument.Parse(extra.ToJsonString()).RootElement).IsValid);
+
+        var mixed = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        mixed["reason"] = "scribe.skip.insufficient-evidence";
+        mixed["evidenceReferenceIds"] = new JsonArray();
+        Assert.False(schema.Evaluate(JsonDocument.Parse(mixed.ToJsonString()).RootElement).IsValid);
+
+        var stringified = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
+        stringified["target"] = stringified["target"]!.ToJsonString();
+        stringified["contentUnits"] = stringified["contentUnits"]!.ToJsonString();
+        Assert.False(schema.Evaluate(JsonDocument.Parse(stringified.ToJsonString()).RootElement).IsValid);
+
+        Assert.IsType<DocumentationScribeProposalTerminal>((await RunTerminal(
+            JsonNode.Parse(ReadTerminal("proposal-result.json"))!)).Terminal);
+        Assert.IsType<DocumentationScribeSkipTerminal>((await RunTerminal(
+            JsonNode.Parse(ReadTerminal("skip-result.json"))!)).Terminal);
+        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunTerminal(mixed)));
+        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunTerminal(stringified)));
 
         static bool IsValid(JsonSchema candidateSchema, JsonNode value)
         {
@@ -830,6 +900,10 @@ public sealed class DocumentationScribeRuntimeTests
             "Reserved collision.",
             ToolSchema,
             1));
+
+        Task<DocumentationScribeRunResult> RunTerminal(JsonNode terminal) => CreateRuntime(
+            Script(TerminalResponse(Encoding.UTF8.GetBytes(terminal.ToJsonString()))),
+            EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         Assert.Throws<ArgumentException>(() => builder.Add(
             new SyntheticDescriptor("SCRIBE.SUBMIT-TERMINAL"),
             new SyntheticPort(DocumentationScribeToolOutcome.Complete),
@@ -1350,7 +1424,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "9efaa665b0ef4571f8ae8ae5a7ac168d54c484383fd73ac8f6b1dd2b8d102620",
+                "650c6041b2401f3b87603969125b88f2c043b3987bf02733c25940e1e14fba44",
                 digest);
         }
         finally
@@ -1373,6 +1447,17 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.DoesNotContain(marker, prompt.ToString(), StringComparison.Ordinal);
         Assert.Throws<ArgumentOutOfRangeException>(() => new DocumentationScribeModelFailure(
             DocumentationScribeModelFailureCode.RateLimited, 300_001));
+        Assert.Throws<ArgumentException>(() => new DocumentationScribeModelFailure(
+            DocumentationScribeModelFailureCode.PermanentUnavailable,
+            origin: DocumentationScribeModelFailureOrigin.HttpStatus));
+        Assert.Throws<ArgumentException>(() => new DocumentationScribeModelFailure(
+            DocumentationScribeModelFailureCode.PermanentUnavailable,
+            origin: DocumentationScribeModelFailureOrigin.Transport,
+            httpStatusCode: 400));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DocumentationScribeModelFailure(
+            DocumentationScribeModelFailureCode.PermanentUnavailable,
+            origin: DocumentationScribeModelFailureOrigin.HttpStatus,
+            httpStatusCode: 600));
         Assert.Throws<ArgumentException>(() => new DocumentationScribeModelToolCall(
             0, "call.one", "tool.read", new byte[DocumentationScribeContract.MaximumArtifactUtf8Bytes + 1]));
     }

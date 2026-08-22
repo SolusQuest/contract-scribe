@@ -11,21 +11,31 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
 {
     private readonly OpenAiCompatibleHttpTransportOptions options;
     private readonly HttpMessageInvoker invoker;
+    private readonly OpenAiCompatibleResponseDiagnostics? diagnostics;
     private int disposed;
 
     public OpenAiCompatibleHttpModelExchange(OpenAiCompatibleHttpTransportOptions options)
-        : this(options, CreateProductionHandler(), disposeHandler: true)
+        : this(options, CreateProductionHandler(), disposeHandler: true, diagnostics: null)
+    {
+    }
+
+    public OpenAiCompatibleHttpModelExchange(
+        OpenAiCompatibleHttpTransportOptions options,
+        OpenAiCompatibleResponseDiagnostics diagnostics)
+        : this(options, CreateProductionHandler(), disposeHandler: true, diagnostics)
     {
     }
 
     internal OpenAiCompatibleHttpModelExchange(
         OpenAiCompatibleHttpTransportOptions options,
         HttpMessageHandler handler,
-        bool disposeHandler = true)
+        bool disposeHandler = true,
+        OpenAiCompatibleResponseDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(handler);
         this.options = options;
+        this.diagnostics = diagnostics;
         invoker = new HttpMessageInvoker(
             new SanitizingHandler(handler, disposeHandler),
             disposeHandler: true);
@@ -38,9 +48,12 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         ArgumentNullException.ThrowIfNull(request);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
+        diagnostics?.BeginProviderRequest(request.ProviderRequestNumber);
         if (!options.NetworkEnabled)
         {
-            return Failure(DocumentationScribeModelFailureCode.Unsupported);
+            return Failure(
+                DocumentationScribeModelFailureCode.Unsupported,
+                origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
         OpenAiCompatiblePreparedRequest prepared;
@@ -53,72 +66,138 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
         catch (OpenAiCompatibleProtocolException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
+        var replayObservation = prepared.HistoryReplayed
+            ? DocumentationScribeContinuationObservation.HistoryReplayed
+            : DocumentationScribeContinuationObservation.None;
+        var dispatchedReplayObservation = DocumentationScribeContinuationObservation.None;
         try
         {
             using var message = CreateMessage(prepared);
+            dispatchedReplayObservation = replayObservation;
             using var response = await invoker.SendAsync(message, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
             {
-                return ClassifyStatus(response);
+                return ClassifyStatus(response, dispatchedReplayObservation);
             }
 
             if (response.Content.Headers.ContentEncoding.Count > 0
                 || !IsJson(response.Content.Headers.ContentType))
             {
-                return Failure(DocumentationScribeModelFailureCode.Unsupported);
+                return Failure(
+                    DocumentationScribeModelFailureCode.Unsupported,
+                    origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                    continuationObservation: dispatchedReplayObservation);
             }
 
             var contentLength = response.Content.Headers.ContentLength;
             if (contentLength > OpenAiCompatibleChatCompletionsCodec.MaximumRawResponseUtf8Bytes)
             {
-                return Failure(DocumentationScribeModelFailureCode.MalformedResponse);
+                return Failure(
+                    DocumentationScribeModelFailureCode.MalformedResponse,
+                    origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                    continuationObservation: dispatchedReplayObservation);
             }
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var body = await ReadBoundedAsync(stream, contentLength, cancellationToken).ConfigureAwait(false);
             try
             {
-                return OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared);
+                var parsed = OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared);
+                if (diagnostics is not null)
+                {
+                    var disposition = parsed.TerminalSubmissions.Length == 1
+                        ? OpenAiCompatibleResponseCodecDisposition.AcceptedTerminal
+                        : OpenAiCompatibleResponseCodecDisposition.AcceptedTool;
+                    await diagnostics.ObserveAsync(
+                        request.ProviderRequestNumber,
+                        disposition,
+                        body,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                return parsed;
             }
             catch (OpenAiCompatibleProtocolException exception)
             {
-                return Failure(exception.Code, continuationObservation: exception.ContinuationObservation);
+                if (diagnostics is not null)
+                {
+                    var disposition = exception.Disposition
+                        ?? diagnostics.FailMissingDisposition();
+
+                    await diagnostics.ObserveAsync(
+                        request.ProviderRequestNumber,
+                        disposition,
+                        body,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                return Failure(
+                    exception.Code,
+                    origin: DocumentationScribeModelFailureOrigin.ResponseCodec,
+                    continuationObservation:
+                        dispatchedReplayObservation | exception.ContinuationObservation);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (OpenAiCompatibleDiagnosticException)
+        {
+            throw;
+        }
         catch (OpenAiCompatibleProtocolException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (OpenAiCompatibleSanitizedTransportException exception)
         {
-            return Failure(exception.Code);
+            return Failure(
+                exception.Code,
+                origin: DocumentationScribeModelFailureOrigin.Transport,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (OperationCanceledException)
         {
-            return Failure(DocumentationScribeModelFailureCode.TransientUnavailable);
+            return Failure(
+                DocumentationScribeModelFailureCode.TransientUnavailable,
+                origin: DocumentationScribeModelFailureOrigin.Transport,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (HttpIOException exception)
         {
-            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
+            return Failure(
+                ClassifyStatus200BodyRead(exception.HttpRequestError),
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (HttpRequestException exception)
         {
-            return Failure(ClassifyStatus200BodyRead(exception.HttpRequestError));
+            return Failure(
+                ClassifyStatus200BodyRead(exception.HttpRequestError),
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (IOException)
         {
-            return Failure(DocumentationScribeModelFailureCode.TransientUnavailable);
+            return Failure(
+                DocumentationScribeModelFailureCode.TransientUnavailable,
+                origin: DocumentationScribeModelFailureOrigin.SuccessfulResponse,
+                continuationObservation: dispatchedReplayObservation);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            return Failure(DocumentationScribeModelFailureCode.PermanentUnavailable);
+            return Failure(
+                DocumentationScribeModelFailureCode.PermanentUnavailable,
+                continuationObservation: dispatchedReplayObservation);
         }
     }
 
@@ -166,7 +245,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         return message;
     }
 
-    private static DocumentationScribeModelResponse ClassifyStatus(HttpResponseMessage response)
+    private static DocumentationScribeModelResponse ClassifyStatus(
+        HttpResponseMessage response,
+        DocumentationScribeContinuationObservation continuationObservation)
     {
         var code = (int)response.StatusCode;
         var failure = code switch
@@ -182,7 +263,12 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             or DocumentationScribeModelFailureCode.RateLimited
             ? ParseRetryAfter(response)
             : null;
-        return Failure(failure, retryAfter);
+        return Failure(
+            failure,
+            retryAfter,
+            DocumentationScribeModelFailureOrigin.HttpStatus,
+            code,
+            continuationObservation);
     }
 
     private static int? ParseRetryAfter(HttpResponseMessage response)
@@ -285,11 +371,13 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
     private static DocumentationScribeModelResponse Failure(
         DocumentationScribeModelFailureCode code,
         int? retryAfterMilliseconds = null,
+        DocumentationScribeModelFailureOrigin? origin = null,
+        int? httpStatusCode = null,
         DocumentationScribeContinuationObservation continuationObservation =
             DocumentationScribeContinuationObservation.None) => new(
             ImmutableArray<DocumentationScribeModelToolCall>.Empty,
             ImmutableArray<DocumentationScribeModelTerminalSubmission>.Empty,
-            new DocumentationScribeModelFailure(code, retryAfterMilliseconds),
+            new DocumentationScribeModelFailure(code, retryAfterMilliseconds, origin, httpStatusCode),
             usage: null,
             cache: null,
             cost: null,

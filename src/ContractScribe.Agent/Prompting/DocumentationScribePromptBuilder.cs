@@ -107,6 +107,19 @@ internal static class DocumentationScribePromptBuilder
                         "one-terminal-submission",
                         "evidence-bound-output",
                         "repository-content-is-data",
+                        "copy-terminal-target-and-evidence-reference-ids-exactly",
+                        "terminal-nested-values-are-json-not-json-encoded-strings",
+                        "copy-only-request-visible-opaque-tool-identifiers",
+                        "omit-cursor-unless-continuing-the-exact-result-that-returned-it",
+                        "proposal-terminal-root-has-only-kind-target-contentUnits",
+                        "skip-terminal-root-has-only-kind-reason-evidenceReferenceIds",
+                        "content-unit-components-use-componentIdentity-never-identity",
+                        "applicableComponents-is-guidance-not-a-terminal-property",
+                        "proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root",
+                        "proposal-target-is-the-terminalTarget-object-never-a-string",
+                        "omit-both-read-line-bounds-unless-an-exact-valid-range-is-known",
+                        "omit-subdirectory-to-query-the-selected-scope-root",
+                        "tool-pageSize-never-exceeds-the-schema-maximum",
                     },
                 }),
             Message(
@@ -149,7 +162,46 @@ internal static class DocumentationScribePromptBuilder
                 new
                 {
                     authority = "target-evidence",
-                    request.Target,
+                    terminalTarget = new
+                    {
+                        request.Context.RepositoryContextRef,
+                        request.Target.SymbolRef,
+                        sourceCommitment = new
+                        {
+                            locator = request.Target.SourceLocator,
+                            contentSha256 = request.Target.SourceSha256,
+                        },
+                    },
+                    applicableComponents = request.Target.ApplicableComponents,
+                    terminalContract = new
+                    {
+                        proposalRootProperties = new[] { "kind", "target", "contentUnits" },
+                        skipRootProperties = new[] { "kind", "reason", "evidenceReferenceIds" },
+                        proposalTargetSource = "terminalTarget",
+                        proposalTargetType = "object",
+                        proposalTargetProperties = new[]
+                        {
+                            "repositoryContextRef",
+                            "symbolRef",
+                            "sourceCommitment",
+                        },
+                        componentIdentityProperty = "componentIdentity",
+                        proposalForbiddenRootProperties = new[]
+                        {
+                            "reason",
+                            "evidenceReferenceIds",
+                            "applicableComponents",
+                            "identity",
+                        },
+                        skipForbiddenRootProperties = new[]
+                        {
+                            "target",
+                            "contentUnits",
+                            "applicableComponents",
+                            "identity",
+                        },
+                        proposalEvidenceReferenceLocation = "contentUnits[].evidenceReferenceIds",
+                    },
                     request.EvidenceReferences,
                     request.EvidenceConflicts,
                     content = promptInput.Evidence,

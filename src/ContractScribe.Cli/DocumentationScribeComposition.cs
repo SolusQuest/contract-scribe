@@ -301,7 +301,7 @@ internal static class DocumentationScribeComposition
     };
 
     private static readonly ReadOnlyMemory<byte> SemanticInputSchema = Encoding.UTF8.GetBytes(
-        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"pageSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"cursor\":{\"type\":\"string\"}}}");
+        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"pageSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"Preserve this exact value when continuing with a cursor.\"},\"cursor\":{\"type\":\"string\",\"description\":\"Omit on the first call. Use a returned semantic cursor once only with the same operation and page size; never use a repository cursor.\"}}}");
 
     internal static async Task<DocumentationScribeCompositionOutcome> ExecuteAsync(
         DocumentationScribeSelectedAudit selection,
@@ -350,7 +350,8 @@ internal static class DocumentationScribeComposition
                 request,
                 loaded,
                 preflight.SourceReference!,
-                preflight.Repository!);
+                preflight.Repository!,
+                preflight.RepositoryScopes);
             var runtime = new DocumentationScribeRuntime(exchange, registry, runtimeOptions);
             var run = await runtime.RunAsync(
                 request,
@@ -649,6 +650,7 @@ internal static class DocumentationScribeComposition
             sourceReference,
             contextContent,
             repository,
+            scopes,
             null);
     }
 
@@ -1030,7 +1032,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeRequest request,
         DocumentationScribeLoadedContext context,
         DocumentationScribeEvidenceReference sourceReference,
-        DocumentationScribeRepositoryToolBundle repository)
+        DocumentationScribeRepositoryToolBundle repository,
+        ImmutableArray<DocumentationScribeRepositoryToolScope> scopes)
     {
         var maximumCallsPerOperation = Math.Max(1, request.Limits.MaximumToolCalls);
         var builder = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId)
@@ -1039,7 +1042,10 @@ internal static class DocumentationScribeComposition
                 repository.ReadExcerpt,
                 new ReadCodec(sourceReference),
                 DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
-                DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
+                BindRepositoryToolScopes(
+                    DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
+                    scopes,
+                    DocumentationScribeRepositoryToolOperations.ReadExcerpt),
                 maximumCallsPerRun: maximumCallsPerOperation);
         if (context.Facts.Routes.Length > 0)
         {
@@ -1048,7 +1054,10 @@ internal static class DocumentationScribeComposition
                 repository.ListFiles,
                 new ListCodec(),
                 DocumentationScribeRepositoryToolSchemas.ListFilesDescription,
-                DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+                BindRepositoryToolScopes(
+                    DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+                    scopes,
+                    DocumentationScribeRepositoryToolOperations.ListFiles),
                 maximumCallsPerRun: maximumCallsPerOperation);
         }
 
@@ -1057,7 +1066,10 @@ internal static class DocumentationScribeComposition
                 repository.SearchText,
                 new SearchCodec(sourceReference),
                 DocumentationScribeRepositoryToolSchemas.SearchTextDescription,
-                DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+                BindRepositoryToolScopes(
+                    DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+                    scopes,
+                    DocumentationScribeRepositoryToolOperations.SearchText),
                 maximumCallsPerRun: maximumCallsPerOperation)
             .Add(
                 new DocumentationScribeSemanticToolDescriptor(),
@@ -1067,6 +1079,44 @@ internal static class DocumentationScribeComposition
                 SemanticInputSchema,
                 maximumCallsPerRun: maximumCallsPerOperation);
         return builder.Build();
+    }
+
+    internal static ReadOnlyMemory<byte> BindRepositoryToolScopes(
+        ReadOnlyMemory<byte> inputSchemaUtf8Json,
+        IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
+        DocumentationScribeRepositoryToolOperations operation)
+    {
+        ArgumentNullException.ThrowIfNull(scopes);
+        if (operation is not (DocumentationScribeRepositoryToolOperations.ReadExcerpt
+            or DocumentationScribeRepositoryToolOperations.ListFiles
+            or DocumentationScribeRepositoryToolOperations.SearchText))
+        {
+            throw new ArgumentOutOfRangeException(nameof(operation));
+        }
+
+        var scopeIds = scopes
+            .Where(scope => (scope.Operations & operation) != 0)
+            .Select(scope => scope.ScopeId)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (scopeIds.Length == 0)
+        {
+            throw new ArgumentException("The tool has no authorized repository scope.", nameof(scopes));
+        }
+
+        var schema = JsonNode.Parse(inputSchemaUtf8Json.Span)?.AsObject()
+            ?? throw new ArgumentException("The repository tool schema is not an object.", nameof(inputSchemaUtf8Json));
+        var scopeProperty = schema["properties"]?["scopeId"]?.AsObject()
+            ?? throw new ArgumentException("The repository tool schema has no scope property.", nameof(inputSchemaUtf8Json));
+        var allowed = new JsonArray();
+        foreach (var scopeId in scopeIds)
+        {
+            allowed.Add(scopeId);
+        }
+
+        scopeProperty["enum"] = allowed;
+        return JsonSerializer.SerializeToUtf8Bytes(schema);
     }
 
     private static bool TerminalMatches(
@@ -1375,13 +1425,14 @@ internal static class DocumentationScribeComposition
         DocumentationScribeEvidenceReference? SourceReference,
         ImmutableArray<BoundContextContent> ContextContent,
         DocumentationScribeRepositoryToolBundle? Repository,
+        ImmutableArray<DocumentationScribeRepositoryToolScope> RepositoryScopes,
         PreflightFailure? Failure)
     {
         internal static PreflightResult Rejected(string code) =>
             Failed(PreflightFailureKind.Rejected, code);
 
         internal static PreflightResult Failed(PreflightFailureKind kind, string code) =>
-            new(null, null, default, null, [], null, new PreflightFailure(kind, code));
+            new(null, null, default, null, [], null, [], new PreflightFailure(kind, code));
     }
 
     private abstract class RepositoryCodec<TRequest, TResult>

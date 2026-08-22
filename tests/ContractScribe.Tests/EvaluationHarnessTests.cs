@@ -1,7 +1,11 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Evaluation;
 
@@ -67,6 +71,159 @@ public sealed class EvaluationHarnessTests
             [.. common, "--safety-gate", "--all"],
             out _,
             out _));
+    }
+
+    [Fact]
+    public void PrivateMimoDiagnosticsRequireTheExactSafetyGateAndComparatorContract()
+    {
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var common = MimoLiveArguments(capture);
+
+        Assert.True(EvaluationOptions.TryParse(common, out var baseline, out _));
+        Assert.True(baseline!.IsPrivateResponseDiagnostic);
+        Assert.Equal("mimo-v2.5", baseline.EffectiveModel);
+        Assert.Null(baseline.DiagnosticModel);
+
+        Assert.True(EvaluationOptions.TryParse(
+            [.. common, "--diagnostic-model", "mimo-v2.5-pro"],
+            out var comparator,
+            out _));
+        Assert.Equal("mimo-v2.5-pro", comparator!.EffectiveModel);
+        Assert.Equal("mimo-v2.5-pro", comparator.DiagnosticModel);
+
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Where(value => value != "--safety-gate"), "--all"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Take(common.Length - 2), "--unsafe-capture-provider-response", "relative"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Take(common.Length - 2), "--diagnostic-model", "mimo-v2.5-pro"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common, "--diagnostic-model", "mimo-v2.5"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            ["--offline", "--corpus", CorpusRoot(), "--unsafe-capture-provider-response", capture],
+            out _,
+            out _));
+    }
+
+    [Fact]
+    public async Task UnsupportedPrivateCapturePlatformFailsBeforeCredentialAcquisition()
+    {
+        if (OperatingSystem.IsLinux()
+            && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+                == System.Runtime.InteropServices.Architecture.X64)
+        {
+            return;
+        }
+
+        var secretName = "CONTRACTSCRIBE_DIAGNOSTIC_PREFLIGHT_" + Guid.NewGuid().ToString("N");
+        const string secret = "preflight-secret-must-remain";
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var output = Path.Join(Path.GetTempPath(), "contract-scribe-output-" + Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable(secretName, secret);
+        try
+        {
+            var arguments = MimoLiveArguments(capture, output, secretName);
+            using var standardOutput = new StringWriter();
+            using var standardError = new StringWriter();
+
+            var exitCode = await EvaluationApplication.RunAsync(
+                arguments,
+                standardOutput,
+                standardError);
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(secret, Environment.GetEnvironmentVariable(secretName));
+            Assert.Contains("evaluation.capture.invalid", standardError.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(capture));
+            Assert.False(Directory.Exists(output));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(secretName, null);
+            if (Directory.Exists(output))
+            {
+                Directory.Delete(output, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinuxCaptureEntriesFailBeforeCredentialAcquisition()
+    {
+        if (!OperatingSystem.IsLinux()
+            || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        {
+            return;
+        }
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+        var dangling = Path.Join(temporaryRoot, "contract-scribe-dangling-" + suffix);
+        var fifo = Path.Join(temporaryRoot, "contract-scribe-fifo-" + suffix);
+        var applicationMarker = Path.Join(AppContext.BaseDirectory, "evaluation-corpus-path.txt");
+        var markerCreated = !File.Exists(applicationMarker);
+        if (markerCreated)
+        {
+            File.WriteAllText(applicationMarker, PreparedCorpusRoot());
+        }
+
+        File.CreateSymbolicLink(
+            dangling,
+            Path.Join(temporaryRoot, "contract-scribe-missing-" + suffix));
+        Assert.Equal(0, CreateNamedPipe(fifo, 0x180));
+        try
+        {
+            foreach (var capture in new[] { dangling, fifo })
+            {
+                var output = Path.Join(
+                    temporaryRoot,
+                    "contract-scribe-output-" + Guid.NewGuid().ToString("N"));
+                var secretName = "CONTRACTSCRIBE_INVALID_CAPTURE_" + Guid.NewGuid().ToString("N");
+                const string secret = "invalid-capture-secret-must-remain";
+                Environment.SetEnvironmentVariable(secretName, secret);
+                try
+                {
+                    using var standardOutput = new StringWriter();
+                    using var standardError = new StringWriter();
+                    var exitCode = await EvaluationApplication.RunAsync(
+                        MimoLiveArguments(capture, output, secretName),
+                        standardOutput,
+                        standardError);
+
+                    Assert.Equal(1, exitCode);
+                    Assert.Equal(secret, Environment.GetEnvironmentVariable(secretName));
+                    Assert.Equal(
+                        "evaluation.capture.invalid" + Environment.NewLine,
+                        standardError.ToString());
+                    Assert.False(Directory.Exists(output));
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable(secretName, null);
+                    if (Directory.Exists(output))
+                    {
+                        Directory.Delete(output, recursive: true);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            File.Delete(dangling);
+            File.Delete(fifo);
+            if (markerCreated)
+            {
+                File.Delete(applicationMarker);
+            }
+        }
     }
 
     [Fact]
@@ -163,6 +320,159 @@ public sealed class EvaluationHarnessTests
                 .Select(observation => EvaluationProviderFailureReport.CodeId(
                     observation.FailureCode!.Value)));
         Assert.Null(observer.Observations[^1].FailureCode);
+    }
+
+    [Fact]
+    public async Task ProviderObserverPreservesBoundedFailureProvenanceAcrossCostDecoration()
+    {
+        var failure = new DocumentationScribeModelFailure(
+            DocumentationScribeModelFailureCode.PermanentUnavailable,
+            origin: DocumentationScribeModelFailureOrigin.HttpStatus,
+            httpStatusCode: 422);
+        var observer = new CostObservingExchange(
+            new QueuedExchange([new DocumentationScribeModelResponse([], [], failure)]),
+            EvaluationCostPolicy.Unpriced);
+
+        var response = await observer.SendAsync(Request(1), CancellationToken.None);
+
+        Assert.Same(failure, response.Failure);
+        var observation = Assert.Single(observer.Observations);
+        Assert.False(observation.ResponseAccepted);
+        Assert.Equal(DocumentationScribeModelFailureCode.PermanentUnavailable, observation.FailureCode);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.HttpStatus, observation.FailureOrigin);
+        Assert.Equal(422, observation.HttpStatusCode);
+        Assert.False(observation.OrdinaryToolCallObserved);
+        Assert.False(observation.TerminalSubmissionObserved);
+        Assert.False(observation.UsageSupplied);
+        Assert.False(observation.CacheSupplied);
+        Assert.False(observation.ToolResultContinuationRequired);
+    }
+
+    [Fact]
+    public void LiveObservationMatcherEvaluatesPredicatesAndProtocolDifferencesSeparately()
+    {
+        var expected = new[]
+        {
+            "cache-fields-when-supplied",
+            "continuation.history-replayed",
+            "continuation.observed",
+            "request.accepted-or-bounded-provider-failure",
+            "tool-call-or-terminal",
+            "tool-result-continuation-when-requested",
+            "usage-fields-when-supplied",
+            "validated-proposal-or-structured-skip-or-bounded-failure",
+        };
+        var complete = new EvaluationLiveObservationFacts(
+            RuntimeExecutionApplicable: true,
+            ContinuationObserved: true,
+            ContinuationHistoryReplayed: true,
+            ProviderResponseBounded: true,
+            ToolCallOrTerminalObserved: true,
+            ToolResultContinuationsSatisfied: true,
+            UsageSupplied: true,
+            UsageReported: true,
+            CacheSupplied: true,
+            CacheReported: true,
+            BoundedTerminal: true,
+            MissingRequiredContinuation: false,
+            MalformedResponse: false,
+            ToolProtocolRejected: false,
+            TerminalValidationRejected: false,
+            RequestPreparationRejected: false);
+
+        var matched = EvaluationLiveObservationMatcher.Match(expected, [complete]);
+        Assert.Equal("matched", matched.Status);
+        Assert.Empty(matched.MissingExpectedObservationIds);
+
+        var directTerminal = complete with
+        {
+            ContinuationObserved = false,
+            ContinuationHistoryReplayed = false,
+            ToolResultContinuationsSatisfied = true,
+            UsageSupplied = false,
+            UsageReported = false,
+            CacheSupplied = false,
+            CacheReported = false,
+        };
+        var direct = EvaluationLiveObservationMatcher.Match(expected, [directTerminal]);
+        Assert.Equal("differed", direct.Status);
+        Assert.Equal(
+            ["continuation.history-replayed", "continuation.observed"],
+            direct.MissingExpectedObservationIds);
+
+        var rejectedFacts = complete with
+        {
+            ContinuationHistoryReplayed = false,
+            ToolResultContinuationsSatisfied = false,
+            UsageSupplied = true,
+            UsageReported = false,
+            CacheSupplied = true,
+            CacheReported = false,
+            MissingRequiredContinuation = true,
+            MalformedResponse = true,
+            ToolProtocolRejected = true,
+            TerminalValidationRejected = true,
+            RequestPreparationRejected = true,
+        };
+        var rejected = EvaluationLiveObservationMatcher.Match(expected, [rejectedFacts]);
+        Assert.Equal(
+            [
+                "cache-fields-when-supplied",
+                "continuation.history-replayed",
+                "tool-result-continuation-when-requested",
+                "usage-fields-when-supplied",
+            ],
+            rejected.MissingExpectedObservationIds);
+        Assert.Equal(
+            [
+                "continuation.missing-required",
+                "request.preparation-rejected",
+                "response.malformed",
+                "terminal-validation.rejected",
+                "tool-protocol.rejected",
+            ],
+            EvaluationLiveObservationMatcher.UnexpectedProtocolObservationIds(rejectedFacts));
+
+        var preflight = complete with
+        {
+            RuntimeExecutionApplicable = false,
+            ContinuationObserved = false,
+            ContinuationHistoryReplayed = false,
+            ProviderResponseBounded = false,
+            ToolCallOrTerminalObserved = false,
+            UsageSupplied = false,
+            UsageReported = false,
+            CacheSupplied = false,
+            CacheReported = false,
+            BoundedTerminal = false,
+        };
+        var patchTerminal = directTerminal;
+        var fullDeepSeek = EvaluationLiveObservationMatcher.Match(
+            expected,
+            [preflight, complete, patchTerminal]);
+        Assert.Equal("matched", fullDeepSeek.Status);
+        Assert.Empty(fullDeepSeek.MissingExpectedObservationIds);
+
+        Assert.False(EvaluationLiveObservationMatcher.HasReportedCache(null));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, 1, null, null, null)));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, null, 1, null, null)));
+        Assert.True(EvaluationLiveObservationMatcher.HasReportedCache(new EvaluationUsageReport(
+            null, null, null, null, null, "cache.hit")));
+
+        var preparationRejected = preflight with
+        {
+            RuntimeExecutionApplicable = true,
+            RequestPreparationRejected = true,
+        };
+        var preparationResult = EvaluationLiveObservationMatcher.Match(
+            ["request.accepted-or-bounded-provider-failure"],
+            [preparationRejected]);
+        Assert.Equal("differed", preparationResult.Status);
+        Assert.Equal(
+            ["request.preparation-rejected"],
+            EvaluationLiveObservationMatcher.UnexpectedProtocolObservationIds(preparationRejected));
     }
 
     [Fact]
@@ -350,6 +660,161 @@ public sealed class EvaluationHarnessTests
     }
 
     [Fact]
+    public void ReportProjectsOnlyClosedProviderAndRuntimeDiagnosticFacts()
+    {
+        var report = MinimalReport("safe bounded line");
+        report = report with
+        {
+            ObservationExpectationStatus = "differed",
+            MissingExpectedObservationIds = ["continuation.history-replayed"],
+        };
+        var reportCase = report.Cases[0] with
+        {
+            UnexpectedProtocolObservationIds = ["terminal-validation.rejected"],
+            ProviderFailures =
+            [
+                new EvaluationProviderFailureReport(
+                    1,
+                    "model.failure.permanent-unavailable",
+                    "model.failure-origin.http-status",
+                    400),
+            ],
+            RuntimeDiagnostics =
+            [
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.result-rejected",
+                    "result",
+                    null,
+                    "scribe.result.invalid-shape"),
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.tool-failure",
+                    "tool",
+                    "repository.read-excerpt",
+                    null),
+            ],
+        };
+
+        var bytes = EvaluationReportWriter.Serialize(report with { Cases = [reportCase] }, null);
+        var text = Encoding.UTF8.GetString(bytes);
+        Assert.Contains("model.failure-origin.http-status", text, StringComparison.Ordinal);
+        using (var document = JsonDocument.Parse(bytes))
+        {
+            Assert.Equal(400, document.RootElement.GetProperty("cases")[0]
+                .GetProperty("providerFailures")[0].GetProperty("httpStatusCode").GetInt32());
+        }
+        Assert.Contains("scribe.result.invalid-shape", text, StringComparison.Ordinal);
+        Assert.Contains("repository.read-excerpt", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("pointer", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rawResponse", text, StringComparison.OrdinalIgnoreCase);
+
+        var hostile = reportCase with
+        {
+            RuntimeDiagnostics =
+            [
+                new EvaluationRuntimeDiagnosticReport(
+                    "scribe.diagnostic.tool-failure",
+                    "tool",
+                    "C:\\private\\provider-error-body",
+                    null),
+            ],
+        };
+        Assert.Throws<InvalidDataException>(() => EvaluationReportWriter.Serialize(
+            report with { Cases = [hostile] },
+            null));
+    }
+
+    [Fact]
+    public void ReportWriterAcceptsTheCompleteClosedCodecVocabularyWithoutRawFields()
+    {
+        var values = Enum.GetValues<OpenAiCompatibleResponseCodecDisposition>();
+        Assert.Equal(26, values.Length);
+        var identifiers = values
+            .Select(value => new OpenAiCompatibleResponseDiagnostic(1, value).CodecDisposition)
+            .ToArray();
+        Assert.Equal(identifiers.Length, identifiers.Distinct(StringComparer.Ordinal).Count());
+        var protocol = File.ReadAllText(Path.Join(
+            FindRepositoryRoot(),
+            "docs",
+            "20_architecture",
+            "validation",
+            "m3-provider-evaluation-protocol.md"));
+        var allowlist = protocol.Split(
+            "The complete first-disposition allowlist, in production evaluation order, is:",
+            StringSplitOptions.None)[1].Split(
+                "`codec.response.exceeds-limit` covers",
+                StringSplitOptions.None)[0];
+        Assert.Equal(
+            identifiers,
+            Regex.Matches(allowlist, "`(codec\\.[a-z0-9.-]+)`")
+                .Select(match => match.Groups[1].Value)
+                .ToArray());
+
+        foreach (var identifier in identifiers)
+        {
+            var report = MinimalReport("safe bounded line");
+            report = report with
+            {
+                Cases =
+                [
+                    report.Cases[0] with
+                    {
+                        ProviderResponses = [new EvaluationProviderResponseReport(1, identifier)],
+                    },
+                ],
+            };
+
+            var bytes = EvaluationReportWriter.Serialize(report, null);
+            using var document = JsonDocument.Parse(bytes);
+            var response = document.RootElement.GetProperty("cases")[0]
+                .GetProperty("providerResponses")[0];
+            Assert.Equal(1, response.GetProperty("providerRequestNumber").GetInt32());
+            Assert.Equal(identifier, response.GetProperty("codecDisposition").GetString());
+            Assert.Equal(2, response.EnumerateObject().Count());
+            Assert.DoesNotContain("raw", Encoding.UTF8.GetString(bytes), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void PrivateDiagnosticReportsSeparateTheActualModelFromTheFrozenSelection()
+    {
+        var loaded = EvaluationManifestLoader.Load(CorpusRoot());
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var arguments = MimoLiveArguments(capture);
+        Assert.True(EvaluationOptions.TryParse(arguments, out var baselineOptions, out _));
+        Assert.True(EvaluationOptions.TryParse(
+            [.. arguments, "--diagnostic-model", "mimo-v2.5-pro"],
+            out var comparatorOptions,
+            out _));
+
+        var baseline = EvaluationReport.Create(
+            loaded,
+            baselineOptions!,
+            [],
+            selectedCaseCount: 1,
+            complete: true,
+            elapsedMilliseconds: 1);
+        var comparator = EvaluationReport.Create(
+            loaded,
+            comparatorOptions!,
+            [],
+            selectedCaseCount: 1,
+            complete: true,
+            elapsedMilliseconds: 1);
+
+        Assert.Equal("private-response-diagnostic", baseline.ExecutionPurpose);
+        Assert.False(baseline.FullCorpusComplete);
+        Assert.Equal("mimo-compatibility", baseline.ConfigurationId);
+        Assert.Equal("mimo-v2.5", baseline.DiagnosticConfiguration!.ActualModel);
+        Assert.Equal("mimo-v2.5-pro", comparator.DiagnosticConfiguration!.ActualModel);
+        Assert.Equal(
+            baseline.DiagnosticConfiguration.InheritedProfileIdentity,
+            comparator.DiagnosticConfiguration.InheritedProfileIdentity);
+        Assert.NotEqual(
+            baseline.DiagnosticConfiguration.DiagnosticConfigurationIdentity,
+            comparator.DiagnosticConfiguration.DiagnosticConfigurationIdentity);
+    }
+
+    [Fact]
     public void InterruptedAndTimeoutCasesRemainExplicitPartialFailures()
     {
         var loaded = EvaluationManifestLoader.Load(CorpusRoot());
@@ -379,6 +844,26 @@ public sealed class EvaluationHarnessTests
             item => Assert.Equal("cancelled", item.Status),
             item => Assert.Equal("timeout", item.Status));
         Assert.Equal(1, EvaluationApplication.ResultExitCode(options!, report));
+
+        var liveOptions = new EvaluationOptions(
+            EvaluationMode.LiveAll,
+            CorpusRoot(),
+            Path.GetTempPath(),
+            "deepseek-primary",
+            new Uri("https://api.deepseek.com/chat/completions"),
+            "deepseek-v4-flash",
+            "CONTRACTSCRIBE_TEST_KEY",
+            EvaluationCostPolicy.Unpriced);
+        var interruptedLive = EvaluationReport.Create(
+            loaded,
+            liveOptions,
+            [cancelled],
+            selectedCaseCount: 3,
+            complete: false,
+            elapsedMilliseconds: 1);
+        Assert.Equal("partial", interruptedLive.Status);
+        Assert.Equal("not-evaluable", interruptedLive.ObservationExpectationStatus);
+        Assert.Empty(interruptedLive.MissingExpectedObservationIds);
     }
 
     [Fact]
@@ -466,6 +951,8 @@ public sealed class EvaluationHarnessTests
         new string('c', 64),
         null,
         null,
+        "not-applicable",
+        [],
         new EvaluationLatencyReport("not-measured", null),
         [
             new EvaluationCaseReport(
@@ -474,10 +961,12 @@ public sealed class EvaluationHarnessTests
                 "code",
                 "matched",
                 [],
+                [],
                 1,
                 1,
                 0,
                 0,
+                [],
                 [],
                 null,
                 new EvaluationCostReport("not-reported", null, null),
@@ -509,10 +998,12 @@ public sealed class EvaluationHarnessTests
         code,
         "differed",
         ["case.execution-differed"],
+        [],
         0,
         0,
         0,
         0,
+        [],
         [],
         null,
         new EvaluationCostReport("not-reported", null, null),
@@ -528,6 +1019,31 @@ public sealed class EvaluationHarnessTests
         "documentation-scribe",
         "evaluation");
 
+    private static string PreparedCorpusRoot()
+    {
+        var root = FindRepositoryRoot();
+        var applicationDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        var candidates = new[]
+        {
+            Path.Join(
+                applicationDirectory.Parent?.Parent?.FullName ?? string.Empty,
+                "ContractScribe.Evaluation",
+                applicationDirectory.Name,
+                "evaluation-corpus-path.txt"),
+            Path.Join(
+                root,
+                "tools",
+                "ContractScribe.Evaluation",
+                "bin",
+                applicationDirectory.Parent?.Name ?? string.Empty,
+                "net10.0",
+                "evaluation-corpus-path.txt"),
+        };
+        var marker = candidates.SingleOrDefault(File.Exists)
+            ?? throw new DirectoryNotFoundException("Evaluation prepared-corpus marker was not found.");
+        return File.ReadAllText(marker).Trim();
+    }
+
     private static DocumentationScribeModelRequest Request(int providerRequestNumber) => new(
         1,
         providerRequestNumber,
@@ -537,6 +1053,26 @@ public sealed class EvaluationHarnessTests
         ImmutableArray<DocumentationScribeCompletedToolExchange>.Empty,
         new DocumentationScribeModelOutputLimits(1, 1, 1, 1, 1),
         ImmutableArray<byte>.Empty);
+
+    private static string[] MimoLiveArguments(
+        string captureDirectory,
+        string? outputDirectory = null,
+        string secretEnvironmentVariable = "CONTRACTSCRIBE_TEST_KEY") =>
+    [
+        "--live",
+        "--safety-gate",
+        "--corpus", CorpusRoot(),
+        "--configuration", "mimo-compatibility",
+        "--endpoint", "https://api.xiaomimimo.com/v1/chat/completions",
+        "--model", "mimo-v2.5",
+        "--secret-env", secretEnvironmentVariable,
+        "--output", outputDirectory ?? Path.Join(Path.GetTempPath(), "contract-scribe-output-" + Guid.NewGuid().ToString("N")),
+        "--currency", "cny",
+        "--cached-input-rate", "1",
+        "--uncached-input-rate", "1",
+        "--output-rate", "1",
+        "--unsafe-capture-provider-response", captureDirectory,
+    ];
 
     private sealed class QueuedExchange : IDocumentationScribeModelExchange
     {
@@ -554,17 +1090,28 @@ public sealed class EvaluationHarnessTests
         }
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
-            {
-                return current.FullName;
-            }
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int CreateNamedPipe(string path, uint mode);
 
-            current = current.Parent;
+    private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "")
+    {
+        foreach (var start in new[]
+        {
+            Path.GetDirectoryName(sourcePath)!,
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory,
+        })
+        {
+            var current = new DirectoryInfo(start);
+            while (current is not null)
+            {
+                if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+                {
+                    return current.FullName;
+                }
+
+                current = current.Parent;
+            }
         }
 
         throw new DirectoryNotFoundException();

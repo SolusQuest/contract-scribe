@@ -26,7 +26,9 @@ internal sealed record EvaluationCostReport(
 
 internal sealed record EvaluationProviderFailureReport(
     int ProviderRequestNumber,
-    string Code)
+    string Code,
+    string? Origin,
+    int? HttpStatusCode)
 {
     internal static string CodeId(DocumentationScribeModelFailureCode code) =>
         code switch
@@ -45,7 +47,38 @@ internal sealed record EvaluationProviderFailureReport(
                 "model.failure.malformed-response",
             _ => throw new ArgumentOutOfRangeException(nameof(code)),
         };
+
+    internal static string OriginId(DocumentationScribeModelFailureOrigin origin) =>
+        origin switch
+        {
+            DocumentationScribeModelFailureOrigin.RequestPreparation =>
+                "model.failure-origin.request-preparation",
+            DocumentationScribeModelFailureOrigin.HttpStatus =>
+                "model.failure-origin.http-status",
+            DocumentationScribeModelFailureOrigin.Transport =>
+                "model.failure-origin.transport",
+            DocumentationScribeModelFailureOrigin.SuccessfulResponse =>
+                "model.failure-origin.successful-response",
+            DocumentationScribeModelFailureOrigin.ResponseCodec =>
+                "model.failure-origin.response-codec",
+            _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+        };
 }
+
+internal sealed record EvaluationProviderResponseReport(
+    int ProviderRequestNumber,
+    string CodecDisposition);
+
+internal sealed record EvaluationDiagnosticConfigurationReport(
+    string ActualModel,
+    string InheritedProfileIdentity,
+    string DiagnosticConfigurationIdentity);
+
+internal sealed record EvaluationRuntimeDiagnosticReport(
+    string Code,
+    string Stage,
+    string? ReferenceId,
+    string? ValidationCode);
 
 internal sealed record EvaluationContentUnitReport(
     string Kind,
@@ -69,17 +102,22 @@ internal sealed record EvaluationCaseReport(
     string Code,
     string ExpectationStatus,
     string[] DifferenceIds,
+    string[] UnexpectedProtocolObservationIds,
     int AttemptCount,
     int ProviderRequestCount,
     int ToolRoundCount,
     int ToolCallCount,
     EvaluationProviderFailureReport[] ProviderFailures,
+    EvaluationRuntimeDiagnosticReport[] RuntimeDiagnostics,
     EvaluationUsageReport? Usage,
     EvaluationCostReport Cost,
     EvaluationProposalReport? Proposal,
     string SensitiveDataStatus,
     string[] IntendedCoverage,
-    string[] ObservedCoverage);
+    string[] ObservedCoverage)
+{
+    public EvaluationProviderResponseReport[] ProviderResponses { get; init; } = [];
+}
 
 internal sealed record EvaluationAggregateReport(
     int SelectedCaseCount,
@@ -108,10 +146,14 @@ internal sealed record EvaluationReport(
     string CostConfigurationIdentity,
     string? SelectedCaseId,
     string? ActiveCaseId,
+    string ObservationExpectationStatus,
+    string[] MissingExpectedObservationIds,
     EvaluationLatencyReport Latency,
     EvaluationCaseReport[] Cases,
     EvaluationAggregateReport Aggregate)
 {
+    public EvaluationDiagnosticConfigurationReport? DiagnosticConfiguration { get; init; }
+
     internal static EvaluationReport Create(
         LoadedEvaluationManifest loaded,
         EvaluationOptions options,
@@ -119,7 +161,8 @@ internal sealed record EvaluationReport(
         int selectedCaseCount,
         bool complete,
         int? elapsedMilliseconds,
-        string? activeCaseId = null)
+        string? activeCaseId = null,
+        EvaluationObservationExpectationResult? observationExpectation = null)
     {
         var costRows = cases.Select(item => item.Cost)
             .Where(item => item.AmountMicrounits is not null)
@@ -149,14 +192,17 @@ internal sealed record EvaluationReport(
             ? loaded.Selection.Configurations.Single(item =>
                 item.ConfigurationId == options.ConfigurationId)
             : null;
-        return new EvaluationReport(
+        var report = new EvaluationReport(
             1,
             "optional-local-provider-evaluation",
             ReadSourceRevision(),
             ModeId(options.Mode),
             complete ? "complete" : "partial",
-            options.Mode == EvaluationMode.LiveSafetyGate ? "safety-gate" : "corpus",
-            complete && (options.Mode != EvaluationMode.LiveSafetyGate
+            options.IsPrivateResponseDiagnostic
+                ? "private-response-diagnostic"
+                : options.Mode == EvaluationMode.LiveSafetyGate ? "safety-gate" : "corpus",
+            !options.IsPrivateResponseDiagnostic
+                && complete && (options.Mode != EvaluationMode.LiveSafetyGate
                 || selectedConfiguration!.LiveScenarioIds.Length == 1),
             loaded.Manifest.CorpusId,
             loaded.CorpusIdentity,
@@ -168,6 +214,9 @@ internal sealed record EvaluationReport(
                 ? selectedConfiguration!.SafetyGateCaseId
                 : null,
             activeCaseId,
+            observationExpectation?.Status
+                ?? (options.IsLive ? "not-evaluable" : "not-applicable"),
+            observationExpectation?.MissingExpectedObservationIds ?? [],
             options.IsLive
                 ? new EvaluationLatencyReport("observed", elapsedMilliseconds)
                 : new EvaluationLatencyReport("not-measured", null),
@@ -182,6 +231,32 @@ internal sealed record EvaluationReport(
                 cases.Sum(item => item.ProviderRequestCount),
                 cases.Sum(item => item.ToolCallCount),
                 new EvaluationCostReport(aggregateCostStatus, currency, amount)));
+        if (options.IsPrivateResponseDiagnostic)
+        {
+            var inheritedConfiguration = selectedConfiguration
+                ?? throw new InvalidDataException("evaluation.selection.invalid");
+            var profileBytes = JsonSerializer.SerializeToUtf8Bytes(
+                inheritedConfiguration.RequestProfile);
+            var profileIdentity = Convert.ToHexString(SHA256.HashData(profileBytes)).ToLowerInvariant();
+            var actualModel = options.EffectiveModel!;
+            var diagnosticIdentity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                string.Join(
+                    "\n",
+                    report.SourceRevision,
+                    loaded.SelectionIdentity,
+                    inheritedConfiguration.ConfigurationId,
+                    profileIdentity,
+                    actualModel)))).ToLowerInvariant();
+            report = report with
+            {
+                DiagnosticConfiguration = new EvaluationDiagnosticConfigurationReport(
+                    actualModel,
+                    profileIdentity,
+                    diagnosticIdentity),
+            };
+        }
+
+        return report;
     }
 
     private static string ModeId(EvaluationMode mode) => mode switch

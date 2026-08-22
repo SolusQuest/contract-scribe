@@ -295,15 +295,31 @@ public enum DocumentationScribeModelFailureCode
     MalformedResponse,
 }
 
+public enum DocumentationScribeModelFailureOrigin
+{
+    RequestPreparation,
+    HttpStatus,
+    Transport,
+    SuccessfulResponse,
+    ResponseCodec,
+}
+
 public sealed class DocumentationScribeModelFailure
 {
     public DocumentationScribeModelFailure(
         DocumentationScribeModelFailureCode code,
-        int? retryAfterMilliseconds = null)
+        int? retryAfterMilliseconds = null,
+        DocumentationScribeModelFailureOrigin? origin = null,
+        int? httpStatusCode = null)
     {
         if (!Enum.IsDefined(code))
         {
             throw new ArgumentOutOfRangeException(nameof(code));
+        }
+
+        if (origin is { } presentOrigin && !Enum.IsDefined(presentOrigin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(origin));
         }
 
         if (retryAfterMilliseconds is < 0 or > DocumentationScribeBoundary.MaximumRetryHintMilliseconds)
@@ -320,13 +336,31 @@ public sealed class DocumentationScribeModelFailure
                 nameof(retryAfterMilliseconds));
         }
 
+        if (httpStatusCode is < 100 or > 599)
+        {
+            throw new ArgumentOutOfRangeException(nameof(httpStatusCode));
+        }
+
+        if ((origin == DocumentationScribeModelFailureOrigin.HttpStatus) != (httpStatusCode is not null))
+        {
+            throw new ArgumentException(
+                "An HTTP status is required only for an HTTP-status failure origin.",
+                nameof(httpStatusCode));
+        }
+
         Code = code;
         RetryAfterMilliseconds = retryAfterMilliseconds;
+        Origin = origin;
+        HttpStatusCode = httpStatusCode;
     }
 
     public DocumentationScribeModelFailureCode Code { get; }
 
     public int? RetryAfterMilliseconds { get; }
+
+    public DocumentationScribeModelFailureOrigin? Origin { get; }
+
+    public int? HttpStatusCode { get; }
 
     public bool IsTransient => Code is DocumentationScribeModelFailureCode.TransientUnavailable
         or DocumentationScribeModelFailureCode.RateLimited;

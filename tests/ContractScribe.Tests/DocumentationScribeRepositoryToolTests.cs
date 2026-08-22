@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ContractScribe.Agent.Runtime;
+using ContractScribe.Cli;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
@@ -13,6 +14,52 @@ namespace ContractScribe.Tests;
 
 public sealed class DocumentationScribeRepositoryToolTests
 {
+    [Fact]
+    public void ProviderSchemasEnumerateOnlyScopesAuthorizedForEachOperation()
+    {
+        var scopes = new[]
+        {
+            DocumentationScribeRepositoryToolScope.Directory(
+                "scope.directory",
+                "docs",
+                DocumentationScribeRepositoryToolOperations.ListFiles
+                    | DocumentationScribeRepositoryToolOperations.SearchText,
+                DocumentationScribeContextRole.MaintainedDocumentation),
+            DocumentationScribeRepositoryToolScope.File(
+                "scope.file",
+                "src/Fixture.cs",
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                    | DocumentationScribeRepositoryToolOperations.SearchText,
+                DocumentationScribeContextRole.SourceDeclaration),
+        };
+
+        Assert.Equal(
+            ["scope.file"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt)));
+        Assert.Equal(
+            ["scope.directory"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.ListFiles)));
+        Assert.Equal(
+            ["scope.directory", "scope.file"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.SearchText)));
+
+        static string[] ScopeIds(ReadOnlyMemory<byte> schemaBytes)
+        {
+            using var schema = JsonDocument.Parse(schemaBytes);
+            return schema.RootElement.GetProperty("properties").GetProperty("scopeId")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        }
+    }
+
     [Fact]
     public void SelectionRecordExposesOnlyClosedReadOperations()
     {
@@ -35,6 +82,45 @@ public sealed class DocumentationScribeRepositoryToolTests
             typeof(DocumentationScribeRepositoryToolBundle).GetProperties(BindingFlags.Public | BindingFlags.Instance),
             property => property.Name.Contains("Root", StringComparison.Ordinal)
                 || property.Name.Contains("Handle", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProviderSchemasDescribeExactOpaqueScopeAndCursorContinuation()
+    {
+        using var read = JsonDocument.Parse(DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json);
+        Assert.Contains("request-visible scope ID", read.RootElement.GetProperty("properties")
+            .GetProperty("scopeId").GetProperty("description").GetString(), StringComparison.Ordinal);
+
+        foreach (var schemaBytes in new[]
+        {
+            DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+            DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+        })
+        {
+            using var schema = JsonDocument.Parse(schemaBytes);
+            var properties = schema.RootElement.GetProperty("properties");
+            Assert.Contains("request-visible scope ID", properties.GetProperty("scopeId")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+            var cursor = properties.GetProperty("cursor").GetProperty("description").GetString();
+            Assert.Contains("Omit on the first call", cursor, StringComparison.Ordinal);
+            Assert.Contains("once only", cursor, StringComparison.Ordinal);
+            Assert.Contains("same operation", cursor, StringComparison.Ordinal);
+            Assert.Contains("page size", cursor, StringComparison.Ordinal);
+            Assert.Equal(64, properties.GetProperty("pageSize").GetProperty("maximum").GetInt32());
+            Assert.Contains("Omit to query the selected scope root", properties.GetProperty("subdirectory")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+            Assert.Contains("never use dot", properties.GetProperty("subdirectory")
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
+        }
+
+        Assert.Contains("Omit both startLine and endLine", read.RootElement.GetProperty("properties")
+            .GetProperty("startLine").GetProperty("description").GetString(), StringComparison.Ordinal);
+
+        using var search = JsonDocument.Parse(DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json);
+        var searchCursor = search.RootElement.GetProperty("properties").GetProperty("cursor")
+            .GetProperty("description").GetString();
+        Assert.Contains("literal", searchCursor, StringComparison.Ordinal);
+        Assert.Contains("subdirectory", searchCursor, StringComparison.Ordinal);
     }
 
     [Fact]
