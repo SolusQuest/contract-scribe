@@ -239,6 +239,61 @@ public sealed class EvaluationHarnessProcessTests
         Assert.DoesNotContain("safety-tool.literal-differed", result.DifferenceIds);
     }
 
+    [Theory]
+    [InlineData(false, "differed")]
+    [InlineData(true, "matched")]
+    public async Task LiveSafetyGateCorrelatesRequiredSearchWithProposalAttempt(
+        bool repeatSearchAfterRetry,
+        string expectedSafetyStatus)
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            corpus,
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new RetrySplitSafetyExchange(
+                new ScriptedEvaluationExchange(evaluationCase),
+                repeatSearchAfterRetry),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var result = Assert.Single(report.Cases);
+        Assert.NotNull(result.Proposal);
+        Assert.Equal(2, result.AttemptCount);
+        Assert.Equal(repeatSearchAfterRetry ? 4 : 3, result.ProviderRequestCount);
+        Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolRoundCount);
+        Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolCallCount);
+        Assert.Equal(expectedSafetyStatus, result.SafetyToolExpectationStatus);
+        if (repeatSearchAfterRetry)
+        {
+            Assert.DoesNotContain("safety-tool.call-count-differed", result.DifferenceIds);
+        }
+        else
+        {
+            Assert.Equal("differed", result.ExpectationStatus);
+            Assert.Contains("safety-tool.call-count-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.operation-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.arguments-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.scope-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.literal-differed", result.DifferenceIds);
+        }
+    }
+
     [Fact]
     public async Task MiMoSafetyGateIsItsCompleteOneCaseDenominator()
     {
@@ -1148,6 +1203,64 @@ public sealed class EvaluationHarnessProcessTests
                 response.Usage,
                 response.Cache,
                 response.Cost);
+        }
+    }
+
+    private sealed class RetrySplitSafetyExchange(
+        IDocumentationScribeModelExchange inner,
+        bool repeatSearchAfterRetry) : IDocumentationScribeModelExchange
+    {
+        private DocumentationScribeModelResponse? searchResponse;
+        private DocumentationScribeModelResponse? proposalResponse;
+
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (request.AttemptNumber == 1 && request.ProviderRequestNumber == 1)
+            {
+                searchResponse = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                return searchResponse;
+            }
+
+            if (request.AttemptNumber == 1 && request.ProviderRequestNumber == 2)
+            {
+                proposalResponse = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                return new DocumentationScribeModelResponse(
+                    [],
+                    [],
+                    new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.RateLimited));
+            }
+
+            if (request.AttemptNumber != 2)
+            {
+                throw new InvalidOperationException("evaluation.retry-split.request.invalid");
+            }
+
+            if (repeatSearchAfterRetry && request.ProviderRequestNumber == 3)
+            {
+                if (!request.CompletedToolExchanges.IsEmpty)
+                {
+                    throw new InvalidOperationException("evaluation.retry-split.history.invalid");
+                }
+
+                return searchResponse ?? throw new InvalidOperationException(
+                    "evaluation.retry-split.search.missing");
+            }
+
+            var expectedProposalRequest = repeatSearchAfterRetry ? 4 : 3;
+            if (request.ProviderRequestNumber != expectedProposalRequest)
+            {
+                throw new InvalidOperationException("evaluation.retry-split.sequence.invalid");
+            }
+
+            if (request.CompletedToolExchanges.Length != (repeatSearchAfterRetry ? 1 : 0))
+            {
+                throw new InvalidOperationException("evaluation.retry-split.history.invalid");
+            }
+
+            return proposalResponse ?? throw new InvalidOperationException(
+                "evaluation.retry-split.proposal.missing");
         }
     }
 

@@ -161,6 +161,7 @@ internal sealed record EvaluationCostPolicy(
 }
 
 internal sealed record EvaluationProviderObservation(
+    int AttemptNumber,
     int ProviderRequestNumber,
     EvaluationCostResult Cost,
     bool ResponseAccepted,
@@ -223,6 +224,7 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
         }
 
         observations.Add(new EvaluationProviderObservation(
+            request.AttemptNumber,
             request.ProviderRequestNumber,
             result,
             response.Failure is null,
