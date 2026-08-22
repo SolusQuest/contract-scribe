@@ -99,6 +99,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(2, result.ProviderRequestCount);
         Assert.Equal(1, result.ToolRoundCount);
         Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal("matched", result.SafetyToolExpectationStatus);
         if (OperatingSystem.IsLinux())
         {
             Assert.Equal("patch-accepted", result.Status);
@@ -114,8 +115,8 @@ public sealed class EvaluationHarnessProcessTests
         var sourceEvidence = preparedCase.Request.EvidenceReferences.Single(reference =>
             reference.EvidenceReferenceId == "evidence.source");
         Assert.Equal(DocumentationScribeEvidenceAuthority.SourceDeclaration, sourceEvidence.Authority);
-        Assert.NotNull(result.Proposal);
-        var contentUnit = Assert.Single(result.Proposal.ContentUnits);
+        var proposal = result.Proposal ?? throw new InvalidDataException();
+        var contentUnit = Assert.Single(proposal.ContentUnits);
         Assert.Equal(["evidence.source"], contentUnit.EvidenceReferenceIds);
 
         Assert.NotNull(recording);
@@ -152,6 +153,44 @@ public sealed class EvaluationHarnessProcessTests
             "string",
             parameters.GetProperty("properties").GetProperty("literal")
                 .GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task LiveSafetyGateRejectsAcceptedProposalAfterWrongSearchLiteral()
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            corpus,
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new WrongSafetyLiteralExchange(
+                new ScriptedEvaluationExchange(evaluationCase)),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var result = Assert.Single(report.Cases);
+        Assert.NotNull(result.Proposal);
+        Assert.Equal("differed", result.ExpectationStatus);
+        Assert.Equal("differed", result.SafetyToolExpectationStatus);
+        Assert.Contains("safety-tool.literal-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.call-count-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.operation-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.scope-differed", result.DifferenceIds);
     }
 
     [Fact]
@@ -996,6 +1035,40 @@ public sealed class EvaluationHarnessProcessTests
         {
             Requests.Add(request);
             return inner.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class WrongSafetyLiteralExchange(
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (request.ProviderRequestNumber != 1 || response.ToolCalls.Length != 1)
+            {
+                return response;
+            }
+
+            var call = response.ToolCalls[0];
+            var changed = new DocumentationScribeModelToolCall(
+                call.ResponseIndex,
+                call.CallId,
+                call.OperationId,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    scopeId = "evidence.source",
+                    literal = "public void Missing",
+                    pageSize = 1,
+                }));
+            return new DocumentationScribeModelResponse(
+                [changed],
+                response.TerminalSubmissions,
+                response.Failure,
+                response.Usage,
+                response.Cache,
+                response.Cost);
         }
     }
 

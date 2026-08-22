@@ -294,6 +294,56 @@ internal static class EvaluationLiveObservationMatcher
             DocumentationScribeContinuationObservation.HistoryReplayed));
 }
 
+internal sealed record EvaluationLiveToolExpectationResult(
+    string Status,
+    string[] DifferenceIds);
+
+internal static class EvaluationLiveToolExpectationMatcher
+{
+    internal static EvaluationLiveToolExpectationResult Match(
+        EvaluationLiveToolExpectation? expected,
+        bool isLive,
+        bool hasValidatedProposal,
+        IEnumerable<EvaluationSafetyToolCallObservation> calls)
+    {
+        if (!isLive || expected is null)
+        {
+            return new EvaluationLiveToolExpectationResult("not-applicable", []);
+        }
+
+        if (!hasValidatedProposal)
+        {
+            return new EvaluationLiveToolExpectationResult("not-evaluable", []);
+        }
+
+        var observed = calls.ToArray();
+        var differences = new SortedSet<string>(StringComparer.Ordinal);
+        if (observed.Length != expected.CallCount)
+        {
+            differences.Add("safety-tool.call-count-differed");
+        }
+
+        if (observed.Any(call => !call.OperationMatches))
+        {
+            differences.Add("safety-tool.operation-differed");
+        }
+
+        if (observed.Any(call => call.OperationMatches && !call.ScopeMatches))
+        {
+            differences.Add("safety-tool.scope-differed");
+        }
+
+        if (observed.Any(call => call.OperationMatches && !call.LiteralMatches))
+        {
+            differences.Add("safety-tool.literal-differed");
+        }
+
+        return new EvaluationLiveToolExpectationResult(
+            differences.Count == 0 ? "matched" : "differed",
+            differences.ToArray());
+    }
+}
+
 internal sealed class EvaluationRunner
 {
     private readonly LoadedEvaluationManifest loaded;
@@ -516,7 +566,10 @@ internal sealed class EvaluationRunner
                         (selectedConfiguration ?? loaded.Selection.Configurations[0]).Limits);
                     var baseExchange = liveExchangeFactory?.Invoke(prepared)
                         ?? new ScriptedEvaluationExchange(prepared);
-                    observing = new CostObservingExchange(baseExchange, options.CostPolicy);
+                    observing = new CostObservingExchange(
+                        baseExchange,
+                        options.CostPolicy,
+                        options.IsLive ? scenario.LiveToolExpectation : null);
                     outcome = await adapter.ExecuteAsync(
                         prepared.SelectedAudit,
                         prepared.RequestBytes,
@@ -701,6 +754,11 @@ internal sealed class EvaluationRunner
             outcome.RunResult,
             status,
             prepared.Scenario.ProposalLine);
+        var safetyToolExpectation = EvaluationLiveToolExpectationMatcher.Match(
+            prepared.Scenario.LiveToolExpectation,
+            options.IsLive,
+            proposal is not null,
+            providerObservations.SelectMany(observation => observation.SafetyToolCalls));
         var observedCoverage = ObservedCoverage(
             prepared.Scenario,
             options.IsLive,
@@ -720,13 +778,15 @@ internal sealed class EvaluationRunner
             envelope?.ToolCallCount ?? 0,
             usage,
             proposal,
-            observedCoverage);
+            observedCoverage,
+            safetyToolExpectation.DifferenceIds);
         return new EvaluationCaseReport(
             prepared.Scenario.Id,
             status,
             outcome.Code,
             expectation.Status,
             expectation.DifferenceIds,
+            safetyToolExpectation.Status,
             UnexpectedProtocolObservations(outcome, envelope, providerObservations),
             envelope?.AttemptNumber ?? 0,
             envelope?.ProviderRequestCount ?? 0,
@@ -806,6 +866,11 @@ internal sealed class EvaluationRunner
                 Status(outcome.Status),
                 prepared.Scenario.ProposalLine)
             : null;
+        var safetyToolExpectation = EvaluationLiveToolExpectationMatcher.Match(
+            scenario.LiveToolExpectation,
+            options.IsLive,
+            proposal is not null,
+            providerObservations.SelectMany(observation => observation.SafetyToolCalls));
         var unexpected = outcome is null
             ? []
             : UnexpectedProtocolObservations(outcome, envelope, providerObservations);
@@ -829,7 +894,10 @@ internal sealed class EvaluationRunner
             status,
             code,
             "differed",
-            ["case.execution-differed"],
+            [.. new[] { "case.execution-differed" }.Concat(safetyToolExpectation.DifferenceIds)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)],
+            safetyToolExpectation.Status,
             unexpected,
             envelope?.AttemptNumber
                 ?? (prepared is not null
@@ -940,7 +1008,8 @@ internal sealed class EvaluationRunner
         int toolCallCount,
         EvaluationUsageReport? usage,
         EvaluationProposalReport? proposal,
-        string[] observedCoverage)
+        string[] observedCoverage,
+        IEnumerable<string> liveToolDifferenceIds)
     {
         var exactOutcome = scenario.ExpectedStatus == status && scenario.ExpectedCode == code;
         var platformNotObserved = !exactOutcome
@@ -976,6 +1045,11 @@ internal sealed class EvaluationRunner
                 status,
                 code,
                 differences);
+        }
+
+        foreach (var difference in liveToolDifferenceIds)
+        {
+            differences.Add(difference);
         }
 
         var differenceIds = differences.ToArray();

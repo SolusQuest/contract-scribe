@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 
@@ -172,20 +173,31 @@ internal sealed record EvaluationProviderObservation(
     DocumentationScribeModelFailureOrigin? FailureOrigin,
     int? HttpStatusCode,
     DocumentationScribeContinuationObservation ContinuationObservation,
-    int OrdinaryToolCallCount = 0);
+    int OrdinaryToolCallCount = 0)
+{
+    internal EvaluationSafetyToolCallObservation[] SafetyToolCalls { get; init; } = [];
+}
+
+internal sealed record EvaluationSafetyToolCallObservation(
+    bool OperationMatches,
+    bool ScopeMatches,
+    bool LiteralMatches);
 
 internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
 {
     private readonly IDocumentationScribeModelExchange inner;
     private readonly EvaluationCostPolicy policy;
+    private readonly EvaluationLiveToolExpectation? liveToolExpectation;
     private readonly List<EvaluationProviderObservation> observations = [];
 
     internal CostObservingExchange(
         IDocumentationScribeModelExchange inner,
-        EvaluationCostPolicy policy)
+        EvaluationCostPolicy policy,
+        EvaluationLiveToolExpectation? liveToolExpectation = null)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        this.liveToolExpectation = liveToolExpectation;
     }
 
     internal IReadOnlyList<EvaluationProviderObservation> Observations => observations;
@@ -224,13 +236,55 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
             response.Failure?.Origin,
             response.Failure?.HttpStatusCode,
             response.ContinuationObservation,
-            response.ToolCalls.Length));
+            response.ToolCalls.Length)
+        {
+            SafetyToolCalls = ObserveSafetyToolCalls(response),
+        });
         var completeCost = result.Completeness == EvaluationCostCompleteness.Complete
             && result.AmountMicrounits is { } amount
             && result.CurrencyId is { } currency
                 ? new DocumentationScribeModelCost(currency, amount)
                 : null;
         return response.WithCost(completeCost);
+    }
+
+    private EvaluationSafetyToolCallObservation[] ObserveSafetyToolCalls(
+        DocumentationScribeModelResponse response)
+    {
+        if (liveToolExpectation is not { } expected)
+        {
+            return [];
+        }
+
+        return response.ToolCalls.Select(call => ObserveSafetyToolCall(call, expected)).ToArray();
+    }
+
+    private static EvaluationSafetyToolCallObservation ObserveSafetyToolCall(
+        DocumentationScribeModelToolCall call,
+        EvaluationLiveToolExpectation expected)
+    {
+        var operationMatches = call.OperationId == expected.OperationId;
+        if (!operationMatches)
+        {
+            return new EvaluationSafetyToolCallObservation(false, false, false);
+        }
+
+        using var arguments = JsonDocument.Parse(call.ArgumentsUtf8Json);
+        if (arguments.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return new EvaluationSafetyToolCallObservation(true, false, false);
+        }
+
+        var scopeMatches = arguments.RootElement.TryGetProperty("scopeId", out var scope)
+            && scope.ValueKind == JsonValueKind.String
+            && scope.GetString() == expected.ScopeId;
+        var literalMatches = arguments.RootElement.TryGetProperty("literal", out var literal)
+            && literal.ValueKind == JsonValueKind.String
+            && literal.GetString() == expected.Literal;
+        return new EvaluationSafetyToolCallObservation(
+            operationMatches,
+            scopeMatches,
+            literalMatches);
     }
 
     public override string ToString() => nameof(CostObservingExchange);

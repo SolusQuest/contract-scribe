@@ -67,6 +67,12 @@
         },
         "observationIds": ["cache.mixed", "proposal-validated", "provider-request", "tool-call", "tool-loop", "usage-observed", "useful-proposal"]
       },
+      "liveToolExpectation": {
+        "callCount": 1,
+        "operationId": "repository.search-text",
+        "scopeId": "evidence.source",
+        "literal": "public void Run"
+      },
       "proposalLine": "Performs no operation.",
       "requiredPlatform": "linux",
       "nonRequiredPlatformStatus": "runtime-failure",
