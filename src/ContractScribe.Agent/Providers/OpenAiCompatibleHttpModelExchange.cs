@@ -126,15 +126,12 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             {
                 if (diagnostics is not null)
                 {
-                    var disposition = exception.Disposition;
-                    if (disposition is null)
-                    {
-                        diagnostics.FailMissingDisposition();
-                    }
+                    var disposition = exception.Disposition
+                        ?? diagnostics.FailMissingDisposition();
 
                     await diagnostics.ObserveAsync(
                         request.ProviderRequestNumber,
-                        disposition.Value,
+                        disposition,
                         body,
                         cancellationToken).ConfigureAwait(false);
                 }

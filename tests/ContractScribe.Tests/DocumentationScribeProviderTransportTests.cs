@@ -964,7 +964,7 @@ public sealed class DocumentationScribeProviderTransportTests
     public async Task Response_diagnostics_do_not_invent_codec_rows_for_non_codec_failures()
     {
         var handler = new CapturingHandler((_, _) => Task.FromResult(
-            new HttpResponseMessage(HttpStatusCode.TooManyRequests)));
+            TextResponse(HttpStatusCode.TooManyRequests, string.Empty)));
         using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateClosedObservations();
         diagnostics.BeginCase(8);
         using var exchange = Exchange(handler, diagnostics);

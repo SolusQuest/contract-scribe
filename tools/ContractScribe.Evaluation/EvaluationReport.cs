@@ -233,8 +233,10 @@ internal sealed record EvaluationReport(
                 new EvaluationCostReport(aggregateCostStatus, currency, amount)));
         if (options.IsPrivateResponseDiagnostic)
         {
+            var inheritedConfiguration = selectedConfiguration
+                ?? throw new InvalidDataException("evaluation.selection.invalid");
             var profileBytes = JsonSerializer.SerializeToUtf8Bytes(
-                selectedConfiguration!.RequestProfile);
+                inheritedConfiguration.RequestProfile);
             var profileIdentity = Convert.ToHexString(SHA256.HashData(profileBytes)).ToLowerInvariant();
             var actualModel = options.EffectiveModel!;
             var diagnosticIdentity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
@@ -242,7 +244,7 @@ internal sealed record EvaluationReport(
                     "\n",
                     report.SourceRevision,
                     loaded.SelectionIdentity,
-                    selectedConfiguration.ConfigurationId,
+                    inheritedConfiguration.ConfigurationId,
                     profileIdentity,
                     actualModel)))).ToLowerInvariant();
             report = report with

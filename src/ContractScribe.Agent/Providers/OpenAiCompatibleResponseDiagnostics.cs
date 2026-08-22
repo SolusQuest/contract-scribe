@@ -184,16 +184,19 @@ public sealed class OpenAiCompatibleResponseDiagnostics : IDisposable
     }
 
     [DoesNotReturn]
-    internal void FailMissingDisposition() => Fail("evaluation.diagnostics.failed");
+    internal OpenAiCompatibleResponseCodecDisposition FailMissingDisposition()
+    {
+        failureCode = "evaluation.diagnostics.failed";
+        throw new OpenAiCompatibleDiagnosticException(failureCode);
+    }
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref disposed, 1) == 0)
+        if (Interlocked.Exchange(ref disposed, 1) == 0
+            && capture is not null
+            && OperatingSystem.IsLinux())
         {
-            if (capture is not null && OperatingSystem.IsLinux())
-            {
-                capture.Dispose();
-            }
+            capture.Dispose();
         }
     }
 

@@ -119,14 +119,7 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
             handle?.Dispose();
             if (created && Directory.Exists(candidate))
             {
-                try
-                {
-                    Directory.Delete(candidate);
-                }
-                catch (Exception cleanup) when (cleanup is IOException
-                    or UnauthorizedAccessException)
-                {
-                }
+                DeleteCreatedDirectoryBestEffort(candidate);
             }
 
             throw new InvalidDataException("evaluation.capture.invalid");
@@ -255,6 +248,19 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
         }
 
         return new SafeFileHandle((nint)fileDescriptor, ownsHandle: true);
+    }
+
+    private static void DeleteCreatedDirectoryBestEffort(string candidate)
+    {
+        try
+        {
+            Directory.Delete(candidate);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return;
+        }
     }
 
     private static int OpenAt(
