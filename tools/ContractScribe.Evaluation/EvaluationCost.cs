@@ -171,7 +171,8 @@ internal sealed record EvaluationProviderObservation(
     DocumentationScribeModelFailureCode? FailureCode,
     DocumentationScribeModelFailureOrigin? FailureOrigin,
     int? HttpStatusCode,
-    DocumentationScribeContinuationObservation ContinuationObservation);
+    DocumentationScribeContinuationObservation ContinuationObservation,
+    int OrdinaryToolCallCount = 0);
 
 internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
 {
@@ -222,7 +223,8 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
             response.Failure?.Code,
             response.Failure?.Origin,
             response.Failure?.HttpStatusCode,
-            response.ContinuationObservation));
+            response.ContinuationObservation,
+            response.ToolCalls.Length));
         var completeCost = result.Completeness == EvaluationCostCompleteness.Complete
             && result.AmountMicrounits is { } amount
             && result.CurrencyId is { } currency

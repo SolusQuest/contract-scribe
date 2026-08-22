@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
@@ -14,39 +15,55 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
     private const int OpenDirectory = 0x10000;
     private const int OpenNoFollow = 0x20000;
     private const int OpenCloseOnExec = 0x80000;
+    private const int AtSymbolicLinkNoFollow = 0x100;
     private const uint DirectoryCreateMode = 0x1C0;
     private const uint FileCreateMode = 0x180;
     private const uint RenameNoReplace = 1;
     private const int AtRemoveDirectory = 0x200;
+    private const int NoSuchFileOrDirectory = 2;
     private static readonly UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     private static readonly UnixFileMode PrivateFileMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
-    private readonly string directory;
     private readonly string temporaryRoot;
-    private readonly string[] forbiddenRoots;
+    private readonly string directoryName;
+    private readonly SafeFileHandle temporaryRootHandle;
+    private readonly LinuxFileIdentity temporaryRootIdentity;
+    private readonly ulong temporaryRootMountIdentity;
     private readonly SafeFileHandle directoryHandle;
-    private readonly LinuxFileIdentity identity;
+    private readonly LinuxFileIdentity directoryIdentity;
+    private readonly ulong directoryMountIdentity;
+    private readonly Func<SafeFileHandle, ulong> mountIdentityReader;
     private int disposed;
 
     private OpenAiCompatibleLinuxResponseCapture(
-        string directory,
         string temporaryRoot,
-        string[] forbiddenRoots,
+        string directoryName,
+        SafeFileHandle temporaryRootHandle,
+        LinuxFileIdentity temporaryRootIdentity,
+        ulong temporaryRootMountIdentity,
         SafeFileHandle directoryHandle,
-        LinuxFileIdentity identity)
+        LinuxFileIdentity directoryIdentity,
+        ulong directoryMountIdentity,
+        Func<SafeFileHandle, ulong> mountIdentityReader)
     {
-        this.directory = directory;
         this.temporaryRoot = temporaryRoot;
-        this.forbiddenRoots = forbiddenRoots;
+        this.directoryName = directoryName;
+        this.temporaryRootHandle = temporaryRootHandle;
+        this.temporaryRootIdentity = temporaryRootIdentity;
+        this.temporaryRootMountIdentity = temporaryRootMountIdentity;
         this.directoryHandle = directoryHandle;
-        this.identity = identity;
+        this.directoryIdentity = directoryIdentity;
+        this.directoryMountIdentity = directoryMountIdentity;
+        this.mountIdentityReader = mountIdentityReader;
     }
 
     internal static OpenAiCompatibleLinuxResponseCapture Create(
         string captureDirectory,
-        IReadOnlyCollection<string> forbiddenRoots)
+        IReadOnlyCollection<string> forbiddenRoots,
+        Func<SafeFileHandle, ulong>? mountIdentityReader = null,
+        Action? beforeExclusiveCreate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(captureDirectory);
         ArgumentNullException.ThrowIfNull(forbiddenRoots);
@@ -59,69 +76,86 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
 
         var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
         var candidate = Path.GetFullPath(captureDirectory);
+        var parent = Path.GetDirectoryName(candidate);
+        var directoryName = Path.GetFileName(candidate);
         var normalizedForbidden = forbiddenRoots.Select(Path.GetFullPath).ToArray();
         if (!Directory.Exists(temporaryRoot)
             || new DirectoryInfo(temporaryRoot).LinkTarget is not null
-            || !IsStrictDescendant(temporaryRoot, candidate)
-            || normalizedForbidden.Any(root => Overlaps(root, candidate))
-            || Directory.Exists(candidate)
-            || File.Exists(candidate))
+            || parent is null
+            || !SamePath(temporaryRoot, parent)
+            || string.IsNullOrEmpty(directoryName)
+            || normalizedForbidden.Any(root => Overlaps(root, candidate)))
         {
             throw new InvalidDataException("evaluation.capture.invalid");
         }
 
-        var parent = Path.GetDirectoryName(candidate);
-        if (parent is null
-            || !Directory.Exists(parent)
-            || ContainsSymbolicLink(temporaryRoot, parent))
-        {
-            throw new InvalidDataException("evaluation.capture.invalid");
-        }
-
-        SafeFileHandle? handle = null;
+        var readMountIdentity = mountIdentityReader ?? ReadMountIdentity;
+        SafeFileHandle? temporaryHandle = null;
+        SafeFileHandle? captureHandle = null;
         var created = false;
         try
         {
-            Directory.CreateDirectory(candidate, PrivateDirectoryMode);
-            created = true;
-            handle = OpenDirectoryHandle(candidate);
-            File.SetUnixFileMode(handle, PrivateDirectoryMode);
-            if (File.GetUnixFileMode(handle) != PrivateDirectoryMode)
+            temporaryHandle = OpenDirectoryHandle(temporaryRoot);
+            var temporaryIdentity = ReadIdentity(temporaryHandle);
+            var temporaryMountIdentity = readMountIdentity(temporaryHandle);
+            if (!EntryIsAbsent(temporaryHandle, directoryName))
             {
                 throw new InvalidDataException("evaluation.capture.invalid");
             }
 
-            var identity = ReadIdentity(handle);
-            using var temporaryHandle = OpenDirectoryHandle(temporaryRoot);
-            var temporaryIdentity = ReadIdentity(temporaryHandle);
-            if (identity.Device != temporaryIdentity.Device
+            beforeExclusiveCreate?.Invoke();
+            if (MakeDirectoryAt(FileDescriptor(temporaryHandle), directoryName, DirectoryCreateMode) != 0)
+            {
+                throw new InvalidDataException("evaluation.capture.invalid");
+            }
+
+            created = true;
+            captureHandle = OpenDirectoryAt(temporaryHandle, directoryName);
+            File.SetUnixFileMode(captureHandle, PrivateDirectoryMode);
+            var captureIdentity = ReadIdentity(captureHandle);
+            var captureMountIdentity = readMountIdentity(captureHandle);
+            if (captureMountIdentity != temporaryMountIdentity
+                || File.GetUnixFileMode(captureHandle) != PrivateDirectoryMode
                 || !Revalidate(
-                    candidate,
                     temporaryRoot,
-                    normalizedForbidden,
-                    handle,
-                    identity))
+                    directoryName,
+                    temporaryHandle,
+                    temporaryIdentity,
+                    temporaryMountIdentity,
+                    captureHandle,
+                    captureIdentity,
+                    captureMountIdentity,
+                    readMountIdentity))
             {
                 throw new InvalidDataException("evaluation.capture.invalid");
             }
 
             var result = new OpenAiCompatibleLinuxResponseCapture(
-                candidate,
                 temporaryRoot,
-                normalizedForbidden,
-                handle,
-                identity);
-            handle = null;
+                directoryName,
+                temporaryHandle,
+                temporaryIdentity,
+                temporaryMountIdentity,
+                captureHandle,
+                captureIdentity,
+                captureMountIdentity,
+                readMountIdentity);
+            temporaryHandle = null;
+            captureHandle = null;
             return result;
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            handle?.Dispose();
-            if (created && Directory.Exists(candidate))
+            captureHandle?.Dispose();
+            if (created && temporaryHandle is not null && !temporaryHandle.IsInvalid)
             {
-                DeleteCreatedDirectoryBestEffort(candidate);
+                _ = UnlinkAt(
+                    FileDescriptor(temporaryHandle),
+                    directoryName,
+                    AtRemoveDirectory);
             }
 
+            temporaryHandle?.Dispose();
             throw new InvalidDataException("evaluation.capture.invalid");
         }
     }
@@ -196,44 +230,76 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
         if (Interlocked.Exchange(ref disposed, 1) == 0)
         {
             directoryHandle.Dispose();
+            temporaryRootHandle.Dispose();
         }
     }
 
-    private int DirectoryFileDescriptor => checked((int)directoryHandle.DangerousGetHandle());
+    private int DirectoryFileDescriptor => FileDescriptor(directoryHandle);
 
     private void EnsureCurrentIdentity()
     {
         if (!Revalidate(
-                directory,
                 temporaryRoot,
-                forbiddenRoots,
+                directoryName,
+                temporaryRootHandle,
+                temporaryRootIdentity,
+                temporaryRootMountIdentity,
                 directoryHandle,
-                identity))
+                directoryIdentity,
+                directoryMountIdentity,
+                mountIdentityReader))
         {
             throw new IOException("evaluation.capture.failed");
         }
     }
 
     private static bool Revalidate(
-        string candidate,
         string temporaryRoot,
-        IReadOnlyCollection<string> forbiddenRoots,
-        SafeFileHandle retainedHandle,
-        LinuxFileIdentity expected)
+        string directoryName,
+        SafeFileHandle retainedTemporaryRoot,
+        LinuxFileIdentity expectedTemporaryRootIdentity,
+        ulong expectedTemporaryRootMountIdentity,
+        SafeFileHandle retainedDirectory,
+        LinuxFileIdentity expectedDirectoryIdentity,
+        ulong expectedDirectoryMountIdentity,
+        Func<SafeFileHandle, ulong> readMountIdentity)
     {
-        if (!Directory.Exists(candidate)
-            || !IsStrictDescendant(temporaryRoot, candidate)
-            || forbiddenRoots.Any(root => Overlaps(root, candidate))
-            || ContainsSymbolicLink(temporaryRoot, candidate)
-            || File.GetUnixFileMode(retainedHandle) != PrivateDirectoryMode)
+        try
+        {
+            using var currentTemporaryRoot = OpenDirectoryHandle(temporaryRoot);
+            using var currentDirectory = OpenDirectoryAt(retainedTemporaryRoot, directoryName);
+            return ReadIdentity(currentTemporaryRoot) == expectedTemporaryRootIdentity
+                && ReadIdentity(retainedTemporaryRoot) == expectedTemporaryRootIdentity
+                && readMountIdentity(currentTemporaryRoot) == expectedTemporaryRootMountIdentity
+                && readMountIdentity(retainedTemporaryRoot) == expectedTemporaryRootMountIdentity
+                && ReadIdentity(currentDirectory) == expectedDirectoryIdentity
+                && ReadIdentity(retainedDirectory) == expectedDirectoryIdentity
+                && readMountIdentity(currentDirectory) == expectedDirectoryMountIdentity
+                && readMountIdentity(retainedDirectory) == expectedDirectoryMountIdentity
+                && expectedDirectoryMountIdentity == expectedTemporaryRootMountIdentity
+                && File.GetUnixFileMode(currentDirectory) == PrivateDirectoryMode
+                && File.GetUnixFileMode(retainedDirectory) == PrivateDirectoryMode;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static bool EntryIsAbsent(SafeFileHandle parent, string name)
+    {
+        if (FStatAt(
+                FileDescriptor(parent),
+                name,
+                out _,
+                AtSymbolicLinkNoFollow) == 0)
         {
             return false;
         }
 
-        using var current = OpenDirectoryHandle(candidate);
-        return ReadIdentity(current) == expected
-            && ReadIdentity(retainedHandle) == expected
-            && File.GetUnixFileMode(current) == PrivateDirectoryMode;
+        return Marshal.GetLastPInvokeError() == NoSuchFileOrDirectory;
     }
 
     private static SafeFileHandle OpenDirectoryHandle(string path)
@@ -250,32 +316,37 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
         return new SafeFileHandle((nint)fileDescriptor, ownsHandle: true);
     }
 
-    private static void DeleteCreatedDirectoryBestEffort(string candidate)
+    private static SafeFileHandle OpenDirectoryAt(SafeFileHandle parent, string name)
     {
-        try
+        var fileDescriptor = OpenAt(
+            parent,
+            name,
+            OpenReadOnly | OpenDirectory | OpenNoFollow | OpenCloseOnExec,
+            DirectoryCreateMode);
+        if (fileDescriptor < 0)
         {
-            Directory.Delete(candidate);
+            throw new IOException("evaluation.capture.invalid");
         }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException)
-        {
-            return;
-        }
+
+        return new SafeFileHandle((nint)fileDescriptor, ownsHandle: true);
     }
+
+    private static int FileDescriptor(SafeFileHandle handle) =>
+        checked((int)handle.DangerousGetHandle());
 
     private static int OpenAt(
         SafeFileHandle directoryHandle,
         string name,
         int flags,
         uint mode) => OpenAt(
-            checked((int)directoryHandle.DangerousGetHandle()),
+            FileDescriptor(directoryHandle),
             name,
             flags,
             mode);
 
     private static LinuxFileIdentity ReadIdentity(SafeFileHandle handle)
     {
-        if (FStat(checked((int)handle.DangerousGetHandle()), out var value) != 0)
+        if (FStat(FileDescriptor(handle), out var value) != 0)
         {
             throw new IOException("evaluation.capture.invalid");
         }
@@ -283,30 +354,28 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
         return new LinuxFileIdentity(value.Device, value.Inode);
     }
 
-    private static bool ContainsSymbolicLink(string root, string candidate)
+    private static ulong ReadMountIdentity(SafeFileHandle handle)
     {
-        var relative = Path.GetRelativePath(root, candidate);
-        var current = root;
-        foreach (var component in relative.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
+        const string prefix = "mnt_id:\t";
+        foreach (var line in File.ReadLines(
+            FormattableString.Invariant($"/proc/self/fdinfo/{FileDescriptor(handle)}")))
         {
-            current = Path.Join(current, component);
-            if ((Directory.Exists(current) || File.Exists(current))
-                && new FileInfo(current).LinkTarget is not null)
+            if (line.StartsWith(prefix, StringComparison.Ordinal)
+                && ulong.TryParse(
+                    line.AsSpan(prefix.Length),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var mountIdentity))
             {
-                return true;
+                return mountIdentity;
             }
         }
 
-        return false;
+        throw new InvalidDataException("evaluation.capture.invalid");
     }
 
     private static bool Overlaps(string first, string second) =>
         IsSameOrDescendant(first, second) || IsSameOrDescendant(second, first);
-
-    private static bool IsStrictDescendant(string root, string candidate) =>
-        !SamePath(root, candidate) && IsSameOrDescendant(root, candidate);
 
     private static bool IsSameOrDescendant(string root, string candidate)
     {
@@ -328,8 +397,18 @@ internal sealed class OpenAiCompatibleLinuxResponseCapture : IDisposable
     [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
     private static extern int OpenAt(int directory, string path, int flags, uint mode);
 
+    [DllImport("libc", EntryPoint = "mkdirat", SetLastError = true)]
+    private static extern int MakeDirectoryAt(int directory, string path, uint mode);
+
     [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
     private static extern int FStat(int fileDescriptor, out LinuxStat value);
+
+    [DllImport("libc", EntryPoint = "fstatat", SetLastError = true)]
+    private static extern int FStatAt(
+        int directory,
+        string path,
+        out LinuxStat value,
+        int flags);
 
     [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
     private static extern int RenameAt2(

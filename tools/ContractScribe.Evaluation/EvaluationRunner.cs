@@ -39,7 +39,8 @@ internal static class EvaluationApplication
 
             if (options.IsPrivateResponseDiagnostic
                 && (!OperatingSystem.IsLinux()
-                    || RuntimeInformation.ProcessArchitecture != Architecture.X64))
+                    || RuntimeInformation.ProcessArchitecture != Architecture.X64
+                    || !Directory.Exists("/proc/self/fdinfo")))
             {
                 await standardError.WriteLineAsync("evaluation.capture.invalid").ConfigureAwait(false);
                 return 2;
@@ -70,13 +71,29 @@ internal static class EvaluationApplication
                     createOutputDirectory: true);
             }
 
-            using var responseDiagnostics = options.IsLive
-                ? options.IsPrivateResponseDiagnostic
-                    ? OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
-                        options.ProviderResponseCaptureDirectory!,
-                        executionPaths.ForbiddenRoots.Append(executionPaths.OutputDirectory!).ToArray())
-                    : OpenAiCompatibleResponseDiagnostics.CreateClosedObservations()
-                : null;
+            OpenAiCompatibleResponseDiagnostics? createdDiagnostics;
+            try
+            {
+                createdDiagnostics = options.IsLive
+                    ? options.IsPrivateResponseDiagnostic
+                        ? OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+                            options.ProviderResponseCaptureDirectory!,
+                            executionPaths.ForbiddenRoots.Append(executionPaths.OutputDirectory!).ToArray())
+                        : OpenAiCompatibleResponseDiagnostics.CreateClosedObservations()
+                    : null;
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            {
+                if (executionPaths.OutputDirectoryCreated
+                    && executionPaths.OutputDirectory is { } createdOutput)
+                {
+                    EvaluationOutput.DeleteEmptyPrivateDirectory(createdOutput);
+                }
+
+                throw;
+            }
+
+            using var responseDiagnostics = createdDiagnostics;
             using var liveExchange = options.IsLive
                 ? new OpenAiCompatibleHttpModelExchange(new OpenAiCompatibleHttpTransportOptions(
                     options.Endpoint!,
@@ -343,7 +360,7 @@ internal sealed class EvaluationRunner
             preparedDirectory,
             preparedCorpus.Manifest.RepositoryProject))
             ?? throw new InvalidDataException("evaluation.repository.path-invalid");
-        var checkout = FindCheckoutRoot();
+        var checkout = FindCheckoutRoot(loaded.CorpusDirectory);
         string[] forbiddenRoots =
         [
             loaded.CorpusDirectory,
@@ -352,18 +369,34 @@ internal sealed class EvaluationRunner
             checkout,
         ];
         string? outputDirectory = null;
-        if (requestedOutputDirectory is not null
-            && !(createOutputDirectory
-                ? EvaluationOutput.TryResolveDirectory(
-                    requestedOutputDirectory,
-                    forbiddenRoots,
-                    out outputDirectory)
-                : EvaluationOutput.TryValidateDirectory(
-                    requestedOutputDirectory,
-                    forbiddenRoots,
-                    out outputDirectory)))
+        var outputDirectoryCreated = false;
+        if (requestedOutputDirectory is not null)
         {
-            throw new InvalidDataException("evaluation.output.invalid");
+            var outputValid = options.IsPrivateResponseDiagnostic
+                ? createOutputDirectory
+                    ? EvaluationOutput.TryResolveNewPrivateDirectory(
+                        requestedOutputDirectory,
+                        forbiddenRoots,
+                        out outputDirectory)
+                    : EvaluationOutput.TryValidateNewPrivateDirectory(
+                        requestedOutputDirectory,
+                        forbiddenRoots,
+                        out outputDirectory)
+                : createOutputDirectory
+                    ? EvaluationOutput.TryResolveDirectory(
+                        requestedOutputDirectory,
+                        forbiddenRoots,
+                        out outputDirectory)
+                    : EvaluationOutput.TryValidateDirectory(
+                        requestedOutputDirectory,
+                        forbiddenRoots,
+                        out outputDirectory);
+            if (!outputValid)
+            {
+                throw new InvalidDataException("evaluation.output.invalid");
+            }
+
+            outputDirectoryCreated = options.IsPrivateResponseDiagnostic && createOutputDirectory;
         }
 
         if (options.IsPrivateResponseDiagnostic
@@ -373,13 +406,19 @@ internal sealed class EvaluationRunner
                     forbiddenRoots.Append(outputDirectory).ToArray(),
                     out _)))
         {
+            if (outputDirectoryCreated && outputDirectory is not null)
+            {
+                EvaluationOutput.DeleteEmptyPrivateDirectory(outputDirectory);
+            }
+
             throw new InvalidDataException("evaluation.capture.invalid");
         }
 
         return new EvaluationExecutionPaths(
             preparedDirectory,
             outputDirectory,
-            forbiddenRoots);
+            forbiddenRoots,
+            outputDirectoryCreated);
     }
 
     internal async Task<EvaluationReport> RunAsync(CancellationToken cancellationToken)
@@ -458,6 +497,9 @@ internal sealed class EvaluationRunner
                 var cancelled = false;
                 var diagnosticsBegan = false;
                 OpenAiCompatibleResponseDiagnosticCase? diagnosticCase = null;
+                PreparedEvaluationCase? prepared = null;
+                CostObservingExchange? observing = null;
+                EvaluationCompositionOutcome? outcome = null;
                 try
                 {
                     if (responseDiagnostics is not null)
@@ -468,14 +510,14 @@ internal sealed class EvaluationRunner
                         diagnosticsBegan = true;
                     }
 
-                    var prepared = repository.Prepare(
+                    prepared = repository.Prepare(
                         loaded,
                         scenario,
                         (selectedConfiguration ?? loaded.Selection.Configurations[0]).Limits);
                     var baseExchange = liveExchangeFactory?.Invoke(prepared)
                         ?? new ScriptedEvaluationExchange(prepared);
-                    var observing = new CostObservingExchange(baseExchange, options.CostPolicy);
-                    var outcome = await adapter.ExecuteAsync(
+                    observing = new CostObservingExchange(baseExchange, options.CostPolicy);
+                    outcome = await adapter.ExecuteAsync(
                         prepared.SelectedAudit,
                         prepared.RequestBytes,
                         prepared.AttemptId,
@@ -515,7 +557,10 @@ internal sealed class EvaluationRunner
                         scenario,
                         "cancelled",
                         "evaluation.case.cancelled",
-                        diagnosticCase));
+                        diagnosticCase,
+                        prepared,
+                        outcome,
+                        observing?.Observations));
                     cancelled = true;
                 }
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
@@ -525,7 +570,10 @@ internal sealed class EvaluationRunner
                         scenario,
                         "failed",
                         diagnosticCase?.FailureCode ?? SafeCaseCode(exception),
-                        diagnosticCase));
+                        diagnosticCase,
+                        prepared,
+                        outcome,
+                        observing?.Observations));
                 }
 
                 if (cancelled)
@@ -703,30 +751,103 @@ internal sealed class EvaluationRunner
         EvaluationScenario scenario,
         string status,
         string code,
-        OpenAiCompatibleResponseDiagnosticCase? diagnosticCase = null)
+        OpenAiCompatibleResponseDiagnosticCase? diagnosticCase = null,
+        PreparedEvaluationCase? prepared = null,
+        EvaluationCompositionOutcome? outcome = null,
+        IReadOnlyList<EvaluationProviderObservation>? providerObservations = null)
     {
+        providerObservations ??= [];
         var providerResponses = ProjectProviderResponses(
             diagnosticCase,
             selectedConfiguration?.Limits.MaximumProviderRequests);
+        var envelope = outcome?.RunResult?.RunEnvelope;
+        var providerFailures = providerObservations
+            .Where(observation => observation.FailureCode is not null)
+            .Select(observation => new EvaluationProviderFailureReport(
+                observation.ProviderRequestNumber,
+                EvaluationProviderFailureReport.CodeId(observation.FailureCode!.Value),
+                observation.FailureOrigin is { } origin
+                    ? EvaluationProviderFailureReport.OriginId(origin)
+                    : null,
+                observation.HttpStatusCode))
+            .OrderBy(observation => observation.ProviderRequestNumber)
+            .ToArray();
+        var runtimeDiagnostics = envelope?.Diagnostics
+            .Select(diagnostic => new EvaluationRuntimeDiagnosticReport(
+                diagnostic.Code,
+                diagnostic.Stage,
+                diagnostic.ReferenceId,
+                diagnostic.ValidationCode))
+            .ToArray() ?? [];
+        var usage = envelope?.Usage is { } modelUsage
+            ? new EvaluationUsageReport(
+                modelUsage.InputTokens,
+                modelUsage.OutputTokens,
+                modelUsage.CachedInputTokens,
+                modelUsage.UncachedInputTokens,
+                modelUsage.ReasoningTokens,
+                envelope.Cache is { } cache ? DocumentationScribeVocabulary.GetId(cache) : null)
+            : null;
+        var providerRequestCount = new[]
+        {
+            envelope?.ProviderRequestCount ?? 0,
+            diagnosticCase?.ProviderRequestCount ?? 0,
+            providerObservations.Count == 0
+                ? 0
+                : providerObservations.Max(observation => observation.ProviderRequestNumber),
+        }.Max();
+        var toolRoundCount = envelope?.ToolRoundCount
+            ?? providerObservations.Count(observation => observation.OrdinaryToolCallObserved);
+        var toolCallCount = envelope?.ToolCallCount
+            ?? providerObservations.Sum(observation => observation.OrdinaryToolCallCount);
+        var proposal = prepared is not null && outcome is not null
+            ? EvaluationReportWriter.ProjectProposal(
+                outcome.RunResult,
+                Status(outcome.Status),
+                prepared.Scenario.ProposalLine)
+            : null;
+        var unexpected = outcome is null
+            ? []
+            : UnexpectedProtocolObservations(outcome, envelope, providerObservations);
+        var observedCoverage = prepared is not null && outcome is not null
+            ? ObservedCoverage(
+                prepared.Scenario,
+                options.IsLive,
+                Status(outcome.Status),
+                outcome.Code,
+                envelope,
+                outcome.RunResult,
+                providerObservations)
+                .Append(code)
+                .Append(status)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray()
+            : [code, status];
         return new EvaluationCaseReport(
             scenario.Id,
             status,
             code,
             "differed",
             ["case.execution-differed"],
-            [],
-            0,
-            providerResponses.Length,
-            0,
-            0,
-            [],
-            [],
-            null,
-            new EvaluationCostReport("not-reported", null, null),
-            null,
+            unexpected,
+            envelope?.AttemptNumber
+                ?? (prepared is not null
+                    && (diagnosticCase?.ProviderRequestCount > 0
+                        || providerObservations.Count > 0)
+                        ? 1
+                        : 0),
+            providerRequestCount,
+            toolRoundCount,
+            toolCallCount,
+            providerFailures,
+            runtimeDiagnostics,
+            usage,
+            AggregateCost(providerObservations),
+            proposal,
             "passed",
             scenario.Coverage.Order(StringComparer.Ordinal).ToArray(),
-            [code, status])
+            observedCoverage)
         {
             ProviderResponses = providerResponses,
         };
@@ -749,6 +870,10 @@ internal sealed class EvaluationRunner
         var maximum = maximumProviderRequests ?? 0;
         if (maximum <= 0
             || responses.Length > maximum
+            || diagnosticCase.ProviderRequestCount is < 0
+                || diagnosticCase.ProviderRequestCount > maximum
+            || responses.Length > 0
+                && responses[^1].ProviderRequestNumber > diagnosticCase.ProviderRequestCount
             || responses.Where((response, index) =>
                     response.ProviderRequestNumber is <= 0
                     || response.ProviderRequestNumber > maximum
@@ -1145,17 +1270,20 @@ internal sealed class EvaluationRunner
                 ? "macos"
                 : "other";
 
-    private static string FindCheckoutRoot()
+    private static string FindCheckoutRoot(string corpusDirectory)
     {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
+        foreach (var start in new[] { corpusDirectory, AppContext.BaseDirectory })
         {
-            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+            var current = new DirectoryInfo(Path.GetFullPath(start));
+            while (current is not null)
             {
-                return current.FullName;
-            }
+                if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+                {
+                    return current.FullName;
+                }
 
-            current = current.Parent;
+                current = current.Parent;
+            }
         }
 
         throw new InvalidDataException("evaluation.checkout.not-found");
@@ -1196,4 +1324,5 @@ internal sealed class EvaluationRunner
 internal sealed record EvaluationExecutionPaths(
     string PreparedDirectory,
     string? OutputDirectory,
-    string[] ForbiddenRoots);
+    string[] ForbiddenRoots,
+    bool OutputDirectoryCreated = false);

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
 using System.Net;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1006,23 +1007,22 @@ public sealed class DocumentationScribeProviderTransportTests
             return;
         }
 
-        var root = Path.Join(
-            Path.GetTempPath(),
-            "contract-scribe-capture-test-" + Guid.NewGuid().ToString("N"));
-        var capture = Path.Join(root, "capture");
-        var moved = Path.Join(root, "moved");
-        Directory.CreateDirectory(
-            root,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var suffix = Guid.NewGuid().ToString("N");
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+        var capture = Path.Join(temporaryRoot, "contract-scribe-capture-" + suffix);
+        var moved = Path.Join(temporaryRoot, "contract-scribe-moved-" + suffix);
+        var ownedDirectories = new List<string>();
         try
         {
             for (var relation = 0; relation < 3; relation++)
             {
-                var candidate = Path.Join(root, "forbidden-" + relation);
+                var candidate = Path.Join(
+                    temporaryRoot,
+                    $"contract-scribe-forbidden-{suffix}-{relation}");
                 var forbidden = relation switch
                 {
                     0 => candidate,
-                    1 => root,
+                    1 => temporaryRoot,
                     _ => Path.Join(candidate, "descendant"),
                 };
                 try
@@ -1046,6 +1046,7 @@ public sealed class DocumentationScribeProviderTransportTests
                 capture,
                 []))
             {
+                ownedDirectories.Add(capture);
                 diagnostics.BeginCase(8);
                 var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(body)));
                 using var exchange = Exchange(handler, diagnostics);
@@ -1075,11 +1076,15 @@ public sealed class DocumentationScribeProviderTransportTests
                 Assert.Equal("evaluation.capture.invalid", exception.Message);
             }
 
-            var secondCapture = Path.Join(root, "capture-two");
+            var secondCapture = Path.Join(
+                temporaryRoot,
+                "contract-scribe-capture-two-" + suffix);
             using (var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
                 secondCapture,
                 []))
             {
+                ownedDirectories.Add(secondCapture);
+                ownedDirectories.Add(moved);
                 diagnostics.BeginCase(8);
                 Directory.Move(secondCapture, moved);
                 Directory.CreateSymbolicLink(secondCapture, moved);
@@ -1095,11 +1100,14 @@ public sealed class DocumentationScribeProviderTransportTests
                 Assert.Single(observed.Responses);
             }
 
-            var collisionCapture = Path.Join(root, "capture-collision");
+            var collisionCapture = Path.Join(
+                temporaryRoot,
+                "contract-scribe-capture-collision-" + suffix);
             using (var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
                 collisionCapture,
                 []))
             {
+                ownedDirectories.Add(collisionCapture);
                 diagnostics.BeginCase(8);
                 var collision = Path.Join(collisionCapture, "provider-response-0001.json");
                 await File.WriteAllTextAsync(collision, "operator-owned");
@@ -1122,15 +1130,58 @@ public sealed class DocumentationScribeProviderTransportTests
         }
         finally
         {
-            if (Directory.Exists(Path.Join(root, "capture-two"))
-                && new DirectoryInfo(Path.Join(root, "capture-two")).LinkTarget is not null)
+            foreach (var directory in ownedDirectories)
             {
-                Directory.Delete(Path.Join(root, "capture-two"));
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void Unsafe_linux_capture_rejects_directory_collision_and_mount_identity_change()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+        var suffix = Guid.NewGuid().ToString("N");
+        var collision = Path.Join(temporaryRoot, "contract-scribe-collision-" + suffix);
+        var mountAlias = Path.Join(temporaryRoot, "contract-scribe-mount-alias-" + suffix);
+        try
+        {
+            var collisionFailure = Assert.Throws<InvalidDataException>(() =>
+                OpenAiCompatibleLinuxResponseCapture.Create(
+                    collision,
+                    [],
+                    beforeExclusiveCreate: () => Directory.CreateDirectory(collision)));
+            Assert.Equal("evaluation.capture.invalid", collisionFailure.Message);
+            Assert.True(Directory.Exists(collision));
+
+            var reads = 0;
+            var mountFailure = Assert.Throws<InvalidDataException>(() =>
+                OpenAiCompatibleLinuxResponseCapture.Create(
+                    mountAlias,
+                    [],
+                    mountIdentityReader: _ => ++reads == 1 ? 41UL : 42UL));
+            Assert.Equal("evaluation.capture.invalid", mountFailure.Message);
+            Assert.False(Directory.Exists(mountAlias));
+        }
+        finally
+        {
+            if (Directory.Exists(collision))
+            {
+                Directory.Delete(collision);
             }
 
-            if (Directory.Exists(root))
+            if (Directory.Exists(mountAlias))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(mountAlias);
             }
         }
     }

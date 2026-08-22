@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -149,6 +151,77 @@ public sealed class EvaluationHarnessTests
             if (Directory.Exists(output))
             {
                 Directory.Delete(output, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinuxCaptureEntriesFailBeforeCredentialAcquisition()
+    {
+        if (!OperatingSystem.IsLinux()
+            || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        {
+            return;
+        }
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+        var dangling = Path.Join(temporaryRoot, "contract-scribe-dangling-" + suffix);
+        var fifo = Path.Join(temporaryRoot, "contract-scribe-fifo-" + suffix);
+        var applicationMarker = Path.Join(AppContext.BaseDirectory, "evaluation-corpus-path.txt");
+        var markerCreated = !File.Exists(applicationMarker);
+        if (markerCreated)
+        {
+            File.WriteAllText(applicationMarker, PreparedCorpusRoot());
+        }
+
+        File.CreateSymbolicLink(
+            dangling,
+            Path.Join(temporaryRoot, "contract-scribe-missing-" + suffix));
+        Assert.Equal(0, CreateNamedPipe(fifo, 0x180));
+        try
+        {
+            foreach (var capture in new[] { dangling, fifo })
+            {
+                var output = Path.Join(
+                    temporaryRoot,
+                    "contract-scribe-output-" + Guid.NewGuid().ToString("N"));
+                var secretName = "CONTRACTSCRIBE_INVALID_CAPTURE_" + Guid.NewGuid().ToString("N");
+                const string secret = "invalid-capture-secret-must-remain";
+                Environment.SetEnvironmentVariable(secretName, secret);
+                try
+                {
+                    using var standardOutput = new StringWriter();
+                    using var standardError = new StringWriter();
+                    var exitCode = await EvaluationApplication.RunAsync(
+                        MimoLiveArguments(capture, output, secretName),
+                        standardOutput,
+                        standardError);
+
+                    Assert.Equal(1, exitCode);
+                    Assert.Equal(secret, Environment.GetEnvironmentVariable(secretName));
+                    Assert.Equal(
+                        "evaluation.capture.invalid" + Environment.NewLine,
+                        standardError.ToString());
+                    Assert.False(Directory.Exists(output));
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable(secretName, null);
+                    if (Directory.Exists(output))
+                    {
+                        Directory.Delete(output, recursive: true);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            File.Delete(dangling);
+            File.Delete(fifo);
+            if (markerCreated)
+            {
+                File.Delete(applicationMarker);
             }
         }
     }
@@ -946,6 +1019,31 @@ public sealed class EvaluationHarnessTests
         "documentation-scribe",
         "evaluation");
 
+    private static string PreparedCorpusRoot()
+    {
+        var root = FindRepositoryRoot();
+        var applicationDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        var candidates = new[]
+        {
+            Path.Join(
+                applicationDirectory.Parent?.Parent?.FullName ?? string.Empty,
+                "ContractScribe.Evaluation",
+                applicationDirectory.Name,
+                "evaluation-corpus-path.txt"),
+            Path.Join(
+                root,
+                "tools",
+                "ContractScribe.Evaluation",
+                "bin",
+                applicationDirectory.Parent?.Name ?? string.Empty,
+                "net10.0",
+                "evaluation-corpus-path.txt"),
+        };
+        var marker = candidates.SingleOrDefault(File.Exists)
+            ?? throw new DirectoryNotFoundException("Evaluation prepared-corpus marker was not found.");
+        return File.ReadAllText(marker).Trim();
+    }
+
     private static DocumentationScribeModelRequest Request(int providerRequestNumber) => new(
         1,
         providerRequestNumber,
@@ -992,17 +1090,28 @@ public sealed class EvaluationHarnessTests
         }
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
-            {
-                return current.FullName;
-            }
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int CreateNamedPipe(string path, uint mode);
 
-            current = current.Parent;
+    private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "")
+    {
+        foreach (var start in new[]
+        {
+            Path.GetDirectoryName(sourcePath)!,
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory,
+        })
+        {
+            var current = new DirectoryInfo(start);
+            while (current is not null)
+            {
+                if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+                {
+                    return current.FullName;
+                }
+
+                current = current.Parent;
+            }
         }
 
         throw new DirectoryNotFoundException();

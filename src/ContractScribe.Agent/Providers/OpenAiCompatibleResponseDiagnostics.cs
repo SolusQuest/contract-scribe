@@ -55,13 +55,17 @@ public sealed class OpenAiCompatibleResponseDiagnosticCase
 {
     internal OpenAiCompatibleResponseDiagnosticCase(
         ImmutableArray<OpenAiCompatibleResponseDiagnostic> responses,
+        int providerRequestCount,
         string? failureCode)
     {
         Responses = responses;
+        ProviderRequestCount = providerRequestCount;
         FailureCode = failureCode;
     }
 
     public IReadOnlyList<OpenAiCompatibleResponseDiagnostic> Responses { get; }
+
+    public int ProviderRequestCount { get; }
 
     public string? FailureCode { get; }
 
@@ -122,6 +126,7 @@ public sealed class OpenAiCompatibleResponseDiagnostics : IDisposable
         completedUnsafeCapture = capture is not null;
         return new OpenAiCompatibleResponseDiagnosticCase(
             responses.ToImmutableArray(),
+            lastProviderRequestNumber,
             failureCode);
     }
 

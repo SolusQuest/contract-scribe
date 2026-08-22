@@ -1,8 +1,12 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 using ContractScribe.Evaluation;
@@ -103,6 +107,198 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(1, report.Aggregate.SelectedCaseCount);
         var result = Assert.Single(report.Cases);
         Assert.Equal("useful-proposal", result.CaseId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalCaptureFailurePreservesPriorSafeExecutionEvidence(bool rateLimitedFirst)
+    {
+        if (!OperatingSystem.IsLinux()
+            || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "mimo-compatibility");
+        var capture = Path.Join(
+            Path.GetFullPath(Path.GetTempPath()),
+            "contract-scribe-partial-evidence-" + Guid.NewGuid().ToString("N"));
+        using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+            capture,
+            [root, corpus]);
+        var terminalResponse = Encoding.UTF8.GetBytes(
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\",\\\"reason\\\":\\\"scribe.skip.insufficient-evidence\\\",\\\"evidenceReferenceIds\\\":[]}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":40}}");
+        await using var server = rateLimitedFirst
+            ? new DiagnosticLoopbackServer(
+                new DiagnosticLoopbackResponse("HTTP/1.1 429 Too Many Requests", "{}"u8.ToArray()),
+                new DiagnosticLoopbackResponse("HTTP/1.1 200 OK", ResponseFactory: SearchToolResponse))
+            : new DiagnosticLoopbackServer(
+                new DiagnosticLoopbackResponse("HTTP/1.1 200 OK", ResponseFactory: SearchToolResponse),
+                new DiagnosticLoopbackResponse("HTTP/1.1 200 OK", terminalResponse));
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                server.Endpoint,
+                selected.Model,
+                networkEnabled: true),
+            diagnostics);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Join(capture, "provider-response-0002.json"),
+                "operator-owned");
+            File.SetUnixFileMode(
+                Path.Join(capture, "provider-response-0002.json"),
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            var options = new EvaluationOptions(
+                EvaluationMode.LiveSafetyGate,
+                corpus,
+                null,
+                selected.ConfigurationId,
+                new Uri(selected.Endpoint),
+                selected.Model,
+                "UNUSED_TEST_SECRET",
+                new EvaluationCostPolicy("cny", 1_000_000, 1_000_000, 1_000_000))
+            {
+                ProviderResponseCaptureDirectory = capture,
+            };
+            var runner = new EvaluationRunner(
+                loaded,
+                options,
+                _ => exchange,
+                null,
+                null,
+                executionPaths: new EvaluationExecutionPaths(PreparedCorpusRoot(root), null, []),
+                responseDiagnostics: diagnostics);
+
+            var report = await runner.RunAsync(CancellationToken.None);
+            var result = Assert.Single(report.Cases);
+            var serverCompletion = await Task.WhenAny(
+                server.Completion,
+                Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.True(
+                ReferenceEquals(serverCompletion, server.Completion),
+                $"Loopback received {server.RequestCount} of 2 expected requests; case={result.Code}; rows={string.Join(',', result.ProviderResponses.Select(item => item.CodecDisposition))}.");
+            await server.Completion;
+            Assert.Equal(2, server.RequestCount);
+            Assert.Equal("failed", result.Status);
+            Assert.Equal("evaluation.capture.failed", result.Code);
+            Assert.Equal(rateLimitedFirst ? 2 : 1, result.AttemptCount);
+            Assert.Equal(2, result.ProviderRequestCount);
+            Assert.Equal(2, result.ProviderResponses[^1].ProviderRequestNumber);
+            Assert.Contains("evaluation.capture.failed", result.ObservedCoverage);
+            Assert.DoesNotContain(
+                result.ProviderFailures,
+                failure => failure.Code.Contains("capture", StringComparison.Ordinal));
+            if (rateLimitedFirst)
+            {
+                var failure = Assert.Single(result.ProviderFailures);
+                Assert.Equal(1, failure.ProviderRequestNumber);
+                Assert.Equal("model.failure.rate-limited", failure.Code);
+                Assert.Equal(0, result.ToolRoundCount);
+                Assert.Equal(0, result.ToolCallCount);
+            }
+            else
+            {
+                Assert.Empty(result.ProviderFailures);
+                Assert.Equal(1, result.ToolRoundCount);
+                Assert.Equal(1, result.ToolCallCount);
+                Assert.NotNull(result.Usage);
+                Assert.NotEqual("not-reported", result.Cost.Status);
+                Assert.Collection(
+                    result.ProviderResponses,
+                    first => Assert.Equal("codec.accepted-tool", first.CodecDisposition),
+                    second => Assert.Equal("codec.accepted-terminal", second.CodecDisposition));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(capture))
+            {
+                Directory.Delete(capture, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CancellationAfterCodecSelectionPreservesTheClosedPartialRow()
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var output = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-cancelled-diagnostic-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(output);
+        using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateClosedObservations();
+        using var cancellation = new CancellationTokenSource();
+        await using var server = new DiagnosticLoopbackServer(
+            new DiagnosticLoopbackResponse("HTTP/1.1 200 OK", ResponseFactory: SearchToolResponse));
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                server.Endpoint,
+                selected.Model,
+                networkEnabled: true),
+            diagnostics);
+        try
+        {
+            var options = new EvaluationOptions(
+                EvaluationMode.LiveSafetyGate,
+                corpus,
+                output,
+                selected.ConfigurationId,
+                new Uri(selected.Endpoint),
+                selected.Model,
+                "UNUSED_TEST_SECRET",
+                new EvaluationCostPolicy("usd", 1, 1, 1));
+            var runner = new EvaluationRunner(
+                loaded,
+                options,
+                _ => new CancellationAfterDiagnosticExchange(exchange, cancellation),
+                null,
+                output,
+                executionPaths: new EvaluationExecutionPaths(
+                    PreparedCorpusRoot(root),
+                    output,
+                    [root, corpus]),
+                responseDiagnostics: diagnostics);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                runner.RunAsync(cancellation.Token));
+            var serverCompletion = await Task.WhenAny(
+                server.Completion,
+                Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.True(
+                ReferenceEquals(serverCompletion, server.Completion),
+                $"Loopback received {server.RequestCount} of 1 expected requests.");
+            await server.Completion;
+            Assert.Equal(1, server.RequestCount);
+
+            using var document = JsonDocument.Parse(await File.ReadAllBytesAsync(
+                Path.Join(output, "evaluation-partial.json")));
+            var result = Assert.Single(document.RootElement.GetProperty("cases").EnumerateArray());
+            Assert.Equal("cancelled", result.GetProperty("status").GetString());
+            Assert.Equal("scribe.cancelled.caller", result.GetProperty("code").GetString());
+            Assert.Equal(1, result.GetProperty("attemptCount").GetInt32());
+            Assert.Equal(1, result.GetProperty("providerRequestCount").GetInt32());
+            Assert.Empty(result.GetProperty("providerFailures").EnumerateArray());
+            var response = Assert.Single(result.GetProperty("providerResponses").EnumerateArray());
+            Assert.Equal(1, response.GetProperty("providerRequestNumber").GetInt32());
+            Assert.Equal("codec.accepted-tool", response.GetProperty("codecDisposition").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(output))
+            {
+                Directory.Delete(output, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -661,16 +857,26 @@ public sealed class EvaluationHarnessProcessTests
 
     private static string PreparedCorpusRoot(string root)
     {
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
-            ?? throw new InvalidOperationException();
-        return File.ReadAllText(Path.Join(
-            root,
-            "tools",
-            "ContractScribe.Evaluation",
-            "bin",
-            configuration,
-            "net10.0",
-            "evaluation-corpus-path.txt")).Trim();
+        var applicationDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        var candidates = new[]
+        {
+            Path.Join(
+                applicationDirectory.Parent?.Parent?.FullName ?? string.Empty,
+                "ContractScribe.Evaluation",
+                applicationDirectory.Name,
+                "evaluation-corpus-path.txt"),
+            Path.Join(
+                root,
+                "tools",
+                "ContractScribe.Evaluation",
+                "bin",
+                applicationDirectory.Parent?.Name ?? string.Empty,
+                "net10.0",
+                "evaluation-corpus-path.txt"),
+        };
+        var marker = candidates.SingleOrDefault(File.Exists)
+            ?? throw new DirectoryNotFoundException("Evaluation prepared-corpus marker was not found.");
+        return File.ReadAllText(marker).Trim();
     }
 
     private static string CorpusRoot(string root) => Path.Join(
@@ -680,17 +886,20 @@ public sealed class EvaluationHarnessProcessTests
         "documentation-scribe",
         "evaluation");
 
-    private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "")
     {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
+        foreach (var start in new[] { Path.GetDirectoryName(sourcePath)!, AppContext.BaseDirectory })
         {
-            if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+            var current = new DirectoryInfo(start);
+            while (current is not null)
             {
-                return current.FullName;
-            }
+                if (File.Exists(Path.Join(current.FullName, "ContractScribe.slnx")))
+                {
+                    return current.FullName;
+                }
 
-            current = current.Parent;
+                current = current.Parent;
+            }
         }
 
         throw new DirectoryNotFoundException();
@@ -744,6 +953,156 @@ public sealed class EvaluationHarnessProcessTests
                 usage,
                 cache,
                 response.Cost);
+    }
+
+    private static byte[] SearchToolResponse(byte[] requestBody)
+    {
+        using var request = JsonDocument.Parse(requestBody);
+        var alias = request.RootElement.GetProperty("tools").EnumerateArray()
+            .Select(tool => tool.GetProperty("function"))
+            .Single(function => function.GetProperty("parameters")
+                .GetProperty("properties")
+                .TryGetProperty("literal", out _))
+            .GetProperty("name")
+            .GetString() ?? throw new InvalidDataException();
+        var arguments = JsonSerializer.Serialize(new
+        {
+            scopeId = "evidence.source",
+            literal = "public void Run",
+            pageSize = 1,
+        });
+        return JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                id = "call.evaluation-search",
+                                type = "function",
+                                function = new { name = alias, arguments },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+            usage = new { prompt_tokens = 100, completion_tokens = 20 },
+        });
+    }
+
+    private sealed record DiagnosticLoopbackResponse(
+        string StatusLine,
+        byte[]? Body = null,
+        Func<byte[], byte[]>? ResponseFactory = null);
+
+    private sealed class DiagnosticLoopbackServer : IAsyncDisposable
+    {
+        private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        private readonly DiagnosticLoopbackResponse[] responses;
+        private readonly Task serverTask;
+        private int requestCount;
+
+        internal DiagnosticLoopbackServer(params DiagnosticLoopbackResponse[] responses)
+        {
+            this.responses = responses;
+            listener.Start();
+            var endpoint = (IPEndPoint)listener.LocalEndpoint;
+            Endpoint = new Uri($"http://127.0.0.1:{endpoint.Port}/v1/chat/completions");
+            serverTask = ServeAsync();
+        }
+
+        internal Uri Endpoint { get; }
+
+        internal Task Completion => serverTask;
+
+        internal int RequestCount => Volatile.Read(ref requestCount);
+
+        public async ValueTask DisposeAsync()
+        {
+            listener.Stop();
+            try
+            {
+                await serverTask;
+            }
+            catch (Exception exception) when (exception is SocketException or ObjectDisposedException)
+            {
+                return;
+            }
+        }
+
+        private async Task ServeAsync()
+        {
+            foreach (var response in responses)
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                Interlocked.Increment(ref requestCount);
+                await using var stream = client.GetStream();
+                var requestBody = await DrainRequestAsync(stream);
+                var responseBody = response.ResponseFactory?.Invoke(requestBody)
+                    ?? response.Body
+                    ?? throw new InvalidDataException();
+                var headers = Encoding.ASCII.GetBytes(
+                    $"{response.StatusLine}\r\nContent-Type: application/json\r\nContent-Length: {responseBody.Length}\r\nConnection: close\r\n\r\n");
+                await stream.WriteAsync(headers);
+                await stream.WriteAsync(responseBody);
+            }
+        }
+
+        private static async Task<byte[]> DrainRequestAsync(Stream stream)
+        {
+            var header = new List<byte>();
+            while (header.Count < 64 * 1024)
+            {
+                var next = stream.ReadByte();
+                if (next < 0)
+                {
+                    throw new EndOfStreamException();
+                }
+
+                header.Add((byte)next);
+                if (header.Count >= 4
+                    && header[^4] == '\r'
+                    && header[^3] == '\n'
+                    && header[^2] == '\r'
+                    && header[^1] == '\n')
+                {
+                    break;
+                }
+            }
+
+            var headerText = Encoding.ASCII.GetString(header.ToArray());
+            var contentLengthLine = headerText.Split("\r\n", StringSplitOptions.RemoveEmptyEntries)
+                .Single(line => line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
+            var contentLength = int.Parse(
+                contentLengthLine.AsSpan(contentLengthLine.IndexOf(':') + 1),
+                System.Globalization.CultureInfo.InvariantCulture);
+            var body = new byte[contentLength];
+            await stream.ReadExactlyAsync(body);
+            return body;
+        }
+    }
+
+    private sealed class CancellationAfterDiagnosticExchange(
+        IDocumentationScribeModelExchange inner,
+        CancellationTokenSource cancellation) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            _ = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            cancellation.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new InvalidOperationException();
+        }
     }
 
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
