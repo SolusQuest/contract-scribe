@@ -111,6 +111,10 @@ internal static class DocumentationScribePromptBuilder
                         "terminal-nested-values-are-json-not-json-encoded-strings",
                         "copy-only-request-visible-opaque-tool-identifiers",
                         "omit-cursor-unless-continuing-the-exact-result-that-returned-it",
+                        "proposal-terminal-root-has-only-kind-target-contentUnits",
+                        "skip-terminal-root-has-only-kind-reason-evidenceReferenceIds",
+                        "content-unit-components-use-componentIdentity-never-identity",
+                        "applicableComponents-is-guidance-not-a-terminal-property",
                     },
                 }),
             Message(
@@ -164,6 +168,13 @@ internal static class DocumentationScribePromptBuilder
                         },
                     },
                     applicableComponents = request.Target.ApplicableComponents,
+                    terminalContract = new
+                    {
+                        proposalRootProperties = new[] { "kind", "target", "contentUnits" },
+                        skipRootProperties = new[] { "kind", "reason", "evidenceReferenceIds" },
+                        componentIdentityProperty = "componentIdentity",
+                        forbiddenTerminalProperties = new[] { "applicableComponents", "identity" },
+                    },
                     request.EvidenceReferences,
                     request.EvidenceConflicts,
                     content = promptInput.Evidence,

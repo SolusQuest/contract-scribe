@@ -935,6 +935,12 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
         var properties = searchSchema.RootElement.GetProperty("properties");
         Assert.Contains("request-visible scope ID", properties.GetProperty("scopeId")
             .GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            fixture.Request.ContextReferences.Select(item => item.ContextReferenceId)
+                .Append("evidence.source")
+                .Order(StringComparer.Ordinal),
+            properties.GetProperty("scopeId").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()!));
         var searchCursor = properties.GetProperty("cursor").GetProperty("description").GetString();
         Assert.Contains("same operation", searchCursor, StringComparison.Ordinal);
         Assert.Contains("literal", searchCursor, StringComparison.Ordinal);

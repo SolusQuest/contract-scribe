@@ -9,6 +9,8 @@ internal static class DocumentationScribeTerminalSchema
         {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "object",
+          "additionalProperties": false,
+          "description": "Submit exactly one closed terminal object. A proposal has only kind, target, and contentUnits. A skip has only kind, reason, and evidenceReferenceIds.",
           "$defs": {
             "identifier": {
               "type": "string",

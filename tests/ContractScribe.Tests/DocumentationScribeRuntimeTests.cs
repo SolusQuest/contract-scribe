@@ -667,6 +667,20 @@ public sealed class DocumentationScribeRuntimeTests
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("omit-cursor-unless-continuing-the-exact-result-that-returned-it", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("proposal-terminal-root-has-only-kind-target-contentUnits", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("content-unit-components-use-componentIdentity-never-identity", systemPolicy.RootElement
+            .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        var terminalContract = targetEvidence.RootElement.GetProperty("terminalContract");
+        Assert.Equal(
+            ["kind", "target", "contentUnits"],
+            terminalContract.GetProperty("proposalRootProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
+        Assert.Equal("componentIdentity", terminalContract.GetProperty("componentIdentityProperty").GetString());
+        Assert.Equal(
+            ["applicableComponents", "identity"],
+            terminalContract.GetProperty("forbiddenTerminalProperties").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
         var parameterEvidence = targetEvidence.RootElement.GetProperty("evidenceReferences")[0];
         Assert.Equal("repoctx-11111111111111111111111111111111", parameterEvidence
             .GetProperty("repositoryContextRef").GetString());
@@ -754,6 +768,9 @@ public sealed class DocumentationScribeRuntimeTests
         {
             var root = schemaDocument.RootElement;
             Assert.Equal("object", root.GetProperty("type").GetString());
+            Assert.False(root.GetProperty("additionalProperties").GetBoolean());
+            Assert.Contains("proposal has only kind, target, and contentUnits", root
+                .GetProperty("description").GetString(), StringComparison.Ordinal);
             var properties = root.GetProperty("properties");
             Assert.Equal("string", properties.GetProperty("kind").GetProperty("type").GetString());
             Assert.Equal("array", properties.GetProperty("contentUnits").GetProperty("type").GetString());
@@ -1391,7 +1408,7 @@ public sealed class DocumentationScribeRuntimeTests
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             Assert.Equal(
-                "862a248bdb81884e2d7ab71868b326fdd311e822dd53dae9c7ec08616efe6d00",
+                "cb43287bf421e2da046b99950b64e0e90f4a2d3625ffc5de3dd9a7dec575927a",
                 digest);
         }
         finally

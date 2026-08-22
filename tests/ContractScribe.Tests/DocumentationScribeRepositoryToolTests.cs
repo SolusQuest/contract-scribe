@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ContractScribe.Agent.Runtime;
+using ContractScribe.Cli;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
@@ -13,6 +14,52 @@ namespace ContractScribe.Tests;
 
 public sealed class DocumentationScribeRepositoryToolTests
 {
+    [Fact]
+    public void ProviderSchemasEnumerateOnlyScopesAuthorizedForEachOperation()
+    {
+        var scopes = new[]
+        {
+            DocumentationScribeRepositoryToolScope.Directory(
+                "scope.directory",
+                "docs",
+                DocumentationScribeRepositoryToolOperations.ListFiles
+                    | DocumentationScribeRepositoryToolOperations.SearchText,
+                DocumentationScribeContextRole.MaintainedDocumentation),
+            DocumentationScribeRepositoryToolScope.File(
+                "scope.file",
+                "src/Fixture.cs",
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt
+                    | DocumentationScribeRepositoryToolOperations.SearchText,
+                DocumentationScribeContextRole.SourceDeclaration),
+        };
+
+        Assert.Equal(
+            ["scope.file"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.ReadExcerpt)));
+        Assert.Equal(
+            ["scope.directory"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.ListFilesInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.ListFiles)));
+        Assert.Equal(
+            ["scope.directory", "scope.file"],
+            ScopeIds(DocumentationScribeComposition.BindRepositoryToolScopes(
+                DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
+                scopes,
+                DocumentationScribeRepositoryToolOperations.SearchText)));
+
+        static string[] ScopeIds(ReadOnlyMemory<byte> schemaBytes)
+        {
+            using var schema = JsonDocument.Parse(schemaBytes);
+            return schema.RootElement.GetProperty("properties").GetProperty("scopeId")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        }
+    }
+
     [Fact]
     public void SelectionRecordExposesOnlyClosedReadOperations()
     {
