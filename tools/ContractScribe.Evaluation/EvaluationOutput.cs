@@ -12,11 +12,8 @@ internal static class EvaluationOutput
         directory = null;
         try
         {
-            var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
-            var candidate = Path.GetFullPath(value);
-            if (!IsStrictDescendant(temporaryRoot, candidate)
-                || forbiddenRoots.Select(Path.GetFullPath).Any(root => Overlaps(root, candidate))
-                || ContainsReparsePoint(temporaryRoot, candidate))
+            if (!TryValidateDirectory(value, forbiddenRoots, out var candidate)
+                || candidate is null)
             {
                 return false;
             }
@@ -39,6 +36,61 @@ internal static class EvaluationOutput
         {
             return false;
         }
+    }
+
+    internal static bool TryValidateDirectory(
+        string value,
+        IReadOnlyCollection<string> forbiddenRoots,
+        out string? directory)
+    {
+        directory = null;
+        try
+        {
+            var temporaryRoot = Path.GetFullPath(Path.GetTempPath());
+            var candidate = Path.GetFullPath(value);
+            if (!IsStrictDescendant(temporaryRoot, candidate)
+                || forbiddenRoots.Select(Path.GetFullPath).Any(root => Overlaps(root, candidate))
+                || ContainsReparsePoint(temporaryRoot, candidate)
+                || File.Exists(candidate)
+                || File.Exists(Path.Join(candidate, "evaluation-report.json"))
+                || File.Exists(Path.Join(candidate, "evaluation-partial.json")))
+            {
+                return false;
+            }
+
+            directory = candidate;
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or NotSupportedException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryValidateNewPrivateDirectory(
+        string value,
+        IReadOnlyCollection<string> forbiddenRoots,
+        out string? directory)
+    {
+        directory = null;
+        if (!TryValidateDirectory(value, forbiddenRoots, out var candidate)
+            || candidate is null
+            || Directory.Exists(candidate))
+        {
+            return false;
+        }
+
+        var parent = Path.GetDirectoryName(candidate);
+        if (parent is null || !Directory.Exists(parent))
+        {
+            return false;
+        }
+
+        directory = candidate;
+        return true;
     }
 
     internal static bool TryResolveExistingTemporaryDirectory(string value, out string? directory)

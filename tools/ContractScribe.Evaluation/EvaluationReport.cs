@@ -65,6 +65,15 @@ internal sealed record EvaluationProviderFailureReport(
         };
 }
 
+internal sealed record EvaluationProviderResponseReport(
+    int ProviderRequestNumber,
+    string CodecDisposition);
+
+internal sealed record EvaluationDiagnosticConfigurationReport(
+    string ActualModel,
+    string InheritedProfileIdentity,
+    string DiagnosticConfigurationIdentity);
+
 internal sealed record EvaluationRuntimeDiagnosticReport(
     string Code,
     string Stage,
@@ -105,7 +114,10 @@ internal sealed record EvaluationCaseReport(
     EvaluationProposalReport? Proposal,
     string SensitiveDataStatus,
     string[] IntendedCoverage,
-    string[] ObservedCoverage);
+    string[] ObservedCoverage)
+{
+    public EvaluationProviderResponseReport[] ProviderResponses { get; init; } = [];
+}
 
 internal sealed record EvaluationAggregateReport(
     int SelectedCaseCount,
@@ -140,6 +152,8 @@ internal sealed record EvaluationReport(
     EvaluationCaseReport[] Cases,
     EvaluationAggregateReport Aggregate)
 {
+    public EvaluationDiagnosticConfigurationReport? DiagnosticConfiguration { get; init; }
+
     internal static EvaluationReport Create(
         LoadedEvaluationManifest loaded,
         EvaluationOptions options,
@@ -178,14 +192,17 @@ internal sealed record EvaluationReport(
             ? loaded.Selection.Configurations.Single(item =>
                 item.ConfigurationId == options.ConfigurationId)
             : null;
-        return new EvaluationReport(
+        var report = new EvaluationReport(
             1,
             "optional-local-provider-evaluation",
             ReadSourceRevision(),
             ModeId(options.Mode),
             complete ? "complete" : "partial",
-            options.Mode == EvaluationMode.LiveSafetyGate ? "safety-gate" : "corpus",
-            complete && (options.Mode != EvaluationMode.LiveSafetyGate
+            options.IsPrivateResponseDiagnostic
+                ? "private-response-diagnostic"
+                : options.Mode == EvaluationMode.LiveSafetyGate ? "safety-gate" : "corpus",
+            !options.IsPrivateResponseDiagnostic
+                && complete && (options.Mode != EvaluationMode.LiveSafetyGate
                 || selectedConfiguration!.LiveScenarioIds.Length == 1),
             loaded.Manifest.CorpusId,
             loaded.CorpusIdentity,
@@ -214,6 +231,30 @@ internal sealed record EvaluationReport(
                 cases.Sum(item => item.ProviderRequestCount),
                 cases.Sum(item => item.ToolCallCount),
                 new EvaluationCostReport(aggregateCostStatus, currency, amount)));
+        if (options.IsPrivateResponseDiagnostic)
+        {
+            var profileBytes = JsonSerializer.SerializeToUtf8Bytes(
+                selectedConfiguration!.RequestProfile);
+            var profileIdentity = Convert.ToHexString(SHA256.HashData(profileBytes)).ToLowerInvariant();
+            var actualModel = options.EffectiveModel!;
+            var diagnosticIdentity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                string.Join(
+                    "\n",
+                    report.SourceRevision,
+                    loaded.SelectionIdentity,
+                    selectedConfiguration.ConfigurationId,
+                    profileIdentity,
+                    actualModel)))).ToLowerInvariant();
+            report = report with
+            {
+                DiagnosticConfiguration = new EvaluationDiagnosticConfigurationReport(
+                    actualModel,
+                    profileIdentity,
+                    diagnosticIdentity),
+            };
+        }
+
+        return report;
     }
 
     private static string ModeId(EvaluationMode mode) => mode switch

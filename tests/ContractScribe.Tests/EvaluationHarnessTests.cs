@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Evaluation;
 
@@ -67,6 +69,88 @@ public sealed class EvaluationHarnessTests
             [.. common, "--safety-gate", "--all"],
             out _,
             out _));
+    }
+
+    [Fact]
+    public void PrivateMimoDiagnosticsRequireTheExactSafetyGateAndComparatorContract()
+    {
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var common = MimoLiveArguments(capture);
+
+        Assert.True(EvaluationOptions.TryParse(common, out var baseline, out _));
+        Assert.True(baseline!.IsPrivateResponseDiagnostic);
+        Assert.Equal("mimo-v2.5", baseline.EffectiveModel);
+        Assert.Null(baseline.DiagnosticModel);
+
+        Assert.True(EvaluationOptions.TryParse(
+            [.. common, "--diagnostic-model", "mimo-v2.5-pro"],
+            out var comparator,
+            out _));
+        Assert.Equal("mimo-v2.5-pro", comparator!.EffectiveModel);
+        Assert.Equal("mimo-v2.5-pro", comparator.DiagnosticModel);
+
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Where(value => value != "--safety-gate"), "--all"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Take(common.Length - 2), "--unsafe-capture-provider-response", "relative"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common.Take(common.Length - 2), "--diagnostic-model", "mimo-v2.5-pro"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            [.. common, "--diagnostic-model", "mimo-v2.5"],
+            out _,
+            out _));
+        Assert.False(EvaluationOptions.TryParse(
+            ["--offline", "--corpus", CorpusRoot(), "--unsafe-capture-provider-response", capture],
+            out _,
+            out _));
+    }
+
+    [Fact]
+    public async Task UnsupportedPrivateCapturePlatformFailsBeforeCredentialAcquisition()
+    {
+        if (OperatingSystem.IsLinux()
+            && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+                == System.Runtime.InteropServices.Architecture.X64)
+        {
+            return;
+        }
+
+        var secretName = "CONTRACTSCRIBE_DIAGNOSTIC_PREFLIGHT_" + Guid.NewGuid().ToString("N");
+        const string secret = "preflight-secret-must-remain";
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var output = Path.Join(Path.GetTempPath(), "contract-scribe-output-" + Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable(secretName, secret);
+        try
+        {
+            var arguments = MimoLiveArguments(capture, output, secretName);
+            using var standardOutput = new StringWriter();
+            using var standardError = new StringWriter();
+
+            var exitCode = await EvaluationApplication.RunAsync(
+                arguments,
+                standardOutput,
+                standardError);
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(secret, Environment.GetEnvironmentVariable(secretName));
+            Assert.Contains("evaluation.capture.invalid", standardError.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(capture));
+            Assert.False(Directory.Exists(output));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(secretName, null);
+            if (Directory.Exists(output))
+            {
+                Directory.Delete(output, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -567,6 +651,97 @@ public sealed class EvaluationHarnessTests
     }
 
     [Fact]
+    public void ReportWriterAcceptsTheCompleteClosedCodecVocabularyWithoutRawFields()
+    {
+        var values = Enum.GetValues<OpenAiCompatibleResponseCodecDisposition>();
+        Assert.Equal(26, values.Length);
+        var identifiers = values
+            .Select(value => new OpenAiCompatibleResponseDiagnostic(1, value).CodecDisposition)
+            .ToArray();
+        Assert.Equal(identifiers.Length, identifiers.Distinct(StringComparer.Ordinal).Count());
+        var protocol = File.ReadAllText(Path.Join(
+            FindRepositoryRoot(),
+            "docs",
+            "20_architecture",
+            "validation",
+            "m3-provider-evaluation-protocol.md"));
+        var allowlist = protocol.Split(
+            "The complete first-disposition allowlist, in production evaluation order, is:",
+            StringSplitOptions.None)[1].Split(
+                "`codec.response.exceeds-limit` covers",
+                StringSplitOptions.None)[0];
+        Assert.Equal(
+            identifiers,
+            Regex.Matches(allowlist, "`(codec\\.[a-z0-9.-]+)`")
+                .Select(match => match.Groups[1].Value)
+                .ToArray());
+
+        foreach (var identifier in identifiers)
+        {
+            var report = MinimalReport("safe bounded line");
+            report = report with
+            {
+                Cases =
+                [
+                    report.Cases[0] with
+                    {
+                        ProviderResponses = [new EvaluationProviderResponseReport(1, identifier)],
+                    },
+                ],
+            };
+
+            var bytes = EvaluationReportWriter.Serialize(report, null);
+            using var document = JsonDocument.Parse(bytes);
+            var response = document.RootElement.GetProperty("cases")[0]
+                .GetProperty("providerResponses")[0];
+            Assert.Equal(1, response.GetProperty("providerRequestNumber").GetInt32());
+            Assert.Equal(identifier, response.GetProperty("codecDisposition").GetString());
+            Assert.Equal(2, response.EnumerateObject().Count());
+            Assert.DoesNotContain("raw", Encoding.UTF8.GetString(bytes), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void PrivateDiagnosticReportsSeparateTheActualModelFromTheFrozenSelection()
+    {
+        var loaded = EvaluationManifestLoader.Load(CorpusRoot());
+        var capture = Path.Join(Path.GetTempPath(), "contract-scribe-capture-" + Guid.NewGuid().ToString("N"));
+        var arguments = MimoLiveArguments(capture);
+        Assert.True(EvaluationOptions.TryParse(arguments, out var baselineOptions, out _));
+        Assert.True(EvaluationOptions.TryParse(
+            [.. arguments, "--diagnostic-model", "mimo-v2.5-pro"],
+            out var comparatorOptions,
+            out _));
+
+        var baseline = EvaluationReport.Create(
+            loaded,
+            baselineOptions!,
+            [],
+            selectedCaseCount: 1,
+            complete: true,
+            elapsedMilliseconds: 1);
+        var comparator = EvaluationReport.Create(
+            loaded,
+            comparatorOptions!,
+            [],
+            selectedCaseCount: 1,
+            complete: true,
+            elapsedMilliseconds: 1);
+
+        Assert.Equal("private-response-diagnostic", baseline.ExecutionPurpose);
+        Assert.False(baseline.FullCorpusComplete);
+        Assert.Equal("mimo-compatibility", baseline.ConfigurationId);
+        Assert.Equal("mimo-v2.5", baseline.DiagnosticConfiguration!.ActualModel);
+        Assert.Equal("mimo-v2.5-pro", comparator.DiagnosticConfiguration!.ActualModel);
+        Assert.Equal(
+            baseline.DiagnosticConfiguration.InheritedProfileIdentity,
+            comparator.DiagnosticConfiguration.InheritedProfileIdentity);
+        Assert.NotEqual(
+            baseline.DiagnosticConfiguration.DiagnosticConfigurationIdentity,
+            comparator.DiagnosticConfiguration.DiagnosticConfigurationIdentity);
+    }
+
+    [Fact]
     public void InterruptedAndTimeoutCasesRemainExplicitPartialFailures()
     {
         var loaded = EvaluationManifestLoader.Load(CorpusRoot());
@@ -780,6 +955,26 @@ public sealed class EvaluationHarnessTests
         ImmutableArray<DocumentationScribeCompletedToolExchange>.Empty,
         new DocumentationScribeModelOutputLimits(1, 1, 1, 1, 1),
         ImmutableArray<byte>.Empty);
+
+    private static string[] MimoLiveArguments(
+        string captureDirectory,
+        string? outputDirectory = null,
+        string secretEnvironmentVariable = "CONTRACTSCRIBE_TEST_KEY") =>
+    [
+        "--live",
+        "--safety-gate",
+        "--corpus", CorpusRoot(),
+        "--configuration", "mimo-compatibility",
+        "--endpoint", "https://api.xiaomimimo.com/v1/chat/completions",
+        "--model", "mimo-v2.5",
+        "--secret-env", secretEnvironmentVariable,
+        "--output", outputDirectory ?? Path.Join(Path.GetTempPath(), "contract-scribe-output-" + Guid.NewGuid().ToString("N")),
+        "--currency", "cny",
+        "--cached-input-rate", "1",
+        "--uncached-input-rate", "1",
+        "--output-rate", "1",
+        "--unsafe-capture-provider-response", captureDirectory,
+    ];
 
     private sealed class QueuedExchange : IDocumentationScribeModelExchange
     {

@@ -919,6 +919,223 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
+    public async Task Authoritative_response_diagnostics_preserve_request_correlation_and_first_codec_disposition()
+    {
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            JsonResponse("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}"),
+            JsonResponse("{\"choices\":[]}"),
+        ]);
+        var handler = new CapturingHandler((_, _) => Task.FromResult(responses.Dequeue()));
+        using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateClosedObservations();
+        diagnostics.BeginCase(8);
+        using var exchange = Exchange(handler, diagnostics);
+
+        var accepted = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var acceptedCall = Assert.Single(accepted.ToolCalls);
+        var completed = new DocumentationScribeCompletedToolExchange(
+            0,
+            acceptedCall.CallId,
+            acceptedCall.OperationId,
+            acceptedCall.ArgumentsUtf8Json.ToArray().ToImmutableArray(),
+            DocumentationScribeToolOutcome.Complete.Id,
+            Encoding.UTF8.GetBytes("{}").ToImmutableArray(),
+            []);
+        var rejected = await exchange.SendAsync(Request([completed]), CancellationToken.None);
+        var observed = diagnostics.CompleteCase();
+
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, rejected.Failure!.Code);
+        Assert.Null(observed.FailureCode);
+        Assert.Collection(
+            observed.Responses,
+            item =>
+            {
+                Assert.Equal(1, item.ProviderRequestNumber);
+                Assert.Equal("codec.accepted-tool", item.CodecDisposition);
+            },
+            item =>
+            {
+                Assert.Equal(2, item.ProviderRequestNumber);
+                Assert.Equal("codec.choices.invalid", item.CodecDisposition);
+            });
+    }
+
+    [Fact]
+    public async Task Response_diagnostics_do_not_invent_codec_rows_for_non_codec_failures()
+    {
+        var handler = new CapturingHandler((_, _) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.TooManyRequests)));
+        using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateClosedObservations();
+        diagnostics.BeginCase(8);
+        using var exchange = Exchange(handler, diagnostics);
+
+        var response = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var observed = diagnostics.CompleteCase();
+
+        Assert.Equal(DocumentationScribeModelFailureCode.RateLimited, response.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureOrigin.HttpStatus, response.Failure.Origin);
+        Assert.Empty(observed.Responses);
+        Assert.Null(observed.FailureCode);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Response_diagnostics_record_terminal_acceptance_only_after_product_construction()
+    {
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}")));
+        using var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateClosedObservations();
+        diagnostics.BeginCase(8);
+        using var exchange = Exchange(handler, diagnostics);
+
+        var response = await exchange.SendAsync(Request([]), CancellationToken.None);
+        var observed = diagnostics.CompleteCase();
+
+        Assert.Single(response.TerminalSubmissions);
+        var row = Assert.Single(observed.Responses);
+        Assert.Equal(1, row.ProviderRequestNumber);
+        Assert.Equal("codec.accepted-terminal", row.CodecDisposition);
+        Assert.Null(observed.FailureCode);
+    }
+
+    [Fact]
+    public async Task Unsafe_linux_capture_writes_exact_private_bytes_and_rejects_directory_substitution()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var root = Path.Join(
+            Path.GetTempPath(),
+            "contract-scribe-capture-test-" + Guid.NewGuid().ToString("N"));
+        var capture = Path.Join(root, "capture");
+        var moved = Path.Join(root, "moved");
+        Directory.CreateDirectory(
+            root,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            for (var relation = 0; relation < 3; relation++)
+            {
+                var candidate = Path.Join(root, "forbidden-" + relation);
+                var forbidden = relation switch
+                {
+                    0 => candidate,
+                    1 => root,
+                    _ => Path.Join(candidate, "descendant"),
+                };
+                try
+                {
+                    using var unexpected =
+                        OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+                            candidate,
+                            [forbidden]);
+                    Assert.Fail("Capture and forbidden roots must be disjoint in both directions.");
+                }
+                catch (InvalidDataException exception)
+                {
+                    Assert.Equal("evaluation.capture.invalid", exception.Message);
+                }
+
+                Assert.False(Directory.Exists(candidate));
+            }
+
+            const string body = "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
+            using (var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+                capture,
+                []))
+            {
+                diagnostics.BeginCase(8);
+                var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(body)));
+                using var exchange = Exchange(handler, diagnostics);
+
+                var response = await exchange.SendAsync(Request([]), CancellationToken.None);
+                var observed = diagnostics.CompleteCase();
+
+                Assert.Single(response.ToolCalls);
+                Assert.Null(observed.FailureCode);
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                    File.GetUnixFileMode(capture));
+                var file = Path.Join(capture, "provider-response-0001.json");
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(file));
+                Assert.Equal(Encoding.UTF8.GetBytes(body), await File.ReadAllBytesAsync(file));
+            }
+            try
+            {
+                using var unexpected =
+                    OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(capture, []);
+                Assert.Fail("A pre-existing capture directory must be rejected.");
+            }
+            catch (InvalidDataException exception)
+            {
+                Assert.Equal("evaluation.capture.invalid", exception.Message);
+            }
+
+            var secondCapture = Path.Join(root, "capture-two");
+            using (var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+                secondCapture,
+                []))
+            {
+                diagnostics.BeginCase(8);
+                Directory.Move(secondCapture, moved);
+                Directory.CreateSymbolicLink(secondCapture, moved);
+                var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(body)));
+                using var exchange = Exchange(handler, diagnostics);
+
+                await Assert.ThrowsAsync<OpenAiCompatibleDiagnosticException>(() =>
+                    exchange.SendAsync(Request([]), CancellationToken.None).AsTask());
+                var observed = diagnostics.CompleteCase();
+
+                Assert.Equal(1, handler.CallCount);
+                Assert.Equal("evaluation.capture.failed", observed.FailureCode);
+                Assert.Single(observed.Responses);
+            }
+
+            var collisionCapture = Path.Join(root, "capture-collision");
+            using (var diagnostics = OpenAiCompatibleResponseDiagnostics.CreateUnsafeLinuxCapture(
+                collisionCapture,
+                []))
+            {
+                diagnostics.BeginCase(8);
+                var collision = Path.Join(collisionCapture, "provider-response-0001.json");
+                await File.WriteAllTextAsync(collision, "operator-owned");
+                File.SetUnixFileMode(
+                    collision,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(body)));
+                using var exchange = Exchange(handler, diagnostics);
+
+                await Assert.ThrowsAsync<OpenAiCompatibleDiagnosticException>(() =>
+                    exchange.SendAsync(Request([]), CancellationToken.None).AsTask());
+                var observed = diagnostics.CompleteCase();
+
+                Assert.Equal(1, handler.CallCount);
+                Assert.Equal("evaluation.capture.failed", observed.FailureCode);
+                Assert.Single(observed.Responses);
+                Assert.Equal("operator-owned", await File.ReadAllTextAsync(collision));
+                Assert.Empty(Directory.EnumerateFiles(collisionCapture, ".capture-*"));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(Path.Join(root, "capture-two"))
+                && new DirectoryInfo(Path.Join(root, "capture-two")).LinkTarget is not null)
+            {
+                Directory.Delete(Path.Join(root, "capture-two"));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Response_structure_precedes_finish_reason_and_uses_array_position()
     {
         var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
@@ -1146,6 +1363,117 @@ public sealed class DocumentationScribeProviderTransportTests
                 new byte[OpenAiCompatibleChatCompletionsCodec.MaximumRawResponseUtf8Bytes + 1],
                 prepared));
         Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        Assert.Equal(
+            OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit,
+            exception.Disposition);
+    }
+
+    [Fact]
+    public void Every_response_codec_rejection_has_one_closed_authoritative_disposition()
+    {
+        const string ordinary = "{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}";
+        const string terminal = "{\"id\":\"call.terminal\",\"type\":\"function\",\"function\":{\"name\":\"cs_terminal\",\"arguments\":\"{\\\"kind\\\":\\\"skip\\\"}\"}}";
+        static string Body(string message, string finish = "tool_calls", string suffix = "") =>
+            "{\"choices\":[{\"index\":0,\"message\":" + message
+            + ",\"finish_reason\":\"" + finish + "\"}]" + suffix + "}";
+
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "model");
+        (string Body, OpenAiCompatibleResponseCodecDisposition Disposition)[] cases =
+        [
+            ("{", OpenAiCompatibleResponseCodecDisposition.JsonInvalid),
+            ("{\"choices\":[],\"choices\":[]}", OpenAiCompatibleResponseCodecDisposition.JsonDuplicateProperty),
+            ("[]", OpenAiCompatibleResponseCodecDisposition.RootInvalid),
+            ("{}", OpenAiCompatibleResponseCodecDisposition.ChoicesInvalid),
+            ("{\"choices\":[{\"index\":1,\"message\":{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]},\"finish_reason\":\"tool_calls\"}]}", OpenAiCompatibleResponseCodecDisposition.ChoiceIndexInvalid),
+            ("{\"choices\":[{\"index\":0,\"message\":[],\"finish_reason\":\"tool_calls\"}]}", OpenAiCompatibleResponseCodecDisposition.MessageInvalid),
+            (Body("{\"role\":\"user\",\"tool_calls\":[" + ordinary + "]}"), OpenAiCompatibleResponseCodecDisposition.MessageRoleInvalid),
+            (Body("{\"role\":\"assistant\",\"content\":{},\"tool_calls\":[" + ordinary + "]}"), OpenAiCompatibleResponseCodecDisposition.MessageContentInvalid),
+            (Body("{\"role\":\"assistant\",\"reasoning_content\":{},\"tool_calls\":[" + ordinary + "]}"), OpenAiCompatibleResponseCodecDisposition.MessageThinkingContentInvalid),
+            (Body("{\"role\":\"assistant\",\"refusal\":{},\"tool_calls\":[" + ordinary + "]}"), OpenAiCompatibleResponseCodecDisposition.MessageRefusalInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":{}}"), OpenAiCompatibleResponseCodecDisposition.ToolCallsInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[{\"index\":1,\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]}"), OpenAiCompatibleResponseCodecDisposition.ToolCallIndexInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"other\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]}"), OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"unknown\",\"arguments\":\"{}\"}}]}"), OpenAiCompatibleResponseCodecDisposition.ToolCallAliasInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\"}}]}"), OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "," + terminal + "]}"), OpenAiCompatibleResponseCodecDisposition.TerminalMixed),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", suffix: ",\"usage\":[]"), OpenAiCompatibleResponseCodecDisposition.UsageInvalid),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", "stop"), OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[]}", "tool_calls"), OpenAiCompatibleResponseCodecDisposition.FinishReasonInconsistent),
+        ];
+
+        foreach (var item in cases)
+        {
+            var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+                OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                    Encoding.UTF8.GetBytes(item.Body),
+                    prepared));
+            Assert.Equal(item.Disposition, exception.Disposition);
+        }
+
+        var tinyTerminal = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([], outputLimits: Limits(maximumTerminal: 1)),
+            "model");
+        AssertDisposition(
+            Body("{\"role\":\"assistant\",\"tool_calls\":[" + terminal + "]}"),
+            tinyTerminal,
+            OpenAiCompatibleResponseCodecDisposition.TerminalArgumentsExceedsLimit);
+
+        var required = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]),
+            "model",
+            RequiredContinuationProfile());
+        AssertDisposition(
+            Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}"),
+            required,
+            OpenAiCompatibleResponseCodecDisposition.ContinuationMissing);
+
+        var oneCall = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([], outputLimits: Limits(maximumToolCalls: 1)),
+            "model");
+        AssertDisposition(
+            Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "," + ordinary.Replace("call.one", "call.two", StringComparison.Ordinal) + "]}"),
+            oneCall,
+            OpenAiCompatibleResponseCodecDisposition.ToolCallsExceedsLimit);
+
+        var tinyArguments = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([], outputLimits: Limits(maximumArguments: 1)),
+            "model");
+        AssertDisposition(
+            Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}"),
+            tinyArguments,
+            OpenAiCompatibleResponseCodecDisposition.ToolCallArgumentsExceedsLimit);
+
+        var aggregateOverflow = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        content = new string('c', 600_000),
+                        reasoning_content = new string('r', 600_000),
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                id = "call.one",
+                                type = "function",
+                                function = new { name = "cs_tool_000", arguments = "{}" },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+        });
+        var aggregateException = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(aggregateOverflow, prepared));
+        Assert.Equal(
+            OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit,
+            aggregateException.Disposition);
     }
 
     [Fact]
@@ -1500,11 +1828,43 @@ public sealed class DocumentationScribeProviderTransportTests
                 maximumNormalizedResponseUtf8Bytes: DocumentationScribeContract.MaximumArtifactUtf8Bytes),
             deterministicUtf8: []);
 
+    private static DocumentationScribeModelOutputLimits Limits(
+        int maximumToolCalls = 4,
+        int maximumArguments = 4_096,
+        int maximumTerminal = 4_096,
+        int maximumNormalized = DocumentationScribeContract.MaximumArtifactUtf8Bytes) => new(
+            maximumToolCalls,
+            maximumArguments,
+            maximumTerminal,
+            maximumOutputTokens: 512,
+            maximumNormalized);
+
+    private static void AssertDisposition(
+        string body,
+        OpenAiCompatiblePreparedRequest prepared,
+        OpenAiCompatibleResponseCodecDisposition expected)
+    {
+        var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                Encoding.UTF8.GetBytes(body),
+                prepared));
+        Assert.Equal(expected, exception.Disposition);
+    }
+
     private static OpenAiCompatibleHttpModelExchange Exchange(HttpMessageHandler handler) => new(
         new OpenAiCompatibleHttpTransportOptions(
             new Uri("https://example.test/v1"), "model", networkEnabled: true),
         handler,
         disposeHandler: false);
+
+    private static OpenAiCompatibleHttpModelExchange Exchange(
+        HttpMessageHandler handler,
+        OpenAiCompatibleResponseDiagnostics diagnostics) => new(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1"), "model", networkEnabled: true),
+            handler,
+            disposeHandler: false,
+            diagnostics);
 
     private static OpenAiCompatibleChatCompletionsRequestProfile RequiredContinuationProfile() => new(
         OpenAiCompatibleThinkingMode.Enabled,

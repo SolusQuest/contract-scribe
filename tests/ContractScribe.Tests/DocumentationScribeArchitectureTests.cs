@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Xml.Linq;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -131,6 +133,56 @@ public sealed class DocumentationScribeArchitectureTests
                     Assert.DoesNotContain(forbiddenNames, forbidden =>
                         parameter.Name?.Contains(forbidden, StringComparison.OrdinalIgnoreCase) == true));
         }
+    }
+
+    [Fact]
+    public void Provider_diagnostics_keep_the_existing_friend_boundary_and_expose_no_raw_capability()
+    {
+        var assembly = typeof(OpenAiCompatibleResponseDiagnostics).Assembly;
+        Assert.Equal(
+            ["ContractScribe.Tests"],
+            assembly.GetCustomAttributes<InternalsVisibleToAttribute>()
+                .Select(attribute => attribute.AssemblyName)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+
+        Type[] diagnosticTypes =
+        [
+            typeof(OpenAiCompatibleResponseDiagnostics),
+            typeof(OpenAiCompatibleResponseDiagnostic),
+            typeof(OpenAiCompatibleResponseDiagnosticCase),
+            typeof(OpenAiCompatibleResponseCodecDisposition),
+        ];
+        Assert.All(diagnosticTypes.Where(type => type.IsClass), type => Assert.True(type.IsSealed));
+        Assert.All(diagnosticTypes, type => Assert.True(type.IsPublic));
+
+        var publicMembers = diagnosticTypes.Where(type => !type.IsEnum).SelectMany(type =>
+            type.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
+                .Where(member => member.DeclaringType == type))
+            .ToArray();
+        var forbiddenNames = new[]
+        {
+            "requestBytes", "responseBody", "rawResponse", "header", "credential",
+            "preparedRequest", "continuation", "callback", "stream",
+        };
+        Assert.DoesNotContain(publicMembers, member => forbiddenNames.Any(forbidden =>
+            member.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase)));
+
+        var signatureTypes = diagnosticTypes
+            .SelectMany(PublicSignatureTypes)
+            .SelectMany(ExpandType)
+            .Distinct()
+            .ToArray();
+        Assert.DoesNotContain(typeof(byte[]), signatureTypes);
+        Assert.DoesNotContain(typeof(Stream), signatureTypes);
+        Assert.DoesNotContain(signatureTypes, type =>
+            type.FullName?.StartsWith("System.Net.Http.Http", StringComparison.Ordinal) == true
+            || typeof(Delegate).IsAssignableFrom(type));
+
+        var structure = File.ReadAllText(Path.Join(
+            FindRepositoryRoot(), "docs", "20_architecture", "project-structure.md"));
+        Assert.Contains("Issue #110 adds a narrow provider-diagnostic capability", structure, StringComparison.Ordinal);
+        Assert.Contains("Evaluation receives no Agent friendship", structure, StringComparison.Ordinal);
     }
 
     [Fact]

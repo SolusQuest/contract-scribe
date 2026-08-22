@@ -11,21 +11,31 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
 {
     private readonly OpenAiCompatibleHttpTransportOptions options;
     private readonly HttpMessageInvoker invoker;
+    private readonly OpenAiCompatibleResponseDiagnostics? diagnostics;
     private int disposed;
 
     public OpenAiCompatibleHttpModelExchange(OpenAiCompatibleHttpTransportOptions options)
-        : this(options, CreateProductionHandler(), disposeHandler: true)
+        : this(options, CreateProductionHandler(), disposeHandler: true, diagnostics: null)
+    {
+    }
+
+    public OpenAiCompatibleHttpModelExchange(
+        OpenAiCompatibleHttpTransportOptions options,
+        OpenAiCompatibleResponseDiagnostics diagnostics)
+        : this(options, CreateProductionHandler(), disposeHandler: true, diagnostics)
     {
     }
 
     internal OpenAiCompatibleHttpModelExchange(
         OpenAiCompatibleHttpTransportOptions options,
         HttpMessageHandler handler,
-        bool disposeHandler = true)
+        bool disposeHandler = true,
+        OpenAiCompatibleResponseDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(handler);
         this.options = options;
+        this.diagnostics = diagnostics;
         invoker = new HttpMessageInvoker(
             new SanitizingHandler(handler, disposeHandler),
             disposeHandler: true);
@@ -38,6 +48,7 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         ArgumentNullException.ThrowIfNull(request);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
+        diagnostics?.BeginProviderRequest(request.ProviderRequestNumber);
         if (!options.NetworkEnabled)
         {
             return Failure(
@@ -96,10 +107,38 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             var body = await ReadBoundedAsync(stream, contentLength, cancellationToken).ConfigureAwait(false);
             try
             {
-                return OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared);
+                var parsed = OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared);
+                if (diagnostics is not null)
+                {
+                    var disposition = parsed.TerminalSubmissions.Length == 1
+                        ? OpenAiCompatibleResponseCodecDisposition.AcceptedTerminal
+                        : OpenAiCompatibleResponseCodecDisposition.AcceptedTool;
+                    await diagnostics.ObserveAsync(
+                        request.ProviderRequestNumber,
+                        disposition,
+                        body,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                return parsed;
             }
             catch (OpenAiCompatibleProtocolException exception)
             {
+                if (diagnostics is not null)
+                {
+                    var disposition = exception.Disposition;
+                    if (disposition is null)
+                    {
+                        diagnostics.FailMissingDisposition();
+                    }
+
+                    await diagnostics.ObserveAsync(
+                        request.ProviderRequestNumber,
+                        disposition.Value,
+                        body,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 return Failure(
                     exception.Code,
                     origin: DocumentationScribeModelFailureOrigin.ResponseCodec,
@@ -108,6 +147,10 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OpenAiCompatibleDiagnosticException)
         {
             throw;
         }

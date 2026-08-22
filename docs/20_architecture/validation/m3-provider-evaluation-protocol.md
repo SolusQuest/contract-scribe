@@ -72,6 +72,10 @@ dotnet tools/ContractScribe.Evaluation/bin/Release/net10.0/ContractScribe.Evalua
 
 For MiMo, use a separately authorized secret/output/cost invocation and replace the configuration-specific arguments with `--configuration mimo-compatibility --endpoint https://api.xiaomimimo.com/v1/chat/completions --model mimo-v2.5`.
 
+Private MiMo response diagnosis is a separate, non-claim-bearing invocation. It is accepted only with `--live --safety-gate` on Linux x64 and adds `--unsafe-capture-provider-response <new-absolute-directory-below-os-temp>`. Other architectures fail before credential acquisition because the native physical-identity ABI is deliberately closed to the reviewed x64 layout. The normal `--model` remains the frozen `mimo-v2.5`. One reviewed comparator may additionally specify exact `--diagnostic-model mimo-v2.5-pro`; it inherits the frozen `mimo-compatibility` endpoint, request profile, safety case, limits, selection identity, and caller pricing. Normal selection still rejects Pro, and no other diagnostic override is accepted. The report identifies the actual model and a distinct deterministic diagnostic configuration while retaining the frozen selection separately; `executionPurpose` is `private-response-diagnostic` and `fullCorpusComplete` is always false.
+
+Before either paid diagnostic launch, the exact pushed executable must pass required GitHub-hosted Ubuntu x64 CI and same-session exact-head code/security review. Fresh operator authorization must then bind the exact SHA, endpoint, actual model, inherited profile, one safety-gate launch with at most eight in-run provider requests, current rates and remaining aggregate budget, credential source, and unique normal-output and capture directories. A correction invalidates that launch authorization. The operator launches the already-built exact-head artifact, examines the private bytes only locally, reduces them to closed facts, deletes the complete capture directory immediately, confirms that deletion, and publishes no raw material or path.
+
 The safety gate executes exactly the selected configuration's `safetyGateCaseId` to a terminal disposition under its normal provider-request and tool-call limits. It can make request 1, execute a real tool, and make request 2 before terminal completion. DeepSeek then stops before case 2 and reports `fullCorpusComplete = false`. MiMo's one-case gate is its complete selected denominator, so successful completion reports `fullCorpusComplete = true` and does not authorize a second MiMo case or the DeepSeek configuration.
 
 After human inspection of that local report, M3-P4 may execute the full selected corpus only under its separate authorization:
@@ -106,6 +110,39 @@ Products and sums use checked `Int128`; the combined response numerator is ceili
 Live output requires an operator-selected physical directory below the operating-system temporary root. Symlink, junction, reparse, non-temporary destinations, prior evaluation report files, and any equality or ancestor/descendant overlap with the checkout, caller corpus, prepared corpus, or analyzed repository are rejected before publication or provider invocation. The same physical non-overlap check runs immediately before every same-directory atomic replacement. A partial allowlisted report names the active case before its initialization and is updated after each disposition; only the selected denominator can become complete, and successful final publication removes the partial file. Partial, interrupted, canceled, timeout, budget, rate-limit, malformed, unavailable, validation, and M2 outcomes stay explicit and are never called passed or compatible.
 
 Every provider response failure is retained in `providerFailures` as an ordered request number, one closed `model.failure.*`, an optional closed origin, and an optional numeric HTTP status. Origins are request preparation, received HTTP status, before-response transport, successful-response metadata/body handling, and response codec. Status is present if and only if a non-success HTTP response was received. The transport never reads, hashes, classifies, or retains a non-success body. The report also projects only the Core-validated runtime diagnostic rows: code, stage, optional tool `referenceId`, and optional result `validationCode`. It excludes validation pointers, provider request IDs, response headers, exception type/message/stack, body length/hash/content, and provider prose. Cost decoration preserves these facts unchanged. Continuation behavior contributes only closed observation IDs; provider prose, raw responses, assistant content, and reasoning content remain excluded.
+
+Each case also contains `providerResponses`. Offline and preflight-only cases use `[]`. Each row contains exactly an integer `providerRequestNumber` and one `codecDisposition`; request numbers are strictly increasing, unique, between 1 and the selected maximum (currently 8), and have at most one row per request. There is no row for request preparation, before-response transport, non-success status, encoded/non-JSON/declared-oversize responses, bounded-read overflow or truncation, or unreadable bodies. Closed rows already selected before cancellation or a local diagnostic/capture failure remain in the failed or canceled partial case when normal report persistence remains available. Local failures never create `providerFailures`.
+
+The complete first-disposition allowlist, in production evaluation order, is:
+
+1. `codec.accepted-tool`
+2. `codec.accepted-terminal`
+3. `codec.response.exceeds-limit`
+4. `codec.json.invalid`
+5. `codec.json.duplicate-property`
+6. `codec.root.invalid`
+7. `codec.choices.invalid`
+8. `codec.choice.index.invalid`
+9. `codec.message.invalid`
+10. `codec.message.role.invalid`
+11. `codec.message.content.invalid`
+12. `codec.message.thinking-content.invalid`
+13. `codec.message.refusal.invalid`
+14. `codec.tool-calls.invalid`
+15. `codec.tool-call.index.invalid`
+16. `codec.tool-call.envelope.invalid`
+17. `codec.tool-call.alias.invalid`
+18. `codec.arguments.invalid`
+19. `codec.terminal.mixed`
+20. `codec.usage.invalid`
+21. `codec.finish-reason.unsupported`
+22. `codec.finish-reason.inconsistent`
+23. `codec.terminal.arguments-exceeds-limit`
+24. `codec.continuation.missing`
+25. `codec.tool-calls.exceeds-limit`
+26. `codec.tool-call.arguments-exceeds-limit`
+
+`codec.response.exceeds-limit` covers both the direct raw codec ceiling and a structurally valid response whose combined normalized representation exceeds the normalized aggregate ceiling. If multiple defects exist, only the first check reached in the production parser is recorded. The thinking-content identifier deliberately avoids reproducing the provider wire-field spelling that the report scanner forbids.
 
 The report allowlist contains corpus/selection/cost/source identities; bounded case IDs, status codes, counts, usage/cache/cost completeness, case-level expectation status and difference IDs, and live elapsed time; proposal-validation and M2 outcomes; and production-validated bounded content units with claim category and sorted evidence IDs for local human review. Offline differences cover the frozen outcome and observation oracle rather than treating deterministic byte equality or declarative input-coverage labels as semantic conformance.
 

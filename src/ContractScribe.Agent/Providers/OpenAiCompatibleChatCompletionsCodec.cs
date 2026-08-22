@@ -107,7 +107,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         ArgumentNullException.ThrowIfNull(request);
         if (utf8Json.Length > MaximumRawResponseUtf8Bytes)
         {
-            throw Malformed();
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit);
         }
 
         try
@@ -118,24 +118,44 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 CommentHandling = JsonCommentHandling.Disallow,
                 MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
             });
-            RejectDuplicateProperties(document.RootElement);
-            var root = RequireObject(document.RootElement);
-            var choices = RequireProperty(root, "choices");
+            RejectDuplicateProperties(
+                document.RootElement,
+                OpenAiCompatibleResponseCodecDisposition.JsonDuplicateProperty);
+            var root = RequireObject(
+                document.RootElement,
+                OpenAiCompatibleResponseCodecDisposition.RootInvalid);
+            var choices = RequireProperty(
+                root,
+                "choices",
+                OpenAiCompatibleResponseCodecDisposition.ChoicesInvalid);
             if (choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() != 1)
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.ChoicesInvalid);
             }
 
-            var choice = RequireObject(choices[0]);
+            var choice = RequireObject(
+                choices[0],
+                OpenAiCompatibleResponseCodecDisposition.ChoicesInvalid);
             if (!TryGetExactInt(choice, "index", out var choiceIndex) || choiceIndex != 0)
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.ChoiceIndexInvalid);
             }
 
-            var message = RequireObject(RequireProperty(choice, "message"));
-            if (!string.Equals(RequireString(message, "role"), "assistant", StringComparison.Ordinal))
+            var message = RequireObject(
+                RequireProperty(
+                    choice,
+                    "message",
+                    OpenAiCompatibleResponseCodecDisposition.MessageInvalid),
+                OpenAiCompatibleResponseCodecDisposition.MessageInvalid);
+            if (!string.Equals(
+                    RequireString(
+                        message,
+                        "role",
+                        OpenAiCompatibleResponseCodecDisposition.MessageRoleInvalid),
+                    "assistant",
+                    StringComparison.Ordinal))
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.MessageRoleInvalid);
             }
 
             var contentPresent = message.TryGetProperty("content", out var content);
@@ -147,14 +167,16 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     contentText = content.GetString();
                     if (contentText is null)
                     {
-                        throw Malformed();
+                        throw Malformed(OpenAiCompatibleResponseCodecDisposition.MessageContentInvalid);
                     }
 
-                    EnsureStrict(contentText);
+                    EnsureStrict(
+                        contentText,
+                        OpenAiCompatibleResponseCodecDisposition.MessageContentInvalid);
                 }
                 else if (content.ValueKind != JsonValueKind.Null)
                 {
-                    throw Malformed();
+                    throw Malformed(OpenAiCompatibleResponseCodecDisposition.MessageContentInvalid);
                 }
             }
 
@@ -164,24 +186,33 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             {
                 if (reasoningContent.ValueKind == JsonValueKind.String)
                 {
-                    reasoningContentText = reasoningContent.GetString() ?? throw Malformed();
-                    EnsureStrict(reasoningContentText);
+                    reasoningContentText = reasoningContent.GetString()
+                        ?? throw Malformed(
+                            OpenAiCompatibleResponseCodecDisposition.MessageThinkingContentInvalid);
+                    EnsureStrict(
+                        reasoningContentText,
+                        OpenAiCompatibleResponseCodecDisposition.MessageThinkingContentInvalid);
                 }
                 else if (reasoningContent.ValueKind != JsonValueKind.Null)
                 {
-                    throw Malformed();
+                    throw Malformed(
+                        OpenAiCompatibleResponseCodecDisposition.MessageThinkingContentInvalid);
                 }
             }
 
             var hasRefusal = message.TryGetProperty("refusal", out var refusal);
             if (hasRefusal && refusal.ValueKind is not (JsonValueKind.Null or JsonValueKind.String))
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.MessageRefusalInvalid);
             }
 
             if (hasRefusal && refusal.ValueKind == JsonValueKind.String)
             {
-                EnsureStrict(refusal.GetString() ?? throw Malformed());
+                EnsureStrict(
+                    refusal.GetString()
+                        ?? throw Malformed(
+                            OpenAiCompatibleResponseCodecDisposition.MessageRefusalInvalid),
+                    OpenAiCompatibleResponseCodecDisposition.MessageRefusalInvalid);
             }
 
             var calls = ImmutableArray.CreateBuilder<ParsedCall>();
@@ -191,38 +222,73 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 if (callsElement.ValueKind != JsonValueKind.Array
                     || callsElement.GetArrayLength() > MaximumOrdinaryTools + 1)
                 {
-                    throw Malformed();
+                    throw Malformed(OpenAiCompatibleResponseCodecDisposition.ToolCallsInvalid);
                 }
 
                 for (var index = 0; index < callsElement.GetArrayLength(); index++)
                 {
-                    var call = RequireObject(callsElement[index]);
+                    var call = RequireObject(
+                        callsElement[index],
+                        OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid);
                     if (call.TryGetProperty("index", out _)
                         && (!TryGetExactInt(call, "index", out var callIndex) || callIndex != index))
                     {
-                        throw Malformed();
+                        throw Malformed(
+                            OpenAiCompatibleResponseCodecDisposition.ToolCallIndexInvalid);
                     }
 
-                    var callId = RequireString(call, "id");
-                    DocumentationScribeBoundary.ValidateCorrelationId(callId, nameof(callId));
+                    var callId = RequireString(
+                        call,
+                        "id",
+                        OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid);
+                    try
+                    {
+                        DocumentationScribeBoundary.ValidateCorrelationId(callId, nameof(callId));
+                    }
+                    catch (ArgumentException)
+                    {
+                        throw Malformed(
+                            OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid);
+                    }
+
                     if (request.CompletedCallIds.Contains(callId)
                         || !callIds.Add(callId)
-                        || !string.Equals(RequireString(call, "type"), "function", StringComparison.Ordinal))
+                        || !string.Equals(
+                            RequireString(
+                                call,
+                                "type",
+                                OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid),
+                            "function",
+                            StringComparison.Ordinal))
                     {
-                        throw Malformed();
+                        throw Malformed(
+                            OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid);
                     }
 
-                    var function = RequireObject(RequireProperty(call, "function"));
-                    var alias = RequireString(function, "name");
+                    var function = RequireObject(
+                        RequireProperty(
+                            call,
+                            "function",
+                            OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid),
+                        OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid);
+                    var alias = RequireString(
+                        function,
+                        "name",
+                        OpenAiCompatibleResponseCodecDisposition.ToolCallAliasInvalid);
                     if (!string.Equals(alias, TerminalAlias, StringComparison.Ordinal)
                         && !request.AliasToOperation.ContainsKey(alias))
                     {
-                        throw Malformed();
+                        throw Malformed(OpenAiCompatibleResponseCodecDisposition.ToolCallAliasInvalid);
                     }
 
-                    var argumentsText = RequireString(function, "arguments");
+                    var argumentsText = RequireString(
+                        function,
+                        "arguments",
+                        OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid);
                     var arguments = StrictUtf8.GetBytes(argumentsText);
-                    ValidateArguments(arguments);
+                    ValidateArguments(
+                        arguments,
+                        OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid);
                     calls.Add(new ParsedCall(index, callId, alias, arguments));
                 }
             }
@@ -230,20 +296,23 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             var terminalCount = calls.Count(call => string.Equals(call.Alias, TerminalAlias, StringComparison.Ordinal));
             if (terminalCount > 0 && (terminalCount != 1 || calls.Count != 1))
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.TerminalMixed);
             }
 
             var observations = ParseUsage(root);
-            var finishReason = RequireString(choice, "finish_reason");
+            var finishReason = RequireString(
+                choice,
+                "finish_reason",
+                OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported);
             if (!string.Equals(finishReason, "tool_calls", StringComparison.Ordinal))
             {
-                throw Unsupported();
+                throw Unsupported(OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported);
             }
 
             if ((hasRefusal && refusal.ValueKind != JsonValueKind.Null)
                 || calls.Count == 0)
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.FinishReasonInconsistent);
             }
 
             if (terminalCount > 0)
@@ -251,7 +320,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 var terminal = calls[0];
                 if (terminal.Arguments.Length > request.OutputLimits.MaximumTerminalUtf8Bytes)
                 {
-                    throw Malformed();
+                    throw Malformed(
+                        OpenAiCompatibleResponseCodecDisposition.TerminalArgumentsExceedsLimit);
                 }
 
                 return Response(
@@ -271,7 +341,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
             if (calls.Count > request.OutputLimits.MaximumToolCalls)
             {
-                throw Malformed();
+                throw Malformed(OpenAiCompatibleResponseCodecDisposition.ToolCallsExceedsLimit);
             }
 
             var normalized = ImmutableArray.CreateBuilder<DocumentationScribeModelToolCall>(calls.Count);
@@ -280,7 +350,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 if (!request.AliasToOperation.TryGetValue(call.Alias, out var operationId)
                     || call.Arguments.Length > request.OutputLimits.MaximumToolArgumentUtf8Bytes)
                 {
-                    throw Malformed();
+                    throw Malformed(
+                        OpenAiCompatibleResponseCodecDisposition.ToolCallArgumentsExceedsLimit);
                 }
 
                 normalized.Add(new DocumentationScribeModelToolCall(
@@ -305,14 +376,17 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         {
             throw;
         }
-        catch (Exception exception) when (exception is JsonException
-            or InvalidOperationException
+        catch (JsonException)
+        {
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.JsonInvalid);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
             or DecoderFallbackException
             or EncoderFallbackException
             or ArgumentException
             or OverflowException)
         {
-            throw Malformed();
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit);
         }
     }
 
@@ -600,7 +674,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             return default;
         }
 
-        usage = RequireObject(usage);
+        usage = RequireObject(
+            usage,
+            OpenAiCompatibleResponseCodecDisposition.UsageInvalid);
         var input = OptionalInt(usage, "prompt_tokens", DocumentationScribeContract.MaximumObservedInputTokens);
         var output = OptionalInt(usage, "completion_tokens", DocumentationScribeContract.MaximumObservedOutputTokens);
         var directHit = OptionalInt(usage, "prompt_cache_hit_tokens", DocumentationScribeContract.MaximumObservedInputTokens);
@@ -608,13 +684,23 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         int? cachedDetail = null;
         if (usage.TryGetProperty("prompt_tokens_details", out var promptDetails))
         {
-            cachedDetail = OptionalInt(RequireObject(promptDetails), "cached_tokens", DocumentationScribeContract.MaximumObservedInputTokens);
+            cachedDetail = OptionalInt(
+                RequireObject(
+                    promptDetails,
+                    OpenAiCompatibleResponseCodecDisposition.UsageInvalid),
+                "cached_tokens",
+                DocumentationScribeContract.MaximumObservedInputTokens);
         }
 
         int? reasoning = null;
         if (usage.TryGetProperty("completion_tokens_details", out var completionDetails))
         {
-            reasoning = OptionalInt(RequireObject(completionDetails), "reasoning_tokens", DocumentationScribeContract.MaximumObservedOutputTokens);
+            reasoning = OptionalInt(
+                RequireObject(
+                    completionDetails,
+                    OpenAiCompatibleResponseCodecDisposition.UsageInvalid),
+                "reasoning_tokens",
+                DocumentationScribeContract.MaximumObservedOutputTokens);
         }
 
         var cached = directHit ?? cachedDetail;
@@ -626,7 +712,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             || (input is not null && (cached > input || directMiss > input))
             || cacheComponentsExceedInput)
         {
-            throw Malformed();
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.UsageInvalid);
         }
 
         var modelUsage = input is null && output is null && cached is null && directMiss is null && reasoning is null
@@ -651,7 +737,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
         if (!value.TryGetInt32(out var result) || result < 0 || result > maximum)
         {
-            throw Malformed();
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.UsageInvalid);
         }
 
         return result;
@@ -722,34 +808,79 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         }
     }
 
-    private static void ValidateArguments(ReadOnlyMemory<byte> arguments)
+    private static void ValidateArguments(
+        ReadOnlyMemory<byte> arguments,
+        OpenAiCompatibleResponseCodecDisposition disposition)
     {
-        using var document = JsonDocument.Parse(arguments, new JsonDocumentOptions
+        try
         {
-            MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
-        });
-        RejectDuplicateProperties(document.RootElement);
+            using var document = JsonDocument.Parse(arguments, new JsonDocumentOptions
+            {
+                MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
+            });
+            RejectDuplicateProperties(document.RootElement, disposition);
+        }
+        catch (OpenAiCompatibleProtocolException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is JsonException
+            or InvalidOperationException)
+        {
+            throw Malformed(disposition);
+        }
     }
 
     private static void EnsureStrict(string value) => _ = StrictUtf8.GetByteCount(value);
 
-    private static JsonElement RequireObject(JsonElement value) => value.ValueKind == JsonValueKind.Object
-        ? value
-        : throw Malformed();
-
-    private static JsonElement RequireProperty(JsonElement owner, string name) =>
-        owner.TryGetProperty(name, out var value) ? value : throw Malformed();
-
-    private static string RequireString(JsonElement owner, string name)
+    private static void EnsureStrict(
+        string value,
+        OpenAiCompatibleResponseCodecDisposition disposition)
     {
-        var value = RequireProperty(owner, name);
+        try
+        {
+            EnsureStrict(value);
+        }
+        catch (EncoderFallbackException)
+        {
+            throw Malformed(disposition);
+        }
+    }
+
+    private static JsonElement RequireObject(
+        JsonElement value,
+        OpenAiCompatibleResponseCodecDisposition? disposition = null) =>
+        value.ValueKind == JsonValueKind.Object
+            ? value
+            : throw Malformed(disposition);
+
+    private static JsonElement RequireProperty(
+        JsonElement owner,
+        string name,
+        OpenAiCompatibleResponseCodecDisposition? disposition = null) =>
+        owner.TryGetProperty(name, out var value) ? value : throw Malformed(disposition);
+
+    private static string RequireString(
+        JsonElement owner,
+        string name,
+        OpenAiCompatibleResponseCodecDisposition? disposition = null)
+    {
+        var value = RequireProperty(owner, name, disposition);
         if (value.ValueKind != JsonValueKind.String)
         {
-            throw Malformed();
+            throw Malformed(disposition);
         }
 
-        var result = value.GetString() ?? throw Malformed();
-        EnsureStrict(result);
+        var result = value.GetString() ?? throw Malformed(disposition);
+        if (disposition is { } responseDisposition)
+        {
+            EnsureStrict(result, responseDisposition);
+        }
+        else
+        {
+            EnsureStrict(result);
+        }
+
         return result;
     }
 
@@ -759,7 +890,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         return owner.TryGetProperty(name, out var property) && property.TryGetInt32(out value);
     }
 
-    private static void RejectDuplicateProperties(JsonElement value)
+    private static void RejectDuplicateProperties(
+        JsonElement value,
+        OpenAiCompatibleResponseCodecDisposition? disposition = null)
     {
         if (value.ValueKind == JsonValueKind.Object)
         {
@@ -768,32 +901,37 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             {
                 if (!names.Add(property.Name))
                 {
-                    throw Malformed();
+                    throw Malformed(disposition);
                 }
 
-                RejectDuplicateProperties(property.Value);
+                RejectDuplicateProperties(property.Value, disposition);
             }
         }
         else if (value.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in value.EnumerateArray())
             {
-                RejectDuplicateProperties(item);
+                RejectDuplicateProperties(item, disposition);
             }
         }
     }
 
-    private static OpenAiCompatibleProtocolException Unsupported() => new(
-        DocumentationScribeModelFailureCode.Unsupported);
+    private static OpenAiCompatibleProtocolException Unsupported(
+        OpenAiCompatibleResponseCodecDisposition? disposition = null) => new(
+            DocumentationScribeModelFailureCode.Unsupported,
+            disposition: disposition);
 
-    private static OpenAiCompatibleProtocolException Malformed() => new(
-        DocumentationScribeModelFailureCode.MalformedResponse);
+    private static OpenAiCompatibleProtocolException Malformed(
+        OpenAiCompatibleResponseCodecDisposition? disposition = null) => new(
+            DocumentationScribeModelFailureCode.MalformedResponse,
+            disposition: disposition);
 
     private static OpenAiCompatibleProtocolException MissingRequiredContinuation(
         OpenAiCompatiblePreparedRequest request) => new(
         DocumentationScribeModelFailureCode.MalformedResponse,
         Observation(request, observed: false)
-            | DocumentationScribeContinuationObservation.MissingRequired);
+            | DocumentationScribeContinuationObservation.MissingRequired,
+        OpenAiCompatibleResponseCodecDisposition.ContinuationMissing);
 
     private readonly record struct ParsedCall(
         int ResponseIndex,
@@ -846,14 +984,18 @@ internal sealed class OpenAiCompatibleProtocolException : Exception
     internal OpenAiCompatibleProtocolException(
         DocumentationScribeModelFailureCode code,
         DocumentationScribeContinuationObservation continuationObservation =
-            DocumentationScribeContinuationObservation.None)
+            DocumentationScribeContinuationObservation.None,
+        OpenAiCompatibleResponseCodecDisposition? disposition = null)
         : base("The selected provider protocol rejected an exchange.")
     {
         Code = code;
         ContinuationObservation = continuationObservation;
+        Disposition = disposition;
     }
 
     internal DocumentationScribeModelFailureCode Code { get; }
 
     internal DocumentationScribeContinuationObservation ContinuationObservation { get; }
+
+    internal OpenAiCompatibleResponseCodecDisposition? Disposition { get; }
 }
