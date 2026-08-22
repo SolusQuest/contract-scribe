@@ -68,6 +68,11 @@ internal sealed record EvaluationLiveToolExpectation
 
     public required string OperationId { get; init; }
 
+    public required EvaluationLiveToolArguments Arguments { get; init; }
+}
+
+internal sealed record EvaluationLiveToolArguments
+{
     public required string ScopeId { get; init; }
 
     public required string Literal { get; init; }
@@ -336,8 +341,9 @@ internal static class EvaluationManifestLoader
             && scenario.ProposalLine is not null
             && expected.CallCount is >= 1 and <= 16
             && IsId(expected.OperationId)
-            && IsBoundedText(expected.ScopeId)
-            && IsBoundedText(expected.Literal);
+            && expected.Arguments is not null
+            && IsBoundedText(expected.Arguments.ScopeId)
+            && IsBoundedText(expected.Arguments.Literal);
     }
 
     private static bool IsBoundedText(string value) => !string.IsNullOrEmpty(value)

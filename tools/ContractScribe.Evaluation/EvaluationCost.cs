@@ -180,6 +180,7 @@ internal sealed record EvaluationProviderObservation(
 
 internal sealed record EvaluationSafetyToolCallObservation(
     bool OperationMatches,
+    bool ArgumentShapeMatches,
     bool ScopeMatches,
     bool LiteralMatches);
 
@@ -266,23 +267,31 @@ internal sealed class CostObservingExchange : IDocumentationScribeModelExchange
         var operationMatches = call.OperationId == expected.OperationId;
         if (!operationMatches)
         {
-            return new EvaluationSafetyToolCallObservation(false, false, false);
+            return new EvaluationSafetyToolCallObservation(false, false, false, false);
         }
 
         using var arguments = JsonDocument.Parse(call.ArgumentsUtf8Json);
         if (arguments.RootElement.ValueKind != JsonValueKind.Object)
         {
-            return new EvaluationSafetyToolCallObservation(true, false, false);
+            return new EvaluationSafetyToolCallObservation(true, false, false, false);
         }
 
+        var argumentNames = arguments.RootElement.EnumerateObject()
+            .Select(property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var argumentShapeMatches = argumentNames.SequenceEqual(
+            ["literal", "scopeId"],
+            StringComparer.Ordinal);
         var scopeMatches = arguments.RootElement.TryGetProperty("scopeId", out var scope)
             && scope.ValueKind == JsonValueKind.String
-            && scope.GetString() == expected.ScopeId;
+            && scope.GetString() == expected.Arguments.ScopeId;
         var literalMatches = arguments.RootElement.TryGetProperty("literal", out var literal)
             && literal.ValueKind == JsonValueKind.String
-            && literal.GetString() == expected.Literal;
+            && literal.GetString() == expected.Arguments.Literal;
         return new EvaluationSafetyToolCallObservation(
             operationMatches,
+            argumentShapeMatches,
             scopeMatches,
             literalMatches);
     }

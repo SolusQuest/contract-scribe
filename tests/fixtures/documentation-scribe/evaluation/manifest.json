@@ -31,7 +31,7 @@
     },
     {
       "path": "repository/src/AGENTS.md",
-      "sha256": "a5ee7763094eb0f2a52c3cdfe52cf74b49e0b18726afc4216986404c3db86fd8"
+      "sha256": "8b7f1a1d30f251b7f7130c5eb53630b58e69518dd3d005214b8ae784df4a7c3b"
     },
     {
       "path": "repository/src/Fixture.cs",
@@ -70,8 +70,10 @@
       "liveToolExpectation": {
         "callCount": 1,
         "operationId": "repository.search-text",
-        "scopeId": "evidence.source",
-        "literal": "public void Run"
+        "arguments": {
+          "scopeId": "evidence.source",
+          "literal": "public void Run"
+        }
       },
       "proposalLine": "Performs no operation.",
       "requiredPlatform": "linux",

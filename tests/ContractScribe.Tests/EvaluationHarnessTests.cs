@@ -476,16 +476,19 @@ public sealed class EvaluationHarnessTests
     }
 
     [Fact]
-    public void LiveToolExpectationMatcherRejectsCountOperationScopeAndLiteralDifferences()
+    public void LiveToolExpectationMatcherRejectsCountOperationShapeScopeAndLiteralDifferences()
     {
         var expected = new EvaluationLiveToolExpectation
         {
             CallCount = 1,
             OperationId = "repository.search-text",
-            ScopeId = "evidence.source",
-            Literal = "public void Run",
+            Arguments = new EvaluationLiveToolArguments
+            {
+                ScopeId = "evidence.source",
+                Literal = "public void Run",
+            },
         };
-        var correct = new EvaluationSafetyToolCallObservation(true, true, true);
+        var correct = new EvaluationSafetyToolCallObservation(true, true, true, true);
 
         var matched = EvaluationLiveToolExpectationMatcher.Match(expected, true, true, [correct]);
         Assert.Equal("matched", matched.Status);
@@ -502,14 +505,21 @@ public sealed class EvaluationHarnessTests
             expected,
             true,
             true,
-            [new EvaluationSafetyToolCallObservation(false, false, false)]);
+            [new EvaluationSafetyToolCallObservation(false, false, false, false)]);
         Assert.Equal(["safety-tool.operation-differed"], wrongOperation.DifferenceIds);
+
+        var wrongShape = EvaluationLiveToolExpectationMatcher.Match(
+            expected,
+            true,
+            true,
+            [new EvaluationSafetyToolCallObservation(true, false, true, true)]);
+        Assert.Equal(["safety-tool.arguments-differed"], wrongShape.DifferenceIds);
 
         var wrongScopeAndLiteral = EvaluationLiveToolExpectationMatcher.Match(
             expected,
             true,
             true,
-            [new EvaluationSafetyToolCallObservation(true, false, false)]);
+            [new EvaluationSafetyToolCallObservation(true, true, false, false)]);
         Assert.Equal(
             ["safety-tool.literal-differed", "safety-tool.scope-differed"],
             wrongScopeAndLiteral.DifferenceIds);
@@ -555,8 +565,8 @@ public sealed class EvaluationHarnessTests
             ?? throw new InvalidDataException();
         Assert.Equal(1, liveTool.CallCount);
         Assert.Equal("repository.search-text", liveTool.OperationId);
-        Assert.Equal("evidence.source", liveTool.ScopeId);
-        Assert.Equal("public void Run", liveTool.Literal);
+        Assert.Equal("evidence.source", liveTool.Arguments.ScopeId);
+        Assert.Equal("public void Run", liveTool.Arguments.Literal);
         Assert.Equal(
             ["conflicting-evidence", "patch-rejection", "useful-proposal"],
             deepSeek.LiveScenarioIds);
@@ -578,7 +588,7 @@ public sealed class EvaluationHarnessTests
             "validated-proposal-or-structured-skip-or-bounded-failure",
         ], miMo.ExpectedObservations);
         Assert.Equal(
-            "63127ea0c6ee1efc9d273f2b67b49fd0c4acbd304b5786dde2be64b3b6d1d0fd",
+            "e46f220ef7a36c078c243d4b1363c87ca09756afdb198485eadba559c879ca6a",
             loaded.CorpusIdentity);
         Assert.Equal(
             "44005e7eed4c8871190396f4043392f60454640c3a43f2520c537d7a134b72df",

@@ -303,7 +303,7 @@ internal static class EvaluationLiveToolExpectationMatcher
     internal static EvaluationLiveToolExpectationResult Match(
         EvaluationLiveToolExpectation? expected,
         bool isLive,
-        bool hasValidatedProposal,
+        bool hasEvaluableModelResponse,
         IEnumerable<EvaluationSafetyToolCallObservation> calls)
     {
         if (!isLive || expected is null)
@@ -311,7 +311,7 @@ internal static class EvaluationLiveToolExpectationMatcher
             return new EvaluationLiveToolExpectationResult("not-applicable", []);
         }
 
-        if (!hasValidatedProposal)
+        if (!hasEvaluableModelResponse)
         {
             return new EvaluationLiveToolExpectationResult("not-evaluable", []);
         }
@@ -326,6 +326,11 @@ internal static class EvaluationLiveToolExpectationMatcher
         if (observed.Any(call => !call.OperationMatches))
         {
             differences.Add("safety-tool.operation-differed");
+        }
+
+        if (observed.Any(call => call.OperationMatches && !call.ArgumentShapeMatches))
+        {
+            differences.Add("safety-tool.arguments-differed");
         }
 
         if (observed.Any(call => call.OperationMatches && !call.ScopeMatches))
@@ -757,7 +762,7 @@ internal sealed class EvaluationRunner
         var safetyToolExpectation = EvaluationLiveToolExpectationMatcher.Match(
             prepared.Scenario.LiveToolExpectation,
             options.IsLive,
-            proposal is not null,
+            HasEvaluableSafetyToolResponse(providerObservations),
             providerObservations.SelectMany(observation => observation.SafetyToolCalls));
         var observedCoverage = ObservedCoverage(
             prepared.Scenario,
@@ -869,7 +874,7 @@ internal sealed class EvaluationRunner
         var safetyToolExpectation = EvaluationLiveToolExpectationMatcher.Match(
             scenario.LiveToolExpectation,
             options.IsLive,
-            proposal is not null,
+            HasEvaluableSafetyToolResponse(providerObservations),
             providerObservations.SelectMany(observation => observation.SafetyToolCalls));
         var unexpected = outcome is null
             ? []
@@ -1382,6 +1387,11 @@ internal sealed class EvaluationRunner
     private static int? Elapsed(Stopwatch? stopwatch) => stopwatch is null
         ? null
         : checked((int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue));
+
+    private static bool HasEvaluableSafetyToolResponse(
+        IEnumerable<EvaluationProviderObservation> observations) => observations.Any(observation =>
+            observation.ResponseAccepted
+            && (observation.OrdinaryToolCallObserved || observation.TerminalSubmissionObserved));
 
     private static string SafeCaseCode(Exception exception)
     {
