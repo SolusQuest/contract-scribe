@@ -59,7 +59,6 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
                         {
                             scopeId = "evidence.source",
                             literal = "public void Run",
-                            pageSize = 1,
                         })),
                 ],
                 [],

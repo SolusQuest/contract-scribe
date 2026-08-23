@@ -10,6 +10,10 @@ using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 using ContractScribe.Evaluation;
+using ContractScribe.Roslyn;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ContractScribe.IntegrationTests;
 
@@ -20,7 +24,34 @@ public sealed class EvaluationHarnessProcessTests
     public async Task LiveSafetyGateRunsOneCompleteMultiRequestCaseAndStopsBeforeCaseTwo()
     {
         var root = FindRepositoryRoot();
-        var loaded = EvaluationManifestLoader.Load(CorpusRoot(root));
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var usefulScenario = loaded.Manifest.Scenarios.Single(scenario =>
+            scenario.Id == "useful-proposal");
+        Assert.Equal("Performs no operation.", usefulScenario.ProposalLine);
+        var structuredSkip = loaded.Manifest.Scenarios.Single(scenario =>
+            scenario.Id == "structured-skip");
+        Assert.Equal(0, structuredSkip.OfflineExpectation.ToolCallCount);
+
+        var source = await File.ReadAllTextAsync(Path.Join(
+            corpus,
+            "repository",
+            "src",
+            "Fixture.cs"));
+        var tree = CSharpSyntaxTree.ParseText(source);
+        var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(candidate => candidate.Identifier.ValueText == "Run");
+        var compilation = CSharpCompilation.Create(
+            "EvaluationCorpusOracle",
+            [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var symbol = compilation.GetSemanticModel(tree).GetDeclaredSymbol(method);
+        Assert.NotNull(symbol);
+        Assert.Equal(usefulScenario.TargetDocumentationId, symbol.GetDocumentationCommentId());
+        Assert.NotNull(method.Body);
+        Assert.Empty(method.Body.Statements);
+
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
             ?? throw new InvalidOperationException();
         var marker = Path.Join(
@@ -36,7 +67,7 @@ public sealed class EvaluationHarnessProcessTests
             item.ConfigurationId == "deepseek-primary");
         var options = new EvaluationOptions(
             EvaluationMode.LiveSafetyGate,
-            CorpusRoot(root),
+            corpus,
             null,
             selected.ConfigurationId,
             new Uri(selected.Endpoint),
@@ -44,13 +75,17 @@ public sealed class EvaluationHarnessProcessTests
             "UNUSED_TEST_SECRET",
             new EvaluationCostPolicy("usd", 1, 1, 1));
         var factoryCalls = 0;
+        PreparedEvaluationCase? preparedCase = null;
+        RecordingExchange? recording = null;
         var runner = new EvaluationRunner(
             loaded,
             options,
             evaluationCase =>
             {
                 factoryCalls++;
-                return new ScriptedEvaluationExchange(evaluationCase);
+                preparedCase = evaluationCase;
+                recording = new RecordingExchange(new ScriptedEvaluationExchange(evaluationCase));
+                return recording;
             },
             null,
             null,
@@ -64,6 +99,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(2, result.ProviderRequestCount);
         Assert.Equal(1, result.ToolRoundCount);
         Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal("matched", result.SafetyToolExpectationStatus);
         if (OperatingSystem.IsLinux())
         {
             Assert.Equal("patch-accepted", result.Status);
@@ -74,6 +110,188 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("safety-gate", report.ExecutionPurpose);
         Assert.Equal("deepseek-primary", report.ConfigurationId);
         Assert.Equal(1, report.Aggregate.SelectedCaseCount);
+
+        Assert.NotNull(preparedCase);
+        var sourceEvidence = preparedCase.Request.EvidenceReferences.Single(reference =>
+            reference.EvidenceReferenceId == "evidence.source");
+        Assert.Equal(DocumentationScribeEvidenceAuthority.SourceDeclaration, sourceEvidence.Authority);
+        var proposal = result.Proposal ?? throw new InvalidDataException();
+        var contentUnit = Assert.Single(proposal.ContentUnits);
+        Assert.Equal(["evidence.source"], contentUnit.EvidenceReferenceIds);
+
+        Assert.NotNull(recording);
+        var firstRequest = Assert.Single(recording.Requests, request =>
+            request.ProviderRequestNumber == 1);
+        const string instruction =
+            "Before submitting a documentation proposal for `M:EvaluationCorpus.Fixture.Run`, "
+            + "make exactly one call to the provided repository tool described as "
+            + "\"Search for one ordinal literal inside an authorized repository scope.\" "
+            + "Use exactly `scopeId` `evidence.source` and `literal` `public void Run`; "
+            + "omit `subdirectory`, `pageSize`, `cursor`, and every other argument. "
+            + "This rule does not apply to a structured skip or any other target.";
+        var repositoryMessage = Assert.Single(firstRequest.Messages, message =>
+            message.Kind == DocumentationScribeMessageKind.RepositoryInstructions);
+        using var repositoryInstructions = JsonDocument.Parse(repositoryMessage.Content);
+        Assert.Contains(
+            repositoryInstructions.RootElement.GetProperty("content").EnumerateArray(),
+            item => item.GetProperty("content").GetString()!.Contains(
+                instruction,
+                StringComparison.Ordinal));
+        var searchTool = Assert.Single(firstRequest.Tools, tool =>
+            tool.Description == DocumentationScribeRepositoryToolSchemas.SearchTextDescription);
+        Assert.Equal(DocumentationScribeRepositoryToolOperationIds.SearchText, searchTool.OperationId);
+        using var schema = JsonDocument.Parse(searchTool.InputSchemaJson);
+        var parameters = schema.RootElement;
+        Assert.Equal("object", parameters.GetProperty("type").GetString());
+        Assert.Equal(
+            ["scopeId", "literal"],
+            parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            parameters.GetProperty("properties").GetProperty("scopeId")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()),
+            scopeId => scopeId == "evidence.source");
+        Assert.Equal(
+            "string",
+            parameters.GetProperty("properties").GetProperty("literal")
+                .GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task LiveSafetyGateRejectsAcceptedProposalAfterWrongSearchLiteral()
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            corpus,
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new WrongSafetyLiteralExchange(
+                new ScriptedEvaluationExchange(evaluationCase)),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var result = Assert.Single(report.Cases);
+        Assert.NotNull(result.Proposal);
+        Assert.Equal("differed", result.ExpectationStatus);
+        Assert.Equal("differed", result.SafetyToolExpectationStatus);
+        Assert.Contains("safety-tool.literal-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.call-count-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.operation-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.arguments-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.scope-differed", result.DifferenceIds);
+    }
+
+    [Fact]
+    public async Task LiveSafetyGateReportsOverLimitOptionalSearchArgumentBeforeProposal()
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            corpus,
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new OverLimitSafetyPageSizeExchange(
+                new ScriptedEvaluationExchange(evaluationCase)),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var result = Assert.Single(report.Cases);
+        Assert.Null(result.Proposal);
+        Assert.Equal("budget-exhausted", result.Status);
+        Assert.Equal("scribe.failure.budget", result.Code);
+        Assert.Equal(1, result.ProviderRequestCount);
+        Assert.Equal(1, result.ToolRoundCount);
+        Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal("differed", result.ExpectationStatus);
+        Assert.Equal("differed", result.SafetyToolExpectationStatus);
+        Assert.Contains("safety-tool.arguments-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.call-count-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.operation-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.scope-differed", result.DifferenceIds);
+        Assert.DoesNotContain("safety-tool.literal-differed", result.DifferenceIds);
+    }
+
+    [Theory]
+    [InlineData(false, "differed")]
+    [InlineData(true, "matched")]
+    public async Task LiveSafetyGateCorrelatesRequiredSearchWithProposalAttempt(
+        bool repeatSearchAfterRetry,
+        string expectedSafetyStatus)
+    {
+        var root = FindRepositoryRoot();
+        var corpus = CorpusRoot(root);
+        var loaded = EvaluationManifestLoader.Load(corpus);
+        var selected = loaded.Selection.Configurations.Single(item =>
+            item.ConfigurationId == "deepseek-primary");
+        var options = new EvaluationOptions(
+            EvaluationMode.LiveSafetyGate,
+            corpus,
+            null,
+            selected.ConfigurationId,
+            new Uri(selected.Endpoint),
+            selected.Model,
+            "UNUSED_TEST_SECRET",
+            new EvaluationCostPolicy("usd", 1, 1, 1));
+        var runner = new EvaluationRunner(
+            loaded,
+            options,
+            evaluationCase => new RetrySplitSafetyExchange(
+                new ScriptedEvaluationExchange(evaluationCase),
+                repeatSearchAfterRetry),
+            null,
+            null,
+            PreparedCorpusRoot(root));
+
+        var report = await runner.RunAsync(CancellationToken.None);
+
+        var result = Assert.Single(report.Cases);
+        Assert.NotNull(result.Proposal);
+        Assert.Equal(2, result.AttemptCount);
+        Assert.Equal(repeatSearchAfterRetry ? 4 : 3, result.ProviderRequestCount);
+        Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolRoundCount);
+        Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolCallCount);
+        Assert.Equal(expectedSafetyStatus, result.SafetyToolExpectationStatus);
+        if (repeatSearchAfterRetry)
+        {
+            Assert.DoesNotContain("safety-tool.call-count-differed", result.DifferenceIds);
+        }
+        else
+        {
+            Assert.Equal("differed", result.ExpectationStatus);
+            Assert.Contains("safety-tool.call-count-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.operation-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.arguments-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.scope-differed", result.DifferenceIds);
+            Assert.DoesNotContain("safety-tool.literal-differed", result.DifferenceIds);
+        }
     }
 
     [Fact]
@@ -443,7 +661,7 @@ public sealed class EvaluationHarnessProcessTests
             proposal.GetProperty("contentUnits").EnumerateArray()
                 .SelectMany(unit => unit.GetProperty("lines").EnumerateArray())
                 .Select(line => line.GetString()),
-            line => line == "Runs the selected operation.");
+            line => line == "Performs no operation.");
     }
 
     [Theory]
@@ -906,6 +1124,145 @@ public sealed class EvaluationHarnessProcessTests
     }
 
     private sealed record ProcessResult(int ExitCode, byte[] StandardOutput, byte[] StandardError);
+
+    private sealed class RecordingExchange(
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        internal List<DocumentationScribeModelRequest> Requests { get; } = [];
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return inner.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class WrongSafetyLiteralExchange(
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (request.ProviderRequestNumber != 1 || response.ToolCalls.Length != 1)
+            {
+                return response;
+            }
+
+            var call = response.ToolCalls[0];
+            var changed = new DocumentationScribeModelToolCall(
+                call.ResponseIndex,
+                call.CallId,
+                call.OperationId,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    scopeId = "evidence.source",
+                    literal = "public void Missing",
+                }));
+            return new DocumentationScribeModelResponse(
+                [changed],
+                response.TerminalSubmissions,
+                response.Failure,
+                response.Usage,
+                response.Cache,
+                response.Cost);
+        }
+    }
+
+    private sealed class OverLimitSafetyPageSizeExchange(
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (request.ProviderRequestNumber != 1 || response.ToolCalls.Length != 1)
+            {
+                return response;
+            }
+
+            var call = response.ToolCalls[0];
+            var changed = new DocumentationScribeModelToolCall(
+                call.ResponseIndex,
+                call.CallId,
+                call.OperationId,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    scopeId = "evidence.source",
+                    literal = "public void Run",
+                    pageSize = 65,
+                }));
+            return new DocumentationScribeModelResponse(
+                [changed],
+                response.TerminalSubmissions,
+                response.Failure,
+                response.Usage,
+                response.Cache,
+                response.Cost);
+        }
+    }
+
+    private sealed class RetrySplitSafetyExchange(
+        IDocumentationScribeModelExchange inner,
+        bool repeatSearchAfterRetry) : IDocumentationScribeModelExchange
+    {
+        private DocumentationScribeModelResponse? searchResponse;
+        private DocumentationScribeModelResponse? proposalResponse;
+
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (request.AttemptNumber == 1 && request.ProviderRequestNumber == 1)
+            {
+                searchResponse = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                return searchResponse;
+            }
+
+            if (request.AttemptNumber == 1 && request.ProviderRequestNumber == 2)
+            {
+                proposalResponse = await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                return new DocumentationScribeModelResponse(
+                    [],
+                    [],
+                    new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.RateLimited));
+            }
+
+            if (request.AttemptNumber != 2)
+            {
+                throw new InvalidOperationException("evaluation.retry-split.request.invalid");
+            }
+
+            if (repeatSearchAfterRetry && request.ProviderRequestNumber == 3)
+            {
+                if (!request.CompletedToolExchanges.IsEmpty)
+                {
+                    throw new InvalidOperationException("evaluation.retry-split.history.invalid");
+                }
+
+                return searchResponse ?? throw new InvalidOperationException(
+                    "evaluation.retry-split.search.missing");
+            }
+
+            var expectedProposalRequest = repeatSearchAfterRetry ? 4 : 3;
+            if (request.ProviderRequestNumber != expectedProposalRequest)
+            {
+                throw new InvalidOperationException("evaluation.retry-split.sequence.invalid");
+            }
+
+            if (request.CompletedToolExchanges.Length != (repeatSearchAfterRetry ? 1 : 0))
+            {
+                throw new InvalidOperationException("evaluation.retry-split.history.invalid");
+            }
+
+            return proposalResponse ?? throw new InvalidOperationException(
+                "evaluation.retry-split.proposal.missing");
+        }
+    }
 
     private sealed class PerturbingExchange(
         IDocumentationScribeModelExchange inner,
