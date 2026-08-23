@@ -428,6 +428,163 @@ public sealed class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
+    public async Task Null_usage_preserves_required_continuation_without_usage_cache_or_cost()
+    {
+        const string reasoning = "nullable-usage-reasoning-marker";
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            ThinkingToolResponseWithUsage("null", reasoning))));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+        var observer = new CostObservingExchange(
+            transport,
+            new EvaluationCostPolicy("usd", 1_000_000, 2_000_000, 3_000_000));
+
+        var response = await observer.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Single(response.ToolCalls);
+        Assert.Equal(reasoning, response.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(
+            DocumentationScribeContinuationObservation.Observed,
+            response.ContinuationObservation);
+        Assert.Null(response.Usage);
+        Assert.Null(response.Cache);
+        Assert.Null(response.Cost);
+        var observation = Assert.Single(observer.Observations);
+        Assert.False(observation.UsageSupplied);
+        Assert.False(observation.CacheSupplied);
+        Assert.Equal(EvaluationCostCompleteness.NotReported, observation.Cost.Completeness);
+        Assert.Null(observation.Cost.AmountMicrounits);
+    }
+
+    [Fact]
+    public async Task Null_prompt_details_preserve_counts_and_conservative_cost_without_double_reasoning()
+    {
+        const string reasoning = "nullable-prompt-details-reasoning-marker";
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            ThinkingToolResponseWithUsage(
+                "{\"prompt_tokens\":10,\"completion_tokens\":3,\"prompt_tokens_details\":null,\"completion_tokens_details\":{\"reasoning_tokens\":2}}",
+                reasoning))));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+        var observer = new CostObservingExchange(
+            transport,
+            new EvaluationCostPolicy("usd", 5_000_000, 2_000_000, 3_000_000));
+
+        var response = await observer.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Single(response.ToolCalls);
+        Assert.Equal(reasoning, response.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(10, response.Usage!.InputTokens);
+        Assert.Equal(3, response.Usage.OutputTokens);
+        Assert.Equal(2, response.Usage.ReasoningTokens);
+        Assert.Null(response.Usage.CachedInputTokens);
+        Assert.Null(response.Usage.UncachedInputTokens);
+        Assert.Null(response.Cache);
+        Assert.Equal(29L, response.Cost!.AmountMicrounits);
+        var observation = Assert.Single(observer.Observations);
+        Assert.True(observation.UsageSupplied);
+        Assert.False(observation.CacheSupplied);
+        Assert.Equal(EvaluationCostCompleteness.Complete, observation.Cost.Completeness);
+        Assert.Equal(29L, observation.Cost.AmountMicrounits);
+    }
+
+    [Fact]
+    public async Task Null_prompt_details_preserve_direct_cache_split_and_priced_cost()
+    {
+        const string reasoning = "nullable-direct-cache-reasoning-marker";
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            ThinkingToolResponseWithUsage(
+                "{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_cache_hit_tokens\":60,\"prompt_cache_miss_tokens\":40,\"prompt_tokens_details\":null,\"completion_tokens_details\":{\"reasoning_tokens\":3}}",
+                reasoning))));
+        using var transport = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(
+                new Uri("https://example.test/v1/chat/completions"),
+                "model",
+                RequiredContinuationProfile(),
+                networkEnabled: true,
+                credential: "synthetic-credential"),
+            handler,
+            disposeHandler: false);
+        var observer = new CostObservingExchange(
+            transport,
+            new EvaluationCostPolicy("usd", 1_000_000, 2_000_000, 3_000_000));
+
+        var response = await observer.SendAsync(Request([]), CancellationToken.None);
+
+        Assert.Single(response.ToolCalls);
+        Assert.Equal(reasoning, response.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(100, response.Usage!.InputTokens);
+        Assert.Equal(10, response.Usage.OutputTokens);
+        Assert.Equal(60, response.Usage.CachedInputTokens);
+        Assert.Equal(40, response.Usage.UncachedInputTokens);
+        Assert.Equal(3, response.Usage.ReasoningTokens);
+        Assert.Equal(DocumentationScribeCacheObservation.Mixed, response.Cache);
+        Assert.Equal(170L, response.Cost!.AmountMicrounits);
+        var observation = Assert.Single(observer.Observations);
+        Assert.True(observation.CacheSupplied);
+        Assert.Equal(EvaluationCostCompleteness.Complete, observation.Cost.Completeness);
+        Assert.Equal(170L, observation.Cost.AmountMicrounits);
+    }
+
+    [Theory]
+    [InlineData("{\"prompt_tokens\":100,\"prompt_cache_hit_tokens\":80,\"prompt_cache_miss_tokens\":40,\"prompt_tokens_details\":null}")]
+    [InlineData("{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":null,\"completion_tokens_details\":null}")]
+    [InlineData("{\"prompt_tokens\":100,\"prompt_tokens_details\":\"invalid\"}")]
+    [InlineData("{\"prompt_tokens\":100,\"prompt_tokens_details\":1}")]
+    [InlineData("{\"prompt_tokens\":100,\"prompt_tokens_details\":true}")]
+    [InlineData("{\"prompt_tokens\":100,\"prompt_tokens_details\":[]}")]
+    public void Nullable_usage_change_retains_closed_invalid_grammar(string usage)
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]),
+            "model",
+            RequiredContinuationProfile());
+
+        var exception = Assert.Throws<OpenAiCompatibleProtocolException>(() =>
+            OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+                Encoding.UTF8.GetBytes(ThinkingToolResponseWithUsage(usage)),
+                prepared));
+
+        Assert.Equal(DocumentationScribeModelFailureCode.MalformedResponse, exception.Code);
+        Assert.Equal(OpenAiCompatibleResponseCodecDisposition.UsageInvalid, exception.Disposition);
+    }
+
+    [Theory]
+    [InlineData("{\"prompt_tokens\":10}", null)]
+    [InlineData("{\"prompt_tokens\":10,\"prompt_tokens_details\":{}}", null)]
+    [InlineData("{\"prompt_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":4}}", 4)]
+    public void Existing_prompt_detail_shapes_remain_accepted(string usage, int? expectedCached)
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(
+            Request([]),
+            "model",
+            RequiredContinuationProfile());
+
+        var response = OpenAiCompatibleChatCompletionsCodec.ParseResponse(
+            Encoding.UTF8.GetBytes(ThinkingToolResponseWithUsage(usage)),
+            prepared);
+
+        Assert.Single(response.ToolCalls);
+        Assert.Equal("nullable-usage-reasoning", response.AssistantContinuation!.ReasoningContent);
+        Assert.Equal(10, response.Usage!.InputTokens);
+        Assert.Equal(expectedCached, response.Usage.CachedInputTokens);
+    }
+
+    [Fact]
     public async Task Http_transport_and_cost_observer_preserve_exact_continuation_into_the_next_wire_request()
     {
         const string marker = "synthetic-reasoning-pass-back-marker";
@@ -1933,6 +2090,15 @@ public sealed class DocumentationScribeProviderTransportTests
     {
         Content = new StringContent(body, Encoding.UTF8, "text/plain"),
     };
+
+    private static string ThinkingToolResponseWithUsage(
+        string usage,
+        string reasoning = "nullable-usage-reasoning") =>
+        "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\","
+        + "\"reasoning_content\":" + JsonSerializer.Serialize(reasoning)
+        + ",\"tool_calls\":[{\"id\":\"call.nullable-usage\",\"type\":\"function\","
+        + "\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{}\"}}]},"
+        + "\"finish_reason\":\"tool_calls\"}],\"usage\":" + usage + "}";
 
     private static byte[] TerminalResponse(string callId, string arguments) =>
         JsonSerializer.SerializeToUtf8Bytes(new

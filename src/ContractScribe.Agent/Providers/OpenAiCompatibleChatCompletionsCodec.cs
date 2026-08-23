@@ -669,7 +669,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
     private static UsageObservations ParseUsage(JsonElement root)
     {
-        if (!root.TryGetProperty("usage", out var usage))
+        if (!root.TryGetProperty("usage", out var usage)
+            || usage.ValueKind == JsonValueKind.Null)
         {
             return default;
         }
@@ -682,7 +683,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         var directHit = OptionalInt(usage, "prompt_cache_hit_tokens", DocumentationScribeContract.MaximumObservedInputTokens);
         var directMiss = OptionalInt(usage, "prompt_cache_miss_tokens", DocumentationScribeContract.MaximumObservedInputTokens);
         int? cachedDetail = null;
-        if (usage.TryGetProperty("prompt_tokens_details", out var promptDetails))
+        if (usage.TryGetProperty("prompt_tokens_details", out var promptDetails)
+            && promptDetails.ValueKind != JsonValueKind.Null)
         {
             cachedDetail = OptionalInt(
                 RequireObject(
