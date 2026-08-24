@@ -1,0 +1,586 @@
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+
+namespace ContractScribe.Core;
+
+public enum CampaignPlanningValidationCode
+{
+    InvalidRoot,
+    InvalidBound,
+    InvalidVocabulary,
+    InvalidCommitment,
+    TargetProfileMismatch,
+    InvalidClassificationAuthority,
+    InvalidObservationAuthority,
+    InvalidAuditAuthority,
+    InvalidOwnerAuthority,
+    InvalidStyleAuthority,
+    InvalidConfiguration,
+    DuplicateWorkItemKey,
+}
+
+public sealed class CampaignPlanningValidationException : FormatException
+{
+    internal CampaignPlanningValidationException(
+        CampaignPlanningValidationCode code,
+        string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public CampaignPlanningValidationCode Code { get; }
+}
+
+public enum CampaignPlanningDispositionKind
+{
+    Executable,
+    Terminal,
+}
+
+public enum CampaignPlanningEditCapability
+{
+    Insert,
+    Replace,
+}
+
+public enum CampaignPlanningTerminalReason
+{
+    AmbiguousOwner,
+    SharedOwner,
+    MultiDeclarator,
+    PrimaryConstructorAlias,
+    PrimaryConstructor,
+    NonRepositorySource,
+    NonWritableSource,
+    UnsupportedTargetKind,
+    UnsupportedRemoval,
+    UnsupportedBlockState,
+}
+
+public static class CampaignPlanningVocabulary
+{
+    public const string PlanningContractRevision = "campaign-planning-v1";
+    public const string SelectionPolicy = "campaign.selection.every-current-violation.v1";
+    public const string OrderingPolicy = "campaign.order.complete-owner.ordinal.v1";
+
+    public static string GetId(CampaignPlanningDispositionKind value) => value switch
+    {
+        CampaignPlanningDispositionKind.Executable => "campaign.work.executable",
+        CampaignPlanningDispositionKind.Terminal => "campaign.work.terminal",
+        _ => throw Unknown(value),
+    };
+
+    public static string GetId(CampaignPlanningEditCapability value) => value switch
+    {
+        CampaignPlanningEditCapability.Insert => "campaign.edit.insert",
+        CampaignPlanningEditCapability.Replace => "campaign.edit.replace",
+        _ => throw Unknown(value),
+    };
+
+    public static string GetId(CampaignPlanningTerminalReason value) => value switch
+    {
+        CampaignPlanningTerminalReason.AmbiguousOwner => "campaign.terminal.ambiguous-owner",
+        CampaignPlanningTerminalReason.SharedOwner => "campaign.terminal.shared-owner",
+        CampaignPlanningTerminalReason.MultiDeclarator => "campaign.terminal.multi-declarator",
+        CampaignPlanningTerminalReason.PrimaryConstructorAlias => "campaign.terminal.primary-constructor-alias",
+        CampaignPlanningTerminalReason.PrimaryConstructor => "campaign.terminal.primary-constructor",
+        CampaignPlanningTerminalReason.NonRepositorySource => "campaign.terminal.non-repository-source",
+        CampaignPlanningTerminalReason.NonWritableSource => "campaign.terminal.non-writable-source",
+        CampaignPlanningTerminalReason.UnsupportedTargetKind => "campaign.terminal.unsupported-target-kind",
+        CampaignPlanningTerminalReason.UnsupportedRemoval => "campaign.terminal.unsupported-removal",
+        CampaignPlanningTerminalReason.UnsupportedBlockState => "campaign.terminal.unsupported-block-state",
+        _ => throw Unknown(value),
+    };
+
+    private static ArgumentOutOfRangeException Unknown<T>(T value)
+        where T : struct, Enum =>
+        new(nameof(value), value, "The value is outside the closed campaign-planning vocabulary.");
+}
+
+public sealed record CampaignPlanningContentAuthority
+{
+    private CampaignPlanningContentAuthority(string id, string contentSha256)
+    {
+        Id = id;
+        ContentSha256 = contentSha256;
+    }
+
+    public string Id { get; }
+
+    public string ContentSha256 { get; }
+
+    public static CampaignPlanningContentAuthority Create(
+        string id,
+        ReadOnlySpan<byte> canonicalValidatedContent)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return new CampaignPlanningContentAuthority(
+            id,
+            Convert.ToHexString(SHA256.HashData(canonicalValidatedContent)).ToLowerInvariant());
+    }
+}
+
+public sealed record CampaignPlanningSnapshot
+{
+    public CampaignPlanningSnapshot(
+        string campaignLineage,
+        string opaqueSnapshotBinding,
+        string repositoryCommitmentSha256,
+        string inputCommitmentSha256,
+        string policyAuthorityCommitmentSha256,
+        TargetProfile targetProfile)
+    {
+        CampaignLineage = campaignLineage;
+        OpaqueSnapshotBinding = opaqueSnapshotBinding;
+        RepositoryCommitmentSha256 = repositoryCommitmentSha256;
+        InputCommitmentSha256 = inputCommitmentSha256;
+        PolicyAuthorityCommitmentSha256 = policyAuthorityCommitmentSha256;
+        TargetProfile = targetProfile;
+    }
+
+    public string CampaignLineage { get; init; }
+
+    public string OpaqueSnapshotBinding { get; init; }
+
+    public string RepositoryCommitmentSha256 { get; init; }
+
+    public string InputCommitmentSha256 { get; init; }
+
+    public string PolicyAuthorityCommitmentSha256 { get; init; }
+
+    public TargetProfile TargetProfile { get; init; }
+}
+
+public sealed record CampaignPlanningBudgetPolicy
+{
+    public CampaignPlanningBudgetPolicy(
+        int maximumBlocks,
+        int maximumChangedFiles,
+        long maximumPatchBytes,
+        int maximumProviderRequests,
+        int maximumAttemptsPerTarget,
+        long maximumInputTokens,
+        long maximumUncachedInputTokens,
+        long maximumOutputTokens,
+        long maximumCostMicrounits,
+        long maximumElapsedMilliseconds,
+        int maximumCandidatesPerBlock,
+        bool costEnforced,
+        string? costCurrency,
+        CampaignPlanningContentAuthority? costRatePolicy)
+    {
+        MaximumBlocks = maximumBlocks;
+        MaximumChangedFiles = maximumChangedFiles;
+        MaximumPatchBytes = maximumPatchBytes;
+        MaximumProviderRequests = maximumProviderRequests;
+        MaximumAttemptsPerTarget = maximumAttemptsPerTarget;
+        MaximumInputTokens = maximumInputTokens;
+        MaximumUncachedInputTokens = maximumUncachedInputTokens;
+        MaximumOutputTokens = maximumOutputTokens;
+        MaximumCostMicrounits = maximumCostMicrounits;
+        MaximumElapsedMilliseconds = maximumElapsedMilliseconds;
+        MaximumCandidatesPerBlock = maximumCandidatesPerBlock;
+        CostEnforced = costEnforced;
+        CostCurrency = costCurrency;
+        CostRatePolicy = costRatePolicy;
+    }
+
+    public int MaximumBlocks { get; }
+    public int MaximumChangedFiles { get; }
+    public long MaximumPatchBytes { get; }
+    public int MaximumProviderRequests { get; }
+    public int MaximumAttemptsPerTarget { get; }
+    public long MaximumInputTokens { get; }
+    public long MaximumUncachedInputTokens { get; }
+    public long MaximumOutputTokens { get; }
+    public long MaximumCostMicrounits { get; }
+    public long MaximumElapsedMilliseconds { get; }
+    public int MaximumCandidatesPerBlock { get; }
+    public bool CostEnforced { get; }
+    public string? CostCurrency { get; }
+    public CampaignPlanningContentAuthority? CostRatePolicy { get; }
+}
+
+public sealed record CampaignPlanningExecutionPolicy
+{
+    public CampaignPlanningExecutionPolicy(
+        DocumentationScribeRunLimits scribeRunLimits,
+        CampaignPlanningBudgetPolicy campaignBudget,
+        CampaignPlanningContentAuthority proposalContract,
+        CampaignPlanningContentAuthority agentProtocol,
+        CampaignPlanningContentAuthority contextSelectionPolicy,
+        CampaignPlanningContentAuthority toolPolicyAndRegistry,
+        CampaignPlanningContentAuthority providerModelRequestProfile,
+        CampaignPlanningContentAuthority retryPolicy,
+        CampaignPlanningContentAuthority m2ProjectionPolicy,
+        CampaignPlanningContentAuthority productContractRevision)
+    {
+        ScribeRunLimits = scribeRunLimits;
+        CampaignBudget = campaignBudget;
+        ProposalContract = proposalContract;
+        AgentProtocol = agentProtocol;
+        ContextSelectionPolicy = contextSelectionPolicy;
+        ToolPolicyAndRegistry = toolPolicyAndRegistry;
+        ProviderModelRequestProfile = providerModelRequestProfile;
+        RetryPolicy = retryPolicy;
+        M2ProjectionPolicy = m2ProjectionPolicy;
+        ProductContractRevision = productContractRevision;
+    }
+
+    public DocumentationScribeRunLimits ScribeRunLimits { get; init; }
+    public CampaignPlanningBudgetPolicy CampaignBudget { get; init; }
+    public CampaignPlanningContentAuthority ProposalContract { get; init; }
+    public CampaignPlanningContentAuthority AgentProtocol { get; init; }
+    public CampaignPlanningContentAuthority ContextSelectionPolicy { get; init; }
+    public CampaignPlanningContentAuthority ToolPolicyAndRegistry { get; init; }
+    public CampaignPlanningContentAuthority ProviderModelRequestProfile { get; init; }
+    public CampaignPlanningContentAuthority RetryPolicy { get; init; }
+    public CampaignPlanningContentAuthority M2ProjectionPolicy { get; init; }
+    public CampaignPlanningContentAuthority ProductContractRevision { get; init; }
+}
+
+public abstract record CampaignPlanningSourceAuthority
+{
+    private protected CampaignPlanningSourceAuthority(
+        DocumentationPatchSourceKind kind,
+        string contentSha256,
+        Utf16Span requestedDeclarationSpan,
+        Utf16Span canonicalDeclarationSpan,
+        Utf16Span ownerSpan,
+        Utf16Span? documentationSpan,
+        DocumentationBlockState blockState,
+        bool writable)
+    {
+        Kind = kind;
+        ContentSha256 = contentSha256;
+        RequestedDeclarationSpan = requestedDeclarationSpan;
+        CanonicalDeclarationSpan = canonicalDeclarationSpan;
+        OwnerSpan = ownerSpan;
+        DocumentationSpan = documentationSpan;
+        BlockState = blockState;
+        Writable = writable;
+    }
+
+    public DocumentationPatchSourceKind Kind { get; }
+    public string ContentSha256 { get; }
+    public Utf16Span RequestedDeclarationSpan { get; }
+    public Utf16Span CanonicalDeclarationSpan { get; }
+    public Utf16Span OwnerSpan { get; }
+    public Utf16Span? DocumentationSpan { get; }
+    public DocumentationBlockState BlockState { get; }
+    public bool Writable { get; }
+}
+
+public sealed record CampaignPlanningRepositorySourceAuthority
+    : CampaignPlanningSourceAuthority
+{
+    public CampaignPlanningRepositorySourceAuthority(
+        string path,
+        string exactFileSha256,
+        DocumentationPatchRepositoryEncoding encoding,
+        Utf16Span requestedDeclarationSpan,
+        Utf16Span canonicalDeclarationSpan,
+        Utf16Span ownerSpan,
+        Utf16Span? documentationSpan,
+        DocumentationBlockState blockState,
+        bool writable = true)
+        : base(
+            DocumentationPatchSourceKind.Repository,
+            exactFileSha256,
+            requestedDeclarationSpan,
+            canonicalDeclarationSpan,
+            ownerSpan,
+            documentationSpan,
+            blockState,
+            writable)
+    {
+        Path = path;
+        Encoding = encoding;
+    }
+
+    public string Path { get; }
+    public DocumentationPatchRepositoryEncoding Encoding { get; }
+}
+
+public sealed record CampaignPlanningGeneratedSourceAuthority
+    : CampaignPlanningSourceAuthority
+{
+    public CampaignPlanningGeneratedSourceAuthority(
+        DocumentationPatchSourceKind kind,
+        string producerId,
+        string outputId,
+        string sourceSha256,
+        Utf16Span requestedDeclarationSpan,
+        Utf16Span canonicalDeclarationSpan,
+        Utf16Span ownerSpan,
+        Utf16Span? documentationSpan,
+        DocumentationBlockState blockState)
+        : base(
+            kind,
+            sourceSha256,
+            requestedDeclarationSpan,
+            canonicalDeclarationSpan,
+            ownerSpan,
+            documentationSpan,
+            blockState,
+            writable: false)
+    {
+        ProducerId = producerId;
+        OutputId = outputId;
+    }
+
+    public string ProducerId { get; }
+    public string OutputId { get; }
+}
+
+public sealed record CampaignPlanningApplicableComponent
+{
+    public CampaignPlanningApplicableComponent(
+        ComponentKind kind,
+        string identity,
+        string? name)
+    {
+        Kind = kind;
+        Identity = identity;
+        Name = name;
+    }
+
+    public ComponentKind Kind { get; }
+    public string Identity { get; }
+    public string? Name { get; }
+}
+
+public sealed record CampaignPlanningTargetAuthority
+{
+    public CampaignPlanningTargetAuthority(
+        TargetClassification target,
+        CampaignPlanningSourceAuthority source,
+        ImmutableArray<CampaignPlanningApplicableComponent> applicableComponents,
+        ImmutableArray<SymbolRef> ownerSymbolRefs,
+        bool multiDeclarator,
+        bool primaryConstructor,
+        bool primaryConstructorAlias,
+        DocumentationScribeStyleProfile? executableStyleProfile)
+    {
+        Target = target;
+        Source = source;
+        ApplicableComponents = applicableComponents;
+        OwnerSymbolRefs = ownerSymbolRefs;
+        MultiDeclarator = multiDeclarator;
+        PrimaryConstructor = primaryConstructor;
+        PrimaryConstructorAlias = primaryConstructorAlias;
+        ExecutableStyleProfile = executableStyleProfile;
+    }
+
+    public TargetClassification Target { get; init; }
+    public CampaignPlanningSourceAuthority Source { get; init; }
+    public ImmutableArray<CampaignPlanningApplicableComponent> ApplicableComponents { get; init; }
+    public ImmutableArray<SymbolRef> OwnerSymbolRefs { get; init; }
+    public bool MultiDeclarator { get; init; }
+    public bool PrimaryConstructor { get; init; }
+    public bool PrimaryConstructorAlias { get; init; }
+    public DocumentationScribeStyleProfile? ExecutableStyleProfile { get; init; }
+}
+
+public sealed record CampaignPlanningOwnerAuthority
+{
+    public CampaignPlanningOwnerAuthority(
+        string ownerEquivalenceRef,
+        ImmutableArray<CampaignPlanningTargetAuthority> targets,
+        bool ambiguousOwner = false)
+    {
+        OwnerEquivalenceRef = ownerEquivalenceRef;
+        Targets = targets;
+        AmbiguousOwner = ambiguousOwner;
+    }
+
+    public string OwnerEquivalenceRef { get; init; }
+    public ImmutableArray<CampaignPlanningTargetAuthority> Targets { get; init; }
+    public bool AmbiguousOwner { get; init; }
+}
+
+public sealed record CampaignPlanningOwnerAuthoritySet
+{
+    public CampaignPlanningOwnerAuthoritySet(
+        ImmutableArray<CampaignPlanningOwnerAuthority> owners)
+    {
+        Owners = owners;
+    }
+
+    public ImmutableArray<CampaignPlanningOwnerAuthority> Owners { get; init; }
+}
+
+public sealed record CampaignPlanningInput
+{
+    public CampaignPlanningInput(
+        CampaignPlanningSnapshot snapshot,
+        CampaignPlanningExecutionPolicy executionPolicy,
+        ClassificationSet classifications,
+        DocumentationObservationSet observations,
+        AuditDocument auditDocument,
+        CampaignPlanningOwnerAuthoritySet ownerAuthority)
+    {
+        Snapshot = snapshot;
+        ExecutionPolicy = executionPolicy;
+        Classifications = classifications;
+        Observations = observations;
+        AuditDocument = auditDocument;
+        OwnerAuthority = ownerAuthority;
+    }
+
+    public CampaignPlanningSnapshot Snapshot { get; init; }
+    public CampaignPlanningExecutionPolicy ExecutionPolicy { get; init; }
+    public ClassificationSet Classifications { get; init; }
+    public DocumentationObservationSet Observations { get; init; }
+    public AuditDocument AuditDocument { get; init; }
+    public CampaignPlanningOwnerAuthoritySet OwnerAuthority { get; init; }
+}
+
+public sealed record CampaignPlanningViolationCause
+{
+    internal CampaignPlanningViolationCause(
+        SymbolRef parentSymbolRef,
+        ComponentKind? componentKind,
+        string? componentIdentity,
+        AuditReason reason,
+        string auditRowSha256)
+    {
+        ParentSymbolRef = parentSymbolRef;
+        ComponentKind = componentKind;
+        ComponentIdentity = componentIdentity;
+        Reason = reason;
+        AuditRowSha256 = auditRowSha256;
+    }
+
+    public SymbolRef ParentSymbolRef { get; }
+    public ComponentKind? ComponentKind { get; }
+    public string? ComponentIdentity { get; }
+    public AuditReason Reason { get; }
+    public string AuditRowSha256 { get; }
+}
+
+public sealed record CampaignPlanningTargetFact
+{
+    internal CampaignPlanningTargetFact(
+        SymbolRef symbolRef,
+        PrimarySymbolKind primaryKind,
+        ClassificationOrigin origin,
+        CampaignPlanningSourceAuthority source,
+        ImmutableArray<CampaignPlanningApplicableComponent> applicableComponents,
+        ImmutableArray<SymbolRef> ownerSymbolRefs,
+        AuditOutcome auditOutcome,
+        AuditReason auditReason,
+        string auditRowSha256,
+        bool m3Eligible,
+        DocumentationScribeStyleProfile? styleProfile)
+    {
+        SymbolRef = symbolRef;
+        PrimaryKind = primaryKind;
+        Origin = origin;
+        Source = source;
+        ApplicableComponents = applicableComponents;
+        OwnerSymbolRefs = ownerSymbolRefs;
+        AuditOutcome = auditOutcome;
+        AuditReason = auditReason;
+        AuditRowSha256 = auditRowSha256;
+        M3Eligible = m3Eligible;
+        StyleProfile = styleProfile;
+    }
+
+    public SymbolRef SymbolRef { get; }
+    public PrimarySymbolKind PrimaryKind { get; }
+    public ClassificationOrigin Origin { get; }
+    public CampaignPlanningSourceAuthority Source { get; }
+    public ImmutableArray<CampaignPlanningApplicableComponent> ApplicableComponents { get; }
+    public ImmutableArray<SymbolRef> OwnerSymbolRefs { get; }
+    public AuditOutcome AuditOutcome { get; }
+    public AuditReason AuditReason { get; }
+    public string AuditRowSha256 { get; }
+    public bool M3Eligible { get; }
+    public DocumentationScribeStyleProfile? StyleProfile { get; }
+}
+
+public sealed record CampaignPlanningDisposition
+{
+    internal CampaignPlanningDisposition(
+        CampaignPlanningDispositionKind kind,
+        CampaignPlanningEditCapability? editCapability,
+        CampaignPlanningTerminalReason? primaryTerminalReason,
+        ImmutableArray<CampaignPlanningTerminalReason> terminalReasons)
+    {
+        Kind = kind;
+        EditCapability = editCapability;
+        PrimaryTerminalReason = primaryTerminalReason;
+        TerminalReasons = terminalReasons;
+    }
+
+    public CampaignPlanningDispositionKind Kind { get; }
+    public CampaignPlanningEditCapability? EditCapability { get; }
+    public CampaignPlanningTerminalReason? PrimaryTerminalReason { get; }
+    public ImmutableArray<CampaignPlanningTerminalReason> TerminalReasons { get; }
+}
+
+public sealed record CampaignPlanningWorkItem
+{
+    internal CampaignPlanningWorkItem(
+        string workItemKey,
+        string ownerEquivalenceRef,
+        ImmutableArray<CampaignPlanningTargetFact> targets,
+        ImmutableArray<CampaignPlanningViolationCause> violationCauses,
+        CampaignPlanningDisposition disposition)
+    {
+        WorkItemKey = workItemKey;
+        OwnerEquivalenceRef = ownerEquivalenceRef;
+        Targets = targets;
+        ViolationCauses = violationCauses;
+        Disposition = disposition;
+    }
+
+    public string WorkItemKey { get; }
+    public string OwnerEquivalenceRef { get; }
+    public ImmutableArray<CampaignPlanningTargetFact> Targets { get; }
+    public ImmutableArray<CampaignPlanningViolationCause> ViolationCauses { get; }
+    public CampaignPlanningDisposition Disposition { get; }
+}
+
+public sealed record CampaignPlanningSummary(
+    int TotalWorkItems,
+    int ExecutableWorkItems,
+    int TerminalWorkItems,
+    int RepositoryBackedWorkItems,
+    int GeneratedOrNonWritableWorkItems,
+    ImmutableArray<CampaignPlanningTerminalReasonCount> TerminalReasonCounts);
+
+public sealed record CampaignPlanningTerminalReasonCount(
+    CampaignPlanningTerminalReason Reason,
+    int Count);
+
+public sealed record CampaignWorkPlan
+{
+    internal CampaignWorkPlan(
+        string campaignLineage,
+        string opaqueSnapshotBinding,
+        string auditDocumentSha256,
+        string executionCommitment,
+        TargetProfile targetProfile,
+        ImmutableArray<CampaignPlanningWorkItem> workItems,
+        CampaignPlanningSummary summary)
+    {
+        CampaignLineage = campaignLineage;
+        OpaqueSnapshotBinding = opaqueSnapshotBinding;
+        AuditDocumentSha256 = auditDocumentSha256;
+        ExecutionCommitment = executionCommitment;
+        TargetProfile = targetProfile;
+        WorkItems = workItems;
+        Summary = summary;
+    }
+
+    public string CampaignLineage { get; }
+    public string OpaqueSnapshotBinding { get; }
+    public string AuditDocumentSha256 { get; }
+    public string ExecutionCommitment { get; }
+    public TargetProfile TargetProfile { get; }
+    public ImmutableArray<CampaignPlanningWorkItem> WorkItems { get; }
+    public CampaignPlanningSummary Summary { get; }
+}
