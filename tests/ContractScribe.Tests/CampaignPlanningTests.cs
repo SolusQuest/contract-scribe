@@ -105,6 +105,8 @@ public sealed class CampaignPlanningTests
                 "conflicting-scoped-generated-source=InvalidOwnerAuthority",
                 "observed-text-hash-substitution=InvalidOwnerAuthority",
                 "stale-partial-binding=InvalidObservationAuthority",
+                "alternate-kind-partial-evidence=InvalidObservationAuthority",
+                "illegal-empty-unavailable-evidence=InvalidObservationAuthority",
                 "unselected-complete-evidence=InvalidObservationAuthority",
                 "nonviolation-owner-outside-selected-closure=InvalidOwnerAuthority",
                 "overbound-observation-authority=InvalidBound",
@@ -117,6 +119,7 @@ public sealed class CampaignPlanningTests
                 "overbound-campaign-budget=InvalidConfiguration",
                 "duplicate-configuration-property=InvalidConfiguration",
                 "overbound-configuration-projection=InvalidConfiguration",
+                "terminal-execution-profile=InvalidStyleAuthority",
                 "multi-error-owner-permutation=InvalidOwnerAuthority",
             ],
             rows);
@@ -553,7 +556,12 @@ public sealed class CampaignPlanningTests
                 owner with
                 {
                     AmbiguousOwner = true,
-                    Targets = [target with { Source = terminalSource, MultiDeclarator = true }],
+                    Targets = [target with
+                    {
+                        Source = terminalSource,
+                        MultiDeclarator = true,
+                        ExecutableStyleProfile = null,
+                    }],
                 },
             ]),
         };
@@ -815,7 +823,14 @@ public sealed class CampaignPlanningTests
         var scenario = CreateScenario(
             PolicyExpectation.Forbidden,
             malformedTarget: true);
-        var plan = CampaignPlanner.Plan(scenario.Input);
+        var owner = Assert.Single(scenario.Input.OwnerAuthority.Owners);
+        var target = Assert.Single(owner.Targets);
+        var plan = CampaignPlanner.Plan(scenario.Input with
+        {
+            OwnerAuthority = new CampaignPlanningOwnerAuthoritySet([
+                owner with { Targets = [target with { ExecutableStyleProfile = null }] },
+            ]),
+        });
 
         var item = Assert.Single(plan.WorkItems);
         Assert.Equal(CampaignPlanningDispositionKind.Terminal, item.Disposition.Kind);
@@ -837,6 +852,39 @@ public sealed class CampaignPlanningTests
                     DocumentationUnavailableCause.MalformedXml,
                     observation.UnavailableCause);
             });
+    }
+
+    [Fact]
+    public void TerminalWorkRejectsExecutionOnlyStyleProfilesAcrossOwnerKinds()
+    {
+        var generated = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: false,
+            firstGenerated: true);
+        var shared = CreateTwoTargetScenario(
+            sharedPhysicalOwner: true,
+            groupTogether: true);
+        foreach (var scenario in new[] { generated, shared })
+        {
+            var owners = scenario.Input.OwnerAuthority.Owners.ToBuilder();
+            var ownerIndex = Enumerable.Range(0, owners.Count).First(index =>
+                owners[index].Targets.Any(target => target.ExecutableStyleProfile is null));
+            var targets = owners[ownerIndex].Targets.ToBuilder();
+            var targetIndex = Enumerable.Range(0, targets.Count).First(index =>
+                targets[index].ExecutableStyleProfile is null);
+            targets[targetIndex] = targets[targetIndex] with
+            {
+                ExecutableStyleProfile = ReadZeroComponentStyleProfile(),
+            };
+            owners[ownerIndex] = owners[ownerIndex] with { Targets = targets.ToImmutable() };
+
+            var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+                CampaignPlanner.Plan(scenario.Input with
+                {
+                    OwnerAuthority = new CampaignPlanningOwnerAuthoritySet(owners.ToImmutable()),
+                }));
+            Assert.Equal(CampaignPlanningValidationCode.InvalidStyleAuthority, failure.Code);
+        }
     }
 
     [Fact]
@@ -1110,6 +1158,78 @@ public sealed class CampaignPlanningTests
                 selected.EvidenceId,
                 documentationEvidenceId: null)]).Binding);
         authorities[index] = new CampaignPlanningEvidenceAuthority(observation, changedBinding);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input with
+            {
+                EvidenceAuthority = authorities.ToImmutable(),
+                AuditDocument = CreateUniformPolicyAudit(scenario, conflict),
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PartialEvidenceRequiresTheProductionEvidenceKindBeforePolicyPrecedence(bool conflict)
+    {
+        var scenario = CreateScenario(blockStateOverride: DocumentationBlockState.WellFormed);
+        var authorities = scenario.Input.EvidenceAuthority.ToBuilder();
+        var index = Enumerable.Range(0, authorities.Count).Single(candidate =>
+            authorities[candidate].Subject.ComponentKind is null);
+        var observation = scenario.Input.Observations.Observations.Single(value =>
+            value.Subject == authorities[index].Subject);
+        var declaration = Assert.Single(observation.Declarations);
+        var repository = Assert.IsType<RepositoryDocumentationSourceIdentity>(declaration.Source);
+        var subject = EvidenceInput.TargetSubject(
+            observation.Subject.ParentSymbolRef.CompilationContextRef,
+            observation.Subject.ParentSymbolRef.DocumentationCommentId);
+        var partialBundle = Assert.IsType<EvidenceBundle>(EvidenceNormalizer.Normalize(
+            [EvidenceInput.Candidate(
+                "evidence.wrong-mode",
+                subject,
+                EvidenceKind.SourceDeclaration,
+                EvidenceRelation.Declares,
+                declaration.DeclarationText,
+                EvidenceInput.RepositoryLocator(
+                    repository.Path,
+                    declaration.DeclarationSpan.Start,
+                    declaration.DeclarationSpan.End))],
+            budgets: EvidenceInput.Budgets(32, 8, 32_768)).Bundle);
+        var wrongMode = Assert.IsType<BoundObservationEvidence>(EvidenceObservationBinder.Bind(
+            observation,
+            partialBundle,
+            []).Binding);
+        authorities[index] = new CampaignPlanningEvidenceAuthority(observation, wrongMode);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input with
+            {
+                EvidenceAuthority = authorities.ToImmutable(),
+                AuditDocument = CreateUniformPolicyAudit(scenario, conflict),
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AvailableObservationRejectsEmptyUnavailableEvidenceBeforePolicyPrecedence(bool conflict)
+    {
+        var scenario = CreateScenario();
+        var authorities = scenario.Input.EvidenceAuthority.ToBuilder();
+        var index = Enumerable.Range(0, authorities.Count).Single(candidate =>
+            authorities[candidate].Subject.ComponentKind is null);
+        var observation = scenario.Input.Observations.Observations.Single(value =>
+            value.Subject == authorities[index].Subject);
+        var unavailableBundle = Assert.IsType<EvidenceBundle>(EvidenceNormalizer.Normalize([]).Bundle);
+        var unavailable = Assert.IsType<BoundObservationEvidence>(EvidenceObservationBinder.Bind(
+            observation,
+            unavailableBundle,
+            []).Binding);
+        authorities[index] = new CampaignPlanningEvidenceAuthority(observation, unavailable);
 
         var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
             CampaignPlanner.Plan(scenario.Input with
@@ -2185,7 +2305,11 @@ public sealed class CampaignPlanningTests
                 multiDeclarator: false,
                 primaryConstructor: false,
                 primaryConstructorAlias: false,
-                zeroComponentStyle);
+                specification.Generated
+                    || groupTogether && (!includeUnrelatedThird
+                        || target.SymbolRef.CompilationContextRef != "synthetic.c")
+                    ? null
+                    : zeroComponentStyle);
         }).ToImmutableArray();
         var ownerAuthority = groupTogether
             ? new CampaignPlanningOwnerAuthoritySet(includeUnrelatedThird

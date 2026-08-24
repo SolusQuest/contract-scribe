@@ -12,20 +12,30 @@ internal static class CampaignPlanningPartialEvidenceValidator
     {
         var complete = bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Complete
             && bundle.OmissionReason is null;
-        if ((!complete && bundle.ObservationSubject is not null)
-            || (complete && bundle.ObservationSubject is null)
-            || bundle.Items.IsDefault
-            || bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Unavailable
-                && !bundle.Items.IsEmpty
-            || bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Partial
-                && bundle.Items.IsEmpty)
+        if (bundle.Items.IsDefault)
         {
             return false;
         }
 
-        if (bundle.Items.IsEmpty)
+        var sourceUnavailable = observation.Value == DocumentationObservationValue.Unavailable
+            && observation.Completeness == DocumentationAuthorityCompleteness.Incomplete
+            && observation.UnavailableCause == DocumentationUnavailableCause.SourceUnavailable;
+        if (!complete && sourceUnavailable)
         {
-            return true;
+            return bundle.ObservationSubject is null
+                && bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Unavailable
+                && bundle.OmissionReason == EvidenceOmissionReason.SourceUnavailable
+                && bundle.Items.IsEmpty;
+        }
+
+        if (complete
+            ? bundle.ObservationSubject is null
+            : bundle.ObservationSubject is not null
+                || bundle.AvailabilityStatus != EvidenceAvailabilityStatus.Partial
+                || bundle.OmissionReason != EvidenceOmissionReason.BudgetExhausted
+                || bundle.Items.IsEmpty)
+        {
+            return false;
         }
 
         EvidenceSubject expectedSubject = observation.Subject.ComponentKind is { } componentKind
@@ -70,7 +80,7 @@ internal static class CampaignPlanningPartialEvidenceValidator
                 }
 
                 if (matched is null
-                    || complete && !IsRequiredKind(
+                    || !IsRequiredKind(
                         observation.Subject,
                         matched,
                         item)

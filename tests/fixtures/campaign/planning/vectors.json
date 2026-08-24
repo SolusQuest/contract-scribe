@@ -19,6 +19,8 @@
     { "id": "conflicting-scoped-generated-source", "validationCode": "InvalidOwnerAuthority" },
     { "id": "observed-text-hash-substitution", "validationCode": "InvalidOwnerAuthority" },
     { "id": "stale-partial-binding", "validationCode": "InvalidObservationAuthority" },
+    { "id": "alternate-kind-partial-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "illegal-empty-unavailable-evidence", "validationCode": "InvalidObservationAuthority" },
     { "id": "unselected-complete-evidence", "validationCode": "InvalidObservationAuthority" },
     { "id": "nonviolation-owner-outside-selected-closure", "validationCode": "InvalidOwnerAuthority" },
     { "id": "overbound-observation-authority", "validationCode": "InvalidBound" },
@@ -31,6 +33,7 @@
     { "id": "overbound-campaign-budget", "validationCode": "InvalidConfiguration" },
     { "id": "duplicate-configuration-property", "validationCode": "InvalidConfiguration" },
     { "id": "overbound-configuration-projection", "validationCode": "InvalidConfiguration" },
+    { "id": "terminal-execution-profile", "validationCode": "InvalidStyleAuthority" },
     { "id": "multi-error-owner-permutation", "validationCode": "InvalidOwnerAuthority" }
   ]
 }

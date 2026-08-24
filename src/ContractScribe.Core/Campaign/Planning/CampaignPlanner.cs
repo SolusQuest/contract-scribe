@@ -1260,6 +1260,9 @@ public static class CampaignPlanner
         }
         else
         {
+            Require(targetFacts.All(target => target.StyleProfile is null),
+                CampaignPlanningValidationCode.InvalidStyleAuthority,
+                "Terminal work cannot carry an execution-only Style Profile.");
             disposition = new CampaignPlanningDisposition(
                 CampaignPlanningDispositionKind.Terminal,
                 null,
