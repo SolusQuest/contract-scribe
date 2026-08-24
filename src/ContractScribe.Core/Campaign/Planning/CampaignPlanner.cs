@@ -134,6 +134,15 @@ public static class CampaignPlanner
         var snapshot = input.Snapshot
             ?? throw Failure(CampaignPlanningValidationCode.InvalidRoot,
                 "Campaign snapshot authority is required.");
+        var executionPolicy = input.ExecutionPolicy
+            ?? throw Failure(CampaignPlanningValidationCode.InvalidRoot,
+                "Campaign execution policy is required.");
+        var classifications = input.Classifications
+            ?? throw Failure(CampaignPlanningValidationCode.InvalidRoot,
+                "Classification authority is required.");
+        var auditDocument = input.AuditDocument
+            ?? throw Failure(CampaignPlanningValidationCode.InvalidRoot,
+                "Audit authority is required.");
         RequireOpaqueIdentifier(snapshot.CampaignLineage, nameof(snapshot.CampaignLineage));
         RequireOpaqueIdentifier(snapshot.OpaqueSnapshotBinding, nameof(snapshot.OpaqueSnapshotBinding));
         RequireSha256(snapshot.RepositoryCommitmentSha256, nameof(snapshot.RepositoryCommitmentSha256));
@@ -141,12 +150,12 @@ public static class CampaignPlanner
         RequireSha256(snapshot.PolicyAuthorityCommitmentSha256, nameof(snapshot.PolicyAuthorityCommitmentSha256));
         Require(
             Enum.IsDefined(snapshot.TargetProfile)
-            && input.Classifications!.TargetProfile == snapshot.TargetProfile
-            && input.AuditDocument!.TargetProfile == snapshot.TargetProfile,
+            && classifications.TargetProfile == snapshot.TargetProfile
+            && auditDocument.TargetProfile == snapshot.TargetProfile,
             CampaignPlanningValidationCode.TargetProfileMismatch,
             "Snapshot, Classification, and Audit target profiles must match.");
 
-        ValidateExecutionPolicy(input.ExecutionPolicy!);
+        ValidateExecutionPolicy(executionPolicy);
         var ownerAuthority = input.OwnerAuthority
             ?? throw Failure(CampaignPlanningValidationCode.InvalidRoot,
                 "Owner authority is required.");
@@ -154,11 +163,11 @@ public static class CampaignPlanner
             !ownerAuthority.Owners.IsDefault
             && ownerAuthority.Owners.Length <= MaximumOwners
             && ownerAuthority.Owners.All(owner => owner is not null)
-            && input.Classifications!.Targets.Length <= MaximumTargets
-            && input.Classifications.Components.Length <= MaximumComponents
-            && input.Classifications.Unresolved.Length <= MaximumUnresolved
+            && classifications.Targets.Length <= MaximumTargets
+            && classifications.Components.Length <= MaximumComponents
+            && classifications.Unresolved.Length <= MaximumUnresolved
             && input.EvidenceAuthority.Length <= MaximumTargets + MaximumComponents
-            && input.AuditDocument!.Root.GetProperty("results").GetArrayLength() <= MaximumAuditRows,
+            && auditDocument.Root.GetProperty("results").GetArrayLength() <= MaximumAuditRows,
             CampaignPlanningValidationCode.InvalidBound,
             "Planning authority collections must be initialized and finitely bounded.");
     }
@@ -296,12 +305,11 @@ public static class CampaignPlanner
             CampaignPlanningValidationCode.InvalidObservationAuthority,
             "Evidence authority cannot contain null records.");
         var result = new Dictionary<string, BoundObservationEvidence>(StringComparer.Ordinal);
-        foreach (var item in supplied.OrderBy(
+        foreach (var actualItem in supplied.OrderBy(
                      item => ObservationKey(item!.Subject!),
                      StringComparer.Ordinal))
         {
-            var actualItem = item!;
-            var key = ObservationKey(actualItem.Subject!);
+            var key = ObservationKey(actualItem!.Subject!);
             Require(observations.TryGetValue(key, out var observation)
                     && result.TryAdd(key, actualItem.Binding!)
                     && actualItem.Binding!.ObservationValue == observation.Value,
@@ -618,12 +626,10 @@ public static class CampaignPlanner
             ValidateComponents(classifications, observations, target);
         }
 
-        foreach (var target in allTargets)
+        foreach (var target in allTargets.Where(target =>
+                     target.ExecutableStyleProfile is not null))
         {
-            if (target.ExecutableStyleProfile is not null)
-            {
-                ValidateStyleProfile(target.ExecutableStyleProfile, target.ApplicableComponents);
-            }
+            ValidateStyleProfile(target.ExecutableStyleProfile!, target.ApplicableComponents);
         }
 
         return validated
