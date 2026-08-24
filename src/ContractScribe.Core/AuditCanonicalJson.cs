@@ -26,6 +26,25 @@ internal static class AuditCanonicalJson
         return stream.ToArray();
     }
 
+    internal static byte[] CanonicalizeProjection(JsonElement root)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+            stream,
+            new JsonWriterOptions
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                Indented = false,
+                SkipValidation = false,
+            }))
+        {
+            WriteProjectionValue(writer, root);
+        }
+
+        stream.WriteByte((byte)'\n');
+        return stream.ToArray();
+    }
+
     internal static byte[] CanonicalizeDeclarations(JsonElement declarations)
     {
         using var stream = new MemoryStream();
@@ -105,6 +124,56 @@ internal static class AuditCanonicalJson
                 throw AuditJsonModel.Failure(
                     AuditValidationCode.InvalidShape,
                     "The Audit Result contains an unsupported JSON value.");
+        }
+    }
+
+    private static void WriteProjectionValue(Utf8JsonWriter writer, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                var properties = value.EnumerateObject()
+                    .ToDictionary(property => property.Name, StringComparer.Ordinal);
+                foreach (var name in properties.Keys.OrderBy(name => name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(name);
+                    WriteProjectionValue(writer, properties[name].Value);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in value.EnumerateArray())
+                {
+                    WriteProjectionValue(writer, item);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                var text = value.GetString()!;
+                AuditJsonModel.RejectUnpairedSurrogates(text);
+                writer.WriteRawValue(EscapeJsonString(text), skipInputValidation: false);
+                break;
+            case JsonValueKind.Number:
+                AuditJsonModel.ValidateCanonicalInteger(value.GetRawText());
+                writer.WriteRawValue(value.GetRawText(), skipInputValidation: false);
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw AuditJsonModel.Failure(
+                    AuditValidationCode.InvalidShape,
+                    "The validated configuration projection contains an unsupported JSON value.");
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
-using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace ContractScribe.Core;
 
@@ -58,6 +59,19 @@ public enum CampaignPlanningTerminalReason
     UnsupportedBlockState,
 }
 
+public enum CampaignPlanningContentFamily
+{
+    ProposalContract,
+    AgentProtocol,
+    ContextSelectionPolicy,
+    ToolPolicyAndRegistry,
+    ProviderModelRequestProfile,
+    RetryPolicy,
+    M2ProjectionPolicy,
+    ProductContractRevision,
+    CostRatePolicy,
+}
+
 public static class CampaignPlanningVocabulary
 {
     public const string PlanningContractRevision = "campaign-planning-v1";
@@ -100,25 +114,59 @@ public static class CampaignPlanningVocabulary
 
 public sealed record CampaignPlanningContentAuthority
 {
-    private CampaignPlanningContentAuthority(string id, string contentSha256)
+    private CampaignPlanningContentAuthority(
+        CampaignPlanningContentFamily family,
+        string id,
+        string contentSha256)
     {
+        Family = family;
         Id = id;
         ContentSha256 = contentSha256;
     }
+
+    public CampaignPlanningContentFamily Family { get; }
 
     public string Id { get; }
 
     public string ContentSha256 { get; }
 
-    public static CampaignPlanningContentAuthority Create(
+    public static CampaignPlanningContentAuthority CreateValidatedJsonProjection(
+        CampaignPlanningContentFamily family,
         string id,
-        ReadOnlySpan<byte> canonicalValidatedContent)
+        JsonElement validatedProjection)
     {
         ArgumentNullException.ThrowIfNull(id);
+        if (!Enum.IsDefined(family) || validatedProjection.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException(
+                "Configuration authority requires a closed family and a validated JSON object projection.",
+                nameof(validatedProjection));
+        }
+
+        var canonicalProjection = AuditCanonicalJson.CanonicalizeProjection(validatedProjection);
+        using var writer = new CampaignPlanningCommitmentWriter(
+            "contract-scribe/campaign-configuration-authority/v1");
+        writer.Add("family", GetContentFamilyId(family));
+        writer.Add("projection", Encoding.UTF8.GetString(canonicalProjection));
         return new CampaignPlanningContentAuthority(
+            family,
             id,
-            Convert.ToHexString(SHA256.HashData(canonicalValidatedContent)).ToLowerInvariant());
+            writer.Complete());
     }
+
+    internal static string GetContentFamilyId(CampaignPlanningContentFamily family) => family switch
+    {
+        CampaignPlanningContentFamily.ProposalContract => "configuration.proposal-contract",
+        CampaignPlanningContentFamily.AgentProtocol => "configuration.agent-protocol",
+        CampaignPlanningContentFamily.ContextSelectionPolicy => "configuration.context-selection",
+        CampaignPlanningContentFamily.ToolPolicyAndRegistry => "configuration.tool-policy-registry",
+        CampaignPlanningContentFamily.ProviderModelRequestProfile => "configuration.provider-model-request",
+        CampaignPlanningContentFamily.RetryPolicy => "configuration.retry-policy",
+        CampaignPlanningContentFamily.M2ProjectionPolicy => "configuration.m2-projection",
+        CampaignPlanningContentFamily.ProductContractRevision => "configuration.product-contract-revision",
+        CampaignPlanningContentFamily.CostRatePolicy => "configuration.cost-rate-policy",
+        _ => throw new ArgumentOutOfRangeException(nameof(family), family, "Unknown configuration family."),
+    };
 }
 
 public sealed record CampaignPlanningSnapshot
@@ -244,6 +292,7 @@ public abstract record CampaignPlanningSourceAuthority
 {
     private protected CampaignPlanningSourceAuthority(
         DocumentationPatchSourceKind kind,
+        string authoritativeDeclarationId,
         string contentSha256,
         Utf16Span requestedDeclarationSpan,
         Utf16Span canonicalDeclarationSpan,
@@ -253,6 +302,7 @@ public abstract record CampaignPlanningSourceAuthority
         bool writable)
     {
         Kind = kind;
+        AuthoritativeDeclarationId = authoritativeDeclarationId;
         ContentSha256 = contentSha256;
         RequestedDeclarationSpan = requestedDeclarationSpan;
         CanonicalDeclarationSpan = canonicalDeclarationSpan;
@@ -263,6 +313,7 @@ public abstract record CampaignPlanningSourceAuthority
     }
 
     public DocumentationPatchSourceKind Kind { get; }
+    public string AuthoritativeDeclarationId { get; }
     public string ContentSha256 { get; }
     public Utf16Span RequestedDeclarationSpan { get; }
     public Utf16Span CanonicalDeclarationSpan { get; }
@@ -277,6 +328,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
 {
     public CampaignPlanningRepositorySourceAuthority(
         string path,
+        string authoritativeDeclarationId,
         string exactFileSha256,
         DocumentationPatchRepositoryEncoding encoding,
         Utf16Span requestedDeclarationSpan,
@@ -287,6 +339,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
         bool writable = true)
         : base(
             DocumentationPatchSourceKind.Repository,
+            authoritativeDeclarationId,
             exactFileSha256,
             requestedDeclarationSpan,
             canonicalDeclarationSpan,
@@ -308,6 +361,7 @@ public sealed record CampaignPlanningGeneratedSourceAuthority
 {
     public CampaignPlanningGeneratedSourceAuthority(
         DocumentationPatchSourceKind kind,
+        string authoritativeDeclarationId,
         string producerId,
         string outputId,
         string sourceSha256,
@@ -318,6 +372,7 @@ public sealed record CampaignPlanningGeneratedSourceAuthority
         DocumentationBlockState blockState)
         : base(
             kind,
+            authoritativeDeclarationId,
             sourceSha256,
             requestedDeclarationSpan,
             canonicalDeclarationSpan,
@@ -386,18 +441,29 @@ public sealed record CampaignPlanningTargetAuthority
 public sealed record CampaignPlanningOwnerAuthority
 {
     public CampaignPlanningOwnerAuthority(
-        string ownerEquivalenceRef,
         ImmutableArray<CampaignPlanningTargetAuthority> targets,
         bool ambiguousOwner = false)
     {
-        OwnerEquivalenceRef = ownerEquivalenceRef;
         Targets = targets;
         AmbiguousOwner = ambiguousOwner;
     }
 
-    public string OwnerEquivalenceRef { get; init; }
     public ImmutableArray<CampaignPlanningTargetAuthority> Targets { get; init; }
     public bool AmbiguousOwner { get; init; }
+}
+
+public sealed record CampaignPlanningEvidenceAuthority
+{
+    public CampaignPlanningEvidenceAuthority(
+        DocumentationObservationSubject subject,
+        BoundObservationEvidence binding)
+    {
+        Subject = subject;
+        Binding = binding;
+    }
+
+    public DocumentationObservationSubject Subject { get; init; }
+    public BoundObservationEvidence Binding { get; init; }
 }
 
 public sealed record CampaignPlanningOwnerAuthoritySet
@@ -418,6 +484,7 @@ public sealed record CampaignPlanningInput
         CampaignPlanningExecutionPolicy executionPolicy,
         ClassificationSet classifications,
         DocumentationObservationSet observations,
+        ImmutableArray<CampaignPlanningEvidenceAuthority> evidenceAuthority,
         AuditDocument auditDocument,
         CampaignPlanningOwnerAuthoritySet ownerAuthority)
     {
@@ -425,6 +492,7 @@ public sealed record CampaignPlanningInput
         ExecutionPolicy = executionPolicy;
         Classifications = classifications;
         Observations = observations;
+        EvidenceAuthority = evidenceAuthority;
         AuditDocument = auditDocument;
         OwnerAuthority = ownerAuthority;
     }
@@ -433,6 +501,7 @@ public sealed record CampaignPlanningInput
     public CampaignPlanningExecutionPolicy ExecutionPolicy { get; init; }
     public ClassificationSet Classifications { get; init; }
     public DocumentationObservationSet Observations { get; init; }
+    public ImmutableArray<CampaignPlanningEvidenceAuthority> EvidenceAuthority { get; init; }
     public AuditDocument AuditDocument { get; init; }
     public CampaignPlanningOwnerAuthoritySet OwnerAuthority { get; init; }
 }
@@ -467,6 +536,7 @@ public sealed record CampaignPlanningTargetFact
         PrimarySymbolKind primaryKind,
         ClassificationOrigin origin,
         CampaignPlanningSourceAuthority source,
+        string authoritativeDeclarationId,
         ImmutableArray<CampaignPlanningApplicableComponent> applicableComponents,
         ImmutableArray<SymbolRef> ownerSymbolRefs,
         AuditOutcome auditOutcome,
@@ -479,6 +549,7 @@ public sealed record CampaignPlanningTargetFact
         PrimaryKind = primaryKind;
         Origin = origin;
         Source = source;
+        AuthoritativeDeclarationId = authoritativeDeclarationId;
         ApplicableComponents = applicableComponents;
         OwnerSymbolRefs = ownerSymbolRefs;
         AuditOutcome = auditOutcome;
@@ -492,6 +563,7 @@ public sealed record CampaignPlanningTargetFact
     public PrimarySymbolKind PrimaryKind { get; }
     public ClassificationOrigin Origin { get; }
     public CampaignPlanningSourceAuthority Source { get; }
+    public string AuthoritativeDeclarationId { get; }
     public ImmutableArray<CampaignPlanningApplicableComponent> ApplicableComponents { get; }
     public ImmutableArray<SymbolRef> OwnerSymbolRefs { get; }
     public AuditOutcome AuditOutcome { get; }

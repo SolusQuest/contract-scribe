@@ -2,8 +2,18 @@
   "contractRevision": "campaign-planning-v1",
   "scenario": "required-target-and-components",
   "auditResultSha256": "e64112e3c4c1e5ee94f65745a7dabe04a940357481d6d58e109d9e44a56dd501",
-  "executionCommitment": "23a0d9e5cb94979c3035a5bc7170ae73756c9e99eeb8334ac1d452979ed4317e",
+  "executionCommitment": "5eb5705600a9e13c21cec018152dc0407a73b6fd8ab4ff4d4030ace39a44e370",
   "workItemKeys": [
-    "campaign-work.780e012797b0e3a736b8d82c496508fa9756492a2e081669d651b011cf572152"
+    "campaign-work.65dda8bb8b54b95a9f1f2df16e1941fc9c5706a8af170b895ee31098640ad467"
+  ],
+  "invalidVectors": [
+    { "id": "split-shared-owner", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "merged-unrelated-owner", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "extra-owner-symbol", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "substituted-bound-evidence", "validationCode": "InvalidAuditAuthority" },
+    { "id": "empty-declaration-span", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "opaque-machine-path", "validationCode": "InvalidBound" },
+    { "id": "overbound-campaign-budget", "validationCode": "InvalidConfiguration" },
+    { "id": "multi-error-owner-permutation", "validationCode": "InvalidOwnerAuthority" }
   ]
 }
