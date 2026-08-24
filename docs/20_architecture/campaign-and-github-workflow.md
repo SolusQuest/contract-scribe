@@ -1,6 +1,6 @@
 # Campaign and GitHub workflow
 
-> **Status:** M4/M5 candidate architecture. Deterministic bounded progress, safe resume, idempotent GitHub mutation, human merge authority, privacy, and no duplicate active work are current roadmap constraints. Snapshot/work-plan/batch/campaign identities, cursors, checkpoints, ledgers, generations, state transitions, and adapter representations remain candidates until their implementing milestone demonstrates the minimum necessary shape.
+> **Status:** Current pre-release M4-C1 snapshot-scoped planning draft, implemented by `CampaignPlanner`. Governing M4 design authority: repository revision `9853f5e234cd7c245b058e7573b8c53e51c188a9`. Persistence, cursors, checkpoints, ledgers, batch execution, state transitions, provider dispatch, and every GitHub adapter representation remain candidate architecture owned by later M4/M5 work.
 
 ## Goal
 
@@ -10,36 +10,48 @@ The core state model is platform-neutral. GitHub Issues, branches, commits, and 
 
 The production adapter is part of the .NET payload. A GitHub Action wrapper invokes that payload and does not duplicate publication logic in TypeScript, shell, workflow expressions, or a second state machine.
 
+## Current M4-C1 planning boundary
+
+M4-C1 defines one pure Core planning operation. It consumes the current validated `ClassificationSet`, `DocumentationObservationSet`, exact bound-evidence authority, canonical `AuditDocument`, an opaque caller-attested snapshot binding, family-tagged canonical-JSON content authority, and a complete exact-set owner/source/declaration authority projection. It emits one immutable `CampaignWorkPlan`.
+
+The planner selects every and only current Audit violation. Target and component violations that share one physical documentation owner collapse into one complete-block work item without losing their parent-target association. A work item is either executable under the current M2/M3 boundary or terminal with a closed, ordered, deduplicated reason set and fixed primary reason. Terminal work remains visible but cannot be dispatched.
+
+The current planner is deliberately source-free and platform-neutral. It does not discover Git state, read a filesystem or workspace, invoke Roslyn or Patching, contact a provider, persist progress, mutate GitHub, or claim that an opaque snapshot attestation is live. The composition owner must produce and attest the complete evidence/source/declaration projection for the same snapshot as the three existing M1 authorities, including a domain-separated commitment over the current load session's `PhysicalSourceIdentity` while retaining each lexical repository path as its exact locator. Core builds one bounded source-session graph before owner partitioning: compilation context maps uniquely to project, repository path and physical commitment mappings close in both directions, repository authority retains separate decoded-observation-text and exact-file-byte commitments, and generated outputs are scoped by project and compilation context. Core commits a bounded complete current observation projection and validates every complete bundle as an exact declaration-to-item bijection while validating every included non-complete item against current declaration text and source authority before applying Audit precedence. Included evidence always retains production-selected kind and relation. Source-unavailable incomplete observations alone admit an empty `Unavailable`/`SourceUnavailable` bundle; all other non-complete observations require a non-empty `Partial`/`BudgetExhausted` bundle. Global Classification/Observation/Evidence/Audit authority is validated for every supported subject, while physical owner authority is required only for the exact closure of selected violation parents. Missing, extra, duplicated, substituted, conflicting, stale, or contradictory authority fails the entire plan.
+
+The plan contains identities, exact source commitments and encoding, spans, target/component facts, Audit-row commitments, Style Profile values for executable targets, dispositions, and bounded counts. Terminal targets must not carry execution-only Style Profile authority. It contains no source excerpts, trivia, documentation text, prompt content, provider output, candidate bytes, diff, credential, transcript, machine-absolute path, checkpoint history, or GitHub state.
+
+The normative in-process draft contract is [Campaign Planning v1](contracts/campaign-planning-v1.md). M4-C2 owns the first persisted checkpoint representation. M4-C3 owns reducer and budget-consumption behavior. Provider/M2/CLI execution and all GitHub publication semantics are later leaves; they may consume this plan but do not retroactively add persistence or mutation semantics to it.
+
 ## Identity model
 
-### Snapshot identity
+### Snapshot identity (current M4-C1 subset)
 
-A snapshot identifies the immutable audit input:
-
-```text
-repository identity
-+ base commit
-+ explicit input path
-+ policy digest
-+ audit tool and contract baseline
-```
-
-### Work-plan identity
-
-A work plan identifies the ordered documentation work derived from a snapshot:
+A snapshot binding identifies the caller-attested immutable planning input. M4-C1 binds the opaque value directly together with explicit repository, input, policy, target-profile, and product-contract commitments; it does not derive or interpret Git identity:
 
 ```text
-snapshot identity
-+ audit-result digest
-+ target-selection policy
-+ proposal contract
-+ style profile
-+ agent protocol and tool-registry identity
-+ project-context selection policy
-+ stable ordering rules
+opaque snapshot binding
++ repository commitment
++ input commitment
++ policy-authority commitment
++ target profile
++ product/contract revision commitment
 ```
 
-The work-plan identity is an execution identity, not merely a content digest. An implementation may compute a separate reusable content digest for diagnostics or caching, but cursors, checkpoints, target completion, replay, and idempotent operations bind the snapshot-scoped work-plan identity.
+### Work-plan identity (current M4-C1 subset)
+
+A work plan uses one composite execution commitment over the validated snapshot, canonical Audit bytes, the complete canonical M1 relation set consumed by semantic evidence, all correctness-bearing execution-policy content and typed ceilings, and the canonical complete ordered owner/target/component/violation/disposition graph:
+
+```text
+snapshot commitments
++ canonical Audit Result digest
++ complete canonical relation observations
++ selection and ordering policy revisions
++ proposal, agent, context, tool, provider, retry, M2, cost, and product content authorities
++ typed Scribe and campaign limits
++ ordered complete-block facts and per-executable-target Style Profile content
+```
+
+The execution commitment is not a permanent entity identifier or merely an Audit content digest. Its SHA-256 preimage uses a domain tag and explicit big-endian length-framed strict UTF-8 fields. Work-item keys use a separate domain and bind the exact execution commitment plus the complete item descriptor. A changed opaque snapshot therefore changes the execution commitment and every key even if canonical Audit bytes collide. Cursor, checkpoint, replay, and operation binding remain deferred to M4-C2 and later work.
 
 ### Context-group identity
 
@@ -82,11 +94,11 @@ A campaign is the stable lineage that continues across snapshots as documentatio
 
 A canonical Audit Result digest identifies result content, not the complete campaign execution identity. Snapshot, policy, contract baseline, target-selection, proposal, style, agent-protocol, tool-registry, and context-selection inputs remain independently identity-bearing. See [Semantic foundation](semantic-foundation.md).
 
-## Work unit and ordering
+## Work unit and ordering (current M4-C1 draft; prefix selection deferred)
 
 The initial work unit is one documentation block attached to one canonical declaration. Summary, type-parameter, parameter, return, value, exception, and remarks fields for that declaration count as one block.
 
-Targets are ordered deterministically by the canonical classification and locator rules. The planner selects a deterministic prefix that satisfies every active budget before model generation begins.
+Work items are ordered by the canonical physical-owner descriptor using ordinal text and numeric spans. Input order, current culture, time, randomness, display names, machine paths, and platform filesystem comparers have no authority. M4-C1 emits the complete current violation plan. Choosing and consuming a budget-bounded execution prefix is deferred to M4-C3.
 
 ## Budgets
 

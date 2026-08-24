@@ -1,0 +1,39 @@
+{
+  "contractRevision": "campaign-planning-v1",
+  "scenario": "required-target-and-components",
+  "auditResultSha256": "e64112e3c4c1e5ee94f65745a7dabe04a940357481d6d58e109d9e44a56dd501",
+  "executionCommitment": "9373e846125710d6b5466bef524db23758285bb942beceeb1bed9925a4916aa8",
+  "workItemKeys": [
+    "campaign-work.9e939f37cb84cb48fdbaaec4491efa72ebebacb244d168dbb0220356846ef78d"
+  ],
+  "invalidVectors": [
+    { "id": "split-shared-owner", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "merged-unrelated-owner", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "extra-owner-symbol", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "substituted-bound-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "stale-session-binding", "validationCode": "InvalidObservationAuthority" },
+    { "id": "split-lexical-alias", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "conflicting-physical-source", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "conflicting-repository-physical-map", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "conflicting-context-project", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "conflicting-scoped-generated-source", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "observed-text-hash-substitution", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "stale-partial-binding", "validationCode": "InvalidObservationAuthority" },
+    { "id": "alternate-kind-partial-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "illegal-empty-unavailable-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "unselected-complete-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "nonviolation-owner-outside-selected-closure", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "overbound-observation-authority", "validationCode": "InvalidBound" },
+    { "id": "substituted-partial-bundle", "validationCode": "InvalidAuditAuthority" },
+    { "id": "empty-declaration-span", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "source-span-role-substitution", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "noncanonical-relation-order", "validationCode": "InvalidClassificationAuthority" },
+    { "id": "opaque-machine-path", "validationCode": "InvalidBound" },
+    { "id": "overbound-audit-bytes", "validationCode": "InvalidBound" },
+    { "id": "overbound-campaign-budget", "validationCode": "InvalidConfiguration" },
+    { "id": "duplicate-configuration-property", "validationCode": "InvalidConfiguration" },
+    { "id": "overbound-configuration-projection", "validationCode": "InvalidConfiguration" },
+    { "id": "terminal-execution-profile", "validationCode": "InvalidStyleAuthority" },
+    { "id": "multi-error-owner-permutation", "validationCode": "InvalidOwnerAuthority" }
+  ]
+}
