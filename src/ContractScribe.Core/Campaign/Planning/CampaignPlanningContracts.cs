@@ -135,15 +135,16 @@ public sealed record CampaignPlanningContentAuthority
         string id,
         JsonElement validatedProjection)
     {
-        ArgumentNullException.ThrowIfNull(id);
-        if (!Enum.IsDefined(family) || validatedProjection.ValueKind != JsonValueKind.Object)
+        if (!Enum.IsDefined(family)
+            || string.IsNullOrEmpty(id)
+            || validatedProjection.ValueKind != JsonValueKind.Object)
         {
-            throw new ArgumentException(
-                "Configuration authority requires a closed family and a validated JSON object projection.",
-                nameof(validatedProjection));
+            throw new CampaignPlanningValidationException(
+                CampaignPlanningValidationCode.InvalidConfiguration,
+                "Configuration authority requires a closed family, identifier, and JSON object projection.");
         }
 
-        var canonicalProjection = AuditCanonicalJson.CanonicalizeProjection(validatedProjection);
+        var canonicalProjection = CampaignPlanningProjectionCanonicalizer.Canonicalize(validatedProjection);
         using var writer = new CampaignPlanningCommitmentWriter(
             "contract-scribe/campaign-configuration-authority/v1");
         writer.Add("family", GetContentFamilyId(family));
@@ -294,6 +295,7 @@ public abstract record CampaignPlanningSourceAuthority
         DocumentationPatchSourceKind kind,
         string authoritativeDeclarationId,
         string contentSha256,
+        Utf16Span observationDeclarationSpan,
         Utf16Span requestedDeclarationSpan,
         Utf16Span canonicalDeclarationSpan,
         Utf16Span ownerSpan,
@@ -304,6 +306,7 @@ public abstract record CampaignPlanningSourceAuthority
         Kind = kind;
         AuthoritativeDeclarationId = authoritativeDeclarationId;
         ContentSha256 = contentSha256;
+        ObservationDeclarationSpan = observationDeclarationSpan;
         RequestedDeclarationSpan = requestedDeclarationSpan;
         CanonicalDeclarationSpan = canonicalDeclarationSpan;
         OwnerSpan = ownerSpan;
@@ -315,6 +318,7 @@ public abstract record CampaignPlanningSourceAuthority
     public DocumentationPatchSourceKind Kind { get; }
     public string AuthoritativeDeclarationId { get; }
     public string ContentSha256 { get; }
+    public Utf16Span ObservationDeclarationSpan { get; }
     public Utf16Span RequestedDeclarationSpan { get; }
     public Utf16Span CanonicalDeclarationSpan { get; }
     public Utf16Span OwnerSpan { get; }
@@ -331,6 +335,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
         string authoritativeDeclarationId,
         string exactFileSha256,
         DocumentationPatchRepositoryEncoding encoding,
+        Utf16Span observationDeclarationSpan,
         Utf16Span requestedDeclarationSpan,
         Utf16Span canonicalDeclarationSpan,
         Utf16Span ownerSpan,
@@ -341,6 +346,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
             DocumentationPatchSourceKind.Repository,
             authoritativeDeclarationId,
             exactFileSha256,
+            observationDeclarationSpan,
             requestedDeclarationSpan,
             canonicalDeclarationSpan,
             ownerSpan,
@@ -365,6 +371,7 @@ public sealed record CampaignPlanningGeneratedSourceAuthority
         string producerId,
         string outputId,
         string sourceSha256,
+        Utf16Span observationDeclarationSpan,
         Utf16Span requestedDeclarationSpan,
         Utf16Span canonicalDeclarationSpan,
         Utf16Span ownerSpan,
@@ -374,6 +381,7 @@ public sealed record CampaignPlanningGeneratedSourceAuthority
             kind,
             authoritativeDeclarationId,
             sourceSha256,
+            observationDeclarationSpan,
             requestedDeclarationSpan,
             canonicalDeclarationSpan,
             ownerSpan,

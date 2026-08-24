@@ -11,6 +11,7 @@ public static class CampaignPlanner
     private const int MaximumTargets = 16_384;
     private const int MaximumComponents = 65_536;
     private const int MaximumUnresolved = 65_536;
+    private const int MaximumRelations = 65_536;
     private const int MaximumOwnerSymbols = 65_536;
     private const int MaximumViolations = 131_072;
     private const int MaximumAuditRows = MaximumTargets + MaximumComponents + MaximumUnresolved;
@@ -23,14 +24,23 @@ public static class CampaignPlanner
     private const int MaximumScribeElapsedBudget = 2_000_000_000;
     private const int MaximumRequestBudget = 1_000_000;
     private const int MaximumAttemptBudget = 1_000;
+    private const int MaximumAuditDepth = 128;
+    private const int MaximumAuditTokens = 2_000_000;
+    private const long MaximumAuditCanonicalBytes = 33_554_432;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static CampaignWorkPlan Plan(CampaignPlanningInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
         ValidateRoot(input);
+        ValidateRelations(input.Classifications);
 
+        ValidateAggregateEvidenceBounds(input.EvidenceAuthority);
+        ValidateAggregateAuditBounds(input.AuditDocument.Root);
         var auditBytes = AuditJson.Write(input.AuditDocument);
+        Require(auditBytes.Length <= MaximumAuditCanonicalBytes,
+            CampaignPlanningValidationCode.InvalidBound,
+            "Canonical Audit authority exceeds the finite planning byte bound.");
         var auditSha256 = Sha256(auditBytes);
         var auditRows = ReadAuditRows(input.AuditDocument);
         var observations = ValidateObservations(input.Classifications, input.Observations);
@@ -82,7 +92,7 @@ public static class CampaignPlanner
         }
 
         var ordered = selectedOwners
-            .OrderBy(item => item.OrderKey, StringComparer.Ordinal)
+            .OrderBy(item => item, PendingWorkItemComparer.Instance)
             .ToImmutableArray();
         var executionCommitment = ComputeExecutionCommitment(
             input,
@@ -165,11 +175,156 @@ public static class CampaignPlanner
             && ownerAuthority.Owners.All(owner => owner is not null)
             && classifications.Targets.Length <= MaximumTargets
             && classifications.Components.Length <= MaximumComponents
+            && classifications.Relations.Length <= MaximumRelations
             && classifications.Unresolved.Length <= MaximumUnresolved
             && input.EvidenceAuthority.Length <= MaximumTargets + MaximumComponents
             && auditDocument.Root.GetProperty("results").GetArrayLength() <= MaximumAuditRows,
             CampaignPlanningValidationCode.InvalidBound,
             "Planning authority collections must be initialized and finitely bounded.");
+    }
+
+    private static void ValidateRelations(ClassificationSet classifications)
+    {
+        Require(!classifications.Relations.IsDefault,
+            CampaignPlanningValidationCode.InvalidClassificationAuthority,
+            "Relation authority must be initialized.");
+        var acceptedTargets = classifications.Targets
+            .Select(target => target.SymbolRef)
+            .ToHashSet();
+        RelationObservation? previous = null;
+        foreach (var relation in classifications.Relations)
+        {
+            Require(relation is not null
+                    && Enum.IsDefined(relation.RelationKind)
+                    && (acceptedTargets.Contains(relation.SourceSymbolRef)
+                        || acceptedTargets.Contains(relation.TargetSymbolRef)),
+                CampaignPlanningValidationCode.InvalidClassificationAuthority,
+                "Every relation must use the closed vocabulary and reference an accepted target.");
+            RequireIdentifier(relation!.SourceSymbolRef.CompilationContextRef,
+                nameof(relation.SourceSymbolRef.CompilationContextRef));
+            RequireText(relation.SourceSymbolRef.DocumentationCommentId,
+                nameof(relation.SourceSymbolRef.DocumentationCommentId));
+            RequireIdentifier(relation.TargetSymbolRef.CompilationContextRef,
+                nameof(relation.TargetSymbolRef.CompilationContextRef));
+            RequireText(relation.TargetSymbolRef.DocumentationCommentId,
+                nameof(relation.TargetSymbolRef.DocumentationCommentId));
+            Require(previous is null || CompareRelation(previous, relation) < 0,
+                CampaignPlanningValidationCode.InvalidClassificationAuthority,
+                "Relations must be unique and use canonical ordinal order.");
+            previous = relation;
+        }
+    }
+
+    private static int CompareRelation(RelationObservation left, RelationObservation right)
+    {
+        var comparison = CompareSymbolRef(left.SourceSymbolRef, right.SourceSymbolRef);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = StringComparer.Ordinal.Compare(
+            ClassificationVocabulary.GetId(left.RelationKind),
+            ClassificationVocabulary.GetId(right.RelationKind));
+        return comparison != 0
+            ? comparison
+            : CompareSymbolRef(left.TargetSymbolRef, right.TargetSymbolRef);
+    }
+
+    private static void ValidateAggregateAuditBounds(JsonElement root)
+    {
+        try
+        {
+            var tokenCount = 0;
+            long estimatedBytes = 0;
+            CountAuditValue(root, 1, ref tokenCount, ref estimatedBytes);
+            Require(estimatedBytes + 1 <= MaximumAuditCanonicalBytes,
+                CampaignPlanningValidationCode.InvalidBound,
+                "Audit authority exceeds the finite planning byte bound.");
+        }
+        catch (CampaignPlanningValidationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is EncoderFallbackException or OverflowException)
+        {
+            throw Failure(CampaignPlanningValidationCode.InvalidBound,
+                "Audit authority exceeds the finite planning byte bound.");
+        }
+    }
+
+    private static void ValidateAggregateEvidenceBounds(
+        ImmutableArray<CampaignPlanningEvidenceAuthority> evidenceAuthority)
+    {
+        try
+        {
+            long aggregateBytes = 0;
+            foreach (var authority in evidenceAuthority)
+            {
+                Require(authority is not null && authority.Binding is not null,
+                    CampaignPlanningValidationCode.InvalidObservationAuthority,
+                    "Evidence authority cannot contain null records.");
+                aggregateBytes = checked(aggregateBytes
+                    + CampaignPlanningEvidenceProjection.EstimateCanonicalBytes(
+                        authority!.Binding!.Bundle));
+                Require(aggregateBytes <= MaximumAuditCanonicalBytes,
+                    CampaignPlanningValidationCode.InvalidBound,
+                    "Aggregate evidence authority exceeds the finite planning byte bound.");
+            }
+        }
+        catch (CampaignPlanningValidationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is EncoderFallbackException or OverflowException)
+        {
+            throw Failure(CampaignPlanningValidationCode.InvalidBound,
+                "Aggregate evidence authority exceeds the finite planning byte bound.");
+        }
+    }
+
+    private static void CountAuditValue(
+        JsonElement value,
+        int depth,
+        ref int tokenCount,
+        ref long estimatedBytes)
+    {
+        Require(depth <= MaximumAuditDepth,
+            CampaignPlanningValidationCode.InvalidBound,
+            "Audit authority exceeds the finite planning depth bound.");
+        tokenCount = checked(tokenCount + 1);
+        Require(tokenCount <= MaximumAuditTokens,
+            CampaignPlanningValidationCode.InvalidBound,
+            "Audit authority exceeds the finite planning token bound.");
+        estimatedBytes = checked(estimatedBytes + 16);
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in value.EnumerateObject())
+                {
+                    estimatedBytes = checked(estimatedBytes
+                        + (long)StrictUtf8.GetByteCount(property.Name) * 6 + 3);
+                    CountAuditValue(property.Value, depth + 1, ref tokenCount, ref estimatedBytes);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in value.EnumerateArray())
+                {
+                    CountAuditValue(item, depth + 1, ref tokenCount, ref estimatedBytes);
+                }
+                break;
+            case JsonValueKind.String:
+                estimatedBytes = checked(estimatedBytes
+                    + (long)StrictUtf8.GetByteCount(value.GetString()!) * 6 + 3);
+                break;
+            case JsonValueKind.Number:
+                estimatedBytes = checked(estimatedBytes + value.GetRawText().Length);
+                break;
+        }
+
+        Require(estimatedBytes <= MaximumAuditCanonicalBytes,
+            CampaignPlanningValidationCode.InvalidBound,
+            "Audit authority exceeds the finite planning byte bound.");
     }
 
     private static void ValidateExecutionPolicy(CampaignPlanningExecutionPolicy policy)
@@ -380,7 +535,8 @@ public static class CampaignPlanner
                     row.GetProperty("documentationObservation").GetString(),
                     evidenceIds,
                     evidenceAuthority,
-                    observationSubject)),
+                    observationSubject,
+                    evidenceBundle.Clone())),
                 CampaignPlanningValidationCode.InvalidAuditAuthority,
                 "Audit authority contains a duplicate classification row.");
         }
@@ -411,8 +567,7 @@ public static class CampaignPlanner
             if (target.SupportStatus == SupportStatus.Supported)
             {
                 Require(observations.TryGetValue(key, out var observation)
-                        && ObservationId(observation.Value) == row.ObservationId
-                        && EvidenceAuthorityMatches(evidenceAuthority[key], row),
+                        && AuditEvidenceMatches(observation.Value, evidenceAuthority[key], row),
                     CampaignPlanningValidationCode.InvalidAuditAuthority,
                     "Audit target observation does not match current observation authority.");
             }
@@ -430,8 +585,7 @@ public static class CampaignPlanner
             if (component.SupportStatus == SupportStatus.Supported)
             {
                 Require(observations.TryGetValue(key, out var observation)
-                        && ObservationId(observation.Value) == row.ObservationId
-                        && EvidenceAuthorityMatches(evidenceAuthority[key], row),
+                        && AuditEvidenceMatches(observation.Value, evidenceAuthority[key], row),
                     CampaignPlanningValidationCode.InvalidAuditAuthority,
                     "Audit component observation does not match current observation authority.");
             }
@@ -453,6 +607,32 @@ public static class CampaignPlanner
                     && UnresolvedClassificationMatches(expected, actual.Classification)),
             CampaignPlanningValidationCode.InvalidAuditAuthority,
             "Audit unresolved classifications must exactly match the accepted ClassificationSet.");
+    }
+
+    private static bool AuditEvidenceMatches(
+        DocumentationObservationValue observation,
+        BoundObservationEvidence binding,
+        AuditRow row)
+    {
+        if (row.Reason is AuditReason.PolicyConflict or AuditReason.PolicyUnavailable)
+        {
+            return row.ObservationId is null
+                && row.EvidenceIds.IsEmpty
+                && row.EvidenceAuthority is null
+                && row.ObservationSubject is null
+                && CampaignPlanningEvidenceProjection.MatchesUnavailable(
+                    row.EvidenceBundle,
+                    EvidenceOmissionReason.NotProvided);
+        }
+
+        var expectedObservation = row.Reason is AuditReason.EvidenceIncomplete
+            or AuditReason.DocumentationUnavailable
+            or AuditReason.DocumentationUnavailableMalformedXml
+            ? DocumentationObservationValue.Unavailable
+            : observation;
+        return ObservationId(expectedObservation) == row.ObservationId
+            && EvidenceAuthorityMatches(binding, row)
+            && CampaignPlanningEvidenceProjection.Matches(binding.Bundle, row.EvidenceBundle);
     }
 
     private static bool EvidenceAuthorityMatches(
@@ -641,6 +821,7 @@ public static class CampaignPlanner
     {
         Require(Enum.IsDefined(source.Kind)
                 && Enum.IsDefined(source.BlockState)
+                && NonEmptySpan(source.ObservationDeclarationSpan)
                 && NonEmptySpan(source.RequestedDeclarationSpan)
                 && NonEmptySpan(source.CanonicalDeclarationSpan)
                 && NonEmptySpan(source.OwnerSpan)
@@ -651,13 +832,19 @@ public static class CampaignPlanner
             source.AuthoritativeDeclarationId,
             nameof(source.AuthoritativeDeclarationId));
         RequireSha256(source.ContentSha256, nameof(source.ContentSha256));
-        Require(source.RequestedDeclarationSpan.Start >= source.OwnerSpan.Start
+        Require(source.RequestedDeclarationSpan.Start >= source.ObservationDeclarationSpan.Start
+                && source.RequestedDeclarationSpan.End <= source.ObservationDeclarationSpan.End
+                && source.CanonicalDeclarationSpan.Start >= source.ObservationDeclarationSpan.Start
+                && source.CanonicalDeclarationSpan.End <= source.ObservationDeclarationSpan.End
+                && source.OwnerSpan.Start >= source.ObservationDeclarationSpan.Start
+                && source.OwnerSpan.End <= source.ObservationDeclarationSpan.End
+                && source.RequestedDeclarationSpan.Start >= source.OwnerSpan.Start
                 && source.RequestedDeclarationSpan.End <= source.OwnerSpan.End
                 && source.CanonicalDeclarationSpan.Start >= source.OwnerSpan.Start
                 && source.CanonicalDeclarationSpan.End <= source.OwnerSpan.End
                 && (source.DocumentationSpan is null
-                    || source.DocumentationSpan.Value.Start >= source.OwnerSpan.Start
-                        && source.DocumentationSpan.Value.End <= source.OwnerSpan.End)
+                    || source.DocumentationSpan.Value.Start >= source.ObservationDeclarationSpan.Start
+                        && source.DocumentationSpan.Value.End <= source.ObservationDeclarationSpan.End)
                 && (source.BlockState == DocumentationBlockState.NoBlock
                     ? source.DocumentationSpan is null
                     : source.DocumentationSpan is { } documentation && NonEmptySpan(documentation)),
@@ -762,7 +949,7 @@ public static class CampaignPlanner
         Require(declarations.Length == 1
                 && SourceMatches(declarations[0].Source, source)
                 && declarations[0].BlockState == source.BlockState
-                && declarations[0].DeclarationSpan == source.RequestedDeclarationSpan
+                && declarations[0].DeclarationSpan == source.ObservationDeclarationSpan
                 && declarations[0].DocumentationSpan == source.DocumentationSpan,
             CampaignPlanningValidationCode.InvalidOwnerAuthority,
             "Exact source authority must correlate with one authoritative declaration and its source, span, documentation, and block facts.");
@@ -910,13 +1097,11 @@ public static class CampaignPlanner
                 orderedReasons);
         }
 
-        var pending = new PendingWorkItem(
+        return new PendingWorkItem(
             owner.CanonicalOwnerRef,
             targetFacts,
             causes,
-            disposition,
-            string.Empty);
-        return pending with { OrderKey = BuildOrderKey(pending) };
+            disposition);
     }
 
     private static void ValidateStyleProfile(
@@ -993,6 +1178,13 @@ public static class CampaignPlanner
         writer.Add("selection-policy", CampaignPlanningVocabulary.SelectionPolicy);
         writer.Add("ordering-policy", CampaignPlanningVocabulary.OrderingPolicy);
         AddExecutionPolicy(writer, input.ExecutionPolicy);
+        writer.Add("relation-count", input.Classifications.Relations.Length);
+        foreach (var relation in input.Classifications.Relations)
+        {
+            writer.Add("relation.kind", ClassificationVocabulary.GetId(relation.RelationKind));
+            AddSymbolRef(writer, "relation.source", relation.SourceSymbolRef);
+            AddSymbolRef(writer, "relation.target", relation.TargetSymbolRef);
+        }
         writer.Add("work-count", items.Length);
         for (var index = 0; index < items.Length; index++)
         {
@@ -1151,6 +1343,7 @@ public static class CampaignPlanner
         writer.Add("source.authoritative-declaration", source.AuthoritativeDeclarationId);
         writer.Add("source.sha256", source.ContentSha256);
         writer.Add("source.writable", source.Writable);
+        AddSpan(writer, "source.observation-declaration-span", source.ObservationDeclarationSpan);
         AddSpan(writer, "source.requested-span", source.RequestedDeclarationSpan);
         AddSpan(writer, "source.canonical-span", source.CanonicalDeclarationSpan);
         AddSpan(writer, "source.owner-span", source.OwnerSpan);
@@ -1266,69 +1459,6 @@ public static class CampaignPlanner
                 target.Source.Kind != DocumentationPatchSourceKind.Repository
                 || !target.Source.Writable)),
             reasonCounts);
-    }
-
-    private static string BuildOrderKey(PendingWorkItem item)
-    {
-        var builder = new StringBuilder();
-        foreach (var target in item.Targets)
-        {
-            AppendKey(builder, SourceKindId(target.Source.Kind));
-            switch (target.Source)
-            {
-                case CampaignPlanningRepositorySourceAuthority repository:
-                    AppendKey(builder, repository.Path);
-                    AppendKey(builder, EncodingId(repository.Encoding));
-                    break;
-                case CampaignPlanningGeneratedSourceAuthority generated:
-                    AppendKey(builder, generated.ProducerId);
-                    AppendKey(builder, generated.OutputId);
-                    break;
-            }
-
-            AppendKey(builder, target.Source.ContentSha256);
-            AppendKey(builder, target.Source.AuthoritativeDeclarationId);
-            AppendKey(builder, target.Source.RequestedDeclarationSpan.Start);
-            AppendKey(builder, target.Source.RequestedDeclarationSpan.End);
-            AppendKey(builder, target.Source.CanonicalDeclarationSpan.Start);
-            AppendKey(builder, target.Source.CanonicalDeclarationSpan.End);
-            AppendKey(builder, target.Source.OwnerSpan.Start);
-            AppendKey(builder, target.Source.OwnerSpan.End);
-            AppendKey(builder, SymbolKey(target.SymbolRef));
-            AppendKey(builder, ClassificationVocabulary.GetId(target.PrimaryKind));
-            foreach (var symbol in target.OwnerSymbolRefs)
-            {
-                AppendKey(builder, SymbolKey(symbol));
-            }
-
-            foreach (var component in target.ApplicableComponents)
-            {
-                AppendKey(builder, ClassificationVocabulary.GetId(component.Kind));
-                AppendKey(builder, component.Identity);
-                AppendKey(builder, component.Name ?? string.Empty);
-            }
-
-            AppendKey(builder, target.AuditRowSha256);
-        }
-
-        AppendKey(builder, item.OwnerEquivalenceRef);
-
-        foreach (var cause in item.Causes)
-        {
-            AppendKey(builder, SymbolKey(cause.ParentSymbolRef));
-            AppendKey(builder, cause.ComponentKind is null
-                ? string.Empty
-                : ClassificationVocabulary.GetId(cause.ComponentKind.Value));
-            AppendKey(builder, cause.ComponentIdentity ?? string.Empty);
-            AppendKey(builder, AuditVocabulary.GetId(cause.Reason));
-        }
-
-        foreach (var reason in item.Disposition.TerminalReasons)
-        {
-            AppendKey(builder, CampaignPlanningVocabulary.GetId(reason));
-        }
-
-        return builder.ToString();
     }
 
     private static void AppendKey(StringBuilder builder, string value) =>
@@ -1673,6 +1803,18 @@ public static class CampaignPlanner
     private static string SymbolKey(SymbolRef symbol) =>
         symbol.CompilationContextRef + "\u001f" + symbol.DocumentationCommentId;
 
+    private static int CompareSymbolRef(SymbolRef left, SymbolRef right)
+    {
+        var comparison = StringComparer.Ordinal.Compare(
+            left.CompilationContextRef,
+            right.CompilationContextRef);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(
+                left.DocumentationCommentId,
+                right.DocumentationCommentId);
+    }
+
     private static bool IsApplicableComponent(ComponentKind kind) => kind is
         ComponentKind.TypeParameter or ComponentKind.Parameter or ComponentKind.Return or ComponentKind.Value;
 
@@ -1803,7 +1945,8 @@ public static class CampaignPlanner
         string? ObservationId,
         ImmutableArray<string> EvidenceIds,
         JsonElement? EvidenceAuthority,
-        JsonElement? ObservationSubject);
+        JsonElement? ObservationSubject,
+        JsonElement EvidenceBundle);
 
     private sealed record ValidatedOwnerAuthority(
         string CanonicalOwnerRef,
@@ -1815,6 +1958,329 @@ public static class CampaignPlanner
         string OwnerEquivalenceRef,
         ImmutableArray<CampaignPlanningTargetFact> Targets,
         ImmutableArray<CampaignPlanningViolationCause> Causes,
-        CampaignPlanningDisposition Disposition,
-        string OrderKey);
+        CampaignPlanningDisposition Disposition);
+
+    private sealed class PendingWorkItemComparer : IComparer<PendingWorkItem>
+    {
+        internal static PendingWorkItemComparer Instance { get; } = new();
+
+        public int Compare(PendingWorkItem? left, PendingWorkItem? right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return 0;
+            }
+
+            if (left is null)
+            {
+                return -1;
+            }
+
+            if (right is null)
+            {
+                return 1;
+            }
+
+            var comparison = CompareTargets(left.Targets, right.Targets);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                left.OwnerEquivalenceRef,
+                right.OwnerEquivalenceRef);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = CompareCauses(left.Causes, right.Causes);
+            return comparison != 0
+                ? comparison
+                : CompareDisposition(left.Disposition, right.Disposition);
+        }
+
+        private static int CompareTargets(
+            ImmutableArray<CampaignPlanningTargetFact> left,
+            ImmutableArray<CampaignPlanningTargetFact> right)
+        {
+            for (var index = 0; index < Math.Min(left.Length, right.Length); index++)
+            {
+                var comparison = CompareTarget(left[index], right[index]);
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
+        private static int CompareTarget(
+            CampaignPlanningTargetFact left,
+            CampaignPlanningTargetFact right)
+        {
+            var comparison = CompareSource(left.Source, right.Source);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = CompareSymbolRef(left.SymbolRef, right.SymbolRef);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                ClassificationVocabulary.GetId(left.PrimaryKind),
+                ClassificationVocabulary.GetId(right.PrimaryKind));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                ClassificationVocabulary.GetId(left.Origin),
+                ClassificationVocabulary.GetId(right.Origin));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = CompareSymbols(left.OwnerSymbolRefs, right.OwnerSymbolRefs);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = CompareComponents(left.ApplicableComponents, right.ApplicableComponents);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                AuditVocabulary.GetId(left.AuditOutcome),
+                AuditVocabulary.GetId(right.AuditOutcome));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                AuditVocabulary.GetId(left.AuditReason),
+                AuditVocabulary.GetId(right.AuditReason));
+            return comparison != 0
+                ? comparison
+                : StringComparer.Ordinal.Compare(left.AuditRowSha256, right.AuditRowSha256);
+        }
+
+        private static int CompareSource(
+            CampaignPlanningSourceAuthority left,
+            CampaignPlanningSourceAuthority right)
+        {
+            var comparison = left.Kind.CompareTo(right.Kind);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = (left, right) switch
+            {
+                (CampaignPlanningRepositorySourceAuthority first,
+                    CampaignPlanningRepositorySourceAuthority second) =>
+                    CompareRepositorySource(first, second),
+                (CampaignPlanningGeneratedSourceAuthority first,
+                    CampaignPlanningGeneratedSourceAuthority second) =>
+                    CompareGeneratedSource(first, second),
+                _ => StringComparer.Ordinal.Compare(left.GetType().Name, right.GetType().Name),
+            };
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(left.ContentSha256, right.ContentSha256);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                left.AuthoritativeDeclarationId,
+                right.AuthoritativeDeclarationId);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            foreach (var (first, second) in new[]
+            {
+                (left.ObservationDeclarationSpan, right.ObservationDeclarationSpan),
+                (left.RequestedDeclarationSpan, right.RequestedDeclarationSpan),
+                (left.CanonicalDeclarationSpan, right.CanonicalDeclarationSpan),
+                (left.OwnerSpan, right.OwnerSpan),
+            })
+            {
+                comparison = CompareSpan(first, second);
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            if (left.DocumentationSpan is null || right.DocumentationSpan is null)
+            {
+                return left.DocumentationSpan is null
+                    ? right.DocumentationSpan is null ? 0 : -1
+                    : 1;
+            }
+
+            return CompareSpan(left.DocumentationSpan.Value, right.DocumentationSpan.Value);
+        }
+
+        private static int CompareRepositorySource(
+            CampaignPlanningRepositorySourceAuthority left,
+            CampaignPlanningRepositorySourceAuthority right)
+        {
+            var comparison = StringComparer.Ordinal.Compare(left.Path, right.Path);
+            return comparison != 0
+                ? comparison
+                : StringComparer.Ordinal.Compare(
+                    EncodingId(left.Encoding),
+                    EncodingId(right.Encoding));
+        }
+
+        private static int CompareGeneratedSource(
+            CampaignPlanningGeneratedSourceAuthority left,
+            CampaignPlanningGeneratedSourceAuthority right)
+        {
+            var comparison = StringComparer.Ordinal.Compare(left.ProducerId, right.ProducerId);
+            return comparison != 0
+                ? comparison
+                : StringComparer.Ordinal.Compare(left.OutputId, right.OutputId);
+        }
+
+        private static int CompareSpan(Utf16Span left, Utf16Span right)
+        {
+            var comparison = left.Start.CompareTo(right.Start);
+            return comparison != 0 ? comparison : left.End.CompareTo(right.End);
+        }
+
+        private static int CompareSymbols(
+            ImmutableArray<SymbolRef> left,
+            ImmutableArray<SymbolRef> right)
+        {
+            for (var index = 0; index < Math.Min(left.Length, right.Length); index++)
+            {
+                var comparison = CompareSymbolRef(left[index], right[index]);
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
+        private static int CompareComponents(
+            ImmutableArray<CampaignPlanningApplicableComponent> left,
+            ImmutableArray<CampaignPlanningApplicableComponent> right)
+        {
+            for (var index = 0; index < Math.Min(left.Length, right.Length); index++)
+            {
+                var comparison = StringComparer.Ordinal.Compare(
+                    ClassificationVocabulary.GetId(left[index].Kind),
+                    ClassificationVocabulary.GetId(right[index].Kind));
+                if (comparison == 0)
+                {
+                    comparison = StringComparer.Ordinal.Compare(
+                        left[index].Identity,
+                        right[index].Identity);
+                }
+                if (comparison == 0)
+                {
+                    comparison = StringComparer.Ordinal.Compare(
+                        left[index].Name ?? string.Empty,
+                        right[index].Name ?? string.Empty);
+                }
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
+        private static int CompareCauses(
+            ImmutableArray<CampaignPlanningViolationCause> left,
+            ImmutableArray<CampaignPlanningViolationCause> right)
+        {
+            for (var index = 0; index < Math.Min(left.Length, right.Length); index++)
+            {
+                var comparison = CompareSymbolRef(
+                    left[index].ParentSymbolRef,
+                    right[index].ParentSymbolRef);
+                if (comparison == 0)
+                {
+                    comparison = StringComparer.Ordinal.Compare(
+                        left[index].ComponentKind is { } leftKind
+                            ? ClassificationVocabulary.GetId(leftKind)
+                            : string.Empty,
+                        right[index].ComponentKind is { } rightKind
+                            ? ClassificationVocabulary.GetId(rightKind)
+                            : string.Empty);
+                }
+                if (comparison == 0)
+                {
+                    comparison = StringComparer.Ordinal.Compare(
+                        left[index].ComponentIdentity ?? string.Empty,
+                        right[index].ComponentIdentity ?? string.Empty);
+                }
+                if (comparison == 0)
+                {
+                    comparison = StringComparer.Ordinal.Compare(
+                        AuditVocabulary.GetId(left[index].Reason),
+                        AuditVocabulary.GetId(right[index].Reason));
+                }
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
+        private static int CompareDisposition(
+            CampaignPlanningDisposition left,
+            CampaignPlanningDisposition right)
+        {
+            var comparison = StringComparer.Ordinal.Compare(
+                CampaignPlanningVocabulary.GetId(left.Kind),
+                CampaignPlanningVocabulary.GetId(right.Kind));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            for (var index = 0;
+                 index < Math.Min(left.TerminalReasons.Length, right.TerminalReasons.Length);
+                 index++)
+            {
+                comparison = StringComparer.Ordinal.Compare(
+                    CampaignPlanningVocabulary.GetId(left.TerminalReasons[index]),
+                    CampaignPlanningVocabulary.GetId(right.TerminalReasons[index]));
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return left.TerminalReasons.Length.CompareTo(right.TerminalReasons.Length);
+        }
+    }
 }

@@ -39,11 +39,12 @@ opaque snapshot binding
 
 ### Work-plan identity (current M4-C1 subset)
 
-A work plan uses one composite execution commitment over the validated snapshot, canonical Audit bytes, all correctness-bearing execution-policy content and typed ceilings, and the canonical complete ordered owner/target/component/violation/disposition graph:
+A work plan uses one composite execution commitment over the validated snapshot, canonical Audit bytes, the complete canonical M1 relation set consumed by semantic evidence, all correctness-bearing execution-policy content and typed ceilings, and the canonical complete ordered owner/target/component/violation/disposition graph:
 
 ```text
 snapshot commitments
 + canonical Audit Result digest
++ complete canonical relation observations
 + selection and ordering policy revisions
 + proposal, agent, context, tool, provider, retry, M2, cost, and product content authorities
 + typed Scribe and campaign limits

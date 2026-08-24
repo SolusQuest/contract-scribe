@@ -66,7 +66,6 @@ public sealed class CampaignPlanningTests
             "vectors.json")));
         var plan = CampaignPlanner.Plan(CreateScenario().Input);
         var root = vector.RootElement;
-
         Assert.Equal(
             CampaignPlanningVocabulary.PlanningContractRevision,
             root.GetProperty("contractRevision").GetString());
@@ -98,9 +97,15 @@ public sealed class CampaignPlanningTests
                 "merged-unrelated-owner=InvalidOwnerAuthority",
                 "extra-owner-symbol=InvalidOwnerAuthority",
                 "substituted-bound-evidence=InvalidAuditAuthority",
+                "substituted-partial-bundle=InvalidAuditAuthority",
                 "empty-declaration-span=InvalidOwnerAuthority",
+                "source-span-role-substitution=InvalidOwnerAuthority",
+                "noncanonical-relation-order=InvalidClassificationAuthority",
                 "opaque-machine-path=InvalidBound",
+                "overbound-audit-bytes=InvalidBound",
                 "overbound-campaign-budget=InvalidConfiguration",
+                "duplicate-configuration-property=InvalidConfiguration",
+                "overbound-configuration-projection=InvalidConfiguration",
                 "multi-error-owner-permutation=InvalidOwnerAuthority",
             ],
             rows);
@@ -133,6 +138,148 @@ public sealed class CampaignPlanningTests
                 CampaignPlanner.Plan(baseline.Input).ExecutionCommitment,
                 plan.ExecutionCommitment);
         }
+    }
+
+    [Theory]
+    [InlineData(DocumentationBlockState.NoBlock)]
+    [InlineData(DocumentationBlockState.WhitespaceOnly)]
+    [InlineData(DocumentationBlockState.WellFormed)]
+    [InlineData(DocumentationBlockState.Malformed)]
+    public void ProductionSpanTopology_PreservesDistinctM1AndM2Roles(
+        DocumentationBlockState blockState)
+    {
+        var scenario = CreateScenario(blockStateOverride: blockState);
+        var owner = Assert.Single(scenario.Input.OwnerAuthority.Owners);
+        var target = Assert.Single(owner.Targets);
+        var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
+        var ownerStart = source.DocumentationSpan?.End ?? 4;
+        var ownerSpan = DocumentationObservationInput.Span(
+            ownerStart,
+            source.ObservationDeclarationSpan.End);
+        var productionSource = new CampaignPlanningRepositorySourceAuthority(
+            source.Path,
+            source.AuthoritativeDeclarationId,
+            source.ContentSha256,
+            source.Encoding,
+            source.ObservationDeclarationSpan,
+            ownerSpan,
+            ownerSpan,
+            ownerSpan,
+            source.DocumentationSpan,
+            source.BlockState);
+
+        var plan = CampaignPlanner.Plan(scenario.Input with
+        {
+            OwnerAuthority = new CampaignPlanningOwnerAuthoritySet([
+                owner with { Targets = [target with { Source = productionSource }] },
+            ]),
+        });
+
+        Assert.Equal(64, plan.ExecutionCommitment.Length);
+        if (source.DocumentationSpan is { } documentation)
+        {
+            Assert.True(documentation.End <= productionSource.OwnerSpan.Start);
+        }
+    }
+
+    [Fact]
+    public void RelationOnlyMutation_ChangesExecutionCommitment()
+    {
+        var first = CreateScenario(relationKind: RelationKind.Overrides);
+        var second = CreateScenario(
+            relationKind: RelationKind.ImplicitInterfaceImplementation);
+
+        Assert.NotEqual(
+            CampaignPlanner.Plan(first.Input).ExecutionCommitment,
+            CampaignPlanner.Plan(second.Input).ExecutionCommitment);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PolicyPrecedenceRows_DoNotSuppressUnrelatedViolation(bool conflict)
+    {
+        var scenario = CreateTwoTargetScenario(sharedPhysicalOwner: false, groupTogether: false);
+        var classifications = scenario.Input.Classifications;
+        var policy = conflict ? ParseConflictPolicy() : ParsePolicy(PolicyExpectation.Required);
+        var auditInputs = ImmutableArray.CreateBuilder<AuditRecordInput>();
+        for (var index = 0; index < classifications.Targets.Length; index++)
+        {
+            var target = classifications.Targets[index];
+            var binding = scenario.Input.EvidenceAuthority.Single(value =>
+                value.Subject.ParentSymbolRef == target.SymbolRef).Binding;
+            PolicyContributionInput[] inputs;
+            if (index == 0 && conflict)
+            {
+                inputs =
+                [
+                    PolicyConfigurationInput.Repository("src/Synthetic.csproj", "src/A.cs"),
+                    PolicyConfigurationInput.Repository("src/Synthetic.csproj", "src/B.cs"),
+                ];
+            }
+            else if (index == 0)
+            {
+                inputs = [];
+            }
+            else
+            {
+                inputs =
+                [PolicyConfigurationInput.Repository("src/Synthetic.csproj", "src/A.cs")];
+            }
+
+            var contributions = Assert.IsType<PolicyContributionSet>(
+                PolicyConfigurationEvaluator.Evaluate(policy, inputs).ContributionSet);
+            auditInputs.Add(AuditInput.Target(target, contributions, binding));
+        }
+
+        var audit = AuditAggregator.Aggregate(
+            TargetProfile.ExternalApi,
+            classifications,
+            policy,
+            auditInputs);
+        var item = Assert.Single(CampaignPlanner.Plan(scenario.Input with
+        {
+            AuditDocument = audit,
+        }).WorkItems);
+
+        Assert.Equal(classifications.Targets[1].SymbolRef, Assert.Single(item.Targets).SymbolRef);
+        Assert.Equal(AuditReason.RequiredAbsent, Assert.Single(item.ViolationCauses).Reason);
+    }
+
+    [Fact]
+    public void EvidenceIncomplete_ValidatesExactPartialBundle()
+    {
+        var scenario = CreateScenario(
+            targetEvidenceMaximumBytes: 32);
+        var item = Assert.Single(CampaignPlanner.Plan(scenario.Input).WorkItems);
+        Assert.Equal(2, item.ViolationCauses.Length);
+
+        var substituted = CreateScenario(
+            targetEvidenceMaximumBytes: 8);
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input with
+            {
+                EvidenceAuthority = substituted.Input.EvidenceAuthority,
+            }));
+        Assert.Equal(CampaignPlanningValidationCode.InvalidAuditAuthority, failure.Code);
+    }
+
+    [Fact]
+    public void RelationInputPermutation_NormalizesToOneCommitment()
+    {
+        var first = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: false,
+            addRelations: true);
+        var second = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: false,
+            addRelations: true,
+            reverseRelations: true);
+
+        Assert.Equal(
+            CampaignPlanner.Plan(first.Input).ExecutionCommitment,
+            CampaignPlanner.Plan(second.Input).ExecutionCommitment);
     }
 
     [Fact]
@@ -294,6 +441,7 @@ public sealed class CampaignPlanningTests
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
+            source.ObservationDeclarationSpan,
             source.RequestedDeclarationSpan,
             source.CanonicalDeclarationSpan,
             source.OwnerSpan,
@@ -336,6 +484,7 @@ public sealed class CampaignPlanningTests
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
+            source.ObservationDeclarationSpan,
             source.RequestedDeclarationSpan,
             source.CanonicalDeclarationSpan,
             source.OwnerSpan,
@@ -498,6 +647,7 @@ public sealed class CampaignPlanningTests
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
+            source.ObservationDeclarationSpan,
             source.RequestedDeclarationSpan,
             source.CanonicalDeclarationSpan,
             source.OwnerSpan,
@@ -573,6 +723,7 @@ public sealed class CampaignPlanningTests
                 source.AuthoritativeDeclarationId,
                 source.ContentSha256,
                 source.Encoding,
+                source.ObservationDeclarationSpan,
                 requestedSpan,
                 source.CanonicalDeclarationSpan,
                 source.OwnerSpan,
@@ -602,6 +753,7 @@ public sealed class CampaignPlanningTests
             "decl." + new string('f', 64),
             source.ContentSha256,
             source.Encoding,
+            source.ObservationDeclarationSpan,
             source.RequestedDeclarationSpan,
             source.CanonicalDeclarationSpan,
             source.OwnerSpan,
@@ -667,6 +819,107 @@ public sealed class CampaignPlanningTests
         Assert.Equal(firstAuthority.ContentSha256, secondAuthority.ContentSha256);
         Assert.NotEqual(firstAuthority.ContentSha256, otherFamily.ContentSha256);
         Assert.NotEqual(orderedAuthority.ContentSha256, reversedAuthority.ContentSha256);
+    }
+
+    [Theory]
+    [InlineData("/home/private/repository")]
+    [InlineData("C:\\private\\repository")]
+    [InlineData("credential=secret-marker")]
+    public void DuplicateConfigurationProperties_FailWithoutCallerText(string propertyName)
+    {
+        using var projection = JsonDocument.Parse(
+            $"{{{JsonSerializer.Serialize(propertyName)}:1,{JsonSerializer.Serialize(propertyName)}:2}}");
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanningContentAuthority.CreateValidatedJsonProjection(
+                CampaignPlanningContentFamily.RetryPolicy,
+                "retry",
+                projection.RootElement));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidConfiguration, failure.Code);
+        Assert.DoesNotContain(propertyName, failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OverDepthAndOversizedConfigurationProjections_FailClosed()
+    {
+        var deepText = string.Concat(Enumerable.Repeat("{\"a\":", 40))
+            + "0"
+            + new string('}', 40);
+        using var deep = JsonDocument.Parse(
+            deepText,
+            new JsonDocumentOptions { MaxDepth = 128 });
+        using var oversized = JsonDocument.Parse(
+            JsonSerializer.Serialize(new { value = new string('x', 70_000) }));
+
+        foreach (var projection in new[] { deep.RootElement, oversized.RootElement })
+        {
+            var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+                CampaignPlanningContentAuthority.CreateValidatedJsonProjection(
+                    CampaignPlanningContentFamily.RetryPolicy,
+                    "retry",
+                    projection));
+            Assert.Equal(CampaignPlanningValidationCode.InvalidConfiguration, failure.Code);
+        }
+    }
+
+    [Fact]
+    public void AggregateAuditEvidenceBytes_FailBeforeCanonicalMaterialization()
+    {
+        var root = JsonSerializer.SerializeToElement(new
+        {
+            results = new[]
+            {
+                new
+                {
+                    evidenceBundle = new
+                    {
+                        items = new[] { new { excerpt = new string('x', 6_000_000) } },
+                    },
+                },
+            },
+        });
+        var method = typeof(CampaignPlanner).GetMethod(
+            "ValidateAggregateAuditBounds",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var invocation = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+            method.Invoke(null, [root]));
+        var failure = Assert.IsType<CampaignPlanningValidationException>(invocation.InnerException);
+        Assert.Equal(CampaignPlanningValidationCode.InvalidBound, failure.Code);
+    }
+
+    [Fact]
+    public void AggregateSuppliedEvidenceBytes_FailBeforeAuditMaterialization()
+    {
+        var scenario = CreateScenario();
+        var authority = scenario.Input.EvidenceAuthority[0];
+        var overBound = Enumerable.Repeat(authority, 65_536).ToImmutableArray();
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input with { EvidenceAuthority = overBound }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidBound, failure.Code);
+    }
+
+    [Theory]
+    [InlineData("z.cs", "aa.cs")]
+    [InlineData("same-z.cs", "same-aa.cs")]
+    [InlineData("é.cs", "aa.cs")]
+    public void WorkItemsUseDirectOrdinalPathOrdering(string firstPath, string secondPath)
+    {
+        var scenario = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: false,
+            firstPath: firstPath,
+            secondPath: secondPath);
+
+        Assert.Equal(
+            new[] { firstPath, secondPath }.Order(StringComparer.Ordinal),
+            CampaignPlanner.Plan(scenario.Input).WorkItems.Select(item =>
+                Assert.IsType<CampaignPlanningRepositorySourceAuthority>(
+                    Assert.Single(item.Targets).Source).Path));
     }
 
     [Fact]
@@ -804,6 +1057,7 @@ public sealed class CampaignPlanningTests
             source.AuthoritativeDeclarationId,
             sha256,
             encoding,
+            source.ObservationDeclarationSpan,
             source.RequestedDeclarationSpan,
             source.CanonicalDeclarationSpan,
             source.OwnerSpan,
@@ -823,23 +1077,36 @@ public sealed class CampaignPlanningTests
 
     private static Scenario CreateScenario(
         PolicyExpectation expectation = PolicyExpectation.Required,
-        bool malformedTarget = false)
+        bool malformedTarget = false,
+        DocumentationBlockState? blockStateOverride = null,
+        RelationKind? relationKind = null,
+        int? targetEvidenceMaximumBytes = null)
     {
         const string Context = "synthetic.v1";
         const string DocumentationId = "M:Synthetic.Widget.Run(System.String)";
         const string Path = "src/Synthetic/Widget.cs";
         const string Body = "public void Run(string value) { }";
         const string MalformedDocumentation = "/// <summary>Malformed\n";
+        const string WhitespaceDocumentation = "///   \n";
+        const string WellFormedDocumentation = "/// <summary>Existing</summary>\n";
         const string DeclarationId = "decl.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var declarationText = malformedTarget ? MalformedDocumentation + Body : Body;
-        var leadingTriviaText = malformedTarget ? MalformedDocumentation : string.Empty;
-        var leadingTriviaSpan = DocumentationObservationInput.Span(0, leadingTriviaText.Length);
-        var documentationSpan = malformedTarget
-            ? DocumentationObservationInput.Span(0, MalformedDocumentation.Length)
-            : (Utf16Span?)null;
-        var blockState = malformedTarget
+        var blockState = blockStateOverride ?? (malformedTarget
             ? DocumentationBlockState.Malformed
-            : DocumentationBlockState.NoBlock;
+            : DocumentationBlockState.NoBlock);
+        var leadingTriviaText = blockState switch
+        {
+            DocumentationBlockState.WhitespaceOnly => WhitespaceDocumentation,
+            DocumentationBlockState.WellFormed => WellFormedDocumentation,
+            DocumentationBlockState.Malformed => MalformedDocumentation,
+            _ => string.Empty,
+        };
+        var declarationText = leadingTriviaText + Body;
+        var leadingTriviaSpan = DocumentationObservationInput.Span(0, leadingTriviaText.Length);
+        var documentationSpan = leadingTriviaText.Length > 0
+            ? DocumentationObservationInput.Span(0, leadingTriviaText.Length)
+            : (Utf16Span?)null;
+        var substantive = blockState is DocumentationBlockState.WellFormed
+            or DocumentationBlockState.Malformed;
 
         var classificationsBuffer = new ClassificationCandidateBuffer();
         classificationsBuffer.AddTarget(
@@ -861,6 +1128,17 @@ public sealed class CampaignPlanningTests
             ComponentKind.Return,
             "return",
             ClassificationOrigin.Source);
+        if (relationKind is { } relation)
+        {
+            classificationsBuffer.AddRelation(
+                relation,
+                Context,
+                DocumentationId,
+                Context,
+                DocumentationId,
+                PrimarySymbolKind.Method,
+                PrimarySymbolKind.Method);
+        }
         var classifications = Assert.IsType<ClassificationSet>(
             classificationsBuffer.Normalize(TargetProfile.ExternalApi).ClassificationSet);
         var target = Assert.Single(classifications.Targets);
@@ -877,9 +1155,9 @@ public sealed class CampaignPlanningTests
             leadingTriviaSpan,
             leadingTriviaText,
             documentationSpan,
-            malformedTarget ? MalformedDocumentation : null,
+            documentationSpan is null ? null : leadingTriviaText,
             blockState,
-            parentSubstantive: malformedTarget);
+            parentSubstantive: substantive);
         var parameterDeclaration = DocumentationObservationInput.RepositoryDeclaration(
             DeclarationId,
             DocumentationAuthorityRole.Ordinary,
@@ -891,11 +1169,13 @@ public sealed class CampaignPlanningTests
             leadingTriviaSpan,
             leadingTriviaText,
             documentationSpan,
-            malformedTarget ? MalformedDocumentation : null,
+            documentationSpan is null ? null : leadingTriviaText,
             blockState,
-            parentSubstantive: malformedTarget,
+            parentSubstantive: substantive,
             componentLocalName: "value",
-            componentMatch: malformedTarget ? null : DocumentationComponentMatch.Absent);
+            componentMatch: blockState == DocumentationBlockState.Malformed
+                ? null
+                : DocumentationComponentMatch.Absent);
         var returnDeclaration = DocumentationObservationInput.RepositoryDeclaration(
             DeclarationId,
             DocumentationAuthorityRole.Ordinary,
@@ -907,11 +1187,13 @@ public sealed class CampaignPlanningTests
             leadingTriviaSpan,
             leadingTriviaText,
             documentationSpan,
-            malformedTarget ? MalformedDocumentation : null,
+            documentationSpan is null ? null : leadingTriviaText,
             blockState,
-            parentSubstantive: malformedTarget,
+            parentSubstantive: substantive,
             componentLocalName: null,
-            componentMatch: malformedTarget ? null : DocumentationComponentMatch.Absent);
+            componentMatch: blockState == DocumentationBlockState.Malformed
+                ? null
+                : DocumentationComponentMatch.Absent);
         var observationBuffer = new DocumentationObservationCandidateBuffer(classifications);
         observationBuffer.AddTarget(target, true, [targetDeclaration]);
         observationBuffer.AddComponent(components[0], true, [parameterDeclaration]);
@@ -932,7 +1214,8 @@ public sealed class CampaignPlanningTests
             targetObservation,
             targetDeclaration,
             EvidenceInput.TargetSubject(Context, DocumentationId),
-            "evidence.declaration");
+            "evidence.declaration",
+            maximumBytes: targetEvidenceMaximumBytes);
         inputs.Add(AuditInput.Target(
             target,
             contribution,
@@ -976,6 +1259,7 @@ public sealed class CampaignPlanningTests
             DeclarationId,
             new string('b', 64),
             DocumentationPatchRepositoryEncoding.Utf8,
+            DocumentationObservationInput.Span(0, declarationText.Length),
             DocumentationObservationInput.Span(0, declarationText.Length),
             DocumentationObservationInput.Span(0, declarationText.Length),
             DocumentationObservationInput.Span(0, declarationText.Length),
@@ -1044,7 +1328,11 @@ public sealed class CampaignPlanningTests
     private static Scenario CreateTwoTargetScenario(
         bool sharedPhysicalOwner,
         bool groupTogether,
-        bool secondGenerated = false)
+        bool secondGenerated = false,
+        string firstPath = "src/Synthetic/A.cs",
+        string secondPath = "src/Synthetic/B.cs",
+        bool addRelations = false,
+        bool reverseRelations = false)
     {
         const string Declaration = "public void Run() { }";
         var specifications = new[]
@@ -1053,7 +1341,7 @@ public sealed class CampaignPlanningTests
             {
                 Context = "synthetic.a",
                 DocumentationId = "M:Synthetic.Widget.RunA",
-                Path = sharedPhysicalOwner ? "src/Synthetic/Shared.cs" : "src/Synthetic/A.cs",
+                Path = sharedPhysicalOwner ? "src/Synthetic/Shared.cs" : firstPath,
                 DeclarationId = "decl." + new string('a', 64),
                 FileSha256 = new string('b', 64),
                 Generated = false,
@@ -1064,7 +1352,7 @@ public sealed class CampaignPlanningTests
             {
                 Context = "synthetic.b",
                 DocumentationId = "M:Synthetic.Widget.RunB",
-                Path = sharedPhysicalOwner ? "src/Synthetic/Shared.cs" : "src/Synthetic/B.cs",
+                Path = sharedPhysicalOwner ? "src/Synthetic/Shared.cs" : secondPath,
                 DeclarationId = "decl." + new string('c', 64),
                 FileSha256 = secondGenerated
                     ? Sha256(Declaration)
@@ -1097,6 +1385,24 @@ public sealed class CampaignPlanningTests
                     ? ClassificationOrigin.SourceGenerator
                     : ClassificationOrigin.Source,
                 locators);
+        }
+
+        if (addRelations)
+        {
+            var relations = reverseRelations
+                ? new[] { (Source: 1, Target: 0), (Source: 0, Target: 1) }
+                : new[] { (Source: 0, Target: 1), (Source: 1, Target: 0) };
+            foreach (var relation in relations)
+            {
+                classificationBuffer.AddRelation(
+                    RelationKind.Overrides,
+                    specifications[relation.Source].Context,
+                    specifications[relation.Source].DocumentationId,
+                    specifications[relation.Target].Context,
+                    specifications[relation.Target].DocumentationId,
+                    PrimarySymbolKind.Method,
+                    PrimarySymbolKind.Method);
+            }
         }
 
         var classifications = Assert.IsType<ClassificationSet>(
@@ -1206,6 +1512,7 @@ public sealed class CampaignPlanningTests
                     DocumentationObservationInput.Span(0, Declaration.Length),
                     DocumentationObservationInput.Span(0, Declaration.Length),
                     DocumentationObservationInput.Span(0, Declaration.Length),
+                    DocumentationObservationInput.Span(0, Declaration.Length),
                     null,
                     DocumentationBlockState.NoBlock)
                 : new CampaignPlanningRepositorySourceAuthority(
@@ -1213,6 +1520,7 @@ public sealed class CampaignPlanningTests
                     specification.DeclarationId,
                     specification.FileSha256,
                     DocumentationPatchRepositoryEncoding.Utf8,
+                    DocumentationObservationInput.Span(0, Declaration.Length),
                     DocumentationObservationInput.Span(0, Declaration.Length),
                     DocumentationObservationInput.Span(0, Declaration.Length),
                     DocumentationObservationInput.Span(0, Declaration.Length),
@@ -1260,7 +1568,8 @@ public sealed class CampaignPlanningTests
         DocumentationDeclarationInput declaration,
         EvidenceSubject subject,
         string evidenceId,
-        string repositoryPath = "src/Synthetic/Widget.cs")
+        string repositoryPath = "src/Synthetic/Widget.cs",
+        int? maximumBytes = null)
     {
         var present = observation.Value == DocumentationObservationValue.Present;
         var documentationEvidence = present
@@ -1271,8 +1580,7 @@ public sealed class CampaignPlanningTests
         var evidenceSpan = documentationEvidence
             ? Assert.IsType<Utf16Span>(declaration.DocumentationSpan)
             : declaration.DeclarationSpan;
-        var bundle = Assert.IsType<EvidenceBundle>(EvidenceNormalizer.Normalize([
-            EvidenceInput.Candidate(
+        var candidate = EvidenceInput.Candidate(
                 evidenceId,
                 subject,
                 documentationEvidence ? EvidenceKind.SourceXmlDocumentation : EvidenceKind.SourceDeclaration,
@@ -1281,15 +1589,22 @@ public sealed class CampaignPlanningTests
                 EvidenceInput.RepositoryLocator(
                     repositoryPath,
                     evidenceSpan.Start,
-                    evidenceSpan.End)),
-        ]).Bundle);
+                    evidenceSpan.End));
+        var normalized = maximumBytes is { } bytes
+            ? EvidenceNormalizer.Normalize(
+                [candidate],
+                budgets: EvidenceInput.Budgets(32, bytes, 32_768))
+            : EvidenceNormalizer.Normalize([candidate]);
+        var bundle = Assert.IsType<EvidenceBundle>(normalized.Bundle);
         return Assert.IsType<BoundObservationEvidence>(EvidenceObservationBinder.Bind(
             observation,
             bundle,
-            [EvidenceBindingInput.Declaration(
-                declaration.DeclarationId,
-                documentationEvidence ? null : evidenceId,
-                documentationEvidence ? evidenceId : null)]).Binding);
+            maximumBytes is null
+                ? [EvidenceBindingInput.Declaration(
+                    declaration.DeclarationId,
+                    documentationEvidence ? null : evidenceId,
+                    documentationEvidence ? evidenceId : null)]
+                : []).Binding);
     }
 
     private static BoundObservationEvidence BindGeneratedEvidence(
@@ -1328,6 +1643,15 @@ public sealed class CampaignPlanningTests
     {
         var json = $$"""
             {"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"{{PolicyConfigurationVocabulary.GetId(expectation)}}"}
+            """;
+        return Assert.IsType<PolicyDocumentV1>(
+            PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(json)).Document);
+    }
+
+    private static PolicyDocumentV1 ParseConflictPolicy()
+    {
+        const string json = """
+            {"schemaVersion":1,"targetProfile":"profile.external-api","defaultDecision":"optional","rules":[{"id":"required-a","priority":2,"decision":"required","sourcePaths":{"include":["src/A.cs"]}},{"id":"forbidden-b","priority":1,"decision":"forbidden","sourcePaths":{"include":["src/B.cs"]}}]}
             """;
         return Assert.IsType<PolicyDocumentV1>(
             PolicyConfigurationEvaluator.Parse(Encoding.UTF8.GetBytes(json)).Document);

@@ -2,18 +2,24 @@
   "contractRevision": "campaign-planning-v1",
   "scenario": "required-target-and-components",
   "auditResultSha256": "e64112e3c4c1e5ee94f65745a7dabe04a940357481d6d58e109d9e44a56dd501",
-  "executionCommitment": "5eb5705600a9e13c21cec018152dc0407a73b6fd8ab4ff4d4030ace39a44e370",
+  "executionCommitment": "5786e9b0cc0fe113c404131239d244cca803c12406d48f391557fc965d46f0e3",
   "workItemKeys": [
-    "campaign-work.65dda8bb8b54b95a9f1f2df16e1941fc9c5706a8af170b895ee31098640ad467"
+    "campaign-work.90625ce8aebcb1e425a614f27a1451a2e33fd4a429988e4716c6679beb60b995"
   ],
   "invalidVectors": [
     { "id": "split-shared-owner", "validationCode": "InvalidOwnerAuthority" },
     { "id": "merged-unrelated-owner", "validationCode": "InvalidOwnerAuthority" },
     { "id": "extra-owner-symbol", "validationCode": "InvalidOwnerAuthority" },
     { "id": "substituted-bound-evidence", "validationCode": "InvalidAuditAuthority" },
+    { "id": "substituted-partial-bundle", "validationCode": "InvalidAuditAuthority" },
     { "id": "empty-declaration-span", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "source-span-role-substitution", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "noncanonical-relation-order", "validationCode": "InvalidClassificationAuthority" },
     { "id": "opaque-machine-path", "validationCode": "InvalidBound" },
+    { "id": "overbound-audit-bytes", "validationCode": "InvalidBound" },
     { "id": "overbound-campaign-budget", "validationCode": "InvalidConfiguration" },
+    { "id": "duplicate-configuration-property", "validationCode": "InvalidConfiguration" },
+    { "id": "overbound-configuration-projection", "validationCode": "InvalidConfiguration" },
     { "id": "multi-error-owner-permutation", "validationCode": "InvalidOwnerAuthority" }
   ]
 }
