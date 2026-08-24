@@ -193,9 +193,10 @@ public sealed class CampaignStateContractTests
             {
                 const string alternate = "M:Synthetic.Widget.Alternate(System.String)";
                 SetSymbol(request["target"]!["symbolRef"]!, "synthetic.v1", alternate);
-                foreach (var evidence in request["evidenceReferences"]!.AsArray())
+                foreach (var subject in request["evidenceReferences"]!
+                    .AsArray()
+                    .Select(evidence => evidence!["subject"]!))
                 {
-                    var subject = evidence!["subject"]!;
                     SetSymbol(subject["parentSymbolRef"] ?? subject["symbolRef"]!, "synthetic.v1", alternate);
                 }
             }, result => SetSymbol(
@@ -836,9 +837,10 @@ public sealed class CampaignStateContractTests
         requestNode["context"]!["inputIdentity"] = inputIdentity;
         SetSymbol(requestNode["target"]!["symbolRef"]!, target.SymbolRef);
         SetSource(requestNode["target"]!["sourceCommitment"]!, source);
-        foreach (var evidence in requestNode["evidenceReferences"]!.AsArray())
+        foreach (var subject in requestNode["evidenceReferences"]!
+            .AsArray()
+            .Select(evidence => evidence!["subject"]!))
         {
-            var subject = evidence!["subject"]!;
             if (subject["parentSymbolRef"] is { } parent)
             {
                 SetSymbol(parent, target.SymbolRef);
