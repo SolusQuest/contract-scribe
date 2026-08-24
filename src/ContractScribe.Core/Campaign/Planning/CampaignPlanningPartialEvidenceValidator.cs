@@ -42,7 +42,7 @@ internal static class CampaignPlanningPartialEvidenceValidator
                 observation.Subject.ParentSymbolRef.CompilationContextRef,
                 observation.Subject.ParentSymbolRef.DocumentationCommentId);
         var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
-        var declarationKinds = new HashSet<string>(StringComparer.Ordinal);
+        var declarationKinds = new HashSet<(string DeclarationId, EvidenceKind Kind)>();
         try
         {
             foreach (var item in bundle.Items)
@@ -73,8 +73,7 @@ internal static class CampaignPlanningPartialEvidenceValidator
                 }
 
                 if (matched is null
-                    || !declarationKinds.Add(
-                        matched.DeclarationId + "\u001f" + item.Kind.ToString()))
+                    || !declarationKinds.Add((matched.DeclarationId, item.Kind)))
                 {
                     return false;
                 }
