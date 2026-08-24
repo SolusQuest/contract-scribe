@@ -598,7 +598,10 @@ public static class CampaignStateJson
         writer.WriteString("stage", outcome.Stage == CampaignWorkOutcomeStage.Planning ? "planning" : "scribe");
         writer.WriteString("code", WorkOutcomeCodeId(outcome.Code));
         WriteNullableString(writer, "scribeRequestSha256", outcome.ScribeRequestSha256);
-        WriteNullableString(writer, "attemptId", outcome.AttemptId?.Value);
+        WriteNullableString(
+            writer,
+            "attemptId",
+            outcome.AttemptId is { } attempt ? attempt.Value : null);
         writer.WriteEndObject();
     }
 
@@ -1741,15 +1744,13 @@ public static class CampaignStateJson
 
     private static ComponentKind ParseComponentKind(string value)
     {
-        foreach (var kind in Enum.GetValues<ComponentKind>())
-        {
-            if (string.Equals(ClassificationVocabulary.GetId(kind), value, StringComparison.Ordinal))
-            {
-                return kind;
-            }
-        }
-
-        throw Vocabulary();
+        var matches = Enum.GetValues<ComponentKind>()
+            .Where(kind => string.Equals(
+                ClassificationVocabulary.GetId(kind),
+                value,
+                StringComparison.Ordinal))
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : throw Vocabulary();
     }
 
     private static string ComponentKindId(ComponentKind value) => ClassificationVocabulary.GetId(value);

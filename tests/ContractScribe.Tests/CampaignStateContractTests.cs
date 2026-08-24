@@ -54,14 +54,9 @@ public sealed class CampaignStateContractTests
         var originalUiCulture = CultureInfo.CurrentUICulture;
         try
         {
-            var bytes = new List<byte[]>();
-            foreach (var cultureName in new[] { "en-US", "tr-TR", "zh-CN" })
-            {
-                var culture = CultureInfo.GetCultureInfo(cultureName);
-                CultureInfo.CurrentCulture = culture;
-                CultureInfo.CurrentUICulture = culture;
-                bytes.Add(CampaignStateJson.Write(CreateState()));
-            }
+            var bytes = new[] { "en-US", "tr-TR", "zh-CN" }
+                .Select(WriteUnderCulture)
+                .ToArray();
 
             Assert.All(bytes.Skip(1), value => Assert.Equal(bytes[0], value));
             var parsed = CampaignStateJson.Parse(bytes[0]);
@@ -259,14 +254,25 @@ public sealed class CampaignStateContractTests
 
     private static string Hash(char value) => new(value, 64);
 
-    private static string FixturePath(params string[] segments) => Path.Combine(
-        new[]
-        {
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "fixtures", "campaign", "state",
-        }.Concat(segments).ToArray());
+    private static byte[] WriteUnderCulture(string cultureName)
+    {
+        var culture = CultureInfo.GetCultureInfo(cultureName);
+        CultureInfo.CurrentCulture = culture;
+        CultureInfo.CurrentUICulture = culture;
+        return CampaignStateJson.Write(CreateState());
+    }
 
-    private static string SchemaPath() => Path.Combine(
+    private static string FixtureRoot() => Path.GetFullPath(Path.Join(
         AppContext.BaseDirectory,
-        "..", "..", "..", "..", "..", "schemas", "campaign-state", "v1.schema.json");
+        "..", "..", "..", "..", "fixtures", "campaign", "state"));
+
+    private static string FixturePath(string name) =>
+        Path.GetFullPath(Path.Join(FixtureRoot(), name));
+
+    private static string FixturePath(string directory, string name) =>
+        Path.GetFullPath(Path.Join(FixtureRoot(), directory, name));
+
+    private static string SchemaPath() => Path.GetFullPath(Path.Join(
+        AppContext.BaseDirectory,
+        "..", "..", "..", "..", "..", "schemas", "campaign-state", "v1.schema.json"));
 }

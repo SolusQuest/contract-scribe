@@ -977,9 +977,10 @@ public static class CampaignStateFactory
     {
         var symbols = new HashSet<string>(StringComparer.Ordinal);
         var locators = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var work in workItems.Where(item => item.TrustedProposal is not null))
+        foreach (var block in workItems
+            .Where(item => item.TrustedProposal is not null)
+            .Select(item => item.TrustedProposal!.PatchBlock))
         {
-            var block = work.TrustedProposal!.PatchBlock;
             var symbolKey = block.SymbolRef.CompilationContextRef + "\0" + block.SymbolRef.DocumentationCommentId;
             Require(symbols.Add(symbolKey), CampaignStateValidationCode.InvalidOrder);
             Require(locators.Add(GetPatchLocatorKey(block.Locator)), CampaignStateValidationCode.InvalidOrder);
