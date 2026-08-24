@@ -209,11 +209,19 @@ public static class CampaignStateFactory
             string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
         var planWork = acceptedPlan.WorkItems.SingleOrDefault(item =>
             string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
+        var providerReservation = state.ActiveReservation as CampaignProviderReservation;
         var expectedScribeSource = planWork is null || planWork.Targets.Length != 1
             ? null
             : CreateScribeSourceLocator(planWork.Targets[0].Source);
         if (stateWork is null
             || planWork is null
+            || providerReservation is null
+            || !string.Equals(providerReservation.WorkItemKey, workItemKey, StringComparison.Ordinal)
+            || !string.Equals(
+                providerReservation.ScribeRequestSha256,
+                request.ArtifactSha256,
+                StringComparison.Ordinal)
+            || providerReservation.AttemptId != result.AttemptId
             || stateWork.Status != CampaignWorkStatus.Planned
             || planWork.Disposition.Kind != CampaignPlanningDispositionKind.Executable
             || planWork.Targets.Length != 1
@@ -864,9 +872,31 @@ public static class CampaignStateFactory
             TargetEvidenceSubject => true,
             ComponentEvidenceSubject component =>
                 Enum.IsDefined(component.ComponentKind)
-                && IsOpaqueId(component.Identity, 128),
+                && IsComponentIdentity(component.ComponentKind, component.Identity),
             _ => false,
         };
+    }
+
+    private static bool IsComponentIdentity(ComponentKind kind, string identity) => kind switch
+    {
+        ComponentKind.TypeParameter => IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
+        ComponentKind.Parameter => IsCanonicalOrdinalIdentity(identity, "parameter/"),
+        ComponentKind.Return => identity == "return",
+        ComponentKind.Value => identity == "value",
+        _ => false,
+    };
+
+    private static bool IsCanonicalOrdinalIdentity(string value, string prefix)
+    {
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ordinal = value.AsSpan(prefix.Length);
+        return ordinal.Length > 0
+            && ordinal.IndexOfAnyExceptInRange('0', '9') < 0
+            && (ordinal.Length == 1 || ordinal[0] != '0');
     }
 
     private static bool IsValidEvidenceLocator(EvidenceLocator? locator) => locator switch
@@ -1104,18 +1134,23 @@ public static class CampaignStateFactory
             && outcome.CompletedFromCheckpointRevision >= 0
             && outcome.CompletedFromCheckpointRevision <= state.CheckpointRevision,
             CampaignStateValidationCode.InvalidCorrelation);
-        Require(outcome.Kind == CampaignCumulativeOutcomeKind.Accepted
+        var requiresResultCommitment = outcome.Kind is
+            CampaignCumulativeOutcomeKind.Accepted
+            or CampaignCumulativeOutcomeKind.Rejected
+            or CampaignCumulativeOutcomeKind.Stale;
+        Require(requiresResultCommitment
             ? IsSha256(outcome.PatchResultCommitmentSha256)
-                && state.CandidateObservation is not null
-                && string.Equals(
-                    state.CandidateObservation.PatchRequestSha256,
-                    outcome.PatchRequestSha256,
-                    StringComparison.Ordinal)
-                && string.Equals(
-                    state.CandidateObservation.PatchResultCommitmentSha256,
-                    outcome.PatchResultCommitmentSha256,
-                    StringComparison.Ordinal)
-            : outcome.PatchResultCommitmentSha256 is null || IsSha256(outcome.PatchResultCommitmentSha256),
+                && (outcome.Kind != CampaignCumulativeOutcomeKind.Accepted
+                    || state.CandidateObservation is { } candidate
+                        && string.Equals(
+                            candidate.PatchRequestSha256,
+                            outcome.PatchRequestSha256,
+                            StringComparison.Ordinal)
+                        && string.Equals(
+                            candidate.PatchResultCommitmentSha256,
+                            outcome.PatchResultCommitmentSha256,
+                            StringComparison.Ordinal))
+            : outcome.PatchResultCommitmentSha256 is null,
             CampaignStateValidationCode.InvalidCorrelation);
     }
 

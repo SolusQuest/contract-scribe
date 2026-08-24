@@ -161,7 +161,11 @@
     },
     "cumulative": {
       "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "patchResultCommitmentSha256", "completedFromCheckpointRevision"],
-      "properties": { "kind": { "enum": ["accepted", "rejected", "stale", "host-failure", "cancelled", "timeout"] }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "completedFromCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" } }
+      "properties": { "kind": { "enum": ["accepted", "rejected", "stale", "host-failure", "cancelled", "timeout"] }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "completedFromCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" } },
+      "allOf": [
+        { "if": { "properties": { "kind": { "enum": ["accepted", "rejected", "stale"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } } },
+        { "if": { "properties": { "kind": { "enum": ["host-failure", "cancelled", "timeout"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "type": "null" } } } }
+      ]
     },
     "terminal": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
