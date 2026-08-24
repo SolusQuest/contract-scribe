@@ -332,6 +332,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
 {
     public CampaignPlanningRepositorySourceAuthority(
         string path,
+        string physicalSourceCommitmentSha256,
         string authoritativeDeclarationId,
         string exactFileSha256,
         DocumentationPatchRepositoryEncoding encoding,
@@ -355,10 +356,12 @@ public sealed record CampaignPlanningRepositorySourceAuthority
             writable)
     {
         Path = path;
+        PhysicalSourceCommitmentSha256 = physicalSourceCommitmentSha256;
         Encoding = encoding;
     }
 
     public string Path { get; }
+    public string PhysicalSourceCommitmentSha256 { get; }
     public DocumentationPatchRepositoryEncoding Encoding { get; }
 }
 
@@ -463,14 +466,17 @@ public sealed record CampaignPlanningOwnerAuthority
 public sealed record CampaignPlanningEvidenceAuthority
 {
     public CampaignPlanningEvidenceAuthority(
-        DocumentationObservationSubject subject,
+        DocumentationObservation observation,
         BoundObservationEvidence binding)
     {
-        Subject = subject;
+        Subject = observation.Subject;
+        ObservationAuthorityCommitmentSha256 =
+            CampaignPlanningObservationProjection.ComputeCommitment(observation);
         Binding = binding;
     }
 
     public DocumentationObservationSubject Subject { get; init; }
+    public string ObservationAuthorityCommitmentSha256 { get; }
     public BoundObservationEvidence Binding { get; init; }
 }
 

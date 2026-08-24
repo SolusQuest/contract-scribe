@@ -96,7 +96,10 @@ public sealed class CampaignPlanningTests
                 "split-shared-owner=InvalidOwnerAuthority",
                 "merged-unrelated-owner=InvalidOwnerAuthority",
                 "extra-owner-symbol=InvalidOwnerAuthority",
-                "substituted-bound-evidence=InvalidAuditAuthority",
+                "substituted-bound-evidence=InvalidObservationAuthority",
+                "stale-session-binding=InvalidObservationAuthority",
+                "split-lexical-alias=InvalidOwnerAuthority",
+                "conflicting-physical-source=InvalidOwnerAuthority",
                 "substituted-partial-bundle=InvalidAuditAuthority",
                 "empty-declaration-span=InvalidOwnerAuthority",
                 "source-span-role-substitution=InvalidOwnerAuthority",
@@ -140,6 +143,41 @@ public sealed class CampaignPlanningTests
         }
     }
 
+    [Fact]
+    public void PhysicalSourceCommitmentMutation_ChangesPlanIdentity()
+    {
+        var scenario = CreateScenario();
+        var owner = Assert.Single(scenario.Input.OwnerAuthority.Owners);
+        var target = Assert.Single(owner.Targets);
+        var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
+        var changedSource = new CampaignPlanningRepositorySourceAuthority(
+            source.Path,
+            new string('f', 64),
+            source.AuthoritativeDeclarationId,
+            source.ContentSha256,
+            source.Encoding,
+            source.ObservationDeclarationSpan,
+            source.RequestedDeclarationSpan,
+            source.CanonicalDeclarationSpan,
+            source.OwnerSpan,
+            source.DocumentationSpan,
+            source.BlockState,
+            source.Writable);
+        var changed = scenario.Input with
+        {
+            OwnerAuthority = new CampaignPlanningOwnerAuthoritySet([
+                owner with { Targets = [target with { Source = changedSource }] },
+            ]),
+        };
+
+        var baselinePlan = CampaignPlanner.Plan(scenario.Input);
+        var changedPlan = CampaignPlanner.Plan(changed);
+        Assert.NotEqual(baselinePlan.ExecutionCommitment, changedPlan.ExecutionCommitment);
+        Assert.NotEqual(
+            Assert.Single(baselinePlan.WorkItems).OwnerEquivalenceRef,
+            Assert.Single(changedPlan.WorkItems).OwnerEquivalenceRef);
+    }
+
     [Theory]
     [InlineData(DocumentationBlockState.NoBlock)]
     [InlineData(DocumentationBlockState.WhitespaceOnly)]
@@ -158,6 +196,7 @@ public sealed class CampaignPlanningTests
             source.ObservationDeclarationSpan.End);
         var productionSource = new CampaignPlanningRepositorySourceAuthority(
             source.Path,
+            source.PhysicalSourceCommitmentSha256,
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
@@ -438,6 +477,7 @@ public sealed class CampaignPlanningTests
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
         var terminalSource = new CampaignPlanningRepositorySourceAuthority(
             source.Path,
+            source.PhysicalSourceCommitmentSha256,
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
@@ -481,6 +521,7 @@ public sealed class CampaignPlanningTests
         const string SecretPath = "C:\\private\\Synthetic.cs";
         var invalidSource = new CampaignPlanningRepositorySourceAuthority(
             SecretPath,
+            source.PhysicalSourceCommitmentSha256,
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
@@ -513,6 +554,102 @@ public sealed class CampaignPlanningTests
         Assert.Equal(2, item.Targets.Length);
         Assert.Equal(2, item.ViolationCauses.Length);
         Assert.StartsWith("campaign-owner.", item.OwnerEquivalenceRef, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("src/Real.cs", "src/Alias.cs")]
+    [InlineData("src/Real.cs", "src/real.cs")]
+    public void LexicalPathAliases_UseOnePhysicalSourceOwner(string firstPath, string secondPath)
+    {
+        var scenario = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: true,
+            firstPath: firstPath,
+            secondPath: secondPath,
+            sharedPhysicalSourceAlias: true);
+
+        var item = Assert.Single(CampaignPlanner.Plan(scenario.Input).WorkItems);
+        Assert.Equal(CampaignPlanningDispositionKind.Terminal, item.Disposition.Kind);
+        Assert.Equal(CampaignPlanningTerminalReason.SharedOwner, item.Disposition.PrimaryTerminalReason);
+        Assert.Equal(
+            new[] { firstPath, secondPath }.Order(StringComparer.Ordinal),
+            item.Targets
+                .Select(target => Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source).Path)
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void LexicalAliasOwner_DoesNotSuppressUnrelatedExecutableWork()
+    {
+        var scenario = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: true,
+            firstPath: "src/Real.cs",
+            secondPath: "src/Alias.cs",
+            sharedPhysicalSourceAlias: true,
+            includeUnrelatedThird: true);
+
+        var plan = CampaignPlanner.Plan(scenario.Input);
+        Assert.Equal(2, plan.WorkItems.Length);
+        var terminal = Assert.Single(plan.WorkItems.Where(item =>
+            item.Disposition.Kind == CampaignPlanningDispositionKind.Terminal));
+        Assert.Equal(2, terminal.Targets.Length);
+        Assert.Equal(CampaignPlanningTerminalReason.SharedOwner, terminal.Disposition.PrimaryTerminalReason);
+        var executable = Assert.Single(plan.WorkItems.Where(item =>
+            item.Disposition.Kind == CampaignPlanningDispositionKind.Executable));
+        Assert.Equal("synthetic.c", Assert.Single(executable.Targets).SymbolRef.CompilationContextRef);
+    }
+
+    [Fact]
+    public void SplitLexicalAliases_FailClosed()
+    {
+        var scenario = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: false,
+            firstPath: "src/Real.cs",
+            secondPath: "src/Alias.cs",
+            sharedPhysicalSourceAlias: true);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input));
+        Assert.Equal(CampaignPlanningValidationCode.InvalidOwnerAuthority, failure.Code);
+    }
+
+    [Fact]
+    public void PhysicalSourceCommitmentWithConflictingBytes_FailsClosed()
+    {
+        var scenario = CreateTwoTargetScenario(
+            sharedPhysicalOwner: false,
+            groupTogether: true,
+            firstPath: "src/Real.cs",
+            secondPath: "src/Alias.cs",
+            sharedPhysicalSourceAlias: true);
+        var owner = Assert.Single(scenario.Input.OwnerAuthority.Owners);
+        var targets = owner.Targets;
+        var second = targets[1];
+        var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(second.Source);
+        var conflicting = new CampaignPlanningRepositorySourceAuthority(
+            source.Path,
+            source.PhysicalSourceCommitmentSha256,
+            source.AuthoritativeDeclarationId,
+            new string('9', 64),
+            source.Encoding,
+            source.ObservationDeclarationSpan,
+            source.RequestedDeclarationSpan,
+            source.CanonicalDeclarationSpan,
+            source.OwnerSpan,
+            source.DocumentationSpan,
+            source.BlockState,
+            source.Writable);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(scenario.Input with
+            {
+                OwnerAuthority = new CampaignPlanningOwnerAuthoritySet([
+                    owner with { Targets = [targets[0], second with { Source = conflicting }] },
+                ]),
+            }));
+        Assert.Equal(CampaignPlanningValidationCode.InvalidOwnerAuthority, failure.Code);
     }
 
     [Fact]
@@ -636,6 +773,29 @@ public sealed class CampaignPlanningTests
     }
 
     [Fact]
+    public void ComponentClosureValidation_UsesPrebuiltParentIndex()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            RepositoryRoot(),
+            "src",
+            "ContractScribe.Core",
+            "Campaign",
+            "Planning",
+            "CampaignPlanner.cs"));
+        var start = source.IndexOf(
+            "private static void ValidateComponents(",
+            StringComparison.Ordinal);
+        var end = source.IndexOf(
+            "private static void ValidateSourceCorrelation(",
+            start,
+            StringComparison.Ordinal);
+        var method = source[start..end];
+
+        Assert.Contains("applicableComponentsByTarget.TryGetValue", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("classifications.Components", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MultipleInvalidInputs_UseStableCategoryPrecedenceAcrossPermutation()
     {
         var scenario = CreateTwoTargetScenario(sharedPhysicalOwner: false, groupTogether: false);
@@ -644,6 +804,7 @@ public sealed class CampaignPlanningTests
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(sourceTarget.Source);
         var invalidSource = new CampaignPlanningRepositorySourceAuthority(
             "C:\\private\\A.cs",
+            source.PhysicalSourceCommitmentSha256,
             source.AuthoritativeDeclarationId,
             source.ContentSha256,
             source.Encoding,
@@ -700,7 +861,89 @@ public sealed class CampaignPlanningTests
 
         var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
             CampaignPlanner.Plan(invalid));
-        Assert.Equal(CampaignPlanningValidationCode.InvalidAuditAuthority, failure.Code);
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Fact]
+    public void SameSubjectAndValueCannotCombineStaleAuditWithCurrentDeclarations()
+    {
+        var stale = CreateScenario();
+        var current = CreateScenario(bodyOverride: "public void Run(string value) {;}");
+        Assert.Equal(
+            stale.Input.Observations.Observations.Select(value => value.Value),
+            current.Input.Observations.Observations.Select(value => value.Value));
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(current.Input with
+            {
+                EvidenceAuthority = RewrapEvidenceAuthority(current, stale),
+                AuditDocument = stale.Input.AuditDocument,
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Fact]
+    public void SameSubjectAndValueCannotCombineStaleBlockAuthority()
+    {
+        var stale = CreateScenario(blockStateOverride: DocumentationBlockState.NoBlock);
+        var current = CreateScenario(blockStateOverride: DocumentationBlockState.WhitespaceOnly);
+        Assert.Equal(
+            stale.Input.Observations.Observations.Select(value => value.Value),
+            current.Input.Observations.Observations.Select(value => value.Value));
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(current.Input with
+            {
+                EvidenceAuthority = stale.Input.EvidenceAuthority,
+                AuditDocument = stale.Input.AuditDocument,
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Fact]
+    public void UnchangedComponentNameCannotHideStaleComponentBinding()
+    {
+        var stale = CreateScenario();
+        var current = CreateScenario(bodyOverride: "public void Run(string value) {;}");
+        var currentEvidence = current.Input.EvidenceAuthority.ToBuilder();
+        var parameterIndex = Enumerable.Range(0, currentEvidence.Count).Single(index =>
+            currentEvidence[index].Subject.ComponentKind == ComponentKind.Parameter);
+        var currentObservation = current.Input.Observations.Observations.Single(observation =>
+            observation.Subject.ComponentKind == ComponentKind.Parameter);
+        var staleBinding = stale.Input.EvidenceAuthority.Single(authority =>
+            authority.Subject.ComponentKind == ComponentKind.Parameter).Binding;
+        currentEvidence[parameterIndex] = new CampaignPlanningEvidenceAuthority(
+            currentObservation,
+            staleBinding);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(current.Input with
+            {
+                EvidenceAuthority = currentEvidence.ToImmutable(),
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PolicyPrecedenceCannotBypassStaleObservationBinding(bool conflict)
+    {
+        var stale = CreateScenario();
+        var current = CreateScenario(bodyOverride: "public void Run(string value) {;}");
+        var staleAudit = CreateUniformPolicyAudit(stale, conflict);
+
+        var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
+            CampaignPlanner.Plan(current.Input with
+            {
+                EvidenceAuthority = RewrapEvidenceAuthority(current, stale),
+                AuditDocument = staleAudit,
+            }));
+
+        Assert.Equal(CampaignPlanningValidationCode.InvalidObservationAuthority, failure.Code);
     }
 
     [Fact]
@@ -720,6 +963,7 @@ public sealed class CampaignPlanningTests
         {
             var invalidSource = new CampaignPlanningRepositorySourceAuthority(
                 source.Path,
+                source.PhysicalSourceCommitmentSha256,
                 source.AuthoritativeDeclarationId,
                 source.ContentSha256,
                 source.Encoding,
@@ -750,6 +994,7 @@ public sealed class CampaignPlanningTests
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
         var invalidSource = new CampaignPlanningRepositorySourceAuthority(
             source.Path,
+            source.PhysicalSourceCommitmentSha256,
             "decl." + new string('f', 64),
             source.ContentSha256,
             source.Encoding,
@@ -1054,6 +1299,7 @@ public sealed class CampaignPlanningTests
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
         var changedSource = new CampaignPlanningRepositorySourceAuthority(
             source.Path,
+            source.PhysicalSourceCommitmentSha256,
             source.AuthoritativeDeclarationId,
             sha256,
             encoding,
@@ -1080,12 +1326,13 @@ public sealed class CampaignPlanningTests
         bool malformedTarget = false,
         DocumentationBlockState? blockStateOverride = null,
         RelationKind? relationKind = null,
-        int? targetEvidenceMaximumBytes = null)
+        int? targetEvidenceMaximumBytes = null,
+        string? bodyOverride = null)
     {
         const string Context = "synthetic.v1";
         const string DocumentationId = "M:Synthetic.Widget.Run(System.String)";
         const string Path = "src/Synthetic/Widget.cs";
-        const string Body = "public void Run(string value) { }";
+        const string DefaultBody = "public void Run(string value) { }";
         const string MalformedDocumentation = "/// <summary>Malformed\n";
         const string WhitespaceDocumentation = "///   \n";
         const string WellFormedDocumentation = "/// <summary>Existing</summary>\n";
@@ -1100,7 +1347,7 @@ public sealed class CampaignPlanningTests
             DocumentationBlockState.Malformed => MalformedDocumentation,
             _ => string.Empty,
         };
-        var declarationText = leadingTriviaText + Body;
+        var declarationText = leadingTriviaText + (bodyOverride ?? DefaultBody);
         var leadingTriviaSpan = DocumentationObservationInput.Span(0, leadingTriviaText.Length);
         var documentationSpan = leadingTriviaText.Length > 0
             ? DocumentationObservationInput.Span(0, leadingTriviaText.Length)
@@ -1221,7 +1468,7 @@ public sealed class CampaignPlanningTests
             contribution,
             targetBinding));
         evidenceAuthority.Add(new CampaignPlanningEvidenceAuthority(
-            targetObservation.Subject,
+            targetObservation,
             targetBinding));
         foreach (var component in components)
         {
@@ -1244,7 +1491,7 @@ public sealed class CampaignPlanningTests
                 contribution,
                 componentBinding));
             evidenceAuthority.Add(new CampaignPlanningEvidenceAuthority(
-                componentObservation.Subject,
+                componentObservation,
                 componentBinding));
         }
 
@@ -1256,6 +1503,7 @@ public sealed class CampaignPlanningTests
         var request = ReadScribeRequest();
         var source = new CampaignPlanningRepositorySourceAuthority(
             Path,
+            new string('e', 64),
             DeclarationId,
             new string('b', 64),
             DocumentationPatchRepositoryEncoding.Utf8,
@@ -1331,6 +1579,8 @@ public sealed class CampaignPlanningTests
         bool secondGenerated = false,
         string firstPath = "src/Synthetic/A.cs",
         string secondPath = "src/Synthetic/B.cs",
+        bool sharedPhysicalSourceAlias = false,
+        bool includeUnrelatedThird = false,
         bool addRelations = false,
         bool reverseRelations = false)
     {
@@ -1344,6 +1594,7 @@ public sealed class CampaignPlanningTests
                 Path = sharedPhysicalOwner ? "src/Synthetic/Shared.cs" : firstPath,
                 DeclarationId = "decl." + new string('a', 64),
                 FileSha256 = new string('b', 64),
+                PhysicalSourceCommitmentSha256 = new string('e', 64),
                 Generated = false,
                 ProducerId = "sgp." + new string('1', 64),
                 OutputId = "sgo." + new string('2', 64),
@@ -1356,12 +1607,32 @@ public sealed class CampaignPlanningTests
                 DeclarationId = "decl." + new string('c', 64),
                 FileSha256 = secondGenerated
                     ? Sha256(Declaration)
-                    : sharedPhysicalOwner ? new string('b', 64) : new string('d', 64),
+                    : sharedPhysicalOwner || sharedPhysicalSourceAlias
+                        ? new string('b', 64)
+                        : new string('d', 64),
+                PhysicalSourceCommitmentSha256 = sharedPhysicalOwner || sharedPhysicalSourceAlias
+                    ? new string('e', 64)
+                    : new string('f', 64),
                 Generated = secondGenerated,
                 ProducerId = "sgp." + new string('3', 64),
                 OutputId = "sgo." + new string('4', 64),
             },
-        };
+        }.ToList();
+        if (includeUnrelatedThird)
+        {
+            specifications.Add(new
+            {
+                Context = "synthetic.c",
+                DocumentationId = "M:Synthetic.Widget.RunC",
+                Path = "src/Synthetic/C.cs",
+                DeclarationId = "decl." + new string('5', 64),
+                FileSha256 = new string('6', 64),
+                PhysicalSourceCommitmentSha256 = new string('7', 64),
+                Generated = false,
+                ProducerId = "sgp." + new string('8', 64),
+                OutputId = "sgo." + new string('9', 64),
+            });
+        }
 
         var classificationBuffer = new ClassificationCandidateBuffer();
         foreach (var specification in specifications)
@@ -1488,7 +1759,7 @@ public sealed class CampaignPlanningTests
                     "evidence.declaration",
                     specification.Path);
             auditInputs.Add(AuditInput.Target(target, contribution, binding));
-            evidenceAuthority.Add(new CampaignPlanningEvidenceAuthority(observation.Subject, binding));
+            evidenceAuthority.Add(new CampaignPlanningEvidenceAuthority(observation, binding));
         }
 
         var audit = AuditAggregator.Aggregate(
@@ -1498,6 +1769,9 @@ public sealed class CampaignPlanningTests
             auditInputs);
         var zeroComponentStyle = ReadZeroComponentStyleProfile();
         var symbols = classifications.Targets.Select(target => target.SymbolRef).ToImmutableArray();
+        var groupedSymbols = includeUnrelatedThird
+            ? symbols.Where(symbol => symbol.CompilationContextRef != "synthetic.c").ToImmutableArray()
+            : symbols;
         var targetAuthorities = classifications.Targets.Select(target =>
         {
             var specification = specifications.Single(value =>
@@ -1517,6 +1791,7 @@ public sealed class CampaignPlanningTests
                     DocumentationBlockState.NoBlock)
                 : new CampaignPlanningRepositorySourceAuthority(
                     specification.Path,
+                    specification.PhysicalSourceCommitmentSha256,
                     specification.DeclarationId,
                     specification.FileSha256,
                     DocumentationPatchRepositoryEncoding.Utf8,
@@ -1530,16 +1805,24 @@ public sealed class CampaignPlanningTests
                 target,
                 source,
                 [],
-                groupTogether ? symbols : [target.SymbolRef],
+                groupTogether && (!includeUnrelatedThird
+                    || target.SymbolRef.CompilationContextRef != "synthetic.c")
+                    ? groupedSymbols
+                    : [target.SymbolRef],
                 multiDeclarator: false,
                 primaryConstructor: false,
                 primaryConstructorAlias: false,
                 zeroComponentStyle);
         }).ToImmutableArray();
         var ownerAuthority = groupTogether
-            ? new CampaignPlanningOwnerAuthoritySet([
-                new CampaignPlanningOwnerAuthority(targetAuthorities),
-            ])
+            ? new CampaignPlanningOwnerAuthoritySet(includeUnrelatedThird
+                ? [
+                    new CampaignPlanningOwnerAuthority(targetAuthorities.Where(target =>
+                        target.Target.SymbolRef.CompilationContextRef != "synthetic.c").ToImmutableArray()),
+                    new CampaignPlanningOwnerAuthority(targetAuthorities.Where(target =>
+                        target.Target.SymbolRef.CompilationContextRef == "synthetic.c").ToImmutableArray()),
+                ]
+                : [new CampaignPlanningOwnerAuthority(targetAuthorities)])
             : new CampaignPlanningOwnerAuthoritySet(
                 targetAuthorities.Select(target =>
                     new CampaignPlanningOwnerAuthority([target])).ToImmutableArray());
@@ -1638,6 +1921,54 @@ public sealed class CampaignPlanningTests
                 EvidenceId,
                 documentationEvidenceId: null)]).Binding);
     }
+
+    private static AuditDocument CreateUniformPolicyAudit(Scenario scenario, bool conflict)
+    {
+        var policy = conflict ? ParseConflictPolicy() : ParsePolicy(PolicyExpectation.Required);
+        PolicyContributionInput[] contributionInputs = conflict
+            ?
+            [
+                PolicyConfigurationInput.Repository("src/Synthetic.csproj", "src/A.cs"),
+                PolicyConfigurationInput.Repository("src/Synthetic.csproj", "src/B.cs"),
+            ]
+            : [];
+        var contribution = Assert.IsType<PolicyContributionSet>(
+            PolicyConfigurationEvaluator.Evaluate(policy, contributionInputs).ContributionSet);
+        var inputs = ImmutableArray.CreateBuilder<AuditRecordInput>();
+        foreach (var target in scenario.Input.Classifications.Targets)
+        {
+            var binding = scenario.Input.EvidenceAuthority.Single(value =>
+                value.Subject.ParentSymbolRef == target.SymbolRef
+                && value.Subject.ComponentKind is null).Binding;
+            inputs.Add(AuditInput.Target(target, contribution, binding));
+        }
+
+        foreach (var component in scenario.Input.Classifications.Components)
+        {
+            var binding = scenario.Input.EvidenceAuthority.Single(value =>
+                value.Subject.ParentSymbolRef == component.ParentSymbolRef
+                && value.Subject.ComponentKind == component.ComponentKind
+                && value.Subject.ComponentIdentity == component.Identity).Binding;
+            inputs.Add(AuditInput.Component(component, contribution, binding));
+        }
+
+        return AuditAggregator.Aggregate(
+            TargetProfile.ExternalApi,
+            scenario.Input.Classifications,
+            policy,
+            inputs);
+    }
+
+    private static ImmutableArray<CampaignPlanningEvidenceAuthority> RewrapEvidenceAuthority(
+        Scenario current,
+        Scenario stale) => current.Input.Observations.Observations
+        .Select(observation => new CampaignPlanningEvidenceAuthority(
+            observation,
+            stale.Input.EvidenceAuthority.Single(authority =>
+                authority.Subject.ParentSymbolRef == observation.Subject.ParentSymbolRef
+                && authority.Subject.ComponentKind == observation.Subject.ComponentKind
+                && authority.Subject.ComponentIdentity == observation.Subject.ComponentIdentity).Binding))
+        .ToImmutableArray();
 
     private static PolicyDocumentV1 ParsePolicy(PolicyExpectation expectation)
     {

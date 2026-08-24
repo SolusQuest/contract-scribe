@@ -44,6 +44,17 @@ internal static class CampaignPlanningEvidenceProjection
     internal static bool Matches(EvidenceBundle expected, JsonElement actual) =>
         JsonNode.DeepEquals(SerializeEvidenceBundle(expected), JsonNode.Parse(actual.GetRawText()));
 
+    internal static bool Equivalent(
+        BoundObservationEvidence left,
+        BoundObservationEvidence right) =>
+        left.ObservationValue == right.ObservationValue
+        && left.SupportsOrdinaryResult == right.SupportsOrdinaryResult
+        && left.EvidenceIds.SequenceEqual(right.EvidenceIds, StringComparer.Ordinal)
+        && AuthorityEquivalent(left.Authority, right.Authority)
+        && JsonNode.DeepEquals(
+            SerializeEvidenceBundle(left.Bundle),
+            SerializeEvidenceBundle(right.Bundle));
+
     internal static bool MatchesUnavailable(
         JsonElement actual,
         EvidenceOmissionReason reason) =>
@@ -89,6 +100,27 @@ internal static class CampaignPlanningEvidenceProjection
         }
 
         return value;
+    }
+
+    private static bool AuthorityEquivalent(
+        EvidenceAuthoritySet? left,
+        EvidenceAuthoritySet? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        return left.DeclarationSetId == right.DeclarationSetId
+            && left.Completeness == right.Completeness
+            && left.Declarations.Length == right.Declarations.Length
+            && left.Declarations.Zip(right.Declarations).All(pair =>
+                pair.First.DeclarationId == pair.Second.DeclarationId
+                && pair.First.AuthorityRole == pair.Second.AuthorityRole
+                && pair.First.BlockState == pair.Second.BlockState
+                && pair.First.EvidenceId == pair.Second.EvidenceId
+                && pair.First.ComponentLocalName == pair.Second.ComponentLocalName
+                && pair.First.ComponentMatch == pair.Second.ComponentMatch);
     }
 
     private static JsonObject SerializeEvidenceItem(EvidenceItem item) => new()
