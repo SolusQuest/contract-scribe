@@ -2,9 +2,9 @@
   "contractRevision": "campaign-planning-v1",
   "scenario": "required-target-and-components",
   "auditResultSha256": "e64112e3c4c1e5ee94f65745a7dabe04a940357481d6d58e109d9e44a56dd501",
-  "executionCommitment": "ff1c410fbe8064b58c90fafbf0e8c5182ecf42fdb4b41cb207a44062c0639d5b",
+  "executionCommitment": "9373e846125710d6b5466bef524db23758285bb942beceeb1bed9925a4916aa8",
   "workItemKeys": [
-    "campaign-work.38283fc390a7aa8bad9b315534e61d69d313898b9992a8d77e0b1ee6c1ae4bcc"
+    "campaign-work.9e939f37cb84cb48fdbaaec4491efa72ebebacb244d168dbb0220356846ef78d"
   ],
   "invalidVectors": [
     { "id": "split-shared-owner", "validationCode": "InvalidOwnerAuthority" },
@@ -17,7 +17,10 @@
     { "id": "conflicting-repository-physical-map", "validationCode": "InvalidOwnerAuthority" },
     { "id": "conflicting-context-project", "validationCode": "InvalidOwnerAuthority" },
     { "id": "conflicting-scoped-generated-source", "validationCode": "InvalidOwnerAuthority" },
+    { "id": "observed-text-hash-substitution", "validationCode": "InvalidOwnerAuthority" },
     { "id": "stale-partial-binding", "validationCode": "InvalidObservationAuthority" },
+    { "id": "unselected-complete-evidence", "validationCode": "InvalidObservationAuthority" },
+    { "id": "nonviolation-owner-outside-selected-closure", "validationCode": "InvalidOwnerAuthority" },
     { "id": "overbound-observation-authority", "validationCode": "InvalidBound" },
     { "id": "substituted-partial-bundle", "validationCode": "InvalidAuditAuthority" },
     { "id": "empty-declaration-span", "validationCode": "InvalidOwnerAuthority" },

@@ -333,6 +333,7 @@ public sealed record CampaignPlanningRepositorySourceAuthority
     public CampaignPlanningRepositorySourceAuthority(
         string path,
         string physicalSourceCommitmentSha256,
+        string observedSourceTextSha256,
         string authoritativeDeclarationId,
         string exactFileSha256,
         DocumentationPatchRepositoryEncoding encoding,
@@ -357,11 +358,13 @@ public sealed record CampaignPlanningRepositorySourceAuthority
     {
         Path = path;
         PhysicalSourceCommitmentSha256 = physicalSourceCommitmentSha256;
+        ObservedSourceTextSha256 = observedSourceTextSha256;
         Encoding = encoding;
     }
 
     public string Path { get; }
     public string PhysicalSourceCommitmentSha256 { get; }
+    public string ObservedSourceTextSha256 { get; }
     public DocumentationPatchRepositoryEncoding Encoding { get; }
 }
 

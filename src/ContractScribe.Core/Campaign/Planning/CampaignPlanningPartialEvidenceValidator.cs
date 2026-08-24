@@ -10,13 +10,10 @@ internal static class CampaignPlanningPartialEvidenceValidator
         DocumentationObservation observation,
         EvidenceBundle bundle)
     {
-        if (bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Complete
-            && bundle.OmissionReason is null)
-        {
-            return true;
-        }
-
-        if (bundle.ObservationSubject is not null
+        var complete = bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Complete
+            && bundle.OmissionReason is null;
+        if ((!complete && bundle.ObservationSubject is not null)
+            || (complete && bundle.ObservationSubject is null)
             || bundle.Items.IsDefault
             || bundle.AvailabilityStatus == EvidenceAvailabilityStatus.Unavailable
                 && !bundle.Items.IsEmpty
@@ -73,19 +70,67 @@ internal static class CampaignPlanningPartialEvidenceValidator
                 }
 
                 if (matched is null
+                    || complete && !IsRequiredKind(
+                        observation.Subject,
+                        matched,
+                        item)
                     || !declarationKinds.Add((matched.DeclarationId, item.Kind)))
+                {
+                    return false;
+                }
+
+                if (complete
+                    && (item.IsTruncated
+                        || item.Excerpt != ExpectedText(matched, item.Kind)))
                 {
                     return false;
                 }
             }
 
-            return true;
+            return !complete
+                || declarationKinds.Count == observation.Declarations.Length
+                    && observation.Declarations.All(declaration =>
+                        declarationKinds.Contains((
+                            declaration.DeclarationId,
+                            RequiredKind(observation.Subject, declaration))));
         }
         catch (EncoderFallbackException)
         {
             return false;
         }
     }
+
+    private static bool IsRequiredKind(
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration,
+        EvidenceItem item) =>
+        item.Kind == RequiredKind(subject, declaration)
+        && item.Relation == (item.Kind == EvidenceKind.SourceXmlDocumentation
+            ? EvidenceRelation.Documents
+            : EvidenceRelation.Declares);
+
+    private static EvidenceKind RequiredKind(
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration) =>
+        RequiresDocumentationEvidence(subject, declaration)
+            ? EvidenceKind.SourceXmlDocumentation
+            : EvidenceKind.SourceDeclaration;
+
+    private static bool RequiresDocumentationEvidence(
+        DocumentationObservationSubject subject,
+        DocumentationDeclarationFact declaration) =>
+        declaration.BlockState == DocumentationBlockState.Malformed
+        || (subject.ComponentKind is null
+            ? declaration.ParentSubstantive
+            : declaration.BlockState == DocumentationBlockState.WellFormed
+                && declaration.ComponentMatch == DocumentationComponentMatch.Present);
+
+    private static string? ExpectedText(
+        DocumentationDeclarationFact declaration,
+        EvidenceKind kind) =>
+        kind == EvidenceKind.SourceXmlDocumentation
+            ? declaration.DocumentationText
+            : declaration.DeclarationText;
 
     private static bool MatchesDeclarationItem(
         EvidenceItem item,

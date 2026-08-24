@@ -42,9 +42,10 @@ internal sealed class CampaignPlanningSourceSessionIndex
         {
             case CampaignPlanningRepositorySourceAuthority repository:
                 Require(repositoryShaByPath.TryGetValue(repository.Path, out var observedSha)
-                        && observedSha == repository.ContentSha256,
+                        && observedSha == repository.ObservedSourceTextSha256,
                     "Repository source authority must match one current observed lexical source exactly.");
                 var bound = new RepositoryBoundFact(
+                    repository.ObservedSourceTextSha256,
                     repository.PhysicalSourceCommitmentSha256,
                     repository.ContentSha256,
                     repository.Encoding,
@@ -54,6 +55,7 @@ internal sealed class CampaignPlanningSourceSessionIndex
                         : existingPath == bound,
                     "One canonical repository path cannot map to conflicting current physical source authority.");
                 var physical = new RepositoryPhysicalFact(
+                    repository.ObservedSourceTextSha256,
                     repository.ContentSha256,
                     repository.Encoding,
                     repository.Writable);
@@ -88,8 +90,7 @@ internal sealed class CampaignPlanningSourceSessionIndex
         CampaignPlanningSourceAuthority supplied)
     {
         if (!projectByContext.TryGetValue(compilationContextRef, out var project)
-            || observed.ProjectIdentity != project
-            || observed.SourceSha256 != supplied.ContentSha256)
+            || observed.ProjectIdentity != project)
         {
             return false;
         }
@@ -100,12 +101,14 @@ internal sealed class CampaignPlanningSourceSessionIndex
                 RepositoryDocumentationSourceIdentity left,
                 CampaignPlanningRepositorySourceAuthority right) =>
                 left.Path == right.Path
+                && left.SourceSha256 == right.ObservedSourceTextSha256
                 && repositoryShaByPath.TryGetValue(left.Path, out var sha)
-                && sha == right.ContentSha256,
+                && sha == right.ObservedSourceTextSha256,
             (
                 GeneratedDocumentationSourceIdentity left,
                 CampaignPlanningGeneratedSourceAuthority right) =>
-                MapSourceKind(left.Kind) == right.Kind
+                left.SourceSha256 == right.ContentSha256
+                && MapSourceKind(left.Kind) == right.Kind
                 && left.ProducerId == right.ProducerId
                 && left.OutputId == right.OutputId
                 && generatedShaByScopedIdentity.TryGetValue(
@@ -189,7 +192,7 @@ internal sealed class CampaignPlanningSourceSessionIndex
             "contract-scribe/campaign/generated-source-session/v1");
         writer.Add("project", project);
         writer.Add("context", context);
-        writer.Add("kind", kind.ToString());
+        writer.Add("kind", SourceKindId(kind));
         writer.Add("producer", producer);
         writer.Add("output", output);
         return "generated." + writer.Complete();
@@ -204,6 +207,14 @@ internal sealed class CampaignPlanningSourceSessionIndex
             _ => throw Failure("Observed source kind is outside the closed vocabulary."),
         };
 
+    private static string SourceKindId(DocumentationPatchSourceKind kind) => kind switch
+    {
+        DocumentationPatchSourceKind.Repository => "source.repository",
+        DocumentationPatchSourceKind.SourceGenerator => "source.source-generator",
+        DocumentationPatchSourceKind.ToolGenerated => "source.tool-generated",
+        _ => throw Failure("Source kind is outside the closed vocabulary."),
+    };
+
     private static void Require(bool condition, string message)
     {
         if (!condition)
@@ -216,12 +227,14 @@ internal sealed class CampaignPlanningSourceSessionIndex
         new(CampaignPlanningValidationCode.InvalidOwnerAuthority, message);
 
     private readonly record struct RepositoryBoundFact(
+        string ObservedSourceTextSha256,
         string PhysicalSourceCommitmentSha256,
         string ContentSha256,
         DocumentationPatchRepositoryEncoding Encoding,
         bool Writable);
 
     private readonly record struct RepositoryPhysicalFact(
+        string ObservedSourceTextSha256,
         string ContentSha256,
         DocumentationPatchRepositoryEncoding Encoding,
         bool Writable);

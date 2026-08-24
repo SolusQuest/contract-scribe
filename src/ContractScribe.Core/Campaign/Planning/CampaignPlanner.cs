@@ -53,13 +53,6 @@ public static class CampaignPlanner
             observationAuthority,
             input.EvidenceAuthority);
         ValidateAuditAuthority(input.Classifications, observations, evidenceAuthority, auditRows);
-        var owners = ValidateOwnerAuthority(
-            input.Classifications,
-            observations,
-            applicableComponentsByTarget,
-            input.OwnerAuthority,
-            sourceSession);
-
         var violationRows = auditRows.Values
             .Where(row => row.Outcome == AuditOutcome.Violation)
             .OrderBy(row => row.SubjectKey, StringComparer.Ordinal)
@@ -67,6 +60,13 @@ public static class CampaignPlanner
         Require(violationRows.Length <= MaximumViolations,
             CampaignPlanningValidationCode.InvalidBound,
             "Violation authority exceeds the finite planning bound.");
+        var owners = ValidateOwnerAuthority(
+            input.Classifications,
+            observations,
+            applicableComponentsByTarget,
+            input.OwnerAuthority,
+            sourceSession,
+            violationRows.Select(row => row.ParentSymbolRef).ToHashSet());
         var ownerByTarget = owners
             .SelectMany(owner => owner.Targets.Select(target => (target.Target.SymbolRef, Owner: owner)))
             .ToDictionary(pair => pair.SymbolRef, pair => pair.Owner);
@@ -869,7 +869,8 @@ public static class CampaignPlanner
         IReadOnlyDictionary<string, DocumentationObservation> observations,
         IReadOnlyDictionary<SymbolRef, ImmutableArray<ComponentClassification>> applicableComponentsByTarget,
         CampaignPlanningOwnerAuthoritySet authoritySet,
-        CampaignPlanningSourceSessionIndex sourceSession)
+        CampaignPlanningSourceSessionIndex sourceSession,
+        IReadOnlySet<SymbolRef> violationParents)
     {
         var supportedTargets = classifications.Targets
             .Where(target => target.SupportStatus == SupportStatus.Supported)
@@ -905,15 +906,20 @@ public static class CampaignPlanner
                 var symbol = actualTargetAuthority.Target!.SymbolRef;
                 Require(supportedTargets.TryGetValue(symbol, out var accepted)
                         && Equals(accepted, actualTargetAuthority.Target)
-                        && targetMembership.TryAdd(symbol, actualOwner),
+                    && targetMembership.TryAdd(symbol, actualOwner),
                     CampaignPlanningValidationCode.InvalidOwnerAuthority,
-                    "Owner authority must cover every supported target exactly once.");
+                    "Selected owner authority must reference current supported targets without duplicate membership.");
             }
+
+            Require(actualOwner.Targets.Any(target =>
+                    violationParents.Contains(target.Target.SymbolRef)),
+                CampaignPlanningValidationCode.InvalidOwnerAuthority,
+                "Physical owner authority may contain only the exact closure of selected violation parents.");
         }
 
-        Require(targetMembership.Count == supportedTargets.Count,
+        Require(violationParents.All(targetMembership.ContainsKey),
             CampaignPlanningValidationCode.InvalidOwnerAuthority,
-            "Owner authority must cover every supported target exactly once.");
+            "Owner authority must cover every violation parent exactly once.");
 
         var allTargets = orderedOwners
             .SelectMany(owner => owner.Targets)
@@ -1019,6 +1025,9 @@ public static class CampaignPlanner
         {
             case CampaignPlanningRepositorySourceAuthority repository:
                 RequireCanonicalPath(repository.Path);
+                RequireSha256(
+                    repository.ObservedSourceTextSha256,
+                    nameof(repository.ObservedSourceTextSha256));
                 RequireSha256(
                     repository.PhysicalSourceCommitmentSha256,
                     nameof(repository.PhysicalSourceCommitmentSha256));
@@ -1530,6 +1539,9 @@ public static class CampaignPlanner
         {
             case CampaignPlanningRepositorySourceAuthority repository:
                 writer.Add("source.repository.path", repository.Path);
+                writer.Add(
+                    "source.repository.observed-text-sha256",
+                    repository.ObservedSourceTextSha256);
                 writer.Add(
                     "source.repository.physical-source-sha256",
                     repository.PhysicalSourceCommitmentSha256);
@@ -2321,6 +2333,14 @@ public static class CampaignPlanner
             comparison = StringComparer.Ordinal.Compare(
                 left.PhysicalSourceCommitmentSha256,
                 right.PhysicalSourceCommitmentSha256);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(
+                left.ObservedSourceTextSha256,
+                right.ObservedSourceTextSha256);
             return comparison != 0
                 ? comparison
                 : StringComparer.Ordinal.Compare(EncodingId(left.Encoding), EncodingId(right.Encoding));
