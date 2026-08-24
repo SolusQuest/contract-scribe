@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.solusquest.dev/contract-scribe/campaign-state/v1.schema.json",
+  "title": "ContractScribe Campaign State v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "terminalOutcome", "predecessor"],
+  "properties": {
+    "campaignStateVersion": { "const": 1 },
+    "productRevision": { "$ref": "#/$defs/revision" },
+    "campaignLineage": { "$ref": "#/$defs/opaqueId" },
+    "snapshot": { "$ref": "#/$defs/snapshot" },
+    "checkpointRevision": { "$ref": "#/$defs/nonNegativeInt64" },
+    "configuredCeilings": { "$ref": "#/$defs/ceilings" },
+    "lineageCharges": { "$ref": "#/$defs/charges" },
+    "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },
+    "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
+    "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
+    "cumulativeOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }] },
+    "terminalOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminal" }] },
+    "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "opaqueId": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "nonNegativeInt64": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
+    "nullableSha": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
+    "nullableOpaque": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/opaqueId" }] },
+    "revision": {
+      "type": "object", "additionalProperties": false, "required": ["id", "contentSha256"],
+      "properties": { "id": { "$ref": "#/$defs/opaqueId" }, "contentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["opaqueSnapshotBinding", "repositoryCommitmentSha256", "inputCommitmentSha256", "policyAuthorityCommitmentSha256", "targetProfile", "executionCommitmentSha256"],
+      "properties": {
+        "opaqueSnapshotBinding": { "$ref": "#/$defs/opaqueId" },
+        "repositoryCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "inputCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "policyAuthorityCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "targetProfile": { "enum": ["profile.external-api", "profile.assembly-visible"] },
+        "executionCommitmentSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "campaignBudget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maximumBlocks", "maximumChangedFiles", "maximumPatchBytes", "maximumProviderRequests", "maximumAttemptsPerTarget", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds", "maximumCandidatesPerBlock", "costEnforced", "costCurrency", "costRatePolicyId", "costRatePolicySha256"],
+      "properties": {
+        "maximumBlocks": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "maximumChangedFiles": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "maximumPatchBytes": { "type": "integer", "minimum": 0, "maximum": 1099511627776 },
+        "maximumProviderRequests": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "maximumAttemptsPerTarget": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "maximumInputTokens": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumUncachedInputTokens": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumOutputTokens": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumCostMicrounits": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumElapsedMilliseconds": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumCandidatesPerBlock": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "costEnforced": { "type": "boolean" },
+        "costCurrency": { "$ref": "#/$defs/nullableOpaque" },
+        "costRatePolicyId": { "$ref": "#/$defs/nullableOpaque" },
+        "costRatePolicySha256": { "$ref": "#/$defs/nullableSha" }
+      }
+    },
+    "scribeLimits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maximumContextReferences", "maximumContextUtf8Bytes", "maximumEvidenceReferences", "maximumEvidenceUtf8Bytes", "maximumProviderRequests", "maximumToolRounds", "maximumToolCalls", "maximumAttempts", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds"],
+      "properties": {
+        "maximumContextReferences": { "type": "integer", "minimum": 0 }, "maximumContextUtf8Bytes": { "type": "integer", "minimum": 0 },
+        "maximumEvidenceReferences": { "type": "integer", "minimum": 0 }, "maximumEvidenceUtf8Bytes": { "type": "integer", "minimum": 0 },
+        "maximumProviderRequests": { "type": "integer", "minimum": 0 }, "maximumToolRounds": { "type": "integer", "minimum": 0 },
+        "maximumToolCalls": { "type": "integer", "minimum": 0 }, "maximumAttempts": { "type": "integer", "minimum": 0 },
+        "maximumInputTokens": { "type": "integer", "minimum": 0 }, "maximumUncachedInputTokens": { "type": "integer", "minimum": 0 },
+        "maximumOutputTokens": { "type": "integer", "minimum": 0 }, "maximumCostMicrounits": { "$ref": "#/$defs/nonNegativeInt64" },
+        "maximumElapsedMilliseconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ceilings": {
+      "type": "object", "additionalProperties": false, "required": ["campaignBudget", "scribeRunLimits", "styleConfigurationAuthority", "campaignConfigurationCommitmentSha256"],
+      "properties": { "campaignBudget": { "$ref": "#/$defs/campaignBudget" }, "scribeRunLimits": { "$ref": "#/$defs/scribeLimits" }, "styleConfigurationAuthority": { "$ref": "#/$defs/revision" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "charge": {
+      "type": "object", "additionalProperties": false, "required": ["observed", "conservativeUnobserved", "totalCharged"],
+      "properties": { "observed": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/nonNegativeInt64" }] }, "conservativeUnobserved": { "$ref": "#/$defs/nonNegativeInt64" }, "totalCharged": { "$ref": "#/$defs/nonNegativeInt64" } }
+    },
+    "charges": {
+      "type": "object", "additionalProperties": false,
+      "required": ["outerInvocations", "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens", "outputTokens", "reasoningTokens", "costMicrounits", "activeElapsedMilliseconds", "patchValidationInvocations"],
+      "properties": { "outerInvocations": { "$ref": "#/$defs/nonNegativeInt64" }, "providerRequests": { "$ref": "#/$defs/charge" }, "inputTokens": { "$ref": "#/$defs/charge" }, "cachedInputTokens": { "$ref": "#/$defs/charge" }, "uncachedInputTokens": { "$ref": "#/$defs/charge" }, "outputTokens": { "$ref": "#/$defs/charge" }, "reasoningTokens": { "$ref": "#/$defs/charge" }, "costMicrounits": { "$ref": "#/$defs/charge" }, "activeElapsedMilliseconds": { "$ref": "#/$defs/charge" }, "patchValidationInvocations": { "$ref": "#/$defs/nonNegativeInt64" } }
+    },
+    "work": {
+      "type": "object", "additionalProperties": false, "required": ["workItemKey", "outerAttemptCount", "candidateAttemptCount", "status", "trustedProposal", "closedOutcome"],
+      "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposalComplete", "accepted", "closed"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] } }
+    },
+    "proposal": {
+      "type": "object", "additionalProperties": false, "required": ["historicalScribeRequestSha256", "historicalAttemptId", "patchBlock", "evidence", "styleProfileCommitmentSha256", "toolPolicyId", "proposalCommitmentSha256"],
+      "properties": { "historicalScribeRequestSha256": { "$ref": "#/$defs/sha256" }, "historicalAttemptId": { "$ref": "#/$defs/opaqueId" }, "patchBlock": { "$ref": "../documentation-patch/v1.request.schema.json#/$defs/block" }, "evidence": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/evidence" } }, "styleProfileCommitmentSha256": { "$ref": "#/$defs/sha256" }, "toolPolicyId": { "$ref": "#/$defs/opaqueId" }, "proposalCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "symbol": {
+      "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"],
+      "properties": { "compilationContextRef": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 } }
+    },
+    "span": {
+      "type": "object", "additionalProperties": false, "required": ["start", "end"],
+      "properties": { "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "end": { "type": "integer", "minimum": 1, "maximum": 2147483647 } }
+    },
+    "subject": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+      "properties": { "kind": { "enum": ["target", "component"] }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^component\\." }] }, "identity": { "$ref": "#/$defs/nullableOpaque" } }
+    },
+    "repositoryEvidenceLocator": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "path", "span"],
+      "properties": { "kind": { "const": "repository" }, "path": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\\\\\u0000]+$" }, "span": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] } }
+    },
+    "metadataEvidenceLocator": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "assemblyIdentity", "documentationCommentId"],
+      "properties": { "kind": { "const": "metadata" }, "assemblyIdentity": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^/\\\\\\u0000]+$" }, "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 } }
+    },
+    "generatedEvidenceLocator": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "producerKind", "producerId", "outputId", "sourceSha256", "span"],
+      "properties": { "kind": { "const": "generated" }, "producerKind": { "enum": ["sourceGenerator", "toolGenerated"] }, "producerId": { "$ref": "#/$defs/opaqueId" }, "outputId": { "$ref": "#/$defs/opaqueId" }, "sourceSha256": { "$ref": "#/$defs/sha256" }, "span": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] } }
+    },
+    "syntheticEvidenceLocator": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "fixtureId"],
+      "properties": { "kind": { "const": "synthetic" }, "fixtureId": { "$ref": "#/$defs/opaqueId" } }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidenceReferenceId", "subject", "kind", "relation", "authority", "locator", "contentSha256", "originalUtf8ByteCount", "includedUtf8ByteCount", "isTruncated", "claimCategoryIds"],
+      "properties": {
+        "evidenceReferenceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "subject": { "$ref": "#/$defs/subject" },
+        "kind": { "enum": ["evidence.source.declaration", "evidence.source.implementation", "evidence.source.xml-documentation", "evidence.source.attribute", "evidence.test", "evidence.repository-documentation", "evidence.public-contract"] },
+        "relation": { "enum": ["evidence.declares", "evidence.documents", "evidence.tests", "evidence.references", "evidence.constrains"] },
+        "authority": { "enum": ["authority.source-implementation", "authority.source-declaration", "authority.existing-documentation", "authority.test", "authority.repository-documentation", "authority.public-contract"] },
+        "locator": { "oneOf": [{ "$ref": "#/$defs/repositoryEvidenceLocator" }, { "$ref": "#/$defs/metadataEvidenceLocator" }, { "$ref": "#/$defs/generatedEvidenceLocator" }, { "$ref": "#/$defs/syntheticEvidenceLocator" }] },
+        "contentSha256": { "$ref": "#/$defs/sha256" }, "originalUtf8ByteCount": { "type": "integer", "minimum": 0 }, "includedUtf8ByteCount": { "type": "integer", "minimum": 0 }, "isTruncated": { "type": "boolean" },
+        "claimCategoryIds": { "type": "array", "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } }
+      }
+    },
+    "closed": {
+      "type": "object", "additionalProperties": false, "required": ["stage", "code", "scribeRequestSha256", "attemptId"],
+      "properties": { "stage": { "enum": ["planning", "scribe"] }, "code": { "enum": ["planning-terminal", "insufficient-evidence", "unsupported-domain", "provider-failure", "tool-protocol-failure", "validation-failure", "internal-failure", "cancelled-by-caller", "cancelled-by-shutdown", "timeout", "budget-exhausted"] }, "scribeRequestSha256": { "$ref": "#/$defs/nullableSha" }, "attemptId": { "$ref": "#/$defs/nullableOpaque" } }
+    },
+    "providerReservation": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "workItemKey", "scribeRequestSha256", "attemptId", "exposure"],
+      "properties": { "kind": { "const": "provider" }, "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "scribeRequestSha256": { "$ref": "#/$defs/sha256" }, "attemptId": { "$ref": "#/$defs/opaqueId" }, "exposure": { "type": "object", "additionalProperties": false, "required": ["providerRequests", "inputTokens", "uncachedInputTokens", "outputTokens", "costMicrounits", "elapsedMilliseconds"], "properties": { "providerRequests": { "type": "integer", "minimum": 0 }, "inputTokens": { "type": "integer", "minimum": 0 }, "uncachedInputTokens": { "type": "integer", "minimum": 0 }, "outputTokens": { "type": "integer", "minimum": 0 }, "costMicrounits": { "$ref": "#/$defs/nonNegativeInt64" }, "elapsedMilliseconds": { "type": "integer", "minimum": 0 } } } }
+    },
+    "patchReservation": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "expectedCheckpointRevision", "patchAttemptCount", "elapsedMilliseconds"],
+      "properties": { "kind": { "const": "patch" }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "expectedCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "patchAttemptCount": { "type": "integer", "minimum": 1, "maximum": 1000 }, "elapsedMilliseconds": { "$ref": "#/$defs/nonNegativeInt64" } }
+    },
+    "changedFile": {
+      "type": "object", "additionalProperties": false, "required": ["path", "originalFileSha256", "candidateFileSha256", "changedDocumentationBlockCount", "originalDocumentationByteCount", "candidateDocumentationByteCount", "originalDocumentationLineCount", "candidateDocumentationLineCount"],
+      "properties": { "path": { "type": "string", "minLength": 1, "maxLength": 512 }, "originalFileSha256": { "$ref": "#/$defs/sha256" }, "candidateFileSha256": { "$ref": "#/$defs/sha256" }, "changedDocumentationBlockCount": { "type": "integer", "minimum": 1 }, "originalDocumentationByteCount": { "type": "integer", "minimum": 0 }, "candidateDocumentationByteCount": { "type": "integer", "minimum": 1 }, "originalDocumentationLineCount": { "type": "integer", "minimum": 0 }, "candidateDocumentationLineCount": { "type": "integer", "minimum": 1 } }
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false, "required": ["acceptedWorkItemKeys", "changedFiles", "patchRequestSha256", "patchResultCommitmentSha256"],
+      "properties": { "acceptedWorkItemKeys": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" } }, "changedFiles": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/changedFile" } }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "cumulative": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "patchResultCommitmentSha256", "completedFromCheckpointRevision"],
+      "properties": { "kind": { "enum": ["accepted", "rejected", "stale", "host-failure", "cancelled", "timeout"] }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "completedFromCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" } }
+    },
+    "terminal": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
+      "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "budget", "caller", "deadline", "host", "new-snapshot"] } }
+    },
+    "predecessor": {
+      "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate"],
+      "properties": { "productRevision": { "$ref": "#/$defs/revision" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" }, "finalCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "finalCheckpointSha256": { "$ref": "#/$defs/sha256" }, "terminalKind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorReservation" }] }, "candidate": { "$ref": "#/$defs/predecessorCandidate" } }
+    },
+    "predecessorReservation": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "correlationSha256", "conservativeCharge"],
+      "properties": { "kind": { "enum": ["provider", "patch"] }, "correlationSha256": { "$ref": "#/$defs/sha256" }, "conservativeCharge": { "$ref": "#/$defs/nonNegativeInt64" } }
+    },
+    "predecessorCandidate": {
+      "type": "object", "additionalProperties": false, "required": ["acceptedCount", "distinctFileCount", "originalDocumentationByteCount", "candidateDocumentationByteCount", "originalDocumentationLineCount", "candidateDocumentationLineCount", "patchRequestSha256", "patchResultCommitmentSha256"],
+      "properties": { "acceptedCount": { "type": "integer", "minimum": 0, "maximum": 512 }, "distinctFileCount": { "type": "integer", "minimum": 0, "maximum": 512 }, "originalDocumentationByteCount": { "$ref": "#/$defs/nonNegativeInt64" }, "candidateDocumentationByteCount": { "$ref": "#/$defs/nonNegativeInt64" }, "originalDocumentationLineCount": { "$ref": "#/$defs/nonNegativeInt64" }, "candidateDocumentationLineCount": { "$ref": "#/$defs/nonNegativeInt64" }, "patchRequestSha256": { "$ref": "#/$defs/nullableSha" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" } }
+    }
+  }
+}
