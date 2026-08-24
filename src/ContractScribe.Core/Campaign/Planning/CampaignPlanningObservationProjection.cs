@@ -1,9 +1,40 @@
+using System.Text;
+
 namespace ContractScribe.Core;
+
+internal readonly record struct CampaignPlanningObservationProjectionResult(
+    string CommitmentSha256,
+    int DeclarationCount,
+    long EstimatedUtf8Bytes);
 
 internal static class CampaignPlanningObservationProjection
 {
-    internal static string ComputeCommitment(DocumentationObservation observation)
+    internal const int MaximumDeclarationsPerObservation = 4_096;
+    internal const int MaximumAggregateDeclarations = 65_536;
+    internal const long MaximumProjectionUtf8Bytes = 4_194_304;
+    internal const long MaximumAggregateProjectionUtf8Bytes = 33_554_432;
+
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    internal static string ComputeCommitment(DocumentationObservation observation) =>
+        Project(observation).CommitmentSha256;
+
+    internal static CampaignPlanningObservationProjectionResult Project(
+        DocumentationObservation observation)
     {
+        ArgumentNullException.ThrowIfNull(observation);
+        if (observation.Declarations.IsDefault
+            || observation.Declarations.Length > MaximumDeclarationsPerObservation)
+        {
+            throw BoundFailure();
+        }
+
+        var estimatedBytes = EstimateProjectionBytes(observation);
+        if (estimatedBytes > MaximumProjectionUtf8Bytes)
+        {
+            throw BoundFailure();
+        }
+
         using var writer = new CampaignPlanningCommitmentWriter(
             "contract-scribe/campaign/observation-authority/v1");
         AddSymbolRef(writer, "subject.parent", observation.Subject.ParentSymbolRef);
@@ -59,8 +90,81 @@ internal static class CampaignPlanningObservationProjection
             }
         }
 
-        return writer.Complete();
+        return new CampaignPlanningObservationProjectionResult(
+            writer.Complete(),
+            declarations.Length,
+            estimatedBytes);
     }
+
+    private static long EstimateProjectionBytes(DocumentationObservation observation)
+    {
+        try
+        {
+            long bytes = 1_024;
+            AddEstimatedString(ref bytes, observation.Subject.ParentSymbolRef.CompilationContextRef);
+            AddEstimatedString(ref bytes, observation.Subject.ParentSymbolRef.DocumentationCommentId);
+            AddEstimatedString(ref bytes, observation.Subject.ComponentIdentity);
+            foreach (var declaration in observation.Declarations)
+            {
+                if (declaration is null || declaration.Source is null)
+                {
+                    throw BoundFailure();
+                }
+
+                bytes = checked(bytes + 1_024);
+                AddEstimatedString(ref bytes, declaration.DeclarationId);
+                AddEstimatedString(ref bytes, declaration.Source.ProjectIdentity);
+                AddEstimatedString(ref bytes, declaration.Source.SourceSha256);
+                switch (declaration.Source)
+                {
+                    case RepositoryDocumentationSourceIdentity repository:
+                        AddEstimatedString(ref bytes, repository.Path);
+                        break;
+                    case GeneratedDocumentationSourceIdentity generated:
+                        AddEstimatedString(ref bytes, generated.ProducerId);
+                        AddEstimatedString(ref bytes, generated.OutputId);
+                        break;
+                    default:
+                        throw BoundFailure();
+                }
+
+                AddEstimatedString(ref bytes, declaration.DeclarationSha256);
+                AddEstimatedString(ref bytes, declaration.LeadingTriviaSha256);
+                AddEstimatedString(ref bytes, declaration.DocumentationSha256);
+                AddEstimatedString(ref bytes, declaration.ComponentLocalName);
+                if (bytes > MaximumProjectionUtf8Bytes)
+                {
+                    throw BoundFailure();
+                }
+            }
+
+            return bytes;
+        }
+        catch (CampaignPlanningValidationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is EncoderFallbackException or OverflowException)
+        {
+            throw BoundFailure();
+        }
+    }
+
+    private static void AddEstimatedString(ref long bytes, string? value)
+    {
+        if (value is null)
+        {
+            bytes = checked(bytes + 16);
+            return;
+        }
+
+        bytes = checked(bytes + 32 + (long)StrictUtf8.GetByteCount(value) * 6);
+    }
+
+    private static CampaignPlanningValidationException BoundFailure() =>
+        new(
+            CampaignPlanningValidationCode.InvalidBound,
+            "Observation authority exceeds the finite planning projection bound.");
 
     private static void AddSource(
         CampaignPlanningCommitmentWriter writer,

@@ -469,14 +469,18 @@ public sealed record CampaignPlanningEvidenceAuthority
         DocumentationObservation observation,
         BoundObservationEvidence binding)
     {
+        var projection = CampaignPlanningObservationProjection.Project(observation);
         Subject = observation.Subject;
-        ObservationAuthorityCommitmentSha256 =
-            CampaignPlanningObservationProjection.ComputeCommitment(observation);
+        ObservationAuthorityCommitmentSha256 = projection.CommitmentSha256;
+        ObservationDeclarationCount = projection.DeclarationCount;
+        ObservationProjectionUtf8Bytes = projection.EstimatedUtf8Bytes;
         Binding = binding;
     }
 
     public DocumentationObservationSubject Subject { get; init; }
     public string ObservationAuthorityCommitmentSha256 { get; }
+    public int ObservationDeclarationCount { get; }
+    public long ObservationProjectionUtf8Bytes { get; }
     public BoundObservationEvidence Binding { get; init; }
 }
 

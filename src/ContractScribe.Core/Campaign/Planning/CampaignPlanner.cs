@@ -43,15 +43,22 @@ public static class CampaignPlanner
             "Canonical Audit authority exceeds the finite planning byte bound.");
         var auditSha256 = Sha256(auditBytes);
         var auditRows = ReadAuditRows(input.AuditDocument);
-        var observations = ValidateObservations(input.Classifications, input.Observations);
+        var observationAuthority = ValidateObservations(
+            input.Classifications,
+            input.Observations);
+        var observations = observationAuthority.Observations;
+        var sourceSession = CampaignPlanningSourceSessionIndex.Build(observations.Values);
         var applicableComponentsByTarget = BuildApplicableComponentIndex(input.Classifications);
-        var evidenceAuthority = ValidateEvidenceAuthority(observations, input.EvidenceAuthority);
+        var evidenceAuthority = ValidateEvidenceAuthority(
+            observationAuthority,
+            input.EvidenceAuthority);
         ValidateAuditAuthority(input.Classifications, observations, evidenceAuthority, auditRows);
         var owners = ValidateOwnerAuthority(
             input.Classifications,
             observations,
             applicableComponentsByTarget,
-            input.OwnerAuthority);
+            input.OwnerAuthority,
+            sourceSession);
 
         var violationRows = auditRows.Values
             .Where(row => row.Outcome == AuditOutcome.Violation)
@@ -261,6 +268,9 @@ public static class CampaignPlanner
         try
         {
             long aggregateBytes = 0;
+            long aggregateObservationBytes = 0;
+            var aggregateObservationDeclarations = 0;
+            var aggregateEvidenceAuthorityRows = 0;
             foreach (var authority in evidenceAuthority)
             {
                 Require(authority is not null && authority.Binding is not null,
@@ -269,9 +279,31 @@ public static class CampaignPlanner
                 aggregateBytes = checked(aggregateBytes
                     + CampaignPlanningEvidenceProjection.EstimateCanonicalBytes(
                         authority!.Binding!.Bundle));
+                aggregateObservationBytes = checked(
+                    aggregateObservationBytes + authority.ObservationProjectionUtf8Bytes);
+                aggregateObservationDeclarations = checked(
+                    aggregateObservationDeclarations + authority.ObservationDeclarationCount);
+                aggregateEvidenceAuthorityRows = checked(
+                    aggregateEvidenceAuthorityRows
+                    + (authority.Binding.Authority?.Declarations.Length ?? 0));
                 Require(aggregateBytes <= MaximumAuditCanonicalBytes,
                     CampaignPlanningValidationCode.InvalidBound,
                     "Aggregate evidence authority exceeds the finite planning byte bound.");
+                Require(
+                    authority.ObservationDeclarationCount >= 0
+                    && authority.ObservationDeclarationCount
+                        <= CampaignPlanningObservationProjection.MaximumDeclarationsPerObservation
+                    && authority.ObservationProjectionUtf8Bytes >= 0
+                    && authority.ObservationProjectionUtf8Bytes
+                        <= CampaignPlanningObservationProjection.MaximumProjectionUtf8Bytes
+                    && aggregateObservationDeclarations
+                        <= CampaignPlanningObservationProjection.MaximumAggregateDeclarations
+                    && aggregateEvidenceAuthorityRows
+                        <= CampaignPlanningObservationProjection.MaximumAggregateDeclarations
+                    && aggregateObservationBytes
+                        <= CampaignPlanningObservationProjection.MaximumAggregateProjectionUtf8Bytes,
+                    CampaignPlanningValidationCode.InvalidBound,
+                    "Aggregate observation and evidence authority exceeds the finite planning bound.");
             }
         }
         catch (CampaignPlanningValidationException)
@@ -413,7 +445,7 @@ public static class CampaignPlanner
         }
     }
 
-    private static Dictionary<string, DocumentationObservation> ValidateObservations(
+    private static ValidatedObservationAuthority ValidateObservations(
         ClassificationSet classifications,
         DocumentationObservationSet observations)
     {
@@ -431,6 +463,11 @@ public static class CampaignPlanner
                     component.Identity)))
             .ToHashSet(StringComparer.Ordinal);
         var result = new Dictionary<string, DocumentationObservation>(StringComparer.Ordinal);
+        var projections = new Dictionary<
+            string,
+            CampaignPlanningObservationProjectionResult>(StringComparer.Ordinal);
+        var aggregateDeclarations = 0;
+        long aggregateProjectionBytes = 0;
         foreach (var observation in observations.Observations)
         {
             Require(observation is not null && observation.Subject is not null,
@@ -438,21 +475,34 @@ public static class CampaignPlanner
                 "Observation authority contains a null record.");
             var actualObservation = observation!;
             var key = ObservationKey(actualObservation.Subject!);
+            var projection = CampaignPlanningObservationProjection.Project(actualObservation);
+            aggregateDeclarations = checked(aggregateDeclarations + projection.DeclarationCount);
+            aggregateProjectionBytes = checked(
+                aggregateProjectionBytes + projection.EstimatedUtf8Bytes);
             Require(expected.Contains(key) && result.TryAdd(key, actualObservation),
                 CampaignPlanningValidationCode.InvalidObservationAuthority,
                 "Observation authority must cover every and only supported classification once.");
+            projections.Add(key, projection);
+            Require(
+                aggregateDeclarations
+                    <= CampaignPlanningObservationProjection.MaximumAggregateDeclarations
+                && aggregateProjectionBytes
+                    <= CampaignPlanningObservationProjection.MaximumAggregateProjectionUtf8Bytes,
+                CampaignPlanningValidationCode.InvalidBound,
+                "Aggregate observation authority exceeds the finite planning projection bound.");
         }
 
         Require(result.Count == expected.Count,
             CampaignPlanningValidationCode.InvalidObservationAuthority,
             "Observation authority must cover every and only supported classification once.");
-        return result;
+        return new ValidatedObservationAuthority(result, projections);
     }
 
     private static Dictionary<string, BoundObservationEvidence> ValidateEvidenceAuthority(
-        IReadOnlyDictionary<string, DocumentationObservation> observations,
+        ValidatedObservationAuthority observationAuthority,
         ImmutableArray<CampaignPlanningEvidenceAuthority> supplied)
     {
+        var observations = observationAuthority.Observations;
         Require(supplied.Length == observations.Count,
             CampaignPlanningValidationCode.InvalidObservationAuthority,
             "Evidence authority must cover every and only supported observation once.");
@@ -469,8 +519,11 @@ public static class CampaignPlanner
             var key = ObservationKey(actualItem!.Subject!);
             Require(observations.TryGetValue(key, out var observation)
                     && result.TryAdd(key, actualItem.Binding!)
+                    && observationAuthority.Projections.TryGetValue(key, out var projection)
                     && actualItem.ObservationAuthorityCommitmentSha256
-                        == CampaignPlanningObservationProjection.ComputeCommitment(observation!)
+                        == projection.CommitmentSha256
+                    && actualItem.ObservationDeclarationCount == projection.DeclarationCount
+                    && actualItem.ObservationProjectionUtf8Bytes == projection.EstimatedUtf8Bytes
                     && BindingMatchesCurrentObservation(observation!, actualItem.Binding!),
                 CampaignPlanningValidationCode.InvalidObservationAuthority,
                 "Evidence authority must be reproducible from every accepted current observation exactly.");
@@ -484,6 +537,13 @@ public static class CampaignPlanner
         BoundObservationEvidence binding)
     {
         if (binding.ObservationValue != observation.Value)
+        {
+            return false;
+        }
+
+        if (!CampaignPlanningPartialEvidenceValidator.MatchesCurrentObservation(
+                observation,
+                binding.Bundle))
         {
             return false;
         }
@@ -808,7 +868,8 @@ public static class CampaignPlanner
         ClassificationSet classifications,
         IReadOnlyDictionary<string, DocumentationObservation> observations,
         IReadOnlyDictionary<SymbolRef, ImmutableArray<ComponentClassification>> applicableComponentsByTarget,
-        CampaignPlanningOwnerAuthoritySet authoritySet)
+        CampaignPlanningOwnerAuthoritySet authoritySet,
+        CampaignPlanningSourceSessionIndex sourceSession)
     {
         var supportedTargets = classifications.Targets
             .Where(target => target.SupportStatus == SupportStatus.Supported)
@@ -861,9 +922,8 @@ public static class CampaignPlanner
         foreach (var target in allTargets)
         {
             ValidateSourceAuthority(target.Source);
+            sourceSession.BindSource(target.Target.SymbolRef, target.Source);
         }
-
-        ValidateRepositoryPhysicalSourceFacts(allTargets);
 
         var physicalKeys = new HashSet<string>(StringComparer.Ordinal);
         var validated = ImmutableArray.CreateBuilder<ValidatedOwnerAuthority>();
@@ -872,8 +932,8 @@ public static class CampaignPlanner
             var targets = owner.Targets
                 .OrderBy(target => SymbolKey(target.Target.SymbolRef), StringComparer.Ordinal)
                 .ToImmutableArray();
-            var key = BuildPhysicalOwnerKey(targets[0].Source);
-            Require(targets.All(target => BuildPhysicalOwnerKey(target.Source) == key)
+            var key = BuildPhysicalOwnerKey(targets[0], sourceSession);
+            Require(targets.All(target => BuildPhysicalOwnerKey(target, sourceSession) == key)
                     && physicalKeys.Add(key),
                 CampaignPlanningValidationCode.InvalidOwnerAuthority,
                 "Owner rows must be the exact partition of canonical physical-owner descriptors.");
@@ -896,12 +956,19 @@ public static class CampaignPlanner
 
         foreach (var target in allTargets)
         {
-            ValidateSourceCorrelation(observations[TargetKey(target.Target.SymbolRef)], target.Source);
+            ValidateSourceCorrelation(
+                observations[TargetKey(target.Target.SymbolRef)],
+                target,
+                sourceSession);
         }
 
         foreach (var target in allTargets)
         {
-            ValidateComponents(applicableComponentsByTarget, observations, target);
+            ValidateComponents(
+                applicableComponentsByTarget,
+                observations,
+                target,
+                sourceSession);
         }
 
         foreach (var target in allTargets.Where(target =>
@@ -913,26 +980,6 @@ public static class CampaignPlanner
         return validated
             .OrderBy(owner => owner.PhysicalOrderKey, StringComparer.Ordinal)
             .ToImmutableArray();
-    }
-
-    private static void ValidateRepositoryPhysicalSourceFacts(
-        ImmutableArray<CampaignPlanningTargetAuthority> targets)
-    {
-        var facts = new Dictionary<string, RepositoryPhysicalSourceFact>(StringComparer.Ordinal);
-        foreach (var repository in targets
-                     .Select(target => target.Source)
-                     .OfType<CampaignPlanningRepositorySourceAuthority>())
-        {
-            var current = new RepositoryPhysicalSourceFact(
-                repository.ContentSha256,
-                repository.Encoding,
-                repository.Writable);
-            Require(!facts.TryGetValue(repository.PhysicalSourceCommitmentSha256, out var existing)
-                    ? facts.TryAdd(repository.PhysicalSourceCommitmentSha256, current)
-                    : existing == current,
-                CampaignPlanningValidationCode.InvalidOwnerAuthority,
-                "One physical-source commitment cannot appear under conflicting exact source facts.");
-        }
     }
 
     private static void ValidateSourceAuthority(CampaignPlanningSourceAuthority source)
@@ -1009,7 +1056,8 @@ public static class CampaignPlanner
     private static void ValidateComponents(
         IReadOnlyDictionary<SymbolRef, ImmutableArray<ComponentClassification>> applicableComponentsByTarget,
         IReadOnlyDictionary<string, DocumentationObservation> observations,
-        CampaignPlanningTargetAuthority authority)
+        CampaignPlanningTargetAuthority authority,
+        CampaignPlanningSourceSessionIndex sourceSession)
     {
         Require(!authority.ApplicableComponents.IsDefault,
             CampaignPlanningValidationCode.InvalidOwnerAuthority,
@@ -1045,7 +1093,10 @@ public static class CampaignPlanner
                 accepted.ParentSymbolRef,
                 accepted.ComponentKind,
                 accepted.Identity)];
-            var declaration = FindCorrelatedDeclaration(observation, authority.Source);
+            var declaration = FindCorrelatedDeclaration(
+                observation,
+                authority,
+                sourceSession);
             Require(actualSupplied.Name == declaration.ComponentLocalName,
                 CampaignPlanningValidationCode.InvalidOwnerAuthority,
                 "Applicable components must match the current declaration and source authority exactly.");
@@ -1054,20 +1105,26 @@ public static class CampaignPlanner
 
     private static void ValidateSourceCorrelation(
         DocumentationObservation observation,
-        CampaignPlanningSourceAuthority source)
+        CampaignPlanningTargetAuthority authority,
+        CampaignPlanningSourceSessionIndex sourceSession)
     {
-        _ = FindCorrelatedDeclaration(observation, source);
+        _ = FindCorrelatedDeclaration(observation, authority, sourceSession);
     }
 
     private static DocumentationDeclarationFact FindCorrelatedDeclaration(
         DocumentationObservation observation,
-        CampaignPlanningSourceAuthority source)
+        CampaignPlanningTargetAuthority authority,
+        CampaignPlanningSourceSessionIndex sourceSession)
     {
+        var source = authority.Source;
         var declarations = observation.Declarations
             .Where(declaration => declaration.DeclarationId == source.AuthoritativeDeclarationId)
             .ToImmutableArray();
         Require(declarations.Length == 1
-                && SourceMatches(declarations[0].Source, source)
+                && sourceSession.MatchesObservedSource(
+                    authority.Target.SymbolRef.CompilationContextRef,
+                    declarations[0].Source,
+                    source)
                 && declarations[0].BlockState == source.BlockState
                 && declarations[0].DeclarationSpan == source.ObservationDeclarationSpan
                 && declarations[0].DocumentationSpan == source.DocumentationSpan,
@@ -1075,23 +1132,6 @@ public static class CampaignPlanner
             "Exact source authority must correlate with one authoritative declaration and its source, span, documentation, and block facts.");
         return declarations[0];
     }
-
-    private static bool SourceMatches(
-        DocumentationSourceIdentity observed,
-        CampaignPlanningSourceAuthority supplied) =>
-        (observed, supplied) switch
-        {
-            (RepositoryDocumentationSourceIdentity left,
-                CampaignPlanningRepositorySourceAuthority right) =>
-                left.Path == right.Path,
-            (GeneratedDocumentationSourceIdentity left,
-                CampaignPlanningGeneratedSourceAuthority right) =>
-                MapSourceKind(left.Kind) == right.Kind
-                && left.ProducerId == right.ProducerId
-                && left.OutputId == right.OutputId
-                && left.SourceSha256 == right.ContentSha256,
-            _ => false,
-        };
 
     private static PendingWorkItem BuildPendingItem(
         ValidatedOwnerAuthority owner,
@@ -1622,24 +1662,14 @@ public static class CampaignPlanner
         return builder.ToString();
     }
 
-    private static string BuildPhysicalOwnerKey(CampaignPlanningSourceAuthority source)
+    private static string BuildPhysicalOwnerKey(
+        CampaignPlanningTargetAuthority target,
+        CampaignPlanningSourceSessionIndex sourceSession)
     {
         var builder = new StringBuilder();
-        AppendKey(builder, SourceKindId(source.Kind));
-        switch (source)
-        {
-            case CampaignPlanningRepositorySourceAuthority repository:
-                AppendKey(builder, repository.PhysicalSourceCommitmentSha256);
-                break;
-            case CampaignPlanningGeneratedSourceAuthority generated:
-                AppendKey(builder, generated.ProducerId);
-                AppendKey(builder, generated.OutputId);
-                AppendKey(builder, generated.ContentSha256);
-                break;
-        }
-
-        AppendKey(builder, source.OwnerSpan.Start);
-        AppendKey(builder, source.OwnerSpan.End);
+        AppendKey(builder, sourceSession.PhysicalSourceKey(target.Target.SymbolRef, target.Source));
+        AppendKey(builder, target.Source.OwnerSpan.Start);
+        AppendKey(builder, target.Source.OwnerSpan.End);
         return builder.ToString();
     }
 
@@ -2087,10 +2117,9 @@ public static class CampaignPlanner
         ImmutableArray<CampaignPlanningTargetAuthority> Targets,
         bool AmbiguousOwner);
 
-    private readonly record struct RepositoryPhysicalSourceFact(
-        string ContentSha256,
-        DocumentationPatchRepositoryEncoding Encoding,
-        bool Writable);
+    private sealed record ValidatedObservationAuthority(
+        IReadOnlyDictionary<string, DocumentationObservation> Observations,
+        IReadOnlyDictionary<string, CampaignPlanningObservationProjectionResult> Projections);
 
     private sealed record PendingWorkItem(
         string OwnerEquivalenceRef,
