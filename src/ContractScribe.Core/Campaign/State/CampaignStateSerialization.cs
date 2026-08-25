@@ -23,7 +23,19 @@ public static class CampaignStateJson
     public static byte[] Write(CampaignCheckpointState state)
     {
         CampaignStateFactory.Validate(state);
-        using var stream = new MemoryStream();
+        using var stream = new BoundedMemoryStream(CampaignStateContract.MaximumArtifactUtf8Bytes);
+        WriteValidatedState(stream, state);
+        return stream.ToArray();
+    }
+
+    internal static void ValidateEncodedSize(CampaignCheckpointState state)
+    {
+        using var stream = new BoundedMemoryStream(CampaignStateContract.MaximumArtifactUtf8Bytes);
+        WriteValidatedState(stream, state);
+    }
+
+    private static void WriteValidatedState(Stream stream, CampaignCheckpointState state)
+    {
         using (var writer = new Utf8JsonWriter(
             stream,
             new JsonWriterOptions
@@ -36,15 +48,6 @@ public static class CampaignStateJson
         }
 
         stream.WriteByte((byte)'\n');
-        var bytes = stream.ToArray();
-        if (bytes.Length > CampaignStateContract.MaximumArtifactUtf8Bytes)
-        {
-            throw CampaignStateFactory.Fail(
-                CampaignStateValidationCode.DocumentTooLarge,
-                "Campaign checkpoint exceeds its byte bound.");
-        }
-
-        return bytes;
     }
 
     public static CampaignCheckpointParseResult Parse(ReadOnlyMemory<byte> utf8Json)
@@ -120,7 +123,10 @@ public static class CampaignStateJson
         ImmutableArray<string> provenanceCatalog,
         ImmutableArray<DocumentationPatchBlockRequest> blocks)
     {
-        using var stream = new MemoryStream();
+        using var stream = new BoundedMemoryStream(
+            DocumentationPatchValidator.MaximumArtifactUtf8Bytes,
+            CampaignStateValidationCode.InvalidBound,
+            "Active patch request exceeds the M2 byte bound.");
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
         {
             writer.WriteStartObject();
@@ -323,6 +329,9 @@ public static class CampaignStateJson
         writer.WriteStartObject();
         writer.WriteString("historicalScribeRequestSha256", proposal.HistoricalScribeRequestSha256);
         writer.WriteString("historicalAttemptId", proposal.HistoricalAttemptId.Value);
+        writer.WriteString("providerConfigurationId", proposal.ProviderConfigurationId);
+        writer.WriteString("modelConfigurationId", proposal.ModelConfigurationId);
+        writer.WriteString("scribeProtocolId", proposal.ScribeProtocolId);
         writer.WritePropertyName("patchBlock");
         WritePatchBlock(writer, proposal.PatchBlock);
         writer.WritePropertyName("evidence");
@@ -602,6 +611,16 @@ public static class CampaignStateJson
         writer.WriteStartObject();
         writer.WriteString("stage", outcome.Stage == CampaignWorkOutcomeStage.Planning ? "planning" : "scribe");
         writer.WriteString("code", WorkOutcomeCodeId(outcome.Code));
+        WriteNullableString(
+            writer,
+            "providerDisposition",
+            outcome.ProviderDisposition switch
+            {
+                CampaignProviderFinalDisposition.Retryable => "retryable",
+                CampaignProviderFinalDisposition.Terminal => "terminal",
+                null => null,
+                _ => throw Vocabulary(),
+            });
         WriteNullableString(writer, "scribeRequestSha256", outcome.ScribeRequestSha256);
         WriteNullableString(
             writer,
@@ -990,6 +1009,9 @@ public static class CampaignStateJson
             element,
             "historicalScribeRequestSha256",
             "historicalAttemptId",
+            "providerConfigurationId",
+            "modelConfigurationId",
+            "scribeProtocolId",
             "patchBlock",
             "evidence",
             "styleProfileCommitmentSha256",
@@ -1005,6 +1027,9 @@ public static class CampaignStateJson
         return new CampaignTrustedProposal(
             ReadString(element, "historicalScribeRequestSha256"),
             attempt,
+            ReadString(element, "providerConfigurationId"),
+            ReadString(element, "modelConfigurationId"),
+            ReadString(element, "scribeProtocolId"),
             ParsePatchBlock(element.GetProperty("patchBlock")),
             ParseArray(
                 element.GetProperty("evidence"),
@@ -1267,7 +1292,7 @@ public static class CampaignStateJson
             return null;
         }
 
-        ExpectObject(element, "stage", "code", "scribeRequestSha256", "attemptId");
+        ExpectObject(element, "stage", "code", "providerDisposition", "scribeRequestSha256", "attemptId");
         var attemptText = ReadNullableString(element, "attemptId");
         DocumentationScribeAttemptId? attempt = null;
         if (attemptText is not null)
@@ -1288,6 +1313,13 @@ public static class CampaignStateJson
                 _ => throw Vocabulary(),
             },
             ParseWorkOutcomeCode(ReadString(element, "code")),
+            ReadNullableString(element, "providerDisposition") switch
+            {
+                "retryable" => CampaignProviderFinalDisposition.Retryable,
+                "terminal" => CampaignProviderFinalDisposition.Terminal,
+                null => null,
+                _ => throw Vocabulary(),
+            },
             ReadNullableString(element, "scribeRequestSha256"),
             attempt);
     }
@@ -1932,4 +1964,58 @@ public static class CampaignStateJson
     private static CampaignStateValidationException Vocabulary() => CampaignStateFactory.Fail(
         CampaignStateValidationCode.InvalidVocabulary,
         "Campaign checkpoint member has an invalid closed value.");
+
+    private sealed class BoundedMemoryStream : MemoryStream
+    {
+        private readonly int maximumBytes;
+        private readonly CampaignStateValidationCode failureCode;
+        private readonly string failureMessage;
+
+        internal BoundedMemoryStream(int maximumBytes)
+            : this(
+                maximumBytes,
+                CampaignStateValidationCode.DocumentTooLarge,
+                "Campaign checkpoint exceeds its byte bound.")
+        {
+        }
+
+        internal BoundedMemoryStream(
+            int maximumBytes,
+            CampaignStateValidationCode failureCode,
+            string failureMessage)
+            : base(Math.Min(maximumBytes, 16_384))
+        {
+            this.maximumBytes = maximumBytes;
+            this.failureCode = failureCode;
+            this.failureMessage = failureMessage;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            EnsureCapacityFor(count);
+            base.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            EnsureCapacityFor(buffer.Length);
+            base.Write(buffer);
+        }
+
+        public override void WriteByte(byte value)
+        {
+            EnsureCapacityFor(1);
+            base.WriteByte(value);
+        }
+
+        private void EnsureCapacityFor(int additionalBytes)
+        {
+            if (additionalBytes < 0 || Position > maximumBytes - additionalBytes)
+            {
+                throw CampaignStateFactory.Fail(
+                    failureCode,
+                    failureMessage);
+            }
+        }
+    }
 }

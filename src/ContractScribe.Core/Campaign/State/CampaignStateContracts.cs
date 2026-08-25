@@ -16,6 +16,9 @@ public static class CampaignStateContract
     public const int MaximumIdentifierScalars = 512;
     public const int MaximumPathScalars = 512;
     public const long MaximumObservation = 1_000_000_000_000_000;
+    public const long MaximumCampaignInputTokens = 1_000_000_000_000;
+    public const long MaximumCampaignElapsedMilliseconds = 2_678_400_000;
+    public const long MaximumPatchBytes = 1_099_511_627_776;
     public const string Revision = "campaign-state-v1";
 }
 
@@ -78,6 +81,12 @@ public enum CampaignWorkOutcomeCode
     CancelledByShutdown,
     Timeout,
     BudgetExhausted,
+}
+
+public enum CampaignProviderFinalDisposition
+{
+    Retryable,
+    Terminal,
 }
 
 public enum CampaignCumulativeOutcomeKind
@@ -198,6 +207,9 @@ public sealed record CampaignEvidenceProjection(
 public sealed record CampaignTrustedProposal(
     string HistoricalScribeRequestSha256,
     DocumentationScribeAttemptId HistoricalAttemptId,
+    string ProviderConfigurationId,
+    string ModelConfigurationId,
+    string ScribeProtocolId,
     DocumentationPatchBlockRequest PatchBlock,
     ImmutableArray<CampaignEvidenceProjection> Evidence,
     string StyleProfileCommitmentSha256,
@@ -207,8 +219,15 @@ public sealed record CampaignTrustedProposal(
 public sealed record CampaignWorkClosedOutcome(
     CampaignWorkOutcomeStage Stage,
     CampaignWorkOutcomeCode Code,
+    CampaignProviderFinalDisposition? ProviderDisposition,
     string? ScribeRequestSha256,
     DocumentationScribeAttemptId? AttemptId);
+
+public sealed record CampaignScribeExecutionAuthority(
+    string ProviderConfigurationId,
+    string ModelConfigurationId,
+    string ScribeProtocolId,
+    string ToolPolicyId);
 
 public sealed record CampaignWorkItemState(
     string WorkItemKey,
@@ -240,12 +259,25 @@ public sealed record CampaignProviderReservation(
     CampaignProviderReservationExposure Exposure)
     : CampaignActiveReservation;
 
-public sealed record CampaignPatchReservation(
-    string PatchRequestSha256,
-    long ExpectedCheckpointRevision,
-    int PatchAttemptCount,
-    long ElapsedMilliseconds)
-    : CampaignActiveReservation;
+public sealed record CampaignPatchReservation : CampaignActiveReservation
+{
+    internal CampaignPatchReservation(
+        string patchRequestSha256,
+        long expectedCheckpointRevision,
+        int patchAttemptCount,
+        long elapsedMilliseconds)
+    {
+        PatchRequestSha256 = patchRequestSha256;
+        ExpectedCheckpointRevision = expectedCheckpointRevision;
+        PatchAttemptCount = patchAttemptCount;
+        ElapsedMilliseconds = elapsedMilliseconds;
+    }
+
+    public string PatchRequestSha256 { get; internal init; }
+    public long ExpectedCheckpointRevision { get; internal init; }
+    public int PatchAttemptCount { get; internal init; }
+    public long ElapsedMilliseconds { get; internal init; }
+}
 
 public sealed record CampaignChangedFileObservation(
     string Path,
@@ -257,17 +289,59 @@ public sealed record CampaignChangedFileObservation(
     int OriginalDocumentationLineCount,
     int CandidateDocumentationLineCount);
 
-public sealed record CampaignCandidateObservation(
-    ImmutableArray<string> AcceptedWorkItemKeys,
-    ImmutableArray<CampaignChangedFileObservation> ChangedFiles,
-    string PatchRequestSha256,
-    string PatchResultCommitmentSha256);
+public sealed record CampaignCandidateObservation
+{
+    internal CampaignCandidateObservation(
+        ImmutableArray<string> acceptedWorkItemKeys,
+        ImmutableArray<CampaignChangedFileObservation> changedFiles,
+        string patchRequestSha256,
+        string patchResultCommitmentSha256)
+    {
+        AcceptedWorkItemKeys = acceptedWorkItemKeys;
+        ChangedFiles = changedFiles;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+    }
 
-public sealed record CampaignCumulativeOutcome(
-    CampaignCumulativeOutcomeKind Kind,
-    string PatchRequestSha256,
-    string? PatchResultCommitmentSha256,
-    long CompletedFromCheckpointRevision);
+    public ImmutableArray<string> AcceptedWorkItemKeys { get; internal init; }
+    public ImmutableArray<CampaignChangedFileObservation> ChangedFiles { get; internal init; }
+    public string PatchRequestSha256 { get; internal init; }
+    public string PatchResultCommitmentSha256 { get; internal init; }
+}
+
+public sealed record CampaignCumulativeOutcome
+{
+    internal CampaignCumulativeOutcome(
+        CampaignCumulativeOutcomeKind kind,
+        string patchRequestSha256,
+        string? patchResultCommitmentSha256,
+        long completedFromCheckpointRevision)
+    {
+        Kind = kind;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        CompletedFromCheckpointRevision = completedFromCheckpointRevision;
+    }
+
+    public CampaignCumulativeOutcomeKind Kind { get; internal init; }
+    public string PatchRequestSha256 { get; internal init; }
+    public string? PatchResultCommitmentSha256 { get; internal init; }
+    public long CompletedFromCheckpointRevision { get; internal init; }
+}
+
+public sealed record CampaignPatchCompletion
+{
+    internal CampaignPatchCompletion(
+        CampaignCandidateObservation? candidateObservation,
+        CampaignCumulativeOutcome cumulativeOutcome)
+    {
+        CandidateObservation = candidateObservation;
+        CumulativeOutcome = cumulativeOutcome;
+    }
+
+    public CampaignCandidateObservation? CandidateObservation { get; }
+    public CampaignCumulativeOutcome CumulativeOutcome { get; }
+}
 
 public sealed record CampaignTerminalOutcome(
     CampaignTerminalKind Kind,
