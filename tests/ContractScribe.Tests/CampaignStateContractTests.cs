@@ -1148,6 +1148,112 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
+    public void Published_schema_and_runtime_share_documentation_id_domain_across_proposal_channels()
+    {
+        var proposal = CreateProposalCompleteState();
+        var invalidDocumentationIds = new[]
+        {
+            "M:A\uFFFE",
+            "M:A\uFFFF",
+            "M:A\n",
+        };
+        Action<JsonObject, string>[] channelMutations =
+        [
+            (root, value) =>
+            {
+                var evidence = root["workItems"]![0]!["trustedProposal"]!["evidence"]!.AsArray();
+                var subject = evidence
+                    .Select(item => item!["subject"]!)
+                    .Single(item => item["kind"]!.GetValue<string>() == "target");
+                subject["parentSymbolRef"]!["documentationCommentId"] = value;
+            },
+            (root, value) =>
+            {
+                var evidence = root["workItems"]![0]!["trustedProposal"]!["evidence"]!.AsArray();
+                var subject = evidence
+                    .Select(item => item!["subject"]!)
+                    .First(item => item["kind"]!.GetValue<string>() == "component");
+                subject["parentSymbolRef"]!["documentationCommentId"] = value;
+            },
+            (root, value) =>
+                root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["locator"] = new JsonObject
+                {
+                    ["kind"] = "metadata",
+                    ["assemblyIdentity"] = "synthetic.v1",
+                    ["documentationCommentId"] = value,
+                },
+            (root, value) =>
+                root["workItems"]![0]!["trustedProposal"]!["patchBlock"]!["symbolRef"]!["documentationCommentId"] = value,
+        ];
+
+        Assert.All(invalidDocumentationIds, value =>
+            Assert.All(channelMutations, mutate =>
+                AssertSchemaAndRuntimeReject(proposal, root => mutate(root, value))));
+    }
+
+    [Theory]
+    [InlineData("\uFFFD")]
+    [InlineData("\U0001F600")]
+    public void Documentation_id_xml_scalar_boundaries_round_trip_through_every_proposal_channel(string suffix)
+    {
+        var documentationId = "M:Synthetic.Widget.Run(System.String)" + suffix;
+        var scenario = CreateProposalScenario(documentationId);
+        var work = scenario.Plan.WorkItems.Single(item =>
+            Assert.Single(item.Targets).SymbolRef.DocumentationCommentId == documentationId);
+        var exchange = CreateScribeExchange(
+            work,
+            requestMutation: root =>
+                root["evidenceReferences"]![0]!["locator"] = new JsonObject
+                {
+                    ["metadata"] = new JsonObject
+                    {
+                        ["assemblyIdentity"] = "synthetic.v1",
+                        ["documentationCommentId"] = documentationId,
+                    },
+                });
+        var proposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, exchange)),
+            work,
+            exchange);
+        var complete = WithState(
+            scenario.InitialState,
+            ReplaceWork(
+                scenario.InitialState,
+                work.WorkItemKey,
+                CampaignWorkStatus.ProposalComplete,
+                proposal),
+            activeReservation: null);
+        var artifact = CampaignStateJson.CreateArtifact(complete);
+
+        using var document = JsonDocument.Parse(artifact.ExactUtf8Json.AsMemory());
+        var evaluation = EvaluateCampaignSchema(document.RootElement);
+        Assert.True(evaluation.IsValid, DescribeSchemaFailures(evaluation));
+        Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+
+        var root = Assert.IsType<JsonObject>(JsonNode.Parse(artifact.ExactUtf8Json.AsSpan()));
+        var trustedProposal = root["workItems"]!
+            .AsArray()
+            .Single(item => item!["trustedProposal"] is not null)!["trustedProposal"]!;
+        Assert.Equal(
+            documentationId,
+            trustedProposal["patchBlock"]!["symbolRef"]!["documentationCommentId"]!.GetValue<string>());
+        Assert.All(
+            trustedProposal["evidence"]!
+                .AsArray()
+                .Select(item => item!["subject"]!["symbolRef"] ?? item!["subject"]!["parentSymbolRef"]),
+            symbol => Assert.Equal(
+                documentationId,
+                symbol!["documentationCommentId"]!.GetValue<string>()));
+        Assert.Equal(
+            documentationId,
+            trustedProposal["evidence"]![0]!["locator"]!["documentationCommentId"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Stable_m3_evidence_projection_is_shared_by_producer_runtime_and_schema()
     {
         var scenario = CreateProposalScenario();
@@ -1256,13 +1362,14 @@ public sealed class CampaignStateContractTests
         Assert.DoesNotContain("Octokit", references);
     }
 
-    private static ProposalScenario CreateProposalScenario()
+    private static ProposalScenario CreateProposalScenario(
+        string firstDocumentationId = "M:Synthetic.Widget.Run(System.String)")
     {
         const string Context = "synthetic.v1";
         var specifications = new[]
         {
             new TargetSpecification(
-                "M:Synthetic.Widget.Run(System.String)",
+                firstDocumentationId,
                 "src/Synthetic/Widget.cs",
                 "public void Run(string value) { }",
                 "decl.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

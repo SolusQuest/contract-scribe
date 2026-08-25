@@ -25,7 +25,7 @@
     "opaqueId": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
     "evidenceIdentifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9.-]*[a-z0-9]$|^[a-z]$" },
     "compilationContextRef": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-    "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024, "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
+    "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024, "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F\\uFFFE\\uFFFF]+(?![\\s\\S])" },
     "scribeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
     "scribeAttemptId": { "type": "string", "pattern": "^scribe-attempt\\.[0-9a-f]{32}$" },
     "repositoryPath": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!\\.{1,2}(?:/|(?![\\s\\S])))(?![^\\u0000]*/\\.{1,2}(?:/|(?![\\s\\S])))(?![^\\u0000]*//)(?![^\\u0000]*/(?![\\s\\S]))[^\\\\\\u0000]+(?![\\s\\S])" },
@@ -101,7 +101,13 @@
     },
     "proposal": {
       "type": "object", "additionalProperties": false, "required": ["historicalScribeRequestSha256", "historicalAttemptId", "providerConfigurationId", "modelConfigurationId", "scribeProtocolId", "patchBlock", "evidence", "styleProfileCommitmentSha256", "toolPolicyId", "proposalCommitmentSha256"],
-      "properties": { "historicalScribeRequestSha256": { "$ref": "#/$defs/sha256" }, "historicalAttemptId": { "$ref": "#/$defs/scribeAttemptId" }, "providerConfigurationId": { "$ref": "#/$defs/scribeId" }, "modelConfigurationId": { "$ref": "#/$defs/scribeId" }, "scribeProtocolId": { "$ref": "#/$defs/scribeId" }, "patchBlock": { "$ref": "../documentation-patch/v1.request.schema.json#/$defs/block" }, "evidence": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/evidence" } }, "styleProfileCommitmentSha256": { "$ref": "#/$defs/sha256" }, "toolPolicyId": { "$ref": "#/$defs/scribeId" }, "proposalCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+      "properties": { "historicalScribeRequestSha256": { "$ref": "#/$defs/sha256" }, "historicalAttemptId": { "$ref": "#/$defs/scribeAttemptId" }, "providerConfigurationId": { "$ref": "#/$defs/scribeId" }, "modelConfigurationId": { "$ref": "#/$defs/scribeId" }, "scribeProtocolId": { "$ref": "#/$defs/scribeId" }, "patchBlock": { "$ref": "#/$defs/campaignPatchBlock" }, "evidence": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/evidence" } }, "styleProfileCommitmentSha256": { "$ref": "#/$defs/sha256" }, "toolPolicyId": { "$ref": "#/$defs/scribeId" }, "proposalCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "campaignPatchBlock": {
+      "allOf": [
+        { "$ref": "../documentation-patch/v1.request.schema.json#/$defs/block" },
+        { "properties": { "symbolRef": { "properties": { "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" } } } } }
+      ]
     },
     "symbol": {
       "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"],
