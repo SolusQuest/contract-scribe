@@ -1254,6 +1254,65 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
+    public void Published_schema_and_runtime_share_exception_type_documentation_id_domain()
+    {
+        var proposal = CreateProposalCompleteStateWithException("T:System.Exception");
+        var invalidDocumentationIds = new[]
+        {
+            "M:WrongPrefix",
+            "T:A\u0001",
+            "T:A\t",
+            "T:A\n",
+            "T:A ",
+            "T:A\u0085",
+            "T:A\u00A0",
+            "T:A\u1680",
+            "T:A\u2000",
+            "T:A\u200A",
+            "T:A\u2028",
+            "T:A\u2029",
+            "T:A\u202F",
+            "T:A\u205F",
+            "T:A\u3000",
+            "T:A\uFFFE",
+            "T:A\uFFFF",
+            "T:A<",
+            "T:A>",
+            "T:A&",
+            "T:A\"",
+            "T:A'",
+        };
+
+        Assert.All(invalidDocumentationIds, value =>
+            AssertSchemaAndRuntimeReject(proposal, root =>
+                root["workItems"]![0]!["trustedProposal"]!["patchBlock"]!["content"]!["exceptions"]![0]!["typeDocumentationId"] = value));
+    }
+
+    [Theory]
+    [InlineData("T:System.Exception")]
+    [InlineData("T:Example\uFFFD")]
+    [InlineData("T:Example\u200B")]
+    [InlineData("T:Example\U0001F600")]
+    public void Exception_type_documentation_id_boundaries_round_trip_through_production_proposal(string value)
+    {
+        var state = CreateProposalCompleteStateWithException(value);
+        var artifact = CampaignStateJson.CreateArtifact(state);
+
+        using var document = JsonDocument.Parse(artifact.ExactUtf8Json.AsMemory());
+        var evaluation = EvaluateCampaignSchema(document.RootElement);
+        Assert.True(evaluation.IsValid, DescribeSchemaFailures(evaluation));
+        Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+
+        var root = Assert.IsType<JsonObject>(JsonNode.Parse(artifact.ExactUtf8Json.AsSpan()));
+        var trustedProposal = root["workItems"]!
+            .AsArray()
+            .Single(item => item!["trustedProposal"] is not null)!["trustedProposal"]!;
+        Assert.Equal(
+            value,
+            trustedProposal["patchBlock"]!["content"]!["exceptions"]![0]!["typeDocumentationId"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Stable_m3_evidence_projection_is_shared_by_producer_runtime_and_schema()
     {
         var scenario = CreateProposalScenario();
@@ -1707,6 +1766,45 @@ public sealed class CampaignStateContractTests
             },
             resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] = contextRef);
 
+    private static ScribeExchange CreateScribeExchangeWithException(
+        CampaignPlanningWorkItem work,
+        string typeDocumentationId)
+    {
+        string? exceptionEvidenceId = null;
+        return CreateScribeExchange(
+            work,
+            requestMutation: root =>
+            {
+                var evidence = root["evidenceReferences"]!.AsArray();
+                var summary = evidence.Single(item =>
+                    item!["evidenceReferenceId"]!.GetValue<string>()
+                        .StartsWith("evidence.summary.", StringComparison.Ordinal));
+                var summaryId = summary!["evidenceReferenceId"]!.GetValue<string>();
+                exceptionEvidenceId = "evidence.type" + summaryId["evidence.summary".Length..];
+                var exception = Assert.IsType<JsonObject>(summary.DeepClone());
+                exception["evidenceReferenceId"] = exceptionEvidenceId;
+                exception["kind"] = "evidence.public-contract";
+                exception["relation"] = "evidence.constrains";
+                exception["authority"] = "authority.public-contract";
+                exception["contentSha256"] = Hash('e');
+                exception["claimCategoryIds"] = new JsonArray { "claim.behavior" };
+                evidence.Add(exception);
+            },
+            resultMutation: root =>
+            {
+                var evidenceId = exceptionEvidenceId
+                    ?? throw new InvalidOperationException("The exception evidence ID was not projected.");
+                root["terminal"]!["contentUnits"]!.AsArray().Add(new JsonObject
+                {
+                    ["kind"] = "content.exception",
+                    ["typeDocumentationId"] = typeDocumentationId,
+                    ["lines"] = new JsonArray { "The operation is invalid." },
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["evidenceReferenceIds"] = new JsonArray { evidenceId },
+                });
+            });
+    }
+
     private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work)
     {
         var proposalExchange = CreateScribeExchange(work);
@@ -1958,6 +2056,25 @@ public sealed class CampaignStateContractTests
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
         var exchange = CreateScribeExchange(work);
+        var proposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, exchange)),
+            work,
+            exchange);
+        return WithState(
+            scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal),
+            activeReservation: null);
+    }
+
+    private static CampaignCheckpointState CreateProposalCompleteStateWithException(string typeDocumentationId)
+    {
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchangeWithException(work, typeDocumentationId);
         var proposal = AdmitProposal(
             scenario,
             WithState(
