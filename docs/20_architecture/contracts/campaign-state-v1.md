@@ -1,0 +1,66 @@
+# Campaign State v1
+
+> **Status:** Current pre-release in-process draft introduced by M4-C2. It is the checkpoint contract consumed by the later reducer/store slice; it is not a storage implementation, migration format, or compatibility promise.
+
+## Purpose and ownership
+
+`CampaignCheckpointState` is one complete, bounded, privacy-safe snapshot of the current campaign lineage. `CampaignStateFactory` is the only public construction boundary and `CampaignStateJson` owns exact canonical bytes plus the artifact SHA-256. A consumer either accepts the whole checkpoint or fails closed; partial recovery and best-effort parsing are forbidden.
+
+C2 owns the versioned state vocabulary, immutable typed state, validation, exact JSON projection, current-context revalidation, trusted M3-to-M2 proposal projection, M2 request reconstruction, and typed M2 result commitment. It does not own reducer transitions, compare-and-swap persistence, dispatch, retry selection, patch execution, repository mutation, compatibility aliases, migration, CLI wiring, publication, or GitHub state.
+
+## Authority and identity
+
+The initial factory receives the exact `CampaignPlanningInput`, the caller-accepted `CampaignWorkPlan`, and the current repository-relative `.sln`, `.slnx`, or `.csproj` input identity, reruns C1, and rejects any mismatch. The checkpoint separately binds:
+
+- product/contract revision ID and content SHA;
+- opaque snapshot binding, repository, explicit-input, and policy-authority commitments;
+- a domain-separated commitment to the current input identity, without persisting the repository-relative path itself;
+- target profile and C1 execution commitment;
+- the complete typed campaign budget and Scribe limits;
+- a target-independent, already validated style-configuration projection, represented only by a bounded ID and a domain-separated content commitment;
+- one composite campaign-configuration commitment over all correctness-bearing C1 content authorities and ceilings.
+
+Concrete Style Profiles remain per-work C1 facts and are rebound when a trusted proposal is created. C2 never invents or reverses a global Style Profile DSL. `RepositoryContextRef` is process-local and is never persisted. The caller supplies it transiently when reconstructing an M2 request. The stable repository-relative input identity is committed when the checkpoint is created; current-context validation, trusted-proposal admission, and both active and accepted reconstruction reject a different input identity even when target, source, and evidence commitments collide across two inputs.
+
+The artifact digest is lowercase SHA-256 over the exact canonical UTF-8 JSON bytes, including the one trailing LF. It is a wrapper property and is not serialized into its own preimage.
+
+## State model
+
+Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
+
+- `planned`: no proposal or terminal outcome;
+- `proposal-complete`: one fully validated trusted proposal;
+- `accepted`: that proposal is part of the current known candidate;
+- `closed`: no proposal and one planning/Scribe terminal outcome.
+
+Current-context revalidation also preserves the C1 disposition matrix: planning-terminal work must remain `closed` with the planning-terminal outcome, while executable work may advance through the executable states or close only with a correlated Scribe outcome. A provider failure additionally carries exactly one provider-neutral final disposition, `retryable` or `terminal`; all other outcomes carry no provider disposition. Later retry policy consumes this durable fact and does not reclassify the historical provider result.
+
+Per-work outer attempts and candidate attempts are persisted separately from lineage-wide charges. Charges distinguish observed values, conservative unobserved exposure, and total charged; `totalCharged = (observed ?? 0) + conservativeUnobserved` is checked. The single active reservation is separate from charged history and is either a provider reservation for one planned item or a patch reservation for the exact active M2 request.
+
+Candidate observation records accepted work keys, one domain-separated commitment over the exact ordered accepted proposal/block projection, changed-file hashes/counts, and the historical request/result commitments of the accepted M2 execution. The stable projection commitment prevents a candidate from being combined with another valid proposal that retains the same C1 work key; the historical execution commitments remain mutually correlated evidence and are not reused as a fresh-process request identity. The observation contains no source or candidate bytes. Cumulative M2 outcome, campaign terminal outcome, and an optional bounded predecessor summary are independent facts; a predecessor summary is not an embedded historical checkpoint.
+
+## Trusted proposal and M2 closure
+
+`CreateTrustedProposal` first revalidates current C1 authority and the request's input identity against the checkpoint commitment. It requires an active provider reservation whose work-item key, exact request SHA, and M3 attempt identity match the proposal being admitted, plus exact request/result/run-envelope correlation, exact request limits, the composition owner's typed provider, model, Scribe protocol, and Tool Policy authority, the current work target, source, applicable components, and exact Style Profile. The input-identity commitment, those execution identities, and the complete Scribe-limit projection enter the proposal commitment. An absent provider reservation, a patch reservation, or any substituted input, work, request, attempt, execution identity, or limit fails closed. It projects only stable, source-free evidence metadata and the typed M2 block, including the bounded validated proposed structured content needed by M2. Prompt text, evidence or existing-documentation text, provider payloads, raw responses, diffs, source bytes, credentials, and process-local repository handles are excluded.
+
+Persisted evidence is validated by the same Core-internal stable projection validator used by M3. It shares M3's lowercase identifier and compilation-context grammar, supported XML documentation IDs, authority-to-kind mapping, repository/metadata/generated/synthetic locator identities, zero-length-or-positive evidence span rule, 4 MiB per-reference observation ceiling, and nonempty ordered 64-item claim-category bound. A target subject has null component kind and identity. A component subject is exactly `component.type-parameter` with `type-parameter/<canonical ordinal>`, `component.parameter` with `parameter/<canonical ordinal>`, `component.return` with `return`, or `component.value` with `value`, and must belong to the proposal's exact patch block. The runtime validator, canonical codec, and published schema accept this same stable M3 subset.
+
+For every patch attempt, `ReconstructPatchRequest` selects exactly work in `proposal-complete` or `accepted` status, preserves C1 order, requires the fresh context's input-identity commitment to equal the checkpoint snapshot authority, and requires the fresh process to supply every and only the current typed evidence row for the persisted projection set. Each row must use the new `RepositoryContextRef` and exactly match the persisted subject, kind, relation, authority, stable locator, content commitment, byte/truncation observations, and claim categories. It then constructs the sorted distinct provenance catalog, writes the complete M2 request, and sends those exact bytes through `DocumentationPatchValidator.ParseRequest`. `ReconstructAcceptedPatchRequest` independently enforces the same input binding, selects only `accepted` work, and requires its exact stable proposal/block commitment to match the candidate. It does not require the fresh request SHA to equal the historical accepted request SHA because `RepositoryContextRef` changes after every successful production load. A later rejected, stale, host-failed, cancelled, or timed-out mixed request cannot invalidate the earlier accepted candidate. This distinction permits a known accepted candidate to coexist with newly proposal-complete work without pretending the unresolved next request already completed. Both projections prove the whole request against M2's 1 MiB, 512-block, 4,096-provenance, 64-reference-per-block, component, content, ordering, uniqueness, path, span, and vocabulary rules.
+
+`CreatePatchReservation` first applies the same target-profile and input-identity gate as reconstruction, then derives the reservation request digest and expected revision from either the exact active projection or the exact accepted-only reconstruction and checkpoint; callers cannot supply those correlation facts. Typed and host completion factories apply that shared state/request-context gate again while consuming the exact validated checkpoint containing the active patch reservation. They reject an input identity, request, expected revision, or proposal projection not owned by the reservation/state. `CreatePatchCompletion` then accepts only a result that passes `DocumentationPatchValidator.ValidateResult` for the exact request and, for an accepted result, derives accepted membership, the stable proposal/block commitment, every changed-file observation, and the cumulative result together. Host completion derives the same historical request/revision authority from the reserved state. The direct constructors for reservation, candidate, and cumulative-result DTOs are not public producer APIs. The domain-separated result commitment covers request identity, outcome, ordered target traces, changed-file facts, changed-block count, invariants, and bounded diagnostics.
+
+A cumulative `accepted`, `rejected`, or `stale` outcome represents a completed typed M2 validation result and therefore requires that result's exact commitment. `host-failure`, `cancelled`, and `timeout` are host-level completion families without a typed M2 result and require a null result commitment. An accepted outcome additionally matches the complete candidate observation's request and result commitments.
+
+## Canonical JSON and validation
+
+The registry is `schemas/campaign-state/v1.schema.json`. Canonical JSON uses fixed writer order, no insignificant whitespace, JSON integers only, ordinal collection order, strict UTF-8 without BOM, and exactly one trailing LF. Parsing rejects malformed UTF-8/JSON, BOM, duplicate or unknown properties, unknown enum values, over-depth or over-byte artifacts, invalid bounds/references/correlation, and any byte sequence that is not the exact writer output.
+
+The checkpoint is bounded to 4 MiB, depth 96, 4,096 work rows, 512 active M2 blocks, 4,096 evidence rows, 64 provenance references per block, 512 changed files, and 128 diagnostics. Enumerable collection happens through capped collectors, intrinsic validation proves the complete canonical encoding fits the 4 MiB bound, and the writer uses a capped stream that cannot allocate or emit past it. Runtime and schema share the same lexical and numeric primitive domains, including Scribe-limit, campaign-limit, attempt-ID, observation, revision, evidence, and canonical repository-path bounds. Documentation-comment IDs use the shared M3 prefix, XML 1.0 scalar, control-exclusion, and scalar-count domain in target and component evidence subjects, metadata locators, and the nested M2 patch block. Nested exception type IDs use their distinct `T:`-only M2 domain, including XML 1.0 scalar, Unicode whitespace, control, XML-markup punctuation, scalar-count, and absolute-end restrictions. Numeric observations are checked before arithmetic. Repository paths count Unicode scalars, permit ordinary non-drive colons and JSON-escaped line terminators, and reject machine-absolute or drive-root forms, traversal segments, backslashes, NUL, empty segments, and over-bound values. A predecessor must differ in both opaque snapshot binding and execution commitment, and its candidate summary uses a closed zero/absent versus positive/present matrix. Failure messages are fixed structural text and never echo caller content.
+
+## Privacy boundary
+
+The persisted artifact may contain stable symbol IDs, repository-relative paths, spans, enum IDs, opaque contract IDs, hashes, counts, truncation flags, source-free evidence locators, and the bounded validated proposed M2 structured content. It must not contain source, existing-documentation, or evidence text; prompts; provider requests or raw responses; candidate bytes; full diffs; secrets; credentials; absolute machine paths; `RepositoryContextRef`; transcripts; environment values; or GitHub metadata.
+
+## Conformance
+
+The normative implementation lives under `src/ContractScribe.Core/Campaign/State/**`. Fixtures under `tests/fixtures/campaign/state/**` and `CampaignStateContractTests` cover fixed known-answer bytes/digest, culture/process stability, canonical round-trip, duplicate/unknown/version/whitespace/BOM/UTF-8/bounds mutations, fail-closed privacy, and current M2 projection correlation. Later M4 slices consume this contract but must not weaken or silently reinterpret it.

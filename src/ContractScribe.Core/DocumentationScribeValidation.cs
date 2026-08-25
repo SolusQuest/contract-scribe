@@ -187,6 +187,40 @@ public static class DocumentationScribeValidation
         }
     }
 
+    internal static bool IsStableEvidenceProjection(
+        string? evidenceReferenceId,
+        EvidenceSubject? subject,
+        EvidenceKind kind,
+        EvidenceRelation relation,
+        DocumentationScribeEvidenceAuthority authority,
+        EvidenceLocator? locator,
+        string? contentSha256,
+        int originalUtf8ByteCount,
+        int includedUtf8ByteCount,
+        bool isTruncated,
+        ImmutableArray<string> claimCategoryIds) =>
+        evidenceReferenceId is not null
+        && IsIdentifier(evidenceReferenceId, allowSlash: false)
+        && IsStableEvidenceSubject(subject)
+        && Enum.IsDefined(kind)
+        && Enum.IsDefined(relation)
+        && Enum.IsDefined(authority)
+        && AuthorityMatchesKind(authority, kind)
+        && IsStableEvidenceLocator(locator)
+        && contentSha256 is not null
+        && IsSha256Value(contentSha256)
+        && originalUtf8ByteCount is >= 0 and <= 4_194_304
+        && includedUtf8ByteCount is >= 0 and <= 4_194_304
+        && includedUtf8ByteCount <= originalUtf8ByteCount
+        && isTruncated == (includedUtf8ByteCount < originalUtf8ByteCount)
+        && !claimCategoryIds.IsDefault
+        && claimCategoryIds.Length is >= 1 and <= 64
+        && claimCategoryIds.All(category => IsIdentifier(category, allowSlash: false))
+        && IsStrictlyIncreasing(claimCategoryIds);
+
+    internal static bool IsStableRepositoryRelativePath(string? value) =>
+        value is not null && IsRepositoryRelativePathValue(value);
+
     public static DocumentationScribeResultParseResult ParseRunResult(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId expectedAttemptId,
@@ -1073,7 +1107,7 @@ public static class DocumentationScribeValidation
                 throw Fail("invalid-reference", itemPointer + "/claimCategoryIds");
             }
 
-            builder.Add(new DocumentationScribeEvidenceReference(
+            var reference = new DocumentationScribeEvidenceReference(
                 id,
                 contextRef,
                 subject,
@@ -1085,7 +1119,24 @@ public static class DocumentationScribeValidation
                 counts.Original,
                 counts.Included,
                 counts.Truncated,
-                categories));
+                categories);
+            if (!IsStableEvidenceProjection(
+                reference.EvidenceReferenceId,
+                reference.Subject,
+                reference.Kind,
+                reference.Relation,
+                reference.Authority,
+                reference.Locator,
+                reference.ContentSha256,
+                reference.OriginalUtf8ByteCount,
+                reference.IncludedUtf8ByteCount,
+                reference.IsTruncated,
+                reference.ClaimCategoryIds))
+            {
+                throw Fail("invalid-vocabulary", itemPointer);
+            }
+
+            builder.Add(reference);
             index++;
         }
 
@@ -2746,39 +2797,70 @@ public static class DocumentationScribeValidation
         prior = current;
     }
 
-    private static bool IsDynamicEvidenceLocatorValid(EvidenceLocator locator, bool isTruncated)
+    private static bool IsStableEvidenceSubject(EvidenceSubject? subject)
     {
-        var valid = locator switch
+        if (subject is null || !IsStableSymbol(subject.ParentSymbolRef))
         {
-            RepositoryEvidenceLocator { Path: not null } repository =>
-                IsRepositoryRelativePathValue(repository.Path)
-                && IsSpanValueValid(repository.Span),
-            MetadataEvidenceLocator
-            {
-                AssemblyIdentity: not null,
-                DocumentationCommentId: not null,
-            } metadata =>
-                IsCompilationContextRef(metadata.AssemblyIdentity)
-                && IsDocumentationCommentId(metadata.DocumentationCommentId),
-            GeneratedOutputEvidenceLocator
-            {
-                ProducerId: not null,
-                OutputId: not null,
-                SourceSha256: not null,
-            } generated =>
-                Enum.IsDefined(generated.ProducerKind)
-                && IsPrefixedSha256(
-                    generated.ProducerId,
-                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgp." : "tgp.")
-                && IsPrefixedSha256(
-                    generated.OutputId,
-                    generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.")
-                && IsSha256Value(generated.SourceSha256)
-                && IsSpanValueValid(generated.Span),
-            SyntheticEvidenceLocator { FixtureId: not null } synthetic =>
-                IsCompilationContextRef(synthetic.FixtureId),
+            return false;
+        }
+
+        return subject switch
+        {
+            TargetEvidenceSubject => true,
+            ComponentEvidenceSubject component =>
+                Enum.IsDefined(component.ComponentKind)
+                && component.Identity is { Length: > 0 and <= DocumentationScribeContract.MaximumIdentifierScalars }
+                && component.ComponentKind switch
+                {
+                    ComponentKind.TypeParameter => IsCanonicalOrdinalIdentity(component.Identity, "type-parameter/"),
+                    ComponentKind.Parameter => IsCanonicalOrdinalIdentity(component.Identity, "parameter/"),
+                    ComponentKind.Return => component.Identity == "return",
+                    ComponentKind.Value => component.Identity == "value",
+                    _ => false,
+                },
             _ => false,
         };
+    }
+
+    private static bool IsStableSymbol(SymbolRef symbol) =>
+        IsCompilationContextRef(symbol.CompilationContextRef)
+        && IsDocumentationCommentId(symbol.DocumentationCommentId);
+
+    private static bool IsStableEvidenceLocator(EvidenceLocator? locator) => locator switch
+    {
+        RepositoryEvidenceLocator { Path: not null } repository =>
+            IsRepositoryRelativePathValue(repository.Path)
+            && IsSpanValueValid(repository.Span),
+        MetadataEvidenceLocator
+        {
+            AssemblyIdentity: not null,
+            DocumentationCommentId: not null,
+        } metadata =>
+            IsCompilationContextRef(metadata.AssemblyIdentity)
+            && IsDocumentationCommentId(metadata.DocumentationCommentId),
+        GeneratedOutputEvidenceLocator
+        {
+            ProducerId: not null,
+            OutputId: not null,
+            SourceSha256: not null,
+        } generated =>
+            Enum.IsDefined(generated.ProducerKind)
+            && IsPrefixedSha256(
+                generated.ProducerId,
+                generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgp." : "tgp.")
+            && IsPrefixedSha256(
+                generated.OutputId,
+                generated.ProducerKind == GeneratedOutputKind.SourceGenerator ? "sgo." : "tgo.")
+            && IsSha256Value(generated.SourceSha256)
+            && IsSpanValueValid(generated.Span),
+        SyntheticEvidenceLocator { FixtureId: not null } synthetic =>
+            IsCompilationContextRef(synthetic.FixtureId),
+        _ => false,
+    };
+
+    private static bool IsDynamicEvidenceLocatorValid(EvidenceLocator locator, bool isTruncated)
+    {
+        var valid = IsStableEvidenceLocator(locator);
         if (!valid || !isTruncated)
         {
             return valid;
