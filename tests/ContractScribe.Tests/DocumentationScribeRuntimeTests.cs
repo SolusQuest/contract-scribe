@@ -289,6 +289,9 @@ public sealed class DocumentationScribeRuntimeTests
         var exhausts = Script(transient, transient, transient);
         var exhausted = await CreateRuntime(exhausts, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         Assert.Equal(DocumentationScribeFailureCode.Provider, FailureCode(exhausted));
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Retryable,
+            Assert.IsType<DocumentationScribeFailureTerminal>(exhausted.Terminal).ProviderFinalDisposition);
         Assert.Equal(3, exhausted.RunEnvelope.AttemptNumber);
         Assert.Equal(3, exhausted.RunEnvelope.ProviderRequestCount);
     }
@@ -300,6 +303,9 @@ public sealed class DocumentationScribeRuntimeTests
         var permanent = Script(FailureResponse(DocumentationScribeModelFailureCode.Authentication));
         var provider = await CreateRuntime(permanent, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         Assert.Equal(DocumentationScribeFailureCode.Provider, FailureCode(provider));
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Terminal,
+            Assert.IsType<DocumentationScribeFailureTerminal>(provider.Terminal).ProviderFinalDisposition);
         Assert.Single(permanent.Requests);
 
         var throws = new HostileFailureExchange(hostile);
@@ -310,6 +316,42 @@ public sealed class DocumentationScribeRuntimeTests
             internalFailure.RunEnvelope.Diagnostics.Select(item => item.ToString()));
         Assert.DoesNotContain(hostile, publicText, StringComparison.Ordinal);
         Assert.DoesNotContain("private", publicText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(DocumentationScribeModelFailureCode.TransientUnavailable, DocumentationScribeProviderFinalDisposition.Retryable)]
+    [InlineData(DocumentationScribeModelFailureCode.RateLimited, DocumentationScribeProviderFinalDisposition.Retryable)]
+    [InlineData(DocumentationScribeModelFailureCode.PermanentUnavailable, DocumentationScribeProviderFinalDisposition.Terminal)]
+    [InlineData(DocumentationScribeModelFailureCode.Authentication, DocumentationScribeProviderFinalDisposition.Terminal)]
+    [InlineData(DocumentationScribeModelFailureCode.Unsupported, DocumentationScribeProviderFinalDisposition.Terminal)]
+    [InlineData(DocumentationScribeModelFailureCode.MalformedResponse, DocumentationScribeProviderFinalDisposition.Terminal)]
+    [InlineData((DocumentationScribeModelFailureCode)int.MaxValue, DocumentationScribeProviderFinalDisposition.Terminal)]
+    public void Provider_failure_mapping_is_closed_and_fail_closed(
+        DocumentationScribeModelFailureCode failureCode,
+        DocumentationScribeProviderFinalDisposition expected) =>
+        Assert.Equal(expected, DocumentationScribeRuntime.MapProviderFinalDisposition(failureCode));
+
+    [Fact]
+    public async Task Exhausted_rate_limit_is_retryable_but_transient_then_permanent_is_terminal()
+    {
+        var rateLimited = FailureResponse(DocumentationScribeModelFailureCode.RateLimited);
+        var rateLimitResult = await CreateRuntime(
+            Script(rateLimited, rateLimited, rateLimited),
+            EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Retryable,
+            Assert.IsType<DocumentationScribeFailureTerminal>(rateLimitResult.Terminal).ProviderFinalDisposition);
+
+        var mixedResult = await CreateRuntime(
+            Script(
+                FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable),
+                FailureResponse(DocumentationScribeModelFailureCode.PermanentUnavailable)),
+            EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Terminal,
+            Assert.IsType<DocumentationScribeFailureTerminal>(mixedResult.Terminal).ProviderFinalDisposition);
+        Assert.Equal(2, mixedResult.RunEnvelope.AttemptNumber);
+        Assert.Equal(2, mixedResult.RunEnvelope.ProviderRequestCount);
     }
 
     [Fact]
@@ -1169,13 +1211,18 @@ public sealed class DocumentationScribeRuntimeTests
         cancellation.Cancel();
         var cancelled = new DocumentationScribeTerminalReducer().CommitProvider(
             cancellationState,
-            cancellation.Token);
+            cancellation.Token,
+            DocumentationScribeProviderFinalDisposition.Terminal);
         Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
         Assert.Equal(2, cancelled.RunEnvelope.Usage!.OutputTokens);
 
         var committedReducer = new DocumentationScribeTerminalReducer();
         var committedState = State(Request(), new ManualTimeProvider());
-        var provider = committedReducer.CommitProvider(committedState, CancellationToken.None);
+        committedState.ProviderRequestCount = 1;
+        var provider = committedReducer.CommitProvider(
+            committedState,
+            CancellationToken.None,
+            DocumentationScribeProviderFinalDisposition.Terminal);
         using var lateCancellation = new CancellationTokenSource();
         lateCancellation.Cancel();
         var unchanged = committedReducer.CommitCancelled(committedState, lateCancellation.Token);

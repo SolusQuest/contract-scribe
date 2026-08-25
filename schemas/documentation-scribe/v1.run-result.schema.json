@@ -752,7 +752,30 @@
         }
       }
     },
-    "failure": {
+    "providerFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "providerFinalDisposition"
+      ],
+      "properties": {
+        "kind": {
+          "const": "failure"
+        },
+        "code": {
+          "const": "scribe.failure.provider"
+        },
+        "providerFinalDisposition": {
+          "enum": [
+            "retryable",
+            "terminal"
+          ]
+        }
+      }
+    },
+    "nonProviderFailure": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -767,13 +790,22 @@
           "enum": [
             "scribe.failure.budget",
             "scribe.failure.internal",
-            "scribe.failure.provider",
             "scribe.failure.timeout",
             "scribe.failure.tool-protocol",
             "scribe.failure.validation"
           ]
         }
       }
+    },
+    "failure": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/providerFailure"
+        },
+        {
+          "$ref": "#/$defs/nonProviderFailure"
+        }
+      ]
     },
     "cancelled": {
       "type": "object",

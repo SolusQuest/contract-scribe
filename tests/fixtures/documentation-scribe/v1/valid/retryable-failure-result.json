@@ -1,26 +1,26 @@
 {
   "scribeRunResultVersion": 1,
   "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",
-  "attemptId": "scribe-attempt.ffffffffffffffffffffffffffffffff",
+  "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
   "dynamicEvidenceReferences": [],
   "terminal": {
     "kind": "failure",
     "code": "scribe.failure.provider",
-    "providerFinalDisposition": "terminal"
+    "providerFinalDisposition": "retryable"
   },
   "runEnvelope": {
     "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",
-    "attemptId": "scribe-attempt.ffffffffffffffffffffffffffffffff",
+    "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
     "providerConfigurationId": "provider.synthetic.v1",
     "modelConfigurationId": "model.synthetic.v1",
     "scribeProtocolId": "scribe-protocol.v1",
     "toolPolicyId": "tool-policy.read-only.v1",
     "styleProfileId": "style.public-api.v1",
-    "attemptNumber": 1,
-    "providerRequestCount": 1,
+    "attemptNumber": 3,
+    "providerRequestCount": 3,
     "toolRoundCount": 0,
     "toolCallCount": 0,
-    "elapsedMilliseconds": 500,
+    "elapsedMilliseconds": 1500,
     "diagnostics": [
       {
         "code": "scribe.diagnostic.provider-failure",

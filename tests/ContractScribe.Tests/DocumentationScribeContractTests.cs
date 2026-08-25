@@ -33,6 +33,7 @@ public sealed class DocumentationScribeContractTests
             ["proposal-result.json"] = DocumentationScribeTerminalKind.Proposal,
             ["skip-result.json"] = DocumentationScribeTerminalKind.Skip,
             ["failure-result.json"] = DocumentationScribeTerminalKind.Failure,
+            ["retryable-failure-result.json"] = DocumentationScribeTerminalKind.Failure,
             ["cancelled-result.json"] = DocumentationScribeTerminalKind.Cancelled,
         };
         foreach (var pair in expectedKinds)
@@ -73,6 +74,11 @@ public sealed class DocumentationScribeContractTests
                 .Select(DocumentationScribeVocabulary.GetId)
                 .Order(StringComparer.Ordinal),
             registry["failureCodes"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            Enum.GetValues<DocumentationScribeProviderFinalDisposition>()
+                .Select(DocumentationScribeVocabulary.GetId)
+                .Order(StringComparer.Ordinal),
+            registry["providerFinalDispositions"]!.AsArray().Select(node => node!.GetValue<string>()));
         Assert.Equal(
             Enum.GetValues<DocumentationScribeCancellationCode>()
                 .Select(DocumentationScribeVocabulary.GetId)
@@ -134,6 +140,150 @@ public sealed class DocumentationScribeContractTests
         var failure = DocumentationScribeValidation.ParseRunResult(request, attempt, [], oldShapeBytes).Failure;
         Assert.Equal("scribe.result.invalid-shape", failure?.Code);
         Assert.Equal("/dynamicEvidenceReferences", failure?.Pointer);
+    }
+
+    [Fact]
+    public void Provider_final_disposition_is_closed_and_producer_realizable()
+    {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+
+        var terminal = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            [],
+            ReadFixture("valid", "failure-result.json"));
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Terminal,
+            Assert.IsType<DocumentationScribeFailureTerminal>(terminal.Result!.Terminal).ProviderFinalDisposition);
+
+        var retryable = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            [],
+            ReadFixture("valid", "retryable-failure-result.json"));
+        Assert.Equal(
+            DocumentationScribeProviderFinalDisposition.Retryable,
+            Assert.IsType<DocumentationScribeFailureTerminal>(retryable.Result!.Terminal).ProviderFinalDisposition);
+
+        var missing = ParseObject(ReadFixture("valid", "failure-result.json"));
+        missing["terminal"]!.AsObject().Remove("providerFinalDisposition");
+        AssertResultFails(request, missing, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+
+        foreach (var invalidValue in new[] { "provider.http-429", "Bearer private-credential", "unknown" })
+        {
+            var invalid = ParseObject(ReadFixture("valid", "failure-result.json"));
+            invalid["terminal"]!["providerFinalDisposition"] = invalidValue;
+            AssertResultFails(request, invalid, "scribe.result.invalid-vocabulary", "/terminal/providerFinalDisposition");
+        }
+
+        var wrongType = ParseObject(ReadFixture("valid", "failure-result.json"));
+        wrongType["terminal"]!["providerFinalDisposition"] = 1;
+        AssertResultFails(request, wrongType, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+
+        var overBound = ParseObject(ReadFixture("valid", "failure-result.json"));
+        overBound["terminal"]!["providerFinalDisposition"] = new string('x', 17);
+        AssertResultFails(request, overBound, "scribe.result.invalid-vocabulary", "/terminal/providerFinalDisposition");
+
+        var misplaced = ParseObject(ReadFixture("valid", "failure-result.json"));
+        misplaced["terminal"]!["code"] = "scribe.failure.budget";
+        AssertResultFails(request, misplaced, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+
+        foreach (var fixture in new[] { "proposal-result.json", "skip-result.json", "cancelled-result.json" })
+        {
+            var misplacedTerminal = ParseObject(ReadFixture("valid", fixture));
+            misplacedTerminal["terminal"]!["providerFinalDisposition"] = "terminal";
+            AssertResultFails(
+                request,
+                misplacedTerminal,
+                "scribe.result.unknown-field",
+                "/terminal/providerFinalDisposition");
+        }
+
+        var duplicateText = Encoding.UTF8.GetString(ReadFixture("valid", "failure-result.json"))
+            .Replace(
+                "\"providerFinalDisposition\": \"terminal\"",
+                "\"providerFinalDisposition\": \"terminal\", \"providerFinalDisposition\": \"retryable\"",
+                StringComparison.Ordinal);
+        var duplicate = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            [],
+            Encoding.UTF8.GetBytes(duplicateText));
+        Assert.Equal("scribe.result.duplicate-property", duplicate.Failure?.Code);
+        Assert.Equal("/terminal/providerFinalDisposition", duplicate.Failure?.Pointer);
+
+        var zeroRequests = ParseObject(ReadFixture("valid", "failure-result.json"));
+        zeroRequests["runEnvelope"]!["providerRequestCount"] = 0;
+        AssertResultFails(request, zeroRequests, "scribe.result.invalid-correlation", "/runEnvelope/providerRequestCount");
+
+        var fewerRequests = ParseObject(ReadFixture("valid", "failure-result.json"));
+        fewerRequests["runEnvelope"]!["attemptNumber"] = 2;
+        fewerRequests["runEnvelope"]!["providerRequestCount"] = 1;
+        AssertResultFails(request, fewerRequests, "scribe.result.invalid-correlation", "/runEnvelope/providerRequestCount");
+
+        var prematureRetryable = ParseObject(ReadFixture("valid", "retryable-failure-result.json"));
+        prematureRetryable["runEnvelope"]!["attemptNumber"] = 2;
+        AssertResultFails(request, prematureRetryable, "scribe.result.invalid-correlation", "/terminal/providerFinalDisposition");
+
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Provider,
+            CreateEnvelope(request) with { ProviderRequestCount = 1 }));
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Provider,
+            CreateEnvelope(request) with { ProviderRequestCount = 1 },
+            DocumentationScribeProviderFinalDisposition.Retryable));
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
+            request,
+            attempt,
+            DocumentationScribeFailureCode.Internal,
+            CreateEnvelope(request),
+            DocumentationScribeProviderFinalDisposition.Terminal));
+    }
+
+    [Fact]
+    public void Validated_run_outcome_binds_the_exact_current_request_and_result()
+    {
+        var request = ParseValidRequest(ReadFixture("valid", "request.json"));
+        Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
+
+        foreach (var fixture in new[]
+                 {
+                     "proposal-result.json",
+                     "skip-result.json",
+                     "failure-result.json",
+                     "retryable-failure-result.json",
+                     "cancelled-result.json",
+                 })
+        {
+            var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [], ReadFixture("valid", fixture));
+            var result = Assert.IsType<DocumentationScribeRunResult>(parsed.Result);
+            var bound = DocumentationScribeValidation.BindValidatedRunOutcome(request, attempt, result);
+            Assert.Same(request, bound.Request);
+            Assert.Same(result, bound.RunResult);
+        }
+
+        var wrongAttempt = DocumentationScribeAttemptId.TryParse(
+            "scribe-attempt.ffffffffffffffffffffffffffffffff",
+            out var otherAttempt)
+            ? otherAttempt
+            : throw new InvalidOperationException();
+        var valid = DocumentationScribeValidation.ParseRunResult(
+            request,
+            attempt,
+            [],
+            ReadFixture("valid", "proposal-result.json")).Result!;
+        Assert.Throws<ArgumentException>(() =>
+            DocumentationScribeValidation.BindValidatedRunOutcome(request, wrongAttempt, valid));
+
+        Assert.True(typeof(DocumentationScribeValidatedRunOutcome).IsSealed);
+        Assert.DoesNotContain(
+            typeof(DocumentationScribeValidatedRunOutcome).GetProperties(),
+            property => property.SetMethod is not null);
     }
 
     [Fact]
@@ -916,6 +1066,7 @@ public sealed class DocumentationScribeContractTests
 
         var rawBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
         rawBudget["terminal"]!["code"] = "scribe.failure.budget";
+        rawBudget["terminal"]!.AsObject().Remove("providerFinalDisposition");
         rawBudget["runEnvelope"]!["usage"] = new JsonObject
         {
             ["uncachedInputTokens"] = request.Limits.MaximumUncachedInputTokens + 1,
@@ -962,6 +1113,7 @@ public sealed class DocumentationScribeContractTests
         var rawBoundaryBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
         Correlate(rawBoundaryBudget, boundaryRequest.ArtifactSha256);
         rawBoundaryBudget["terminal"]!["code"] = "scribe.failure.budget";
+        rawBoundaryBudget["terminal"]!.AsObject().Remove("providerFinalDisposition");
         rawBoundaryBudget["runEnvelope"]!["usage"] = new JsonObject
         {
             ["inputTokens"] = DocumentationScribeContract.MaximumObservedInputTokens,
@@ -994,6 +1146,7 @@ public sealed class DocumentationScribeContractTests
         var rawSimultaneousTimeout = ParseObject(ReadFixture("valid", "failure-result.json"));
         Correlate(rawSimultaneousTimeout, boundaryRequest.ArtifactSha256);
         rawSimultaneousTimeout["terminal"]!["code"] = "scribe.failure.timeout";
+        rawSimultaneousTimeout["terminal"]!.AsObject().Remove("providerFinalDisposition");
         rawSimultaneousTimeout["runEnvelope"]!["elapsedMilliseconds"] =
             DocumentationScribeContract.MaximumObservedElapsedMilliseconds;
         rawSimultaneousTimeout["runEnvelope"]!["usage"] = new JsonObject
