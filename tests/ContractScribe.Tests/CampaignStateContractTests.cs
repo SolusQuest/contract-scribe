@@ -1116,13 +1116,19 @@ public sealed class CampaignStateContractTests
         {
             "/root.cs",
             "C:/drive.cs",
+            ".",
+            "..",
             "./relative.cs",
+            "evidence/.",
+            "evidence/..",
             "evidence/../relative.cs",
             "evidence/line\nbreak/../relative.cs",
             "evidence\\file.cs",
             "evidence/\0file.cs",
             "evidence//file.cs",
+            "evidence//\n",
             "evidence/line\nbreak//file.cs",
+            "evidence/line\nbreak/",
             "evidence/",
         };
         Assert.All(invalidRepositoryPaths, path => AssertSchemaAndRuntimeReject(proposal, root =>
@@ -1182,6 +1188,16 @@ public sealed class CampaignStateContractTests
             },
             root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
                 "evidence/line\nbreak.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/\n",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/.\n",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/..\n",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/.\n/next.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/..\n/next.cs",
             root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
                 "evidence/carriage\rreturn.cs",
             root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
