@@ -28,7 +28,7 @@
     "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024, "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
     "scribeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
     "scribeAttemptId": { "type": "string", "pattern": "^scribe-attempt\\.[0-9a-f]{32}$" },
-    "repositoryPath": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)(?!.*\\u0000).+$" },
+    "repositoryPath": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!\\.{1,2}(?:/|$))(?![^\\u0000]*/\\.{1,2}(?:/|$))(?![^\\u0000]*//)(?![^\\u0000]*/$)[^\\\\\\u0000]+$" },
     "nonNegativeInt64": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
     "nullableSha": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
     "nullableOpaque": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/opaqueId" }] },

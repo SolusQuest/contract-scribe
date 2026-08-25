@@ -1112,6 +1112,22 @@ public sealed class CampaignStateContractTests
                 ["span"] = new JsonObject { ["start"] = 1, ["end"] = 1 },
             });
 
+        var invalidRepositoryPaths = new[]
+        {
+            "/root.cs",
+            "C:/drive.cs",
+            "./relative.cs",
+            "evidence/../relative.cs",
+            "evidence/line\nbreak/../relative.cs",
+            "evidence\\file.cs",
+            "evidence/\0file.cs",
+            "evidence//file.cs",
+            "evidence/line\nbreak//file.cs",
+            "evidence/",
+        };
+        Assert.All(invalidRepositoryPaths, path => AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["locator"]!["path"] = path));
+
         var reversedSpan = Assert.IsType<JsonObject>(JsonNode.Parse(CampaignStateJson.Write(proposal)));
         var span = reversedSpan["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["locator"]!["span"]!;
         span["start"] = 2;
@@ -1164,6 +1180,18 @@ public sealed class CampaignStateContractTests
             {
                 ["synthetic"] = new JsonObject { ["fixtureId"] = "synthetic.v1" },
             },
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/line\nbreak.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/carriage\rreturn.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/tab\tpath.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/line\u2028separator.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/paragraph\u2029separator.cs",
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] =
+                "evidence/name:part.cs",
         };
 
         Assert.All(variants, mutation =>
