@@ -412,13 +412,7 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(currentEvidence);
         Validate(state);
-        Require(
-            context.TargetProfile == state.Snapshot.TargetProfile
-            && string.Equals(
-                CreateInputIdentityCommitment(context.InputIdentity),
-                state.Snapshot.InputIdentityCommitmentSha256,
-                StringComparison.Ordinal),
-            CampaignStateValidationCode.InvalidCorrelation);
+        RequirePatchContextMatchesState(state, context);
 
         var proposals = state.WorkItems
             .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
@@ -452,13 +446,7 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(currentEvidence);
         Validate(state);
-        Require(
-            context.TargetProfile == state.Snapshot.TargetProfile
-            && string.Equals(
-                CreateInputIdentityCommitment(context.InputIdentity),
-                state.Snapshot.InputIdentityCommitmentSha256,
-                StringComparison.Ordinal),
-            CampaignStateValidationCode.InvalidCorrelation);
+        RequirePatchContextMatchesState(state, context);
         var proposals = state.WorkItems
             .Where(item => item.Status == CampaignWorkStatus.Accepted)
             .Select(item => item.TrustedProposal!)
@@ -495,8 +483,6 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(request);
         Validate(state);
         Require(state.ActiveReservation is null, CampaignStateValidationCode.InvalidCorrelation);
-        Require(request.Context.TargetProfile == state.Snapshot.TargetProfile,
-            CampaignStateValidationCode.InvalidCorrelation);
         _ = ResolvePatchRequestProjection(state, request);
         Require(patchAttemptCount is >= 1 and <= 1_000
             && elapsedMilliseconds is >= 0 and <= CampaignStateContract.MaximumObservation,
@@ -517,9 +503,6 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
         Validate(state);
-        Require(
-            request.Context.TargetProfile == state.Snapshot.TargetProfile,
-            CampaignStateValidationCode.InvalidCorrelation);
         var reservation = state.ActiveReservation as CampaignPatchReservation;
         Require(reservation is not null
             && string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
@@ -570,9 +553,6 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(request);
         Validate(state);
-        Require(
-            request.Context.TargetProfile == state.Snapshot.TargetProfile,
-            CampaignStateValidationCode.InvalidCorrelation);
         Require(kind is CampaignCumulativeOutcomeKind.HostFailure
             or CampaignCumulativeOutcomeKind.Cancelled
             or CampaignCumulativeOutcomeKind.Timeout,
@@ -1170,6 +1150,7 @@ public static class CampaignStateFactory
         CampaignCheckpointState state,
         DocumentationPatchRequest request)
     {
+        RequirePatchContextMatchesState(state, request.Context);
         var active = state.WorkItems
             .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
             .Select(item => item.TrustedProposal!)
@@ -1183,6 +1164,17 @@ public static class CampaignStateFactory
         Require(activeMatches || acceptedMatches, CampaignStateValidationCode.InvalidCorrelation);
         return activeMatches ? active : accepted;
     }
+
+    private static void RequirePatchContextMatchesState(
+        CampaignCheckpointState state,
+        DocumentationPatchContext context) =>
+        Require(
+            context.TargetProfile == state.Snapshot.TargetProfile
+            && string.Equals(
+                CreateInputIdentityCommitment(context.InputIdentity),
+                state.Snapshot.InputIdentityCommitmentSha256,
+                StringComparison.Ordinal),
+            CampaignStateValidationCode.InvalidCorrelation);
 
     private static bool MatchesPatchRequest(
         DocumentationPatchRequest request,

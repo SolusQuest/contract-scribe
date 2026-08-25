@@ -1043,6 +1043,100 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
+    public void Patch_factory_family_enforces_input_identity_at_every_state_bound_request_seam()
+    {
+        var proposalState = CreateProposalCompleteState();
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work);
+        var request = CampaignStateFactory.ReconstructPatchRequest(
+            proposalState,
+            PatchContext(exchange.Request),
+            CurrentEvidence(exchange));
+        var proposal = Assert.IsType<CampaignTrustedProposal>(proposalState.WorkItems[0].TrustedProposal);
+        var foreignExchange = CreateFreshContextExchange(
+            work,
+            "repoctx-33333333333333333333333333333333",
+            "samples/Alternate.csproj");
+        var foreign = RebindPatchRequest(request, PatchContext(foreignExchange.Request));
+
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreatePatchReservation(
+            proposalState,
+            foreign,
+            patchAttemptCount: 1,
+            elapsedMilliseconds: 0));
+
+        var foreignReserved = MutateValidState(proposalState, root =>
+            root["activeReservation"] = new JsonObject
+            {
+                ["kind"] = "patch",
+                ["patchRequestSha256"] = foreign.ArtifactSha256,
+                ["expectedCheckpointRevision"] = proposalState.CheckpointRevision,
+                ["patchAttemptCount"] = 1,
+                ["elapsedMilliseconds"] = 0,
+            });
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreatePatchCompletion(
+            foreignReserved,
+            foreign,
+            CreateAcceptedPatchResult(foreign, proposal)));
+        foreach (var kind in new[]
+        {
+            CampaignCumulativeOutcomeKind.HostFailure,
+            CampaignCumulativeOutcomeKind.Cancelled,
+            CampaignCumulativeOutcomeKind.Timeout,
+        })
+        {
+            AssertInvalidCorrelation(() => CampaignStateFactory.CreateHostPatchOutcome(
+                foreignReserved,
+                foreign,
+                kind));
+        }
+
+        var accepted = CreateAcceptedCandidateScenario();
+        var foreignAcceptedExchange = CreateFreshContextExchange(
+            work,
+            "repoctx-44444444444444444444444444444444",
+            "samples/Alternate.sln");
+        var foreignAccepted = RebindPatchRequest(
+            accepted.Request,
+            PatchContext(foreignAcceptedExchange.Request));
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreatePatchReservation(
+            accepted.State,
+            foreignAccepted,
+            patchAttemptCount: 1,
+            elapsedMilliseconds: 0));
+
+        var freshExchange = CreateFreshContextExchange(
+            work,
+            "repoctx-55555555555555555555555555555555");
+        var fresh = RebindPatchRequest(request, PatchContext(freshExchange.Request));
+        var freshReserved = WithState(
+            proposalState,
+            proposalState.WorkItems,
+            CampaignStateFactory.CreatePatchReservation(
+                proposalState,
+                fresh,
+                patchAttemptCount: 1,
+                elapsedMilliseconds: 0));
+        var completion = CampaignStateFactory.CreatePatchCompletion(
+            freshReserved,
+            fresh,
+            CreateAcceptedPatchResult(fresh, proposal));
+        Assert.Equal(fresh.ArtifactSha256, completion.CumulativeOutcome.PatchRequestSha256);
+        foreach (var kind in new[]
+        {
+            CampaignCumulativeOutcomeKind.HostFailure,
+            CampaignCumulativeOutcomeKind.Cancelled,
+            CampaignCumulativeOutcomeKind.Timeout,
+        })
+        {
+            Assert.Equal(
+                fresh.ArtifactSha256,
+                CampaignStateFactory.CreateHostPatchOutcome(freshReserved, fresh, kind).PatchRequestSha256);
+        }
+    }
+
+    [Fact]
     public void Work_item_collection_stops_at_the_contract_cap_before_validation_or_unbounded_materialization()
     {
         var scenario = CreateProposalScenario();
@@ -2079,6 +2173,21 @@ public sealed class CampaignStateContractTests
         var parsed = DocumentationPatchValidator.ParseRequest(Encoding.UTF8.GetBytes(node.ToJsonString()));
         Assert.True(parsed.IsValid, parsed.Failure?.Code);
         return parsed.Request!.Context;
+    }
+
+    private static DocumentationPatchRequest RebindPatchRequest(
+        DocumentationPatchRequest request,
+        DocumentationPatchContext context)
+    {
+        var writer = typeof(CampaignStateJson).GetMethod(
+            "WritePatchRequest",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        var bytes = Assert.IsType<byte[]>(writer!.Invoke(
+            null,
+            [context, request.ProvenanceCatalog, request.Blocks]));
+        var parsed = DocumentationPatchValidator.ParseRequest(bytes);
+        Assert.True(parsed.IsValid, parsed.Failure?.Code);
+        return Assert.IsType<DocumentationPatchRequest>(parsed.Request);
     }
 
     private static CampaignCheckpointState CreateProposalCompleteState()
