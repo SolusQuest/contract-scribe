@@ -288,9 +288,9 @@ public sealed class CampaignStateContractTests
             (request => request["toolPolicyId"] = "tool-policy.alternate.v1",
                 result => result["runEnvelope"]!["toolPolicyId"] = "tool-policy.alternate.v1"),
         };
-        foreach (var mutation in mutations)
+        foreach (var changed in mutations.Select(mutation =>
+            CreateScribeExchange(work, requestMutation: mutation.Request, resultMutation: mutation.Result)))
         {
-            var changed = CreateScribeExchange(work, requestMutation: mutation.Request, resultMutation: mutation.Result);
             AssertInvalidCorrelation(() => AdmitProposal(scenario, reserved, work, changed));
         }
 
@@ -500,7 +500,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(first.WorkItemKey, accepted.Blocks[0].BlockId);
         Assert.Equal(firstRequest.ArtifactSha256, accepted.ArtifactSha256);
 
-        foreach (var withLaterOutcome in new[] { "rejected", "stale", "host-failure", "cancelled", "timeout" }
+        var reconstructedRequests = new[] { "rejected", "stale", "host-failure", "cancelled", "timeout" }
             .Select(laterOutcome => MutateValidState(mixed, root =>
                 root["cumulativeOutcome"] = new JsonObject
                 {
@@ -508,14 +508,13 @@ public sealed class CampaignStateContractTests
                     ["patchRequestSha256"] = active.ArtifactSha256,
                     ["patchResultCommitmentSha256"] = laterOutcome is "rejected" or "stale" ? Hash('a') : null,
                     ["completedFromCheckpointRevision"] = mixed.CheckpointRevision,
-                })))
-        {
-            var reconstructed = CampaignStateFactory.ReconstructAcceptedPatchRequest(
+                }))
+            .Select(withLaterOutcome => CampaignStateFactory.ReconstructAcceptedPatchRequest(
                 withLaterOutcome,
                 PatchContext(firstExchange.Request),
-                CurrentEvidence(firstExchange));
-            Assert.Equal(firstRequest.ArtifactSha256, reconstructed.ArtifactSha256);
-        }
+                CurrentEvidence(firstExchange)));
+        Assert.All(reconstructedRequests, reconstructed =>
+            Assert.Equal(firstRequest.ArtifactSha256, reconstructed.ArtifactSha256));
     }
 
     [Fact]
