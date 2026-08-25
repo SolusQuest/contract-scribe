@@ -356,7 +356,12 @@ public static class CampaignStateJson
             writer.WriteStartObject();
             writer.WriteString("kind", PatchComponentKindId(component.Kind));
             writer.WriteString("identity", component.Identity);
-            WriteNullableString(writer, "name", component.Name);
+            if (component.Kind is DocumentationPatchComponentKind.TypeParameter
+                or DocumentationPatchComponentKind.Parameter)
+            {
+                writer.WriteString("name", component.Name);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -1038,11 +1043,22 @@ public static class CampaignStateJson
 
     private static DocumentationPatchApplicableComponent ParsePatchComponent(JsonElement element)
     {
-        ExpectObject(element, "kind", "identity", "name");
+        var kind = ParsePatchComponentKind(ReadString(element, "kind"));
+        var named = kind is DocumentationPatchComponentKind.TypeParameter
+            or DocumentationPatchComponentKind.Parameter;
+        if (named)
+        {
+            ExpectObject(element, "kind", "identity", "name");
+        }
+        else
+        {
+            ExpectObject(element, "kind", "identity");
+        }
+
         return new DocumentationPatchApplicableComponent(
-            ParsePatchComponentKind(ReadString(element, "kind")),
+            kind,
             ReadString(element, "identity"),
-            ReadNullableString(element, "name"));
+            named ? ReadString(element, "name") : null);
     }
 
     private static DocumentationPatchSourceLocator ParsePatchLocator(JsonElement element)

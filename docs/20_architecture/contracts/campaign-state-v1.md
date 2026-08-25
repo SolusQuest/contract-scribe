@@ -28,7 +28,7 @@ The artifact digest is lowercase SHA-256 over the exact canonical UTF-8 JSON byt
 Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
 
 - `planned`: no proposal or terminal outcome;
-- `proposalComplete`: one fully validated trusted proposal;
+- `proposal-complete`: one fully validated trusted proposal;
 - `accepted`: that proposal is part of the current known candidate;
 - `closed`: no proposal and one planning/Scribe terminal outcome.
 
@@ -40,7 +40,9 @@ Candidate observation records only accepted work keys, changed-file hashes/count
 
 `CreateTrustedProposal` first revalidates current C1 authority. It requires an active provider reservation whose work-item key, exact request SHA, and M3 attempt identity match the proposal being admitted, plus exact request/result/run-envelope correlation, the composition owner's current expected Tool Policy ID, the current work target, source, applicable components, and exact Style Profile. An absent provider reservation, a patch reservation, or any substituted work, request, or attempt fails closed. It projects only stable, source-free evidence metadata and the typed M2 block, including the bounded validated proposed structured content needed by M2. Prompt text, evidence or existing-documentation text, provider payloads, raw responses, diffs, source bytes, credentials, and process-local repository handles are excluded.
 
-For every patch attempt, `ReconstructPatchRequest` selects exactly work in `proposalComplete` or `accepted` status, preserves C1 order, constructs the sorted distinct provenance catalog, writes the complete M2 request, and sends those exact bytes through `DocumentationPatchValidator.ParseRequest`. A patch reservation must reference that active request SHA. `ReconstructAcceptedPatchRequest` independently selects only `accepted` work and correlates the known complete candidate and cumulative outcome. This distinction permits a known accepted candidate to coexist with newly proposal-complete work without pretending the unresolved next request already completed. Both projections prove the whole request against M2's 1 MiB, 512-block, 4,096-provenance, 64-reference-per-block, component, content, ordering, uniqueness, path, span, and vocabulary rules.
+Persisted evidence subjects are a closed M3-to-M2 union. A target subject has null component kind and identity. A component subject is exactly `component.type-parameter` with `type-parameter/<canonical ordinal>`, `component.parameter` with `parameter/<canonical ordinal>`, `component.return` with `return`, or `component.value` with `value`; component identities retain M3's 128-scalar ceiling. The runtime validator, canonical codec, and published schema accept this same structural vocabulary.
+
+For every patch attempt, `ReconstructPatchRequest` selects exactly work in `proposal-complete` or `accepted` status, preserves C1 order, constructs the sorted distinct provenance catalog, writes the complete M2 request, and sends those exact bytes through `DocumentationPatchValidator.ParseRequest`. A patch reservation must reference that active request SHA. `ReconstructAcceptedPatchRequest` independently selects only `accepted` work and correlates the known complete candidate and cumulative outcome. This distinction permits a known accepted candidate to coexist with newly proposal-complete work without pretending the unresolved next request already completed. Both projections prove the whole request against M2's 1 MiB, 512-block, 4,096-provenance, 64-reference-per-block, component, content, ordering, uniqueness, path, span, and vocabulary rules.
 
 `CreatePatchResultCommitment` accepts only a result that passes `DocumentationPatchValidator.ValidateResult` for the exact request. Its domain-separated typed commitment covers request identity, outcome, ordered target traces, changed-file facts, changed-block count, invariants, and bounded diagnostics.
 

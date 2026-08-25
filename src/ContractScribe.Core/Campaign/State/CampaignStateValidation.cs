@@ -877,14 +877,17 @@ public static class CampaignStateFactory
         };
     }
 
-    private static bool IsComponentIdentity(ComponentKind kind, string identity) => kind switch
-    {
-        ComponentKind.TypeParameter => IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
-        ComponentKind.Parameter => IsCanonicalOrdinalIdentity(identity, "parameter/"),
-        ComponentKind.Return => identity == "return",
-        ComponentKind.Value => identity == "value",
-        _ => false,
-    };
+    private static bool IsComponentIdentity(ComponentKind kind, string identity) =>
+        !string.IsNullOrEmpty(identity)
+        && identity.Length <= DocumentationScribeContract.MaximumIdentifierScalars
+        && kind switch
+        {
+            ComponentKind.TypeParameter => IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
+            ComponentKind.Parameter => IsCanonicalOrdinalIdentity(identity, "parameter/"),
+            ComponentKind.Return => identity == "return",
+            ComponentKind.Value => identity == "value",
+            _ => false,
+        };
 
     private static bool IsCanonicalOrdinalIdentity(string value, string prefix)
     {

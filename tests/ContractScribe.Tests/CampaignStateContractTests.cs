@@ -12,6 +12,8 @@ namespace ContractScribe.Tests;
 
 public sealed class CampaignStateContractTests
 {
+    private static readonly Lazy<JsonSchema> CampaignSchema = new(LoadCampaignSchema);
+
     [Fact]
     public void Canonical_artifact_has_fixed_bytes_lf_and_digest()
     {
@@ -30,10 +32,79 @@ public sealed class CampaignStateContractTests
     [Fact]
     public void Known_answer_conforms_to_the_published_registry()
     {
-        var schema = JsonSchema.FromText(File.ReadAllText(SchemaPath()));
         using var document = JsonDocument.Parse(File.ReadAllBytes(FixturePath("empty-terminal.json")));
 
-        Assert.True(schema.Evaluate(document.RootElement).IsValid);
+        var evaluation = EvaluateCampaignSchema(document.RootElement);
+        Assert.True(evaluation.IsValid, DescribeSchemaFailures(evaluation));
+    }
+
+    [Fact]
+    public void Trusted_proposal_canonical_bytes_conform_to_the_published_registry()
+    {
+        var state = CreateProposalCompleteState();
+        var artifact = CampaignStateJson.CreateArtifact(state);
+        using var document = JsonDocument.Parse(artifact.ExactUtf8Json.AsMemory());
+        var proposal = Assert.Single(state.WorkItems, work => work.Status == CampaignWorkStatus.ProposalComplete)
+            .TrustedProposal;
+
+        Assert.NotNull(proposal);
+        Assert.Contains(proposal.Evidence, evidence =>
+            evidence.Subject is ComponentEvidenceSubject
+            {
+                ComponentKind: ComponentKind.Parameter,
+                Identity: "parameter/0",
+            });
+        Assert.Contains(proposal.Evidence, evidence =>
+            evidence.Subject is ComponentEvidenceSubject
+            {
+                ComponentKind: ComponentKind.Return,
+                Identity: "return",
+            });
+        var evaluation = EvaluateCampaignSchema(document.RootElement);
+        Assert.True(evaluation.IsValid, DescribeSchemaFailures(evaluation));
+        Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+    }
+
+    [Fact]
+    public void Published_registry_closes_the_subject_kind_and_identity_matrix()
+    {
+        var cases = new (string Kind, string? ComponentKind, string? Identity, bool Expected)[]
+        {
+            ("target", null, null, true),
+            ("component", "component.type-parameter", "type-parameter/0", true),
+            ("component", "component.parameter", "parameter/0", true),
+            ("component", "component.return", "return", true),
+            ("component", "component.value", "value", true),
+            ("target", "component.parameter", "parameter/0", false),
+            ("component", null, null, false),
+            ("component", "component.unknown", "unknown/0", false),
+            ("component", "component.parameter", "return", false),
+            ("component", "component.return", "parameter/0", false),
+            ("component", "component.type-parameter", "type-parameter/00", false),
+            ("component", "component.parameter", "parameter/00", false),
+            ("unexpected", null, null, false),
+            ("component", "component.parameter", "parameter/" + new string('1', 128), false),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = CreateProposalCanonicalNode();
+            var subject = root["workItems"]![0]!["trustedProposal"]!["evidence"]!
+                .AsArray()
+                .Select(evidence => evidence!["subject"]!)
+                .Single(candidate => candidate["componentKind"]?.GetValue<string>() == "component.parameter");
+            subject["kind"] = testCase.Kind;
+            subject["componentKind"] = testCase.ComponentKind;
+            subject["identity"] = testCase.Identity;
+            using var document = JsonDocument.Parse(root.ToJsonString());
+            var evaluation = EvaluateCampaignSchema(document.RootElement);
+            var actual = evaluation.IsValid;
+
+            Assert.True(
+                actual == testCase.Expected,
+                $"subject matrix mismatch: {testCase.Kind}|{testCase.ComponentKind}|{testCase.Identity}: "
+                + DescribeSchemaFailures(evaluation));
+        }
     }
 
     [Theory]
@@ -994,6 +1065,29 @@ public sealed class CampaignStateContractTests
             resultCommitmentSha256);
     }
 
+    private static CampaignCheckpointState CreateProposalCompleteState()
+    {
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work);
+        var proposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, exchange)),
+            work,
+            exchange);
+        return WithState(
+            scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal),
+            activeReservation: null);
+    }
+
+    private static JsonObject CreateProposalCanonicalNode() =>
+        Assert.IsType<JsonObject>(JsonNode.Parse(
+            CampaignStateJson.CreateArtifact(CreateProposalCompleteState()).ExactUtf8Json.AsSpan()));
+
     private static AcceptedCandidateScenario CreateAcceptedCandidateScenario()
     {
         var scenario = CreateProposalScenario();
@@ -1263,6 +1357,50 @@ public sealed class CampaignStateContractTests
 
     private static string FixturePath(string directory, string name) =>
         Path.GetFullPath(Path.Join(FixtureRoot(), directory, name));
+
+    private static JsonSchema LoadCampaignSchema()
+    {
+        var registry = new SchemaRegistry();
+        var options = new BuildOptions { SchemaRegistry = registry };
+        _ = JsonSchema.FromText(File.ReadAllText(PatchRequestSchemaPath()), options);
+        return JsonSchema.FromText(File.ReadAllText(SchemaPath()), options);
+    }
+
+    private static EvaluationResults EvaluateCampaignSchema(JsonElement value) =>
+        CampaignSchema.Value.Evaluate(value, new EvaluationOptions { OutputFormat = OutputFormat.List });
+
+    private static string DescribeSchemaFailures(EvaluationResults evaluation)
+    {
+        var failures = new List<string>();
+        CollectSchemaFailures(evaluation, failures);
+        return string.Join(", ", failures
+            .OrderBy(failure => failure.Length)
+            .ThenBy(failure => failure, StringComparer.Ordinal)
+            .Take(40));
+    }
+
+    private static void CollectSchemaFailures(EvaluationResults evaluation, List<string> failures)
+    {
+        if (!evaluation.IsValid)
+        {
+            var keywords = evaluation.Errors is null
+                ? string.Empty
+                : string.Join("+", evaluation.Errors.Keys.Order(StringComparer.Ordinal));
+            failures.Add(evaluation.EvaluationPath + "|" + evaluation.InstanceLocation + ":" + keywords);
+        }
+
+        if (evaluation.Details is not null)
+        {
+            foreach (var detail in evaluation.Details)
+            {
+                CollectSchemaFailures(detail, failures);
+            }
+        }
+    }
+
+    private static string PatchRequestSchemaPath() => Path.GetFullPath(Path.Join(
+        AppContext.BaseDirectory,
+        "..", "..", "..", "..", "..", "schemas", "documentation-patch", "v1.request.schema.json"));
 
     private static string SchemaPath() => Path.GetFullPath(Path.Join(
         AppContext.BaseDirectory,

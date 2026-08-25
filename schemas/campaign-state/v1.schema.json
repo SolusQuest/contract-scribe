@@ -91,7 +91,7 @@
     },
     "work": {
       "type": "object", "additionalProperties": false, "required": ["workItemKey", "outerAttemptCount", "candidateAttemptCount", "status", "trustedProposal", "closedOutcome"],
-      "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposalComplete", "accepted", "closed"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] } }
+      "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposal-complete", "accepted", "closed"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] } }
     },
     "proposal": {
       "type": "object", "additionalProperties": false, "required": ["historicalScribeRequestSha256", "historicalAttemptId", "patchBlock", "evidence", "styleProfileCommitmentSha256", "toolPolicyId", "proposalCommitmentSha256"],
@@ -106,8 +106,28 @@
       "properties": { "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "end": { "type": "integer", "minimum": 1, "maximum": 2147483647 } }
     },
     "subject": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
-      "properties": { "kind": { "enum": ["target", "component"] }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^component\\." }] }, "identity": { "$ref": "#/$defs/nullableOpaque" } }
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+          "properties": { "kind": { "const": "target" }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "type": "null" }, "identity": { "type": "null" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+          "properties": { "kind": { "const": "component" }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "const": "component.type-parameter" }, "identity": { "type": "string", "maxLength": 128, "pattern": "^type-parameter/(0|[1-9][0-9]*)$" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+          "properties": { "kind": { "const": "component" }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "const": "component.parameter" }, "identity": { "type": "string", "maxLength": 128, "pattern": "^parameter/(0|[1-9][0-9]*)$" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+          "properties": { "kind": { "const": "component" }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "const": "component.return" }, "identity": { "const": "return" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "parentSymbolRef", "componentKind", "identity"],
+          "properties": { "kind": { "const": "component" }, "parentSymbolRef": { "$ref": "#/$defs/symbol" }, "componentKind": { "const": "component.value" }, "identity": { "const": "value" } }
+        }
+      ]
     },
     "repositoryEvidenceLocator": {
       "type": "object", "additionalProperties": false, "required": ["kind", "path", "span"],
