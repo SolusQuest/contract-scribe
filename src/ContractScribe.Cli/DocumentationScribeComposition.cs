@@ -71,48 +71,15 @@ internal sealed class DocumentationScribeCompositionOutcome
     public override string ToString() => nameof(DocumentationScribeCompositionOutcome);
 }
 
-internal sealed class DocumentationScribePreparedOutcome
+internal interface IDocumentationScribePreparedOutcome
 {
-    private DocumentationScribePreparedOutcome(
-        DocumentationScribeCompositionStatus status,
-        string code,
-        DocumentationScribeValidatedRunOutcome? m3Outcome,
-        DocumentationPatchRequest? patchAuthorization)
-    {
-        Status = status;
-        Code = code;
-        M3Outcome = m3Outcome;
-        PatchAuthorization = patchAuthorization;
-    }
+    DocumentationScribeCompositionStatus Status { get; }
 
-    internal DocumentationScribeCompositionStatus Status { get; }
+    string Code { get; }
 
-    internal string Code { get; }
+    DocumentationScribeValidatedRunOutcome? M3Outcome { get; }
 
-    internal DocumentationScribeValidatedRunOutcome? M3Outcome { get; }
-
-    internal DocumentationPatchRequest? PatchAuthorization { get; }
-
-    internal bool IsProposalReady => M3Outcome?.RunResult.Terminal is DocumentationScribeProposalTerminal
-        && PatchAuthorization is not null;
-
-    internal static DocumentationScribePreparedOutcome Create(
-        DocumentationScribeCompositionStatus status,
-        string code,
-        DocumentationScribeValidatedRunOutcome? m3Outcome = null,
-        DocumentationPatchRequest? patchAuthorization = null)
-    {
-        var proposalReady = status == DocumentationScribeCompositionStatus.ProposalReady;
-        if (proposalReady != (patchAuthorization is not null)
-            || proposalReady && m3Outcome?.RunResult.Terminal is not DocumentationScribeProposalTerminal)
-        {
-            throw new ArgumentException("Patch authorization requires a bound proposal-ready M3 outcome.", nameof(patchAuthorization));
-        }
-
-        return new DocumentationScribePreparedOutcome(status, code, m3Outcome, patchAuthorization);
-    }
-
-    public override string ToString() => nameof(DocumentationScribePreparedOutcome);
+    bool IsProposalReady { get; }
 }
 
 internal sealed class DocumentationScribeAuditAuthority
@@ -340,6 +307,73 @@ internal sealed class DocumentationScribeSelectedAudit
 
 internal static class DocumentationScribeComposition
 {
+    private sealed class PreparedOutcome : IDocumentationScribePreparedOutcome
+    {
+        private readonly PatchAuthorization? patchAuthorization;
+        private int consumptionState;
+
+        public PreparedOutcome(
+            DocumentationScribeCompositionStatus status,
+            string code,
+            DocumentationScribeValidatedRunOutcome? m3Outcome,
+            PatchAuthorization? patchAuthorization)
+        {
+            Status = status;
+            Code = code;
+            M3Outcome = m3Outcome;
+            this.patchAuthorization = patchAuthorization;
+
+            var proposalReady = status == DocumentationScribeCompositionStatus.ProposalReady;
+            if (proposalReady != (patchAuthorization is not null)
+                || proposalReady && m3Outcome?.RunResult.Terminal is not DocumentationScribeProposalTerminal)
+            {
+                throw new ArgumentException("Patch authorization requires a bound proposal-ready M3 outcome.", nameof(patchAuthorization));
+            }
+        }
+
+        public DocumentationScribeCompositionStatus Status { get; }
+
+        public string Code { get; }
+
+        public DocumentationScribeValidatedRunOutcome? M3Outcome { get; }
+
+        public bool IsProposalReady => Status == DocumentationScribeCompositionStatus.ProposalReady
+            && M3Outcome?.RunResult.Terminal is DocumentationScribeProposalTerminal
+            && patchAuthorization is not null;
+
+        public bool TryTakePatchAuthorization(out PatchAuthorization? authorization)
+        {
+            authorization = Interlocked.CompareExchange(ref consumptionState, 1, 0) == 0
+                ? patchAuthorization
+                : null;
+            return authorization is not null;
+        }
+
+        public override string ToString() => nameof(PreparedOutcome);
+    }
+
+    private sealed record PatchAuthorization(
+        DocumentationScribeSelectedAudit Selection,
+        DocumentationPatchResolvedDeclaration Declaration,
+        DocumentationPatchEditKind EditKind);
+
+    private static PreparedOutcome CreatePrepared(
+        DocumentationScribeCompositionStatus status,
+        string code,
+        DocumentationScribeValidatedRunOutcome? m3Outcome = null) =>
+        new(status, code, m3Outcome, patchAuthorization: null);
+
+    private static PreparedOutcome CreateProposalReady(
+        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeValidatedRunOutcome m3Outcome,
+        DocumentationPatchResolvedDeclaration declaration,
+        DocumentationPatchEditKind editKind) =>
+        new(
+            DocumentationScribeCompositionStatus.ProposalReady,
+            "scribe.proposal.ready",
+            m3Outcome,
+            new PatchAuthorization(selection, declaration, editKind));
+
     private static readonly JsonSerializerOptions ToolJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -370,7 +404,7 @@ internal static class DocumentationScribeComposition
         return ConsumePreparedOutcome(selection, prepared, cancellationToken);
     }
 
-    internal static async Task<DocumentationScribePreparedOutcome> PrepareAsync(
+    internal static async Task<IDocumentationScribePreparedOutcome> PrepareAsync(
         DocumentationScribeSelectedAudit selection,
         ReadOnlyMemory<byte> requestUtf8Json,
         DocumentationScribeAttemptId attemptId,
@@ -400,7 +434,7 @@ internal static class DocumentationScribeComposition
             if (preflight.Failure is { } failure)
             {
                 var mapped = MapPreflightFailure(failure, afterProposal: false);
-                return DocumentationScribePreparedOutcome.Create(mapped.Status, mapped.Code);
+                return CreatePrepared(mapped.Status, mapped.Code);
             }
 
             var loaded = preflight.Context!;
@@ -433,14 +467,13 @@ internal static class DocumentationScribeComposition
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     DocumentationScribeCompositionStatus.ProposalRejected,
                     "scribe.proposal.correlation-invalid");
             }
 
             return await AuthorizeProposalAsync(
                 selection,
-                request,
                 attemptId,
                 configuredAgentEntrypoint,
                 loaded,
@@ -449,21 +482,20 @@ internal static class DocumentationScribeComposition
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return DocumentationScribePreparedOutcome.Create(
+            return CreatePrepared(
                 DocumentationScribeCompositionStatus.Cancelled,
                 "scribe.cancelled.caller");
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            return DocumentationScribePreparedOutcome.Create(
+            return CreatePrepared(
                 DocumentationScribeCompositionStatus.RuntimeFailure,
                 "scribe.failure.internal");
         }
     }
 
-    private static async Task<DocumentationScribePreparedOutcome> AuthorizeProposalAsync(
+    private static async Task<PreparedOutcome> AuthorizeProposalAsync(
         DocumentationScribeSelectedAudit selection,
-        DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
         DocumentationScribeLoadedContext loaded,
@@ -475,7 +507,7 @@ internal static class DocumentationScribeComposition
             var run = bound.RunResult;
             if (run.Terminal is DocumentationScribeCancelledTerminal cancelled)
             {
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     DocumentationScribeCompositionStatus.Cancelled,
                     DocumentationScribeVocabulary.GetId(cancelled.Code),
                     bound);
@@ -490,7 +522,7 @@ internal static class DocumentationScribeComposition
                     DocumentationScribeFailureCode.Budget => DocumentationScribeCompositionStatus.BudgetExhausted,
                     _ => DocumentationScribeCompositionStatus.RuntimeFailure,
                 };
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     status,
                     DocumentationScribeVocabulary.GetId(terminalFailure.Code),
                     bound);
@@ -498,7 +530,7 @@ internal static class DocumentationScribeComposition
 
             if (run.Terminal is DocumentationScribeSkipTerminal)
             {
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     DocumentationScribeCompositionStatus.ProposalSkipped,
                     "scribe.proposal.skipped",
                     bound);
@@ -506,7 +538,7 @@ internal static class DocumentationScribeComposition
 
             if (run.Terminal is not DocumentationScribeProposalTerminal proposal)
             {
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     DocumentationScribeCompositionStatus.ProposalRejected,
                     "scribe.proposal.correlation-invalid",
                     bound);
@@ -514,55 +546,40 @@ internal static class DocumentationScribeComposition
 
             var postflight = await PreflightAsync(
                 selection,
-                request,
+                bound.Request,
                 attemptId,
                 configuredAgentEntrypoint,
                 cancellationToken).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
                 var outcome = MapPreflightFailure(postflightFailure, afterProposal: true);
-                return DocumentationScribePreparedOutcome.Create(outcome.Status, outcome.Code, bound);
+                return CreatePrepared(outcome.Status, outcome.Code, bound);
             }
 
             if (!loaded.VerifyFreshness(cancellationToken))
             {
-                return DocumentationScribePreparedOutcome.Create(
+                return CreatePrepared(
                     DocumentationScribeCompositionStatus.PatchStale,
                     "scribe.patch.stale-context",
                     bound);
             }
 
-            var patchBytes = BuildPatchRequest(
-                request,
-                postflight.Declaration!,
-                postflight.EditKind,
-                proposal.PatchContent,
-                proposal.ContentUnits);
-            var patchParse = DocumentationPatchValidator.ParseRequest(patchBytes);
-            if (!patchParse.IsValid || patchParse.Request is not { } patchRequest)
-            {
-                return DocumentationScribePreparedOutcome.Create(
-                    DocumentationScribeCompositionStatus.ProposalRejected,
-                    "scribe.patch.request-invalid",
-                    bound);
-            }
-
-            return DocumentationScribePreparedOutcome.Create(
-                DocumentationScribeCompositionStatus.ProposalReady,
-                "scribe.proposal.ready",
+            return CreateProposalReady(
+                selection,
                 bound,
-                patchRequest);
+                postflight.Declaration!,
+                postflight.EditKind);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return DocumentationScribePreparedOutcome.Create(
+            return CreatePrepared(
                 DocumentationScribeCompositionStatus.Cancelled,
                 "scribe.cancelled.caller",
                 bound);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            return DocumentationScribePreparedOutcome.Create(
+            return CreatePrepared(
                 DocumentationScribeCompositionStatus.RuntimeFailure,
                 "scribe.failure.internal",
                 bound);
@@ -571,21 +588,62 @@ internal static class DocumentationScribeComposition
 
     internal static DocumentationScribeCompositionOutcome ConsumePreparedOutcome(
         DocumentationScribeSelectedAudit selection,
-        DocumentationScribePreparedOutcome prepared,
+        IDocumentationScribePreparedOutcome prepared,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(prepared);
-        if (!prepared.IsProposalReady || prepared.PatchAuthorization is not { } patchRequest)
+        if (prepared is not PreparedOutcome owned)
         {
             return DocumentationScribeCompositionOutcome.Create(
-                prepared.Status,
-                prepared.Code,
-                prepared.M3Outcome);
+                DocumentationScribeCompositionStatus.ProposalRejected,
+                "scribe.proposal.foreign-prepared");
+        }
+
+        if (!owned.IsProposalReady)
+        {
+            return DocumentationScribeCompositionOutcome.Create(
+                owned.Status,
+                owned.Code,
+                owned.M3Outcome);
+        }
+
+        if (!owned.TryTakePatchAuthorization(out var authorization)
+            || authorization is null
+            || owned.M3Outcome?.RunResult.Terminal is not DocumentationScribeProposalTerminal proposal)
+        {
+            return DocumentationScribeCompositionOutcome.Create(
+                DocumentationScribeCompositionStatus.ProposalRejected,
+                "scribe.proposal.already-consumed",
+                owned.M3Outcome);
         }
 
         try
         {
+            if (!ReferenceEquals(selection, authorization.Selection)
+                || !IsPreparedAuthorizationCurrent(selection, owned.M3Outcome.Request, authorization, cancellationToken))
+            {
+                return DocumentationScribeCompositionOutcome.Create(
+                    DocumentationScribeCompositionStatus.PatchStale,
+                    "scribe.patch.prepared-authority-mismatch",
+                    owned.M3Outcome);
+            }
+
+            var patchBytes = BuildPatchRequest(
+                owned.M3Outcome.Request,
+                authorization.Declaration,
+                authorization.EditKind,
+                proposal.PatchContent,
+                proposal.ContentUnits);
+            var patchParse = DocumentationPatchValidator.ParseRequest(patchBytes);
+            if (!patchParse.IsValid || patchParse.Request is not { } patchRequest)
+            {
+                return DocumentationScribeCompositionOutcome.Create(
+                    DocumentationScribeCompositionStatus.ProposalRejected,
+                    "scribe.patch.request-invalid",
+                    owned.M3Outcome);
+            }
+
             var patchOutcome = new DocumentationPatchEngine().Execute(
                 selection.Session,
                 patchRequest,
@@ -595,7 +653,7 @@ internal static class DocumentationScribeComposition
                 return DocumentationScribeCompositionOutcome.Create(
                     DocumentationScribeCompositionStatus.RuntimeFailure,
                     patchOutcome.FailureCode ?? "scribe.patch.host-failure",
-                    prepared.M3Outcome,
+                    owned.M3Outcome,
                     patchRequest,
                     patchOutcome);
             }
@@ -614,7 +672,7 @@ internal static class DocumentationScribeComposition
                     : patchStatus == DocumentationScribeCompositionStatus.PatchStale
                         ? "scribe.patch.stale"
                         : "scribe.patch.rejected",
-                prepared.M3Outcome,
+                owned.M3Outcome,
                 patchRequest,
                 patchOutcome);
         }
@@ -623,15 +681,53 @@ internal static class DocumentationScribeComposition
             return DocumentationScribeCompositionOutcome.Create(
                 DocumentationScribeCompositionStatus.Cancelled,
                 "scribe.cancelled.caller",
-                prepared.M3Outcome);
+                owned.M3Outcome);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
             return DocumentationScribeCompositionOutcome.Create(
                 DocumentationScribeCompositionStatus.RuntimeFailure,
                 "scribe.failure.internal",
-                prepared.M3Outcome);
+                owned.M3Outcome);
         }
+    }
+
+    private static bool IsPreparedAuthorizationCurrent(
+        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeRequest request,
+        PatchAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        if (!selection.IsCurrent
+            || request.Context.RepositoryContextRef
+                != selection.Session.RepositorySession.RepositoryContextRef
+            || !string.Equals(
+                request.Context.InputIdentity,
+                selection.Session.RepositorySession.InputIdentity,
+                StringComparison.Ordinal)
+            || request.Context.TargetProfile
+                != selection.Session.Classification.ClassificationSet!.TargetProfile
+            || request.Context.AuditOutcome != selection.Outcome
+            || request.Target.SymbolRef != selection.Target.SymbolRef
+            || authorization.Declaration.RepositoryPath
+                is not { } repositoryPath
+            || authorization.Declaration.SourceSha256 != request.Target.SourceSha256
+            || request.Target.SourceLocator is not RepositoryEvidenceLocator locator
+            || locator.Path != repositoryPath
+            || locator.Span is null
+            || authorization.Declaration.RequestedDeclarationSpan != locator.Span.Value
+            || !ComponentsEqual(
+                request.Target.ApplicableComponents,
+                authorization.Declaration.ApplicableComponents))
+        {
+            return false;
+        }
+
+        var capture = selection.Session.RepositorySession
+            .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
+        return capture.Baseline is { } baseline
+            && baseline.TryGetEntry(repositoryPath, out var entry)
+            && string.Equals(entry.Sha256, request.Target.SourceSha256, StringComparison.Ordinal);
     }
 
     private static async Task<PreflightResult> PreflightAsync(
@@ -1489,8 +1585,8 @@ internal static class DocumentationScribeComposition
         return "block." + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
-    private static DocumentationScribePreparedOutcome RejectPrepared(string code) =>
-        DocumentationScribePreparedOutcome.Create(
+    private static PreparedOutcome RejectPrepared(string code) =>
+        CreatePrepared(
             DocumentationScribeCompositionStatus.PreflightRejected,
             code);
 
