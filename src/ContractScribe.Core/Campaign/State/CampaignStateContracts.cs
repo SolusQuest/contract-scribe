@@ -128,6 +128,7 @@ public sealed record CampaignStateSnapshotAuthority(
     string OpaqueSnapshotBinding,
     string RepositoryCommitmentSha256,
     string InputCommitmentSha256,
+    string InputIdentityCommitmentSha256,
     string PolicyAuthorityCommitmentSha256,
     TargetProfile TargetProfile,
     string ExecutionCommitmentSha256);

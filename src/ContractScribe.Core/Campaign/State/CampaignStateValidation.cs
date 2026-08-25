@@ -40,6 +40,7 @@ public static class CampaignStateFactory
     public static CampaignCheckpointState CreateInitial(
         string styleConfigurationId,
         JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan)
     {
@@ -61,6 +62,7 @@ public static class CampaignStateFactory
                 planningInput.Snapshot.OpaqueSnapshotBinding,
                 planningInput.Snapshot.RepositoryCommitmentSha256,
                 planningInput.Snapshot.InputCommitmentSha256,
+                CreateInputIdentityCommitment(inputIdentity),
                 planningInput.Snapshot.PolicyAuthorityCommitmentSha256,
                 planningInput.Snapshot.TargetProfile,
                 acceptedPlan.ExecutionCommitment),
@@ -137,6 +139,7 @@ public static class CampaignStateFactory
         CampaignCheckpointState state,
         string styleConfigurationId,
         JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan)
     {
@@ -169,6 +172,10 @@ public static class CampaignStateFactory
             || !string.Equals(
                 state.Snapshot.InputCommitmentSha256,
                 snapshot.InputCommitmentSha256,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                state.Snapshot.InputIdentityCommitmentSha256,
+                CreateInputIdentityCommitment(inputIdentity),
                 StringComparison.Ordinal)
             || !string.Equals(
                 state.Snapshot.PolicyAuthorityCommitmentSha256,
@@ -227,6 +234,7 @@ public static class CampaignStateFactory
             state,
             styleConfigurationId,
             validatedStyleConfigurationProjection,
+            request.Context.InputIdentity,
             planningInput,
             acceptedPlan);
         var stateWork = state.WorkItems.SingleOrDefault(item =>
@@ -405,7 +413,11 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(currentEvidence);
         Validate(state);
         Require(
-            context.TargetProfile == state.Snapshot.TargetProfile,
+            context.TargetProfile == state.Snapshot.TargetProfile
+            && string.Equals(
+                CreateInputIdentityCommitment(context.InputIdentity),
+                state.Snapshot.InputIdentityCommitmentSha256,
+                StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
 
         var proposals = state.WorkItems
@@ -441,7 +453,11 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(currentEvidence);
         Validate(state);
         Require(
-            context.TargetProfile == state.Snapshot.TargetProfile,
+            context.TargetProfile == state.Snapshot.TargetProfile
+            && string.Equals(
+                CreateInputIdentityCommitment(context.InputIdentity),
+                state.Snapshot.InputIdentityCommitmentSha256,
+                StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
         var proposals = state.WorkItems
             .Where(item => item.Status == CampaignWorkStatus.Accepted)
@@ -958,6 +974,7 @@ public static class CampaignStateFactory
         Require(IsOpaqueId(snapshot.OpaqueSnapshotBinding, 512), CampaignStateValidationCode.InvalidVocabulary);
         RequireSha(snapshot.RepositoryCommitmentSha256);
         RequireSha(snapshot.InputCommitmentSha256);
+        RequireSha(snapshot.InputIdentityCommitmentSha256);
         RequireSha(snapshot.PolicyAuthorityCommitmentSha256);
         Require(Enum.IsDefined(snapshot.TargetProfile), CampaignStateValidationCode.InvalidVocabulary);
         RequireSha(snapshot.ExecutionCommitmentSha256);
@@ -1646,6 +1663,7 @@ public static class CampaignStateFactory
         writer.Add("lineage", state.CampaignLineage);
         writer.Add("snapshot", state.Snapshot.OpaqueSnapshotBinding);
         writer.Add("execution", state.Snapshot.ExecutionCommitmentSha256);
+        writer.Add("input-identity", state.Snapshot.InputIdentityCommitmentSha256);
         writer.Add("product", state.ProductRevision.ContentSha256);
         writer.Add("configuration", state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256);
         writer.Add("request", historicalScribeRequestSha256);
@@ -1983,6 +2001,20 @@ public static class CampaignStateFactory
             writer.Add(prefix + ".identity", content.ComponentIdentity);
             AddLines(writer, prefix + ".lines", content.Lines);
         }
+    }
+
+    private static string CreateInputIdentityCommitment(string? inputIdentity)
+    {
+        Require(
+            DocumentationScribeValidation.IsStableRepositoryRelativePath(inputIdentity)
+            && (inputIdentity!.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                || inputIdentity.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+                || inputIdentity.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)),
+            CampaignStateValidationCode.InvalidVocabulary);
+        using var writer = new CampaignPlanningCommitmentWriter(
+            "contract-scribe/campaign-input-identity/v1");
+        writer.Add("input-identity", inputIdentity);
+        return writer.Complete();
     }
 
     private static bool IsWorkItemKey(string? value) =>

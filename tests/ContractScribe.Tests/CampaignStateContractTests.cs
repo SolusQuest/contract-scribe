@@ -24,7 +24,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("b772dabcbcce3435dcd4ff138dcc63e84fb6e19dc87d45e2f987cf0d89ac99ce", artifact.Sha256);
+        Assert.Equal("775e06bd7812aa5713eeefcd837da3ea6324a82f85018556832448c3962ec990", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -202,6 +202,11 @@ public sealed class CampaignStateContractTests
             scenario.InitialState.WorkItems,
             ProviderReservation(first.WorkItemKey, alternateRequest));
         AssertInvalidCorrelation(() => AdmitProposal(scenario, wrongRequestReservation, first, exchange));
+        AssertInvalidCorrelation(() => AdmitProposal(
+            scenario,
+            wrongRequestReservation,
+            first,
+            alternateRequest));
 
         var alternateAttempt = CreateScribeExchange(
             first,
@@ -412,6 +417,14 @@ public sealed class CampaignStateContractTests
             CurrentEvidence(fresh));
         Assert.Equal(fresh.Request.Context.RepositoryContextRef, reconstructed.Context.RepositoryContextRef);
 
+        var foreignInput = CreateFreshContextExchange(
+            work,
+            inputIdentity: "samples/Alternate.csproj");
+        AssertInvalidCorrelation(() => CampaignStateFactory.ReconstructPatchRequest(
+            complete,
+            PatchContext(foreignInput.Request),
+            CurrentEvidence(foreignInput)));
+
         AssertInvalidCorrelation(() => CampaignStateFactory.ReconstructPatchRequest(
             complete,
             PatchContext(fresh.Request),
@@ -470,6 +483,14 @@ public sealed class CampaignStateContractTests
         Assert.Equal(
             historicalRequest.ArtifactSha256,
             accepted.CandidateObservation!.PatchRequestSha256);
+
+        var foreignInput = CreateFreshContextExchange(
+            work,
+            inputIdentity: "samples/Alternate.csproj");
+        AssertInvalidCorrelation(() => CampaignStateFactory.ReconstructAcceptedPatchRequest(
+            accepted,
+            PatchContext(foreignInput.Request),
+            CurrentEvidence(foreignInput)));
 
         var freshReserved = WithPatchReservation(accepted, freshRequest);
         var reconstructedFromReservation = CampaignStateFactory.ReconstructAcceptedPatchRequest(
@@ -620,6 +641,7 @@ public sealed class CampaignStateContractTests
             retryable,
             "style.synthetic",
             scenario.StyleProjection,
+            "samples/Synthetic.csproj",
             scenario.Input,
             scenario.Plan);
         var roundTrip = CampaignStateJson.Parse(CampaignStateJson.Write(retryable));
@@ -653,6 +675,7 @@ public sealed class CampaignStateContractTests
             planningRollback,
             "style.synthetic",
             scenario.StyleProjection,
+            "samples/Synthetic.csproj",
             scenario.Input,
             scenario.Plan));
     }
@@ -1666,7 +1689,12 @@ public sealed class CampaignStateContractTests
         var plan = CampaignPlanner.Plan(input);
         Assert.Equal(2, plan.WorkItems.Length);
         var styleProjection = JsonSerializer.SerializeToElement(new { style = "synthetic-v1" });
-        var initial = CampaignStateFactory.CreateInitial("style.synthetic", styleProjection, input, plan);
+        var initial = CampaignStateFactory.CreateInitial(
+            "style.synthetic",
+            styleProjection,
+            "samples/Synthetic.csproj",
+            input,
+            plan);
         return new ProposalScenario(styleProjection, input, plan, initial);
     }
 
@@ -1748,9 +1776,11 @@ public sealed class CampaignStateContractTests
 
     private static ScribeExchange CreateFreshContextExchange(
         CampaignPlanningWorkItem work,
-        string contextRef = "repoctx-22222222222222222222222222222222") =>
+        string contextRef = "repoctx-22222222222222222222222222222222",
+        string inputIdentity = "samples/Synthetic.csproj") =>
         CreateScribeExchange(
             work,
+            inputIdentity,
             requestMutation: root =>
             {
                 root["context"]!["repositoryContextRef"] = contextRef;
@@ -2315,6 +2345,7 @@ public sealed class CampaignStateContractTests
             "snapshot.test",
             Hash('2'),
             Hash('3'),
+            Hash('8'),
             Hash('4'),
             TargetProfile.ExternalApi,
             Hash('5'));

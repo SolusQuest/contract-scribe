@@ -207,6 +207,7 @@ public static class CampaignStateJson
         writer.WriteString("opaqueSnapshotBinding", snapshot.OpaqueSnapshotBinding);
         writer.WriteString("repositoryCommitmentSha256", snapshot.RepositoryCommitmentSha256);
         writer.WriteString("inputCommitmentSha256", snapshot.InputCommitmentSha256);
+        writer.WriteString("inputIdentityCommitmentSha256", snapshot.InputIdentityCommitmentSha256);
         writer.WriteString("policyAuthorityCommitmentSha256", snapshot.PolicyAuthorityCommitmentSha256);
         writer.WriteString("targetProfile", ClassificationVocabulary.GetId(snapshot.TargetProfile));
         writer.WriteString("executionCommitmentSha256", snapshot.ExecutionCommitmentSha256);
@@ -853,6 +854,7 @@ public static class CampaignStateJson
             "opaqueSnapshotBinding",
             "repositoryCommitmentSha256",
             "inputCommitmentSha256",
+            "inputIdentityCommitmentSha256",
             "policyAuthorityCommitmentSha256",
             "targetProfile",
             "executionCommitmentSha256");
@@ -860,6 +862,7 @@ public static class CampaignStateJson
             ReadString(element, "opaqueSnapshotBinding"),
             ReadString(element, "repositoryCommitmentSha256"),
             ReadString(element, "inputCommitmentSha256"),
+            ReadString(element, "inputIdentityCommitmentSha256"),
             ReadString(element, "policyAuthorityCommitmentSha256"),
             ParseTargetProfile(ReadString(element, "targetProfile")),
             ReadString(element, "executionCommitmentSha256"));

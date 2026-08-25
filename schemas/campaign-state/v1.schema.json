@@ -39,11 +39,12 @@
     },
     "snapshot": {
       "type": "object", "additionalProperties": false,
-      "required": ["opaqueSnapshotBinding", "repositoryCommitmentSha256", "inputCommitmentSha256", "policyAuthorityCommitmentSha256", "targetProfile", "executionCommitmentSha256"],
+      "required": ["opaqueSnapshotBinding", "repositoryCommitmentSha256", "inputCommitmentSha256", "inputIdentityCommitmentSha256", "policyAuthorityCommitmentSha256", "targetProfile", "executionCommitmentSha256"],
       "properties": {
         "opaqueSnapshotBinding": { "$ref": "#/$defs/opaqueId" },
         "repositoryCommitmentSha256": { "$ref": "#/$defs/sha256" },
         "inputCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "inputIdentityCommitmentSha256": { "$ref": "#/$defs/sha256" },
         "policyAuthorityCommitmentSha256": { "$ref": "#/$defs/sha256" },
         "targetProfile": { "enum": ["profile.external-api", "profile.assembly-visible"] },
         "executionCommitmentSha256": { "$ref": "#/$defs/sha256" }
