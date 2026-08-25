@@ -500,16 +500,16 @@ public sealed class CampaignStateContractTests
         Assert.Equal(first.WorkItemKey, accepted.Blocks[0].BlockId);
         Assert.Equal(firstRequest.ArtifactSha256, accepted.ArtifactSha256);
 
-        foreach (var laterOutcome in new[] { "rejected", "stale", "host-failure", "cancelled", "timeout" })
-        {
-            var withLaterOutcome = MutateValidState(mixed, root =>
+        foreach (var withLaterOutcome in new[] { "rejected", "stale", "host-failure", "cancelled", "timeout" }
+            .Select(laterOutcome => MutateValidState(mixed, root =>
                 root["cumulativeOutcome"] = new JsonObject
                 {
                     ["kind"] = laterOutcome,
                     ["patchRequestSha256"] = active.ArtifactSha256,
                     ["patchResultCommitmentSha256"] = laterOutcome is "rejected" or "stale" ? Hash('a') : null,
                     ["completedFromCheckpointRevision"] = mixed.CheckpointRevision,
-                });
+                })))
+        {
             var reconstructed = CampaignStateFactory.ReconstructAcceptedPatchRequest(
                 withLaterOutcome,
                 PatchContext(firstExchange.Request),
@@ -1267,9 +1267,10 @@ public sealed class CampaignStateContractTests
         resultNode["runEnvelope"]!["attemptId"] = attemptId;
         SetSymbol(resultNode["terminal"]!["target"]!["symbolRef"]!, target.SymbolRef);
         SetSource(resultNode["terminal"]!["target"]!["sourceCommitment"]!, source);
-        foreach (var unit in resultNode["terminal"]!["contentUnits"]!.AsArray())
+        foreach (var ids in resultNode["terminal"]!["contentUnits"]!
+            .AsArray()
+            .Select(unit => unit!["evidenceReferenceIds"]!.AsArray()))
         {
-            var ids = unit!["evidenceReferenceIds"]!.AsArray();
             for (var index = 0; index < ids.Count; index++)
             {
                 var originalId = ids[index]!.GetValue<string>();
