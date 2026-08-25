@@ -682,6 +682,9 @@ public static class CampaignStateJson
         writer.WriteStartObject();
         writer.WritePropertyName("acceptedWorkItemKeys");
         WriteStrings(writer, candidate.AcceptedWorkItemKeys);
+        writer.WriteString(
+            "acceptedProjectionCommitmentSha256",
+            candidate.AcceptedProjectionCommitmentSha256);
         writer.WritePropertyName("changedFiles");
         writer.WriteStartArray();
         foreach (var file in candidate.ChangedFiles)
@@ -1213,7 +1216,7 @@ public static class CampaignStateJson
             ReadInt32(element, "originalUtf8ByteCount"),
             ReadInt32(element, "includedUtf8ByteCount"),
             ReadBoolean(element, "isTruncated"),
-            ParseStrings(element.GetProperty("claimCategoryIds"), 256));
+            ParseStrings(element.GetProperty("claimCategoryIds"), 64));
     }
 
     private static EvidenceSubject ParseEvidenceSubject(JsonElement element)
@@ -1395,11 +1398,13 @@ public static class CampaignStateJson
         ExpectObject(
             element,
             "acceptedWorkItemKeys",
+            "acceptedProjectionCommitmentSha256",
             "changedFiles",
             "patchRequestSha256",
             "patchResultCommitmentSha256");
         return new CampaignCandidateObservation(
             ParseStrings(element.GetProperty("acceptedWorkItemKeys"), CampaignStateContract.MaximumActivePatchBlocks),
+            ReadString(element, "acceptedProjectionCommitmentSha256"),
             ParseArray(
                 element.GetProperty("changedFiles"),
                 ParseChangedFile,

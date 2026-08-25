@@ -23,9 +23,12 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "opaqueId": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "evidenceIdentifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9.-]*[a-z0-9]$|^[a-z]$" },
+    "compilationContextRef": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024, "pattern": "^[TMPFEN]:[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
     "scribeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
     "scribeAttemptId": { "type": "string", "pattern": "^scribe-attempt\\.[0-9a-f]{32}$" },
-    "repositoryPath": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\\\\\u0000:]+$" },
+    "repositoryPath": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)(?!.*\\u0000).+$" },
     "nonNegativeInt64": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
     "nullableSha": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
     "nullableOpaque": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/opaqueId" }] },
@@ -102,11 +105,11 @@
     },
     "symbol": {
       "type": "object", "additionalProperties": false, "required": ["compilationContextRef", "documentationCommentId"],
-      "properties": { "compilationContextRef": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }, "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 } }
+      "properties": { "compilationContextRef": { "$ref": "#/$defs/compilationContextRef" }, "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" } }
     },
     "span": {
       "type": "object", "additionalProperties": false, "required": ["start", "end"],
-      "properties": { "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "end": { "type": "integer", "minimum": 1, "maximum": 2147483647 } }
+      "properties": { "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "end": { "type": "integer", "minimum": 0, "maximum": 2147483647 } }
     },
     "subject": {
       "oneOf": [
@@ -138,29 +141,41 @@
     },
     "metadataEvidenceLocator": {
       "type": "object", "additionalProperties": false, "required": ["kind", "assemblyIdentity", "documentationCommentId"],
-      "properties": { "kind": { "const": "metadata" }, "assemblyIdentity": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^/\\\\\\u0000]+$" }, "documentationCommentId": { "type": "string", "minLength": 3, "maxLength": 1024 } }
+      "properties": { "kind": { "const": "metadata" }, "assemblyIdentity": { "$ref": "#/$defs/compilationContextRef" }, "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" } }
     },
     "generatedEvidenceLocator": {
       "type": "object", "additionalProperties": false, "required": ["kind", "producerKind", "producerId", "outputId", "sourceSha256", "span"],
-      "properties": { "kind": { "const": "generated" }, "producerKind": { "enum": ["sourceGenerator", "toolGenerated"] }, "producerId": { "$ref": "#/$defs/opaqueId" }, "outputId": { "$ref": "#/$defs/opaqueId" }, "sourceSha256": { "$ref": "#/$defs/sha256" }, "span": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] } }
+      "properties": { "kind": { "const": "generated" }, "producerKind": { "enum": ["sourceGenerator", "toolGenerated"] }, "producerId": { "type": "string" }, "outputId": { "type": "string" }, "sourceSha256": { "$ref": "#/$defs/sha256" }, "span": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] } },
+      "allOf": [
+        { "if": { "properties": { "producerKind": { "const": "sourceGenerator" } }, "required": ["producerKind"] }, "then": { "properties": { "producerId": { "pattern": "^sgp\\.[0-9a-f]{64}$" }, "outputId": { "pattern": "^sgo\\.[0-9a-f]{64}$" } } } },
+        { "if": { "properties": { "producerKind": { "const": "toolGenerated" } }, "required": ["producerKind"] }, "then": { "properties": { "producerId": { "pattern": "^tgp\\.[0-9a-f]{64}$" }, "outputId": { "pattern": "^tgo\\.[0-9a-f]{64}$" } } } }
+      ]
     },
     "syntheticEvidenceLocator": {
       "type": "object", "additionalProperties": false, "required": ["kind", "fixtureId"],
-      "properties": { "kind": { "const": "synthetic" }, "fixtureId": { "$ref": "#/$defs/opaqueId" } }
+      "properties": { "kind": { "const": "synthetic" }, "fixtureId": { "$ref": "#/$defs/compilationContextRef" } }
     },
     "evidence": {
       "type": "object", "additionalProperties": false,
       "required": ["evidenceReferenceId", "subject", "kind", "relation", "authority", "locator", "contentSha256", "originalUtf8ByteCount", "includedUtf8ByteCount", "isTruncated", "claimCategoryIds"],
       "properties": {
-        "evidenceReferenceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "evidenceReferenceId": { "$ref": "#/$defs/evidenceIdentifier" },
         "subject": { "$ref": "#/$defs/subject" },
         "kind": { "enum": ["evidence.source.declaration", "evidence.source.implementation", "evidence.source.xml-documentation", "evidence.source.attribute", "evidence.test", "evidence.repository-documentation", "evidence.public-contract"] },
         "relation": { "enum": ["evidence.declares", "evidence.documents", "evidence.tests", "evidence.references", "evidence.constrains"] },
         "authority": { "enum": ["authority.source-implementation", "authority.source-declaration", "authority.existing-documentation", "authority.test", "authority.repository-documentation", "authority.public-contract"] },
         "locator": { "oneOf": [{ "$ref": "#/$defs/repositoryEvidenceLocator" }, { "$ref": "#/$defs/metadataEvidenceLocator" }, { "$ref": "#/$defs/generatedEvidenceLocator" }, { "$ref": "#/$defs/syntheticEvidenceLocator" }] },
-        "contentSha256": { "$ref": "#/$defs/sha256" }, "originalUtf8ByteCount": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "includedUtf8ByteCount": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "isTruncated": { "type": "boolean" },
-        "claimCategoryIds": { "type": "array", "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" } }
-      }
+        "contentSha256": { "$ref": "#/$defs/sha256" }, "originalUtf8ByteCount": { "type": "integer", "minimum": 0, "maximum": 4194304 }, "includedUtf8ByteCount": { "type": "integer", "minimum": 0, "maximum": 4194304 }, "isTruncated": { "type": "boolean" },
+        "claimCategoryIds": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/evidenceIdentifier" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "evidence.source.implementation" } } }, "then": { "properties": { "authority": { "const": "authority.source-implementation" } } } },
+        { "if": { "properties": { "kind": { "enum": ["evidence.source.declaration", "evidence.source.attribute"] } } }, "then": { "properties": { "authority": { "const": "authority.source-declaration" } } } },
+        { "if": { "properties": { "kind": { "const": "evidence.source.xml-documentation" } } }, "then": { "properties": { "authority": { "const": "authority.existing-documentation" } } } },
+        { "if": { "properties": { "kind": { "const": "evidence.test" } } }, "then": { "properties": { "authority": { "const": "authority.test" } } } },
+        { "if": { "properties": { "kind": { "const": "evidence.repository-documentation" } } }, "then": { "properties": { "authority": { "const": "authority.repository-documentation" } } } },
+        { "if": { "properties": { "kind": { "const": "evidence.public-contract" } } }, "then": { "properties": { "authority": { "const": "authority.public-contract" } } } }
+      ]
     },
     "closed": {
       "type": "object", "additionalProperties": false, "required": ["stage", "code", "providerDisposition", "scribeRequestSha256", "attemptId"],
@@ -180,8 +195,8 @@
       "properties": { "path": { "$ref": "#/$defs/repositoryPath" }, "originalFileSha256": { "$ref": "#/$defs/sha256" }, "candidateFileSha256": { "$ref": "#/$defs/sha256" }, "changedDocumentationBlockCount": { "type": "integer", "minimum": 1, "maximum": 2147483647 }, "originalDocumentationByteCount": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "candidateDocumentationByteCount": { "type": "integer", "minimum": 1, "maximum": 2147483647 }, "originalDocumentationLineCount": { "type": "integer", "minimum": 0, "maximum": 2147483647 }, "candidateDocumentationLineCount": { "type": "integer", "minimum": 1, "maximum": 2147483647 } }
     },
     "candidate": {
-      "type": "object", "additionalProperties": false, "required": ["acceptedWorkItemKeys", "changedFiles", "patchRequestSha256", "patchResultCommitmentSha256"],
-      "properties": { "acceptedWorkItemKeys": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" } }, "changedFiles": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/changedFile" } }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+      "type": "object", "additionalProperties": false, "required": ["acceptedWorkItemKeys", "acceptedProjectionCommitmentSha256", "changedFiles", "patchRequestSha256", "patchResultCommitmentSha256"],
+      "properties": { "acceptedWorkItemKeys": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" } }, "acceptedProjectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "changedFiles": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/changedFile" } }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } }
     },
     "cumulative": {
       "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "patchResultCommitmentSha256", "completedFromCheckpointRevision"],

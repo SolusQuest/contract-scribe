@@ -293,17 +293,20 @@ public sealed record CampaignCandidateObservation
 {
     internal CampaignCandidateObservation(
         ImmutableArray<string> acceptedWorkItemKeys,
+        string acceptedProjectionCommitmentSha256,
         ImmutableArray<CampaignChangedFileObservation> changedFiles,
         string patchRequestSha256,
         string patchResultCommitmentSha256)
     {
         AcceptedWorkItemKeys = acceptedWorkItemKeys;
+        AcceptedProjectionCommitmentSha256 = acceptedProjectionCommitmentSha256;
         ChangedFiles = changedFiles;
         PatchRequestSha256 = patchRequestSha256;
         PatchResultCommitmentSha256 = patchResultCommitmentSha256;
     }
 
     public ImmutableArray<string> AcceptedWorkItemKeys { get; internal init; }
+    public string AcceptedProjectionCommitmentSha256 { get; internal init; }
     public ImmutableArray<CampaignChangedFileObservation> ChangedFiles { get; internal init; }
     public string PatchRequestSha256 { get; internal init; }
     public string PatchResultCommitmentSha256 { get; internal init; }

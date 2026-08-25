@@ -454,12 +454,15 @@ public static class CampaignStateFactory
         var request = ParsePatchRequest(context, proposals);
         Require(
             state.CandidateObservation is { } candidate
-            && string.Equals(candidate.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal),
+            && string.Equals(
+                candidate.AcceptedProjectionCommitmentSha256,
+                CreateAcceptedProjectionCommitment(proposals),
+                StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
-        if (state.CumulativeOutcome is { Kind: CampaignCumulativeOutcomeKind.Accepted } outcome)
+        if (state.ActiveReservation is CampaignPatchReservation reservation)
         {
             Require(
-                string.Equals(outcome.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal),
+                string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal),
                 CampaignStateValidationCode.InvalidCorrelation);
         }
 
@@ -475,18 +478,10 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(request);
         Validate(state);
+        Require(state.ActiveReservation is null, CampaignStateValidationCode.InvalidCorrelation);
         Require(request.Context.TargetProfile == state.Snapshot.TargetProfile,
             CampaignStateValidationCode.InvalidCorrelation);
-        var proposals = state.WorkItems
-            .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
-            .Select(item => item.TrustedProposal!)
-            .ToImmutableArray();
-        Require(!proposals.IsEmpty
-            && string.Equals(
-                ParsePatchRequest(request.Context, proposals).ArtifactSha256,
-                request.ArtifactSha256,
-                StringComparison.Ordinal),
-            CampaignStateValidationCode.InvalidCorrelation);
+        _ = ResolvePatchRequestProjection(state, request);
         Require(patchAttemptCount is >= 1 and <= 1_000
             && elapsedMilliseconds is >= 0 and <= CampaignStateContract.MaximumObservation,
             CampaignStateValidationCode.InvalidBound);
@@ -498,14 +493,23 @@ public static class CampaignStateFactory
     }
 
     public static CampaignPatchCompletion CreatePatchCompletion(
+        CampaignCheckpointState state,
         DocumentationPatchRequest request,
-        DocumentationPatchValidationResult result,
-        long completedFromCheckpointRevision)
+        DocumentationPatchValidationResult result)
     {
+        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
-        Require(completedFromCheckpointRevision is >= 0 and <= CampaignStateContract.MaximumObservation,
-            CampaignStateValidationCode.InvalidBound);
+        Validate(state);
+        Require(
+            request.Context.TargetProfile == state.Snapshot.TargetProfile,
+            CampaignStateValidationCode.InvalidCorrelation);
+        var reservation = state.ActiveReservation as CampaignPatchReservation;
+        Require(reservation is not null
+            && string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+            && reservation.ExpectedCheckpointRevision == state.CheckpointRevision,
+            CampaignStateValidationCode.InvalidCorrelation);
+        var proposals = ResolvePatchRequestProjection(state, request);
         var resultCommitment = CreatePatchResultCommitment(request, result);
         var kind = result.Outcome switch
         {
@@ -519,6 +523,7 @@ public static class CampaignStateFactory
         {
             candidate = new CampaignCandidateObservation(
                 request.Blocks.Select(block => block.BlockId).ToImmutableArray(),
+                CreateAcceptedProjectionCommitment(proposals),
                 result.ChangedFiles.Select(file => new CampaignChangedFileObservation(
                     file.Path,
                     file.OriginalFileSha256,
@@ -538,26 +543,35 @@ public static class CampaignStateFactory
                 kind,
                 request.ArtifactSha256,
                 resultCommitment,
-                completedFromCheckpointRevision));
+                reservation!.ExpectedCheckpointRevision));
     }
 
     public static CampaignCumulativeOutcome CreateHostPatchOutcome(
+        CampaignCheckpointState state,
         DocumentationPatchRequest request,
-        CampaignCumulativeOutcomeKind kind,
-        long completedFromCheckpointRevision)
+        CampaignCumulativeOutcomeKind kind)
     {
+        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(request);
+        Validate(state);
+        Require(
+            request.Context.TargetProfile == state.Snapshot.TargetProfile,
+            CampaignStateValidationCode.InvalidCorrelation);
         Require(kind is CampaignCumulativeOutcomeKind.HostFailure
             or CampaignCumulativeOutcomeKind.Cancelled
             or CampaignCumulativeOutcomeKind.Timeout,
             CampaignStateValidationCode.InvalidVocabulary);
-        Require(completedFromCheckpointRevision is >= 0 and <= CampaignStateContract.MaximumObservation,
-            CampaignStateValidationCode.InvalidBound);
+        var reservation = state.ActiveReservation as CampaignPatchReservation;
+        Require(reservation is not null
+            && string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+            && reservation.ExpectedCheckpointRevision == state.CheckpointRevision,
+            CampaignStateValidationCode.InvalidCorrelation);
+        _ = ResolvePatchRequestProjection(state, request);
         return new CampaignCumulativeOutcome(
             kind,
             request.ArtifactSha256,
             null,
-            completedFromCheckpointRevision);
+            reservation!.ExpectedCheckpointRevision);
     }
 
     public static string CreatePatchResultCommitment(
@@ -845,21 +859,8 @@ public static class CampaignStateFactory
         return true;
     }
 
-    internal static bool IsCanonicalRepositoryPath(string? path)
-    {
-        if (string.IsNullOrEmpty(path)
-            || path.Length > CampaignStateContract.MaximumPathScalars
-            || path[0] == '/'
-            || path.Contains('\\', StringComparison.Ordinal)
-            || path.Contains('\0', StringComparison.Ordinal)
-            || path.Contains(':', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return path.Split('/').All(segment =>
-            segment.Length > 0 && segment is not "." and not "..");
-    }
+    internal static bool IsCanonicalRepositoryPath(string? path) =>
+        DocumentationScribeValidation.IsStableRepositoryRelativePath(path);
 
     internal static CampaignStateValidationException Fail(
         CampaignStateValidationCode code,
@@ -1071,20 +1072,21 @@ public static class CampaignStateFactory
         foreach (var evidence in proposal.Evidence)
         {
             Require(evidence is not null
-                && IsOpaqueId(evidence.EvidenceReferenceId, DocumentationScribeContract.MaximumIdentifierScalars)
                 && evidenceIds.Add(evidence.EvidenceReferenceId)
                 && (previousId is null || string.CompareOrdinal(previousId, evidence.EvidenceReferenceId) < 0)
-                && IsValidEvidenceSubject(evidence.Subject)
-                && Enum.IsDefined(evidence.Kind)
-                && Enum.IsDefined(evidence.Relation)
-                && Enum.IsDefined(evidence.Authority)
-                && IsValidEvidenceLocator(evidence.Locator)
-                && IsSha256(evidence.ContentSha256)
-                && evidence.OriginalUtf8ByteCount >= 0
-                && evidence.IncludedUtf8ByteCount >= 0
-                && evidence.IncludedUtf8ByteCount <= evidence.OriginalUtf8ByteCount
-                && evidence.IsTruncated == (evidence.IncludedUtf8ByteCount < evidence.OriginalUtf8ByteCount)
-                && IsOrderedOpaqueIds(evidence.ClaimCategoryIds, 256, 128),
+                && DocumentationScribeValidation.IsStableEvidenceProjection(
+                    evidence.EvidenceReferenceId,
+                    evidence.Subject,
+                    evidence.Kind,
+                    evidence.Relation,
+                    evidence.Authority,
+                    evidence.Locator,
+                    evidence.ContentSha256,
+                    evidence.OriginalUtf8ByteCount,
+                    evidence.IncludedUtf8ByteCount,
+                    evidence.IsTruncated,
+                    evidence.ClaimCategoryIds)
+                && EvidenceSubjectBelongsToBlock(evidence.Subject, proposal.PatchBlock),
                 CampaignStateValidationCode.InvalidCorrelation);
             previousId = evidence.EvidenceReferenceId;
         }
@@ -1114,108 +1116,15 @@ public static class CampaignStateFactory
             CampaignStateValidationCode.InvalidCorrelation);
     }
 
-    private static bool IsValidEvidenceSubject(EvidenceSubject? subject)
-    {
-        if (subject is null || !IsValidSymbol(subject.ParentSymbolRef))
-        {
-            return false;
-        }
-
-        return subject switch
-        {
-            TargetEvidenceSubject => true,
-            ComponentEvidenceSubject component =>
-                Enum.IsDefined(component.ComponentKind)
-                && IsComponentIdentity(component.ComponentKind, component.Identity),
-            _ => false,
-        };
-    }
-
-    private static bool IsComponentIdentity(ComponentKind kind, string identity) =>
-        !string.IsNullOrEmpty(identity)
-        && identity.Length <= DocumentationScribeContract.MaximumIdentifierScalars
-        && kind switch
-        {
-            ComponentKind.TypeParameter => IsCanonicalOrdinalIdentity(identity, "type-parameter/"),
-            ComponentKind.Parameter => IsCanonicalOrdinalIdentity(identity, "parameter/"),
-            ComponentKind.Return => identity == "return",
-            ComponentKind.Value => identity == "value",
-            _ => false,
-        };
-
-    private static bool IsCanonicalOrdinalIdentity(string value, string prefix)
-    {
-        if (!value.StartsWith(prefix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var ordinal = value.AsSpan(prefix.Length);
-        return ordinal.Length > 0
-            && ordinal.IndexOfAnyExceptInRange('0', '9') < 0
-            && (ordinal.Length == 1 || ordinal[0] != '0');
-    }
-
-    private static bool IsValidEvidenceLocator(EvidenceLocator? locator) => locator switch
-    {
-        RepositoryEvidenceLocator repository =>
-            IsCanonicalRepositoryPath(repository.Path)
-            && IsValidSpan(repository.Span),
-        MetadataEvidenceLocator metadata =>
-            IsSafeMetadataIdentity(metadata.AssemblyIdentity)
-            && IsDocumentationCommentId(metadata.DocumentationCommentId),
-        GeneratedOutputEvidenceLocator generated =>
-            Enum.IsDefined(generated.ProducerKind)
-            && IsOpaqueId(generated.ProducerId, 512)
-            && IsOpaqueId(generated.OutputId, 512)
-            && IsSha256(generated.SourceSha256)
-            && IsValidSpan(generated.Span),
-        SyntheticEvidenceLocator synthetic => IsOpaqueId(synthetic.FixtureId, 512),
-        _ => false,
-    };
-
-    private static bool IsValidSymbol(SymbolRef symbol) =>
-        IsOpaqueId(symbol.CompilationContextRef, 128)
-        && IsDocumentationCommentId(symbol.DocumentationCommentId);
-
-    private static bool IsDocumentationCommentId(string? value) =>
-        value is { Length: >= 3 and <= 1024 }
-        && !value.Any(character => char.IsControl(character));
-
-    private static bool IsSafeMetadataIdentity(string? value) =>
-        value is { Length: >= 1 and <= 512 }
-        && !value.Contains('\\', StringComparison.Ordinal)
-        && !value.Contains('/', StringComparison.Ordinal)
-        && !value.Contains('\0', StringComparison.Ordinal)
-        && !value.Any(character => char.IsControl(character));
-
-    private static bool IsValidSpan(Utf16Span? span) =>
-        span is null || span.Value.Start >= 0 && span.Value.End > span.Value.Start;
-
-    private static bool IsOrderedOpaqueIds(
-        ImmutableArray<string> values,
-        int maximumItems,
-        int maximumLength)
-    {
-        if (values.IsDefault || values.Length > maximumItems)
-        {
-            return false;
-        }
-
-        string? previous = null;
-        foreach (var value in values)
-        {
-            if (!IsOpaqueId(value, maximumLength)
-                || previous is not null && string.CompareOrdinal(previous, value) >= 0)
-            {
-                return false;
-            }
-
-            previous = value;
-        }
-
-        return true;
-    }
+    private static bool EvidenceSubjectBelongsToBlock(
+        EvidenceSubject subject,
+        DocumentationPatchBlockRequest block) =>
+        subject.ParentSymbolRef == block.SymbolRef
+        && (subject is TargetEvidenceSubject
+            || subject is ComponentEvidenceSubject component
+                && block.ApplicableComponents.Any(candidate =>
+                    candidate.Kind == MapComponentKind(component.ComponentKind)
+                    && string.Equals(candidate.Identity, component.Identity, StringComparison.Ordinal)));
 
     private static DocumentationPatchRequest ParsePatchRequest(
         DocumentationPatchContext context,
@@ -1239,6 +1148,33 @@ public static class CampaignStateFactory
 
         return parsed.Request!;
     }
+
+    private static ImmutableArray<CampaignTrustedProposal> ResolvePatchRequestProjection(
+        CampaignCheckpointState state,
+        DocumentationPatchRequest request)
+    {
+        var active = state.WorkItems
+            .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            .Select(item => item.TrustedProposal!)
+            .ToImmutableArray();
+        var accepted = state.WorkItems
+            .Where(item => item.Status == CampaignWorkStatus.Accepted)
+            .Select(item => item.TrustedProposal!)
+            .ToImmutableArray();
+        var activeMatches = MatchesPatchRequest(request, active);
+        var acceptedMatches = MatchesPatchRequest(request, accepted);
+        Require(activeMatches || acceptedMatches, CampaignStateValidationCode.InvalidCorrelation);
+        return activeMatches ? active : accepted;
+    }
+
+    private static bool MatchesPatchRequest(
+        DocumentationPatchRequest request,
+        ImmutableArray<CampaignTrustedProposal> proposals) =>
+        !proposals.IsEmpty
+        && string.Equals(
+            ParsePatchRequest(request.Context, proposals).ArtifactSha256,
+            request.ArtifactSha256,
+            StringComparison.Ordinal);
 
     private static void ValidateClosedOutcome(CampaignWorkClosedOutcome outcome)
     {
@@ -1334,9 +1270,12 @@ public static class CampaignStateFactory
 
     private static void ValidateCandidate(CampaignCheckpointState state)
     {
-        var accepted = state.WorkItems
+        var acceptedProposals = state.WorkItems
             .Where(item => item.Status == CampaignWorkStatus.Accepted)
-            .Select(item => item.WorkItemKey)
+            .Select(item => item.TrustedProposal!)
+            .ToImmutableArray();
+        var accepted = acceptedProposals
+            .Select(proposal => proposal.PatchBlock.BlockId)
             .ToImmutableArray();
         if (state.CandidateObservation is null)
         {
@@ -1348,6 +1287,11 @@ public static class CampaignStateFactory
         Require(!candidate.AcceptedWorkItemKeys.IsDefault
             && candidate.AcceptedWorkItemKeys.SequenceEqual(accepted, StringComparer.Ordinal)
             && !candidate.AcceptedWorkItemKeys.IsEmpty
+            && IsSha256(candidate.AcceptedProjectionCommitmentSha256)
+            && string.Equals(
+                candidate.AcceptedProjectionCommitmentSha256,
+                CreateAcceptedProjectionCommitment(acceptedProposals),
+                StringComparison.Ordinal)
             && !candidate.ChangedFiles.IsDefault
             && candidate.ChangedFiles.Length <= state.ConfiguredCeilings.CampaignBudget.MaximumChangedFiles
             && candidate.ChangedFiles.Length <= CampaignStateContract.MaximumChangedFiles
@@ -1621,6 +1565,48 @@ public static class CampaignStateFactory
 
         writer.Add("maximum-content-units", profile.MaximumContentUnits);
         writer.Add("maximum-evidence-refs", profile.MaximumEvidenceRefsPerUnit);
+        return writer.Complete();
+    }
+
+    private static string CreateAcceptedProjectionCommitment(
+        ImmutableArray<CampaignTrustedProposal> proposals)
+    {
+        using var writer = new CampaignPlanningCommitmentWriter(
+            "contract-scribe/campaign-accepted-projection/v1");
+        writer.Add("proposal.count", proposals.Length);
+        foreach (var proposal in proposals)
+        {
+            writer.Add("work", proposal.PatchBlock.BlockId);
+            writer.Add("proposal", proposal.ProposalCommitmentSha256);
+            writer.Add("block", CreatePatchBlockCommitment(proposal.PatchBlock));
+        }
+
+        return writer.Complete();
+    }
+
+    private static string CreatePatchBlockCommitment(DocumentationPatchBlockRequest block)
+    {
+        using var writer = new CampaignPlanningCommitmentWriter(
+            "contract-scribe/campaign-patch-block/v1");
+        writer.Add("id", block.BlockId);
+        AddSymbol(writer, "symbol", block.SymbolRef);
+        AddPatchLocator(writer, "locator", block.Locator);
+        writer.Add("edit", PatchEditKindId(block.EditKind));
+        writer.Add("component.count", block.ApplicableComponents.Length);
+        foreach (var component in block.ApplicableComponents)
+        {
+            writer.Add("component.kind", PatchComponentKindId(component.Kind));
+            writer.Add("component.identity", component.Identity);
+            writer.AddOptional("component.name", component.Name);
+        }
+
+        writer.Add("content", CreatePatchContentCommitment(block.Content));
+        writer.Add("provenance.count", block.ProvenanceRefs.Length);
+        foreach (var provenance in block.ProvenanceRefs)
+        {
+            writer.Add("provenance", provenance);
+        }
+
         return writer.Complete();
     }
 

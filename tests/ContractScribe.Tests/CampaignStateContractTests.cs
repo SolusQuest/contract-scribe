@@ -404,22 +404,7 @@ public sealed class CampaignStateContractTests
             scenario.InitialState,
             ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal),
             activeReservation: null);
-        var fresh = CreateScribeExchange(
-            work,
-            requestMutation: root =>
-            {
-                root["context"]!["repositoryContextRef"] = "repoctx-22222222222222222222222222222222";
-                foreach (var evidence in root["evidenceReferences"]!.AsArray())
-                {
-                    evidence!["repositoryContextRef"] = "repoctx-22222222222222222222222222222222";
-                }
-                foreach (var contextReference in root["contextReferences"]!.AsArray())
-                {
-                    contextReference!["repositoryContextRef"] = "repoctx-22222222222222222222222222222222";
-                }
-            },
-            resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] =
-                "repoctx-22222222222222222222222222222222");
+        var fresh = CreateFreshContextExchange(work);
 
         var reconstructed = CampaignStateFactory.ReconstructPatchRequest(
             complete,
@@ -442,6 +427,59 @@ public sealed class CampaignStateContractTests
             complete,
             PatchContext(changedEvidence.Request),
             CurrentEvidence(changedEvidence)));
+    }
+
+    [Fact]
+    public void Accepted_reconstruction_uses_a_fresh_request_identity_and_new_reservation_after_restart()
+    {
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var historical = CreateScribeExchange(work);
+        var proposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, historical)),
+            work,
+            historical);
+        var proposalComplete = WithState(
+            scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal),
+            activeReservation: null);
+        var historicalRequest = CampaignStateFactory.ReconstructPatchRequest(
+            proposalComplete,
+            PatchContext(historical.Request),
+            CurrentEvidence(historical));
+        var historicalReserved = WithPatchReservation(proposalComplete, historicalRequest);
+        var completion = CreateAcceptedCompletion(historicalReserved, historicalRequest, proposal);
+        var accepted = WithState(
+            scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.Accepted, proposal),
+            activeReservation: null,
+            candidateObservation: completion.CandidateObservation,
+            cumulativeOutcome: completion.CumulativeOutcome);
+        var fresh = CreateFreshContextExchange(work);
+
+        var freshRequest = CampaignStateFactory.ReconstructAcceptedPatchRequest(
+            accepted,
+            PatchContext(fresh.Request),
+            CurrentEvidence(fresh));
+        Assert.NotEqual(historicalRequest.ArtifactSha256, freshRequest.ArtifactSha256);
+        Assert.Equal(fresh.Request.Context.RepositoryContextRef, freshRequest.Context.RepositoryContextRef);
+        Assert.Equal(
+            historicalRequest.ArtifactSha256,
+            accepted.CandidateObservation!.PatchRequestSha256);
+
+        var freshReserved = WithPatchReservation(accepted, freshRequest);
+        var reconstructedFromReservation = CampaignStateFactory.ReconstructAcceptedPatchRequest(
+            freshReserved,
+            PatchContext(fresh.Request),
+            CurrentEvidence(fresh));
+        Assert.Equal(freshRequest.ArtifactSha256, reconstructedFromReservation.ArtifactSha256);
+        Assert.Equal(
+            freshRequest.ArtifactSha256,
+            Assert.IsType<CampaignPatchReservation>(freshReserved.ActiveReservation).PatchRequestSha256);
     }
 
     [Fact]
@@ -474,7 +512,8 @@ public sealed class CampaignStateContractTests
             firstOnly,
             PatchContext(firstExchange.Request),
             CurrentEvidence(firstExchange));
-        var candidate = CreateAcceptedCompletion(firstRequest, firstProposal).CandidateObservation!;
+        var firstReserved = WithPatchReservation(firstOnly, firstRequest);
+        var candidate = CreateAcceptedCompletion(firstReserved, firstRequest, firstProposal).CandidateObservation!;
         var mixed = WithState(
             scenario.InitialState,
             ReplaceWork(
@@ -665,6 +704,10 @@ public sealed class CampaignStateContractTests
             CampaignStateValidationCode.InvalidCorrelation);
         AssertMutationFailure(
             scenario.State,
+            root => root["candidateObservation"]!["acceptedProjectionCommitmentSha256"] = Hash('f'),
+            CampaignStateValidationCode.InvalidCorrelation);
+        AssertMutationFailure(
+            scenario.State,
             root => root["candidateObservation"]!["changedFiles"]![0]!["changedDocumentationBlockCount"] = 2,
             CampaignStateValidationCode.InvalidBound);
         AssertMutationFailure(
@@ -677,6 +720,78 @@ public sealed class CampaignStateContractTests
             root => root["candidateObservation"]!["changedFiles"]![0]!["candidateDocumentationByteCount"] =
                 scenario.State.ConfiguredCeilings.CampaignBudget.MaximumPatchBytes + 1,
             CampaignStateValidationCode.InvalidBound);
+    }
+
+    [Fact]
+    public void Candidate_and_completion_are_bound_to_the_exact_state_proposal_projection_and_reservation()
+    {
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var firstExchange = CreateScribeExchange(work);
+        var alternateExchange = CreateScribeExchange(work, resultMutation: root =>
+            root["terminal"]!["contentUnits"]![0]!["lines"]![0] =
+                "Runs the alternate synthetic widget operation.");
+        var firstProposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, firstExchange)),
+            work,
+            firstExchange);
+        var alternateProposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(work.WorkItemKey, alternateExchange)),
+            work,
+            alternateExchange);
+        Assert.NotEqual(firstProposal.ProposalCommitmentSha256, alternateProposal.ProposalCommitmentSha256);
+
+        var proposalComplete = WithState(
+            scenario.InitialState,
+            ReplaceWork(
+                scenario.InitialState,
+                work.WorkItemKey,
+                CampaignWorkStatus.ProposalComplete,
+                firstProposal),
+            activeReservation: null);
+        var request = CampaignStateFactory.ReconstructPatchRequest(
+            proposalComplete,
+            PatchContext(firstExchange.Request),
+            CurrentEvidence(firstExchange));
+        var result = CreateAcceptedPatchResult(request, firstProposal);
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreatePatchCompletion(
+            proposalComplete,
+            request,
+            result));
+        var reserved = WithPatchReservation(proposalComplete, request);
+        var completion = CampaignStateFactory.CreatePatchCompletion(reserved, request, result);
+        Assert.Equal(
+            reserved.CheckpointRevision,
+            completion.CumulativeOutcome.CompletedFromCheckpointRevision);
+
+        AssertInvalidCorrelation(() => WithState(
+            scenario.InitialState,
+            ReplaceWork(
+                scenario.InitialState,
+                work.WorkItemKey,
+                CampaignWorkStatus.Accepted,
+                alternateProposal),
+            activeReservation: null,
+            candidateObservation: completion.CandidateObservation,
+            cumulativeOutcome: completion.CumulativeOutcome));
+
+        var fresh = CreateFreshContextExchange(work);
+        var freshRequest = CampaignStateFactory.ReconstructPatchRequest(
+            proposalComplete,
+            PatchContext(fresh.Request),
+            CurrentEvidence(fresh));
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreatePatchCompletion(
+            reserved,
+            freshRequest,
+            CreateAcceptedPatchResult(freshRequest, firstProposal)));
     }
 
     [Theory]
@@ -881,12 +996,27 @@ public sealed class CampaignStateContractTests
         Assert.Equal(proposalState.CheckpointRevision, reservation.ExpectedCheckpointRevision);
 
         var proposal = Assert.IsType<CampaignTrustedProposal>(proposalState.WorkItems[0].TrustedProposal);
-        var completion = CreateAcceptedCompletion(request, proposal);
+        var reservedState = WithState(
+            proposalState,
+            proposalState.WorkItems,
+            reservation);
+        var completion = CreateAcceptedCompletion(reservedState, request, proposal);
         Assert.Equal(request.Blocks.Select(block => block.BlockId), completion.CandidateObservation!.AcceptedWorkItemKeys);
         Assert.Equal(request.ArtifactSha256, completion.CumulativeOutcome.PatchRequestSha256);
         Assert.Equal(
             completion.CandidateObservation.PatchResultCommitmentSha256,
             completion.CumulativeOutcome.PatchResultCommitmentSha256);
+        AssertInvalidCorrelation(() => CampaignStateFactory.CreateHostPatchOutcome(
+            proposalState,
+            request,
+            CampaignCumulativeOutcomeKind.Timeout));
+        var timeout = CampaignStateFactory.CreateHostPatchOutcome(
+            reservedState,
+            request,
+            CampaignCumulativeOutcomeKind.Timeout);
+        Assert.Equal(request.ArtifactSha256, timeout.PatchRequestSha256);
+        Assert.Equal(reservedState.CheckpointRevision, timeout.CompletedFromCheckpointRevision);
+        Assert.Null(timeout.PatchResultCommitmentSha256);
     }
 
     [Fact]
@@ -945,10 +1075,128 @@ public sealed class CampaignStateContractTests
 
         var accepted = CreateAcceptedCandidateScenario().State;
         AssertSchemaAndRuntimeReject(accepted, root =>
-            root["candidateObservation"]!["changedFiles"]![0]!["path"] = "src:alternate.cs");
+            root["candidateObservation"]!["changedFiles"]![0]!["path"] = "C:/alternate.cs");
         var proposal = CreateProposalCompleteState();
         AssertSchemaAndRuntimeReject(proposal, root =>
             root["workItems"]![0]!["trustedProposal"]!["historicalAttemptId"] = "attempt.arbitrary");
+        AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["claimCategoryIds"] =
+                new JsonArray());
+        AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["evidenceReferenceId"] =
+                "Evidence.Invalid");
+        AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["authority"] =
+                "authority.test");
+        AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["subject"]!["identity"] =
+                "parameter/" + new string('1', 129));
+        AssertSchemaAndRuntimeReject(proposal, root =>
+        {
+            var claims = new JsonArray();
+            foreach (var index in Enumerable.Range(0, 65))
+            {
+                claims.Add($"claim.{index:D2}");
+            }
+
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["claimCategoryIds"] = claims;
+        });
+        AssertSchemaAndRuntimeReject(proposal, root =>
+            root["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["locator"] = new JsonObject
+            {
+                ["kind"] = "generated",
+                ["producerKind"] = "sourceGenerator",
+                ["producerId"] = "tgp." + Hash('a'),
+                ["outputId"] = "tgo." + Hash('b'),
+                ["sourceSha256"] = Hash('c'),
+                ["span"] = new JsonObject { ["start"] = 1, ["end"] = 1 },
+            });
+
+        var reversedSpan = Assert.IsType<JsonObject>(JsonNode.Parse(CampaignStateJson.Write(proposal)));
+        var span = reversedSpan["workItems"]![0]!["trustedProposal"]!["evidence"]![0]!["locator"]!["span"]!;
+        span["start"] = 2;
+        span["end"] = 1;
+        using (var document = JsonDocument.Parse(reversedSpan.ToJsonString()))
+        {
+            Assert.True(EvaluateCampaignSchema(document.RootElement).IsValid);
+        }
+
+        Assert.False(CampaignStateJson.Parse(
+            Encoding.UTF8.GetBytes(reversedSpan.ToJsonString() + "\n")).IsValid);
+    }
+
+    [Fact]
+    public void Stable_m3_evidence_projection_is_shared_by_producer_runtime_and_schema()
+    {
+        var scenario = CreateProposalScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var astralPath = "evidence/" + string.Concat(Enumerable.Repeat("\U0001F600", 300)) + ".txt";
+        Assert.True(astralPath.EnumerateRunes().Count() <= 512);
+        Assert.True(astralPath.Length > 512);
+        var variants = new Action<JsonObject>[]
+        {
+            root =>
+            {
+                var span = root["evidenceReferences"]![0]!["locator"]!["repository"]!["span"]!;
+                span["end"] = span["start"]!.GetValue<int>();
+            },
+            root => root["evidenceReferences"]![0]!["locator"]!["repository"]!["path"] = astralPath,
+            root => root["evidenceReferences"]![0]!["locator"] = new JsonObject
+            {
+                ["metadata"] = new JsonObject
+                {
+                    ["assemblyIdentity"] = "synthetic.v1",
+                    ["documentationCommentId"] = "M:Synthetic.Widget.Run(System.String)",
+                },
+            },
+            root => root["evidenceReferences"]![0]!["locator"] = new JsonObject
+            {
+                ["generatedOutput"] = new JsonObject
+                {
+                    ["producerKind"] = "source-generator",
+                    ["producerId"] = "sgp." + Hash('a'),
+                    ["outputId"] = "sgo." + Hash('b'),
+                    ["sourceSha256"] = Hash('c'),
+                    ["span"] = new JsonObject { ["start"] = 1, ["end"] = 1 },
+                },
+            },
+            root => root["evidenceReferences"]![0]!["locator"] = new JsonObject
+            {
+                ["synthetic"] = new JsonObject { ["fixtureId"] = "synthetic.v1" },
+            },
+        };
+
+        Assert.All(variants, mutation =>
+        {
+            var exchange = CreateScribeExchange(work, requestMutation: mutation);
+            var proposal = AdmitProposal(
+                scenario,
+                WithState(
+                    scenario.InitialState,
+                    scenario.InitialState.WorkItems,
+                    ProviderReservation(work.WorkItemKey, exchange)),
+                work,
+                exchange);
+            var complete = WithState(
+                scenario.InitialState,
+                ReplaceWork(
+                    scenario.InitialState,
+                    work.WorkItemKey,
+                    CampaignWorkStatus.ProposalComplete,
+                    proposal),
+                activeReservation: null);
+            var artifact = CampaignStateJson.CreateArtifact(complete);
+            using var document = JsonDocument.Parse(artifact.ExactUtf8Json.AsMemory());
+            Assert.True(EvaluateCampaignSchema(document.RootElement).IsValid);
+            Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+        });
+
+        var reversedRequest = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
+        var reversedRequestSpan = reversedRequest["evidenceReferences"]![0]!["locator"]!["repository"]!["span"]!;
+        reversedRequestSpan["start"] = 2;
+        reversedRequestSpan["end"] = 1;
+        Assert.NotNull(DocumentationScribeValidation.ParseRequest(
+            Encoding.UTF8.GetBytes(reversedRequest.ToJsonString())).Failure);
     }
 
     [Fact]
@@ -1288,6 +1536,26 @@ public sealed class CampaignStateContractTests
             Assert.IsType<DocumentationScribeRunResult>(resultParse.Result));
     }
 
+    private static ScribeExchange CreateFreshContextExchange(
+        CampaignPlanningWorkItem work,
+        string contextRef = "repoctx-22222222222222222222222222222222") =>
+        CreateScribeExchange(
+            work,
+            requestMutation: root =>
+            {
+                root["context"]!["repositoryContextRef"] = contextRef;
+                foreach (var evidence in root["evidenceReferences"]!.AsArray())
+                {
+                    evidence!["repositoryContextRef"] = contextRef;
+                }
+
+                foreach (var contextReference in root["contextReferences"]!.AsArray())
+                {
+                    contextReference!["repositoryContextRef"] = contextRef;
+                }
+            },
+            resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] = contextRef);
+
     private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work)
     {
         var proposalExchange = CreateScribeExchange(work);
@@ -1365,6 +1633,15 @@ public sealed class CampaignStateContractTests
     }
 
     private static CampaignPatchCompletion CreateAcceptedCompletion(
+        CampaignCheckpointState reservedState,
+        DocumentationPatchRequest request,
+        CampaignTrustedProposal proposal)
+        => CampaignStateFactory.CreatePatchCompletion(
+            reservedState,
+            request,
+            CreateAcceptedPatchResult(request, proposal));
+
+    private static DocumentationPatchValidationResult CreateAcceptedPatchResult(
         DocumentationPatchRequest request,
         CampaignTrustedProposal proposal)
     {
@@ -1398,8 +1675,22 @@ public sealed class CampaignStateContractTests
                 CandidateDocumentationLineCount: 3)],
             invariants,
             []);
-        return CampaignStateFactory.CreatePatchCompletion(request, result, completedFromCheckpointRevision: 0);
+        return result;
     }
+
+    private static CampaignCheckpointState WithPatchReservation(
+        CampaignCheckpointState state,
+        DocumentationPatchRequest request) =>
+        WithState(
+            state,
+            state.WorkItems,
+            CampaignStateFactory.CreatePatchReservation(
+                state,
+                request,
+                patchAttemptCount: 1,
+                elapsedMilliseconds: 0),
+            state.CandidateObservation,
+            state.CumulativeOutcome);
 
     private static void AssertMutationFailure(
         CampaignCheckpointState state,
@@ -1555,7 +1846,8 @@ public sealed class CampaignStateContractTests
             proposalComplete,
             PatchContext(exchange.Request),
             CurrentEvidence(exchange));
-        var completion = CreateAcceptedCompletion(request, proposal);
+        var reserved = WithPatchReservation(proposalComplete, request);
+        var completion = CreateAcceptedCompletion(reserved, request, proposal);
         var accepted = WithState(
             scenario.InitialState,
             ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.Accepted, proposal),
