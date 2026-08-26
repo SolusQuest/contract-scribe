@@ -308,6 +308,7 @@ public static class DocumentationScribeValidation
                     request,
                     expectedAttemptId,
                     terminal);
+                ValidateProviderFailureMatrixForParse(request, terminal, envelope);
 
                 return new DocumentationScribeResultParseResult(
                     new DocumentationScribeRunResult(
@@ -329,11 +330,88 @@ public static class DocumentationScribeValidation
         }
     }
 
+    public static DocumentationScribeValidatedRunOutcome BindValidatedRunOutcome(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId expectedAttemptId,
+        DocumentationScribeRunResult runResult)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(runResult);
+        if (string.IsNullOrEmpty(expectedAttemptId.Value))
+        {
+            throw new ArgumentException("A validated attempt identity is required.", nameof(expectedAttemptId));
+        }
+
+        var envelope = runResult.RunEnvelope;
+        if (!string.Equals(runResult.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+            || runResult.AttemptId != expectedAttemptId
+            || !string.Equals(envelope.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+            || envelope.AttemptId != expectedAttemptId
+            || !string.Equals(envelope.ToolPolicyId, request.ToolPolicyId, StringComparison.Ordinal)
+            || !string.Equals(envelope.StyleProfileId, request.StyleProfile.StyleProfileId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The run result is not correlated to the parsed request and attempt.", nameof(runResult));
+        }
+
+        if (runResult.DynamicEvidenceReferences.IsDefault
+            || runResult.DynamicEvidenceReferences.Length > 0
+                && runResult.Terminal.Kind is DocumentationScribeTerminalKind.Failure
+                    or DocumentationScribeTerminalKind.Cancelled)
+        {
+            throw new ArgumentException("The run result has an invalid trusted evidence overlay.", nameof(runResult));
+        }
+
+        if (runResult.Terminal is DocumentationScribeProposalTerminal proposal
+            && (proposal.Target.RepositoryContextRef != request.Context.RepositoryContextRef
+                || proposal.Target.SymbolRef != request.Target.SymbolRef
+                || proposal.Target.SourceLocator != request.Target.SourceLocator
+                || !string.Equals(proposal.Target.SourceSha256, request.Target.SourceSha256, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException("The proposal target is not correlated to the parsed request.", nameof(runResult));
+        }
+
+        _ = CreateRunEnvelope(
+            request,
+            expectedAttemptId,
+            new DocumentationScribeRunEnvelopeInput(
+                envelope.ProviderConfigurationId,
+                envelope.ModelConfigurationId,
+                envelope.ScribeProtocolId,
+                envelope.AttemptNumber,
+                envelope.ProviderRequestCount,
+                envelope.ToolRoundCount,
+                envelope.ToolCallCount,
+                envelope.ElapsedMilliseconds,
+                envelope.Usage is null
+                    ? null
+                    : new DocumentationScribeUsageObservationInput(
+                        envelope.Usage.InputTokens,
+                        envelope.Usage.OutputTokens,
+                        envelope.Usage.CachedInputTokens,
+                        envelope.Usage.UncachedInputTokens,
+                        envelope.Usage.ReasoningTokens),
+                envelope.Cache,
+                envelope.Cost is null
+                    ? null
+                    : new DocumentationScribeCostObservationInput(
+                        envelope.Cost.CurrencyId,
+                        envelope.Cost.AmountMicrounits),
+                envelope.Diagnostics.Select(diagnostic => new DocumentationScribeDiagnosticInput(
+                    diagnostic.Code,
+                    diagnostic.Stage,
+                    diagnostic.ReferenceId,
+                    diagnostic.ValidationCode)).ToImmutableArray()),
+            runResult.Terminal);
+
+        return new DocumentationScribeValidatedRunOutcome(request, runResult);
+    }
+
     public static DocumentationScribeRunResult CreateFailureResult(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
         DocumentationScribeFailureCode code,
-        DocumentationScribeRunEnvelopeInput envelope)
+        DocumentationScribeRunEnvelopeInput envelope,
+        DocumentationScribeProviderFinalDisposition? providerFinalDisposition = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (!Enum.IsDefined(code))
@@ -341,11 +419,19 @@ public static class DocumentationScribeValidation
             throw new ArgumentOutOfRangeException(nameof(code));
         }
 
+        if (providerFinalDisposition is { } disposition && !Enum.IsDefined(disposition)
+            || code == DocumentationScribeFailureCode.Provider != (providerFinalDisposition is not null))
+        {
+            throw new ArgumentException(
+                "Provider final disposition must be present only for a provider failure.",
+                nameof(providerFinalDisposition));
+        }
+
         return CreateRuntimeResult(
             request,
             attemptId,
             [],
-            new DocumentationScribeFailureTerminal(code),
+            new DocumentationScribeFailureTerminal(code, providerFinalDisposition),
             envelope);
     }
 
@@ -440,6 +526,7 @@ public static class DocumentationScribeValidation
         }
 
         var envelope = CreateRunEnvelope(request, attemptId, input, terminal);
+        ValidateProviderFailureMatrixForFactory(request, terminal, envelope);
         return new DocumentationScribeRunResult(
             request.ArtifactSha256,
             attemptId,
@@ -1397,7 +1484,7 @@ public static class DocumentationScribeValidation
 
     private static DocumentationScribeFailureTerminal ParseFailureTerminal(JsonElement element, string pointer)
     {
-        ExpectProperties(element, pointer, ["kind", "code"]);
+        ExpectProperties(element, pointer, ["kind", "code"], ["providerFinalDisposition"]);
         var code = ReadString(element, "code", pointer, 64) switch
         {
             "scribe.failure.provider" => DocumentationScribeFailureCode.Provider,
@@ -1408,7 +1495,87 @@ public static class DocumentationScribeValidation
             "scribe.failure.internal" => DocumentationScribeFailureCode.Internal,
             _ => throw Fail("invalid-vocabulary", pointer + "/code"),
         };
-        return new DocumentationScribeFailureTerminal(code);
+        DocumentationScribeProviderFinalDisposition? providerFinalDisposition = null;
+        if (element.TryGetProperty("providerFinalDisposition", out var dispositionElement))
+        {
+            if (code != DocumentationScribeFailureCode.Provider)
+            {
+                throw Fail("invalid-shape", pointer + "/providerFinalDisposition");
+            }
+
+            providerFinalDisposition = ReadStringValue(
+                dispositionElement,
+                pointer + "/providerFinalDisposition",
+                16) switch
+            {
+                "retryable" => DocumentationScribeProviderFinalDisposition.Retryable,
+                "terminal" => DocumentationScribeProviderFinalDisposition.Terminal,
+                _ => throw Fail("invalid-vocabulary", pointer + "/providerFinalDisposition"),
+            };
+        }
+        else if (code == DocumentationScribeFailureCode.Provider)
+        {
+            throw Fail("invalid-shape", pointer + "/providerFinalDisposition");
+        }
+
+        return new DocumentationScribeFailureTerminal(code, providerFinalDisposition);
+    }
+
+    private static void ValidateProviderFailureMatrixForParse(
+        DocumentationScribeRequest request,
+        DocumentationScribeTerminal terminal,
+        DocumentationScribeRunEnvelope envelope)
+    {
+        if (terminal is not DocumentationScribeFailureTerminal
+            {
+                Code: DocumentationScribeFailureCode.Provider,
+            } providerFailure)
+        {
+            return;
+        }
+
+        if (envelope.ProviderRequestCount < 1
+            || envelope.ProviderRequestCount < envelope.AttemptNumber)
+        {
+            throw Fail("invalid-correlation", "/runEnvelope/providerRequestCount");
+        }
+
+        if (providerFailure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
+            && envelope.AttemptNumber != request.Limits.MaximumAttempts)
+        {
+            throw Fail("invalid-correlation", "/terminal/providerFinalDisposition");
+        }
+    }
+
+    private static void ValidateProviderFailureMatrixForFactory(
+        DocumentationScribeRequest request,
+        DocumentationScribeTerminal terminal,
+        DocumentationScribeRunEnvelope envelope)
+    {
+        if (terminal is not DocumentationScribeFailureTerminal failure)
+        {
+            return;
+        }
+
+        if (failure.Code == DocumentationScribeFailureCode.Provider
+            != (failure.ProviderFinalDisposition is not null)
+            || failure.ProviderFinalDisposition is { } disposition && !Enum.IsDefined(disposition))
+        {
+            throw new ArgumentException("The provider final disposition is not valid for the failure terminal.", nameof(terminal));
+        }
+
+        if (failure.Code != DocumentationScribeFailureCode.Provider)
+        {
+            return;
+        }
+
+        if (envelope.ProviderRequestCount < 1
+            || envelope.ProviderRequestCount < envelope.AttemptNumber
+            || failure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
+                && envelope.AttemptNumber != request.Limits.MaximumAttempts)
+        {
+            throw new ArgumentException("The provider failure is not a producer-realizable final state.", nameof(envelope));
+        }
     }
 
     private static DocumentationScribeCancelledTerminal ParseCancelledTerminal(JsonElement element, string pointer)

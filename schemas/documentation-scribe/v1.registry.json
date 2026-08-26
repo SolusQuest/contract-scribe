@@ -38,6 +38,10 @@
     "scribe.failure.tool-protocol",
     "scribe.failure.validation"
   ],
+  "providerFinalDispositions": [
+    "retryable",
+    "terminal"
+  ],
   "cancellationCodes": [
     "scribe.cancelled.caller",
     "scribe.cancelled.shutdown"

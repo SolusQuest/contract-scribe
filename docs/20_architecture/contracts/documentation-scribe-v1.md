@@ -158,6 +158,8 @@ The validator rejects a unit when any evidence reference is missing, duplicated,
 
 After validation, Core retains the original ordered M3 units and projects them to the current M2 `DocumentationPatchContent` union. Structured units map to summary/type-parameter/parameter/return/value/exception/remarks fields; the single inherit-doc unit maps to `DocumentationPatchInheritDocContent`. Projection does not grant source mutation authority and does not erase the original claim/evidence facts.
 
+Core may bind the exact parsed request, expected attempt, and immutable validated Run Result into one current-call `DocumentationScribeValidatedRunOutcome`. Binding repeats the complete root/envelope request and attempt correlation, target/source/context, tool/style, trusted overlay/terminal, proposal, provider-disposition, and bounded-envelope checks. The outcome retains the exact accepted request and result objects, including the original ordered proposal units, and has no independently supplied proposal or disposition field. It is not serialized, persisted, transferable to another process or session, or a source-mutation capability. Completion of Agent execution plus successful binding is the authoritative M3 point; later proposal postflight or M2-authorization failure cannot erase that outcome, although it withholds M2 authority.
+
 The proposal has no C#, XML nodes or trivia, source bytes, replacement text, edit kind, patch, diff, formatting instruction, or writer capability.
 
 ### Structured domain skip
@@ -180,6 +182,8 @@ A terminal `failure` contains one closed code:
 - `scribe.failure.budget`;
 - `scribe.failure.internal`.
 
+Only `scribe.failure.provider` also contains `providerFinalDisposition`, with exactly `retryable` or `terminal`. Every other failure and terminal forbids that property. The disposition summarizes the final provider terminal after the Agent-owned retry loop; it does not expose transport/provider taxonomy and does not authorize a campaign retry. A provider failure is producer-realizable only when at least one provider request was made and `providerRequestCount >= attemptNumber`. `retryable` additionally requires `attemptNumber == maximumAttempts`; `terminal` is allowed at any otherwise valid attempt. A transient final-attempt/provider-request-limit tie is therefore provider/retryable, while an observed higher-priority cancellation, timeout, or budget crossing remains its existing terminal.
+
 Cancellation is a disjoint `cancelled` variant with `scribe.cancelled.caller` or `scribe.cancelled.shutdown`. A terminal object cannot combine fields from another variant.
 
 ## Run envelope
@@ -193,7 +197,7 @@ The envelope repeats the exact request SHA-256 and attempt identity and records 
 - independently optional usage, cache, and cost observations;
 - a bounded ordered diagnostic list.
 
-Tool-policy and Style Profile identities must exactly equal the request. Provider/tool counts cannot exceed request limits. Optional usage fields independently observe input, cached input, uncached input, output, and reasoning tokens; no equality between token fields is asserted. Cache is one of hit, miss, mixed, or not reported. Cost is a currency configuration identity plus non-negative microunits. Provider mapping is owned by the transport issue, and configured cost calculation is owned by evaluation work.
+Tool-policy and Style Profile identities must exactly equal the request. Provider/tool counts cannot exceed request limits. Optional usage fields independently observe input, cached input, uncached input, output, and reasoning tokens; no equality between token fields is asserted. Cache is one of hit, miss, mixed, or not reported. Cost is a currency configuration identity plus non-negative microunits. Provider transport supplies the closed model-failure class, the Agent owns invocation-local retry exhaustion and the final disposition, and configured cost calculation is owned by evaluation work.
 
 The request ceilings are execution controls, while the result schema's larger published maxima are artifact-safety bounds. Each configured token, cost, and elapsed maximum is strictly lower than its corresponding artifact-safety maximum, leaving a bounded range in which the result can preserve the overrun that caused termination. A proposal or skip must remain within configured ceilings. A budget failure may truthfully report token or cost observations that crossed a configured ceiling. A timeout failure may truthfully report the elapsed overrun and any simultaneous bounded token or cost overruns observed at the same reducer checkpoint. Cancellation may report either kind of already-incurred observation. Those observations must still remain within the artifact-safety maxima. This terminal-aware allowance preserves the facts that caused termination without granting permission for another attempt.
 

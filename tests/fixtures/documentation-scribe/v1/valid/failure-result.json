@@ -5,7 +5,8 @@
   "dynamicEvidenceReferences": [],
   "terminal": {
     "kind": "failure",
-    "code": "scribe.failure.provider"
+    "code": "scribe.failure.provider",
+    "providerFinalDisposition": "terminal"
   },
   "runEnvelope": {
     "scribeRequestSha256": "803f3e6676ec2e719872ed4b40814ca62bb5aa93d5e8aa2cecece0611418d263",

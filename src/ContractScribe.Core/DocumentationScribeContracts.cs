@@ -69,6 +69,12 @@ public enum DocumentationScribeFailureCode
     Internal,
 }
 
+public enum DocumentationScribeProviderFinalDisposition
+{
+    Retryable,
+    Terminal,
+}
+
 public enum DocumentationScribeCancellationCode
 {
     Caller,
@@ -178,6 +184,13 @@ public static class DocumentationScribeVocabulary
         DocumentationScribeFailureCode.Timeout => "scribe.failure.timeout",
         DocumentationScribeFailureCode.Budget => "scribe.failure.budget",
         DocumentationScribeFailureCode.Internal => "scribe.failure.internal",
+        _ => throw new ArgumentOutOfRangeException(nameof(value)),
+    };
+
+    public static string GetId(DocumentationScribeProviderFinalDisposition value) => value switch
+    {
+        DocumentationScribeProviderFinalDisposition.Retryable => "retryable",
+        DocumentationScribeProviderFinalDisposition.Terminal => "terminal",
         _ => throw new ArgumentOutOfRangeException(nameof(value)),
     };
 
@@ -756,10 +769,18 @@ public sealed record DocumentationScribeSkipTerminal : DocumentationScribeTermin
 
 public sealed record DocumentationScribeFailureTerminal : DocumentationScribeTerminal
 {
-    internal DocumentationScribeFailureTerminal(DocumentationScribeFailureCode code)
-        : base(DocumentationScribeTerminalKind.Failure) => Code = code;
+    internal DocumentationScribeFailureTerminal(
+        DocumentationScribeFailureCode code,
+        DocumentationScribeProviderFinalDisposition? providerFinalDisposition)
+        : base(DocumentationScribeTerminalKind.Failure)
+    {
+        Code = code;
+        ProviderFinalDisposition = providerFinalDisposition;
+    }
 
     public DocumentationScribeFailureCode Code { get; }
+
+    public DocumentationScribeProviderFinalDisposition? ProviderFinalDisposition { get; }
 }
 
 public sealed record DocumentationScribeCancelledTerminal : DocumentationScribeTerminal
@@ -962,6 +983,23 @@ public sealed record DocumentationScribeRunResult
     public DocumentationScribeTerminal Terminal { get; }
 
     public DocumentationScribeRunEnvelope RunEnvelope { get; }
+}
+
+public sealed class DocumentationScribeValidatedRunOutcome
+{
+    internal DocumentationScribeValidatedRunOutcome(
+        DocumentationScribeRequest request,
+        DocumentationScribeRunResult runResult)
+    {
+        Request = request;
+        RunResult = runResult;
+    }
+
+    public DocumentationScribeRequest Request { get; }
+
+    public DocumentationScribeRunResult RunResult { get; }
+
+    public override string ToString() => nameof(DocumentationScribeValidatedRunOutcome);
 }
 
 public sealed record DocumentationScribeRequestValidationFailure(string Code, string? Pointer);

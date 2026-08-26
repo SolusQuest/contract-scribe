@@ -187,7 +187,10 @@ public sealed class DocumentationScribeRuntime
                 var failure = response.Failure!;
                 if (!failure.IsTransient || state.AttemptNumber >= request.Limits.MaximumAttempts)
                 {
-                    return reducer.CommitProvider(state, cancellationToken);
+                    return reducer.CommitProvider(
+                        state,
+                        cancellationToken,
+                        MapProviderFinalDisposition(failure.Code));
                 }
 
                 if (state.ProviderRequestCount >= request.Limits.MaximumProviderRequests
@@ -247,6 +250,16 @@ public sealed class DocumentationScribeRuntime
                 response.TerminalSubmissions[0].TerminalUtf8Json);
         }
     }
+
+    internal static DocumentationScribeProviderFinalDisposition MapProviderFinalDisposition(
+        DocumentationScribeModelFailureCode failureCode) => failureCode switch
+        {
+            DocumentationScribeModelFailureCode.TransientUnavailable =>
+                DocumentationScribeProviderFinalDisposition.Retryable,
+            DocumentationScribeModelFailureCode.RateLimited =>
+                DocumentationScribeProviderFinalDisposition.Retryable,
+            _ => DocumentationScribeProviderFinalDisposition.Terminal,
+        };
 
     private async Task<DocumentationScribeRunResult?> ProcessToolRoundAsync(
         ImmutableArray<DocumentationScribeModelToolCall> calls,
@@ -692,8 +705,13 @@ internal sealed class DocumentationScribeTerminalReducer
 
     internal DocumentationScribeRunResult CommitProvider(
         RunState state,
-        CancellationToken cancellationToken) =>
-        CommitFailureCore(state, cancellationToken, DocumentationScribeFailureCode.Provider);
+        CancellationToken cancellationToken,
+        DocumentationScribeProviderFinalDisposition providerFinalDisposition) =>
+        CommitFailureCore(
+            state,
+            cancellationToken,
+            DocumentationScribeFailureCode.Provider,
+            providerFinalDisposition: providerFinalDisposition);
 
     internal DocumentationScribeRunResult CommitToolProtocol(
         RunState state,
@@ -791,7 +809,8 @@ internal sealed class DocumentationScribeTerminalReducer
         CancellationToken cancellationToken,
         DocumentationScribeFailureCode code,
         string? detail = null,
-        bool cancelled = false)
+        bool cancelled = false,
+        DocumentationScribeProviderFinalDisposition? providerFinalDisposition = null)
     {
         lock (gate)
         {
@@ -811,7 +830,11 @@ internal sealed class DocumentationScribeTerminalReducer
                 ? state.CreateCancelled(elapsed)
                 : code switch
                 {
-                    DocumentationScribeFailureCode.Provider => state.CreateProviderFailure(elapsed),
+                    DocumentationScribeFailureCode.Provider =>
+                        state.CreateProviderFailure(
+                            providerFinalDisposition
+                            ?? DocumentationScribeProviderFinalDisposition.Terminal,
+                            elapsed),
                     DocumentationScribeFailureCode.ToolProtocol =>
                         state.CreateToolProtocolFailure(detail ?? "tool", elapsed),
                     DocumentationScribeFailureCode.Validation =>
@@ -1064,14 +1087,17 @@ internal sealed class RunState
                 allowObservedOverrun: code is DocumentationScribeFailureCode.Budget
                     or DocumentationScribeFailureCode.Timeout));
 
-    internal DocumentationScribeRunResult CreateProviderFailure(int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
+    internal DocumentationScribeRunResult CreateProviderFailure(
+        DocumentationScribeProviderFinalDisposition providerFinalDisposition,
+        int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
         Request,
         AttemptId,
         DocumentationScribeFailureCode.Provider,
         CreateEnvelope(
             [new DocumentationScribeDiagnosticInput("scribe.diagnostic.provider-failure", "provider")],
             elapsedMilliseconds,
-            allowObservedOverrun: false));
+            allowObservedOverrun: false),
+        providerFinalDisposition);
 
     internal DocumentationScribeRunResult CreateToolProtocolFailure(
         string referenceId,
