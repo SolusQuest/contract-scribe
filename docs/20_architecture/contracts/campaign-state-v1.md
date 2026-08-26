@@ -88,6 +88,9 @@ non-removable decision without probing a subset.
 The removable decision contains an opaque immutable capability retaining the
 complete exact predecessor and internally derived closed outcome. The reducer
 has no overload that accepts a caller-selected key plus a generic Patch outcome.
+Each closed outcome also carries a non-serialized in-memory binding to its
+enclosing work key; parsing restores that binding from the parent row, and the
+generic validated-state materializer rejects reuse under any other key.
 Applying the capability to its predecessor always derives the same canonical
 successor; applying it to that exact successor is unchanged; applying it to any
 other artifact is a conflict.
@@ -99,37 +102,67 @@ settlement. Provider admission increments one durable outer invocation and one
 per-work outer ordinal, then reserves the complete persisted Scribe-run maxima
 for provider requests, input/uncached/output tokens, enabled same-currency cost,
 and active elapsed time. Patch admission increments exactly one validation
-invocation and the applicable proposal candidate counts. The Patch reservation
+invocation and the candidate count of every accepted or proposal-complete block
+in the exact request projection. The Patch reservation
 always has `PatchAttemptCount = 1` and records the resulting checkpoint revision;
 there is no caller-supplied batch count. M2 dispatch/completion requires an
-opaque `CampaignPatchInvocationAuthority` derived from the exact persisted,
-read-back reserved artifact. Its complete artifact and revision binding prevents
-an earlier result from being attached to a later same-SHA retry.
+opaque provider/Patch invocation authority derived only from an accepted
+checkpoint capability produced after exact persisted readback. The complete
+artifact, attempt, request, and revision bindings prevent pre-persistence
+dispatch and prevent an earlier result from being attached to a later retry.
 
 Settlement adds exact observations when present. A missing observation moves
 the entire reserved dimension to `conservativeUnobserved`; it never becomes
 zero. A typed retry first settles the old reservation once, then performs one
-new admission in the same revision transition. Fresh provider attempt identity
+new admission in the same revision transition. A retryable closed provider
+outcome is also a durable retry source. Both retry families validate a freshly
+reconstructed current request; its process-local request SHA may stay equal or
+change. Fresh provider attempt identity
 is derived from immutable execution authority, work key, and the checked new
-outer ordinal. A same-SHA Patch retry receives a later reserved revision. Late
+outer ordinal. Every Patch retry receives a later reserved revision. Late
 results for retired attempt/revision authority fail correlation.
 
+Valid authoritative budget, timeout, or cancellation terminals may report
+bounded observations above the reserved run maxima. Those exact observations
+are charged and the reservation is cleared; they are not reclassified as an
+ambiguous invocation. Provider cost telemetry is ignored by the currency-less
+campaign ledger when cost enforcement is disabled. A valid successful proposal
+or candidate that cannot fit is omitted while prior authority is retained and a
+durable budget exhaustion is stored.
+
 `CampaignStateReducer` is pure and produces `Applied`, exact `Unchanged`, or a
-bounded rejection. Every applied mutation advances `checked(revision + 1)` once;
+bounded rejection. Each applied transition carries its exact predecessor and
+intended successor, so `ApplyTransition` accepts only the predecessor, returns
+the byte-identical successor as unchanged replay, and rejects every third state.
+Every applied mutation advances `checked(revision + 1)` once;
 the Campaign State observation ceiling is also the revision ceiling. A
 correlated authoritative M3/M2 completion settles and clears its reservation.
-Cancellation, timeout, or exhaustion without such a result conservatively
-settles and clears the active exposure before recording the terminal. Accepted
+An authoritative completion supplied with a simultaneous cancellation or
+timeout wins. A generic stop cannot settle an active invocation; the active-stop
+entry point requires the exact accepted checkpoint capability. Cancellation,
+timeout, or exhaustion without an authoritative result conservatively settles
+and clears the active exposure before recording the terminal. Accepted
 M2 completion replaces the complete candidate observation; an over-ceiling
 candidate is omitted and becomes durable budget exhaustion. Patch rejection
-closes only the work proven by the opaque reduction capability.
+closes only the work proven by the opaque reduction capability. Campaign
+completion is reached when no `planned` or `proposal-complete` work remains;
+accepted rows remain accepted and reconstructible while closed rows retain their
+terminal evidence. The historical `all-work-closed` reason names this resolved
+terminal set and does not authorize rewriting accepted rows as closed.
+Rejected, stale, and host-failed cumulative Patch outcomes are durable stops
+unless the exact Patch rejection capability proves a sole removable item;
+cancelled and timed-out Patch host outcomes preserve their exact request and
+reserved-revision correlation.
 
 Supersession revalidates a fresh revision-zero C2 template against current C1
 authority. Product revision, lineage, complete ceilings, policy, target profile,
 and input identity remain equal, while opaque snapshot and execution commitments
 must both change. Active exposure is conservatively settled, lineage charges and
 revision continue, snapshot work/candidate facts reset from the template, and
-one bounded immediate-predecessor summary is retained.
+one bounded immediate-predecessor summary is retained. When a correlated old
+snapshot transition is observed at the same boundary, supersession wins and the
+old transition is retained only as rejected late authority; it is not applied to
+the successor snapshot.
 
 ## Conditional store and readback
 
@@ -140,13 +173,17 @@ exact predecessor revision and digest while distinguishing missing from current
 mismatch. The port exposes no path, stream, filesystem, lease, Git, or process
 capability.
 
-`CampaignCheckpointAcceptance` reads before writing. An applied transition is
-written only over its exact predecessor; an already exact successor is accepted
-as lost-ack replay without a write. An unchanged result never writes. Every
-accepted path performs an exact readback, recomputes SHA-256, parses and
+`CampaignCheckpointAcceptance` reads before writing. Initial creation requires
+an explicit validated revision-zero initial authority. An applied transition is
+written only over the predecessor embedded in that transition; an independently
+supplied predecessor is not accepted. An already exact successor is accepted as
+lost-ack replay without a write. A conditional-write conflict is reread and is
+accepted only when the concurrent winner is that exact intended successor.
+Every accepted path performs an exact readback, recomputes SHA-256, parses and
 canonical-validates the bytes, and compares bytes, digest, revision, and the
 complete parsed artifact. A rejected reducer result performs zero port calls,
 and no conflict falls back from replace to create or from create to overwrite.
+Found reads enforce byte, revision, and lowercase digest bounds before copying.
 
 ## Canonical JSON and validation
 

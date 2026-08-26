@@ -17,6 +17,8 @@ public static class CampaignStateFactory
         "patch.rejected.unsafe-change",
     };
 
+    internal static CampaignLineageCharges EmptyChargesForAcceptance() => EmptyCharges();
+
     public static CampaignStyleConfigurationAuthority CreateStyleConfigurationAuthority(
         string id,
         JsonElement validatedProjection)
@@ -62,6 +64,30 @@ public static class CampaignStateFactory
             styleConfigurationId,
             validatedStyleConfigurationProjection);
         var policy = planningInput.ExecutionPolicy;
+        var workItems = acceptedPlan.WorkItems.Select(work => new CampaignWorkItemState(
+            work.WorkItemKey,
+            OuterAttemptCount: 0,
+            CandidateAttemptCount: 0,
+            work.Disposition.Kind == CampaignPlanningDispositionKind.Executable
+                ? CampaignWorkStatus.Planned
+                : CampaignWorkStatus.Closed,
+            TrustedProposal: null,
+            ClosedOutcome: work.Disposition.Kind == CampaignPlanningDispositionKind.Terminal
+                ? new CampaignWorkClosedOutcome(
+                    CampaignWorkOutcomeStage.Planning,
+                    CampaignWorkOutcomeCode.PlanningTerminal,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    work.WorkItemKey)
+                : null)).ToImmutableArray();
+        CampaignTerminalOutcome? terminal = workItems.IsEmpty
+            ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.NoWork)
+            : workItems.All(item => item.Status == CampaignWorkStatus.Closed)
+                ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed)
+                : null;
         var state = new CampaignCheckpointState(
             new CampaignStateProductRevision(
                 policy.ProductContractRevision.Id,
@@ -78,28 +104,11 @@ public static class CampaignStateFactory
             checkpointRevision: 0,
             CreateCeilings(policy, styleAuthority),
             EmptyCharges(),
-            acceptedPlan.WorkItems.Select(work => new CampaignWorkItemState(
-                work.WorkItemKey,
-                OuterAttemptCount: 0,
-                CandidateAttemptCount: 0,
-                work.Disposition.Kind == CampaignPlanningDispositionKind.Executable
-                    ? CampaignWorkStatus.Planned
-                    : CampaignWorkStatus.Closed,
-                TrustedProposal: null,
-                ClosedOutcome: work.Disposition.Kind == CampaignPlanningDispositionKind.Terminal
-                    ? new CampaignWorkClosedOutcome(
-                        CampaignWorkOutcomeStage.Planning,
-                        CampaignWorkOutcomeCode.PlanningTerminal,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null)
-                    : null)).ToImmutableArray(),
+            workItems,
             activeReservation: null,
             candidateObservation: null,
             cumulativeOutcome: null,
-            terminalOutcome: null,
+            terminalOutcome: terminal,
             predecessor: null);
         Validate(state);
         return state;
@@ -748,7 +757,8 @@ public static class CampaignStateFactory
                 null,
                 null,
                 request.ArtifactSha256,
-                resultCommitment);
+                resultCommitment,
+                workItemKey);
             var remainingWork = state.WorkItems.Select(item =>
                 string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
                     ? item with
@@ -901,7 +911,7 @@ public static class CampaignStateFactory
 
             if (work.ClosedOutcome is not null)
             {
-                ValidateClosedOutcome(work.ClosedOutcome);
+                ValidateClosedOutcome(work.ClosedOutcome, work.WorkItemKey);
             }
         }
 
@@ -1401,8 +1411,12 @@ public static class CampaignStateFactory
             request.ArtifactSha256,
             StringComparison.Ordinal);
 
-    private static void ValidateClosedOutcome(CampaignWorkClosedOutcome outcome)
+    private static void ValidateClosedOutcome(
+        CampaignWorkClosedOutcome outcome,
+        string workItemKey)
     {
+        Require(string.Equals(outcome.BoundWorkItemKey, workItemKey, StringComparison.Ordinal),
+            CampaignStateValidationCode.InvalidCorrelation);
         Require(Enum.IsDefined(outcome.Stage) && Enum.IsDefined(outcome.Code), CampaignStateValidationCode.InvalidVocabulary);
         if (outcome.Stage == CampaignWorkOutcomeStage.Planning)
         {
@@ -1616,7 +1630,7 @@ public static class CampaignStateFactory
                     state.WorkItems.IsEmpty,
                 CampaignTerminalKind.Complete when terminal.Reason == CampaignTerminalReason.AllWorkClosed =>
                     !state.WorkItems.IsEmpty
-                    && state.WorkItems.All(item => item.Status == CampaignWorkStatus.Closed),
+                    && state.WorkItems.All(item => item.Status is CampaignWorkStatus.Closed or CampaignWorkStatus.Accepted),
                 CampaignTerminalKind.Exhausted => terminal.Reason == CampaignTerminalReason.Budget,
                 CampaignTerminalKind.Cancelled => terminal.Reason == CampaignTerminalReason.Caller,
                 CampaignTerminalKind.Timeout => terminal.Reason == CampaignTerminalReason.Deadline,

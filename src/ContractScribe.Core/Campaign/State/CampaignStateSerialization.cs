@@ -1003,13 +1003,14 @@ public static class CampaignStateJson
             "status",
             "trustedProposal",
             "closedOutcome");
+        var workItemKey = ReadString(element, "workItemKey");
         return new CampaignWorkItemState(
-            ReadString(element, "workItemKey"),
+            workItemKey,
             ReadInt32(element, "outerAttemptCount"),
             ReadInt32(element, "candidateAttemptCount"),
             ParseWorkStatus(ReadString(element, "status")),
             ParseProposal(element.GetProperty("trustedProposal")),
-            ParseClosedOutcome(element.GetProperty("closedOutcome")));
+            ParseClosedOutcome(element.GetProperty("closedOutcome"), workItemKey));
     }
 
     private static CampaignTrustedProposal? ParseProposal(JsonElement element)
@@ -1299,7 +1300,9 @@ public static class CampaignStateJson
         return new SyntheticEvidenceLocator(ReadString(element, "fixtureId"));
     }
 
-    private static CampaignWorkClosedOutcome? ParseClosedOutcome(JsonElement element)
+    private static CampaignWorkClosedOutcome? ParseClosedOutcome(
+        JsonElement element,
+        string workItemKey)
     {
         if (element.ValueKind == JsonValueKind.Null)
         {
@@ -1346,7 +1349,8 @@ public static class CampaignStateJson
             ReadNullableString(element, "scribeRequestSha256"),
             attempt,
             ReadNullableString(element, "patchRequestSha256"),
-            ReadNullableString(element, "patchResultCommitmentSha256"));
+            ReadNullableString(element, "patchResultCommitmentSha256"),
+            workItemKey);
     }
 
     private static CampaignActiveReservation? ParseReservation(JsonElement element)

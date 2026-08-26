@@ -87,24 +87,17 @@ public static class CampaignBudgetAccounting
             || reservation.AttemptId != outcome.RunResult.AttemptId
             || outcome.RunResult.RunEnvelope.AttemptId != reservation.AttemptId
             || activeElapsedMilliseconds is < 0
-            || activeElapsedMilliseconds > reservation.Exposure.ElapsedMilliseconds)
+            || activeElapsedMilliseconds > CampaignStateContract.MaximumObservation)
         {
             return new CampaignSettlementDecision(CampaignBudgetDecisionKind.Invalid, null);
         }
 
         var envelope = outcome.RunResult.RunEnvelope;
         var budget = state.ConfiguredCeilings.CampaignBudget;
-        if (envelope.ProviderRequestCount > reservation.Exposure.ProviderRequests
-            || envelope.Usage?.InputTokens > reservation.Exposure.InputTokens
-            || envelope.Usage?.UncachedInputTokens > reservation.Exposure.UncachedInputTokens
-            || envelope.Usage?.OutputTokens > reservation.Exposure.OutputTokens
-            || envelope.Cost?.AmountMicrounits > reservation.Exposure.CostMicrounits
-            || envelope.ElapsedMilliseconds > reservation.Exposure.ElapsedMilliseconds
-            || activeElapsedMilliseconds is { } hostElapsed
+        if (activeElapsedMilliseconds is { } hostElapsed
                 && hostElapsed < envelope.ElapsedMilliseconds
             || budget.CostEnforced && envelope.Cost is not null
-                && !string.Equals(envelope.Cost.CurrencyId, budget.CostCurrency, StringComparison.Ordinal)
-            || !budget.CostEnforced && envelope.Cost is not null)
+                && !string.Equals(envelope.Cost.CurrencyId, budget.CostCurrency, StringComparison.Ordinal))
         {
             return new CampaignSettlementDecision(CampaignBudgetDecisionKind.Invalid, null);
         }
@@ -163,7 +156,7 @@ public static class CampaignBudgetAccounting
         long elapsedMilliseconds)
     {
         ArgumentNullException.ThrowIfNull(state);
-        if (elapsedMilliseconds < 0
+        if (elapsedMilliseconds <= 0
             || elapsedMilliseconds > CampaignStateContract.MaximumObservation)
         {
             return new CampaignSettlementDecision(CampaignBudgetDecisionKind.Invalid, null);
@@ -194,7 +187,7 @@ public static class CampaignBudgetAccounting
         if (state.ActiveReservation is not CampaignPatchReservation reservation
             || reservation.PatchAttemptCount != 1
             || activeElapsedMilliseconds is < 0
-            || activeElapsedMilliseconds > reservation.ElapsedMilliseconds)
+            || activeElapsedMilliseconds > CampaignStateContract.MaximumObservation)
         {
             return new CampaignSettlementDecision(CampaignBudgetDecisionKind.Invalid, null);
         }

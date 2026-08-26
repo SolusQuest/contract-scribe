@@ -50,8 +50,15 @@ public sealed class CampaignStateTransitionTests
                 attemptId,
                 budget.Exposure!));
         var predecessor = CampaignStateJson.CreateArtifact(reserved);
+        var unboundStop = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        Assert.Equal(CampaignTransitionKind.Rejected, unboundStop.Kind);
+        Assert.True(predecessor.ExactUtf8Json.AsSpan().SequenceEqual(
+            unboundStop.Artifact.ExactUtf8Json.AsSpan()));
 
-        var stopped = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        var stopped = CampaignStateReducer.StopActiveInvocation(
+            predecessor,
+            AcceptForTest(predecessor),
+            CampaignTerminalKind.Cancelled);
 
         Assert.Equal(CampaignTransitionKind.Applied, stopped.Kind);
         Assert.Null(stopped.Artifact.State.ActiveReservation);
@@ -84,11 +91,13 @@ public sealed class CampaignStateTransitionTests
         var over = CampaignBudgetAccounting.ReservePatchInvocation(
             state,
             state.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1);
+        var zero = CampaignBudgetAccounting.ReservePatchInvocation(state, 0);
 
         Assert.Equal(CampaignBudgetDecisionKind.Admitted, exact.Kind);
         Assert.Equal(1, exact.Charges!.PatchValidationInvocations);
         Assert.Equal(CampaignBudgetDecisionKind.Exhausted, over.Kind);
         Assert.Null(over.Charges);
+        Assert.Equal(CampaignBudgetDecisionKind.Invalid, zero.Kind);
     }
 
     [Fact]
@@ -135,5 +144,41 @@ public sealed class CampaignStateTransitionTests
             basis.ConfiguredCeilings,
             basis.LineageCharges,
             [work]);
+    }
+
+    private static CampaignAcceptedCheckpoint AcceptForTest(CampaignCheckpointArtifact artifact)
+    {
+        var result = CampaignCheckpointAcceptance.AcceptCurrentAsync(new ReadOnlyStore(artifact))
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+        return Assert.IsType<CampaignAcceptedCheckpoint>(result.AcceptedCheckpoint);
+    }
+
+    private sealed class ReadOnlyStore : ICampaignCheckpointStore
+    {
+        private readonly CampaignCheckpointArtifact _artifact;
+
+        public ReadOnlyStore(CampaignCheckpointArtifact artifact) => _artifact = artifact;
+
+        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult(CampaignCheckpointReadResult.Found(
+                _artifact.ExactUtf8Json.AsSpan(),
+                _artifact.CheckpointRevision,
+                _artifact.Sha256));
+
+        public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(
+            ReadOnlyMemory<byte> exactUtf8Json,
+            long checkpointRevision,
+            string sha256,
+            CancellationToken cancellationToken) => throw new InvalidOperationException();
+
+        public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(
+            long expectedCheckpointRevision,
+            string expectedSha256,
+            ReadOnlyMemory<byte> exactUtf8Json,
+            long checkpointRevision,
+            string sha256,
+            CancellationToken cancellationToken) => throw new InvalidOperationException();
     }
 }

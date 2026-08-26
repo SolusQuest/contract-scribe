@@ -14,7 +14,6 @@ public sealed class CampaignCheckpointStorePortTests
 
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(
             store,
-            predecessor,
             transition);
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
@@ -36,11 +35,9 @@ public sealed class CampaignCheckpointStorePortTests
 
         var unchanged = await CampaignCheckpointAcceptance.AcceptAsync(
             store,
-            predecessor,
             replay);
         var lostAck = await CampaignCheckpointAcceptance.AcceptAsync(
             store,
-            predecessor,
             applied);
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, unchanged.Kind);
@@ -60,7 +57,6 @@ public sealed class CampaignCheckpointStorePortTests
 
         var stale = await CampaignCheckpointAcceptance.AcceptAsync(
             staleStore,
-            predecessor,
             intended);
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, stale.Kind);
@@ -70,7 +66,6 @@ public sealed class CampaignCheckpointStorePortTests
         var badReadbackStore = new MemoryStore(predecessor) { CorruptAfterWrite = true };
         var badReadback = await CampaignCheckpointAcceptance.AcceptAsync(
             badReadbackStore,
-            predecessor,
             intended);
         Assert.Equal(CampaignCheckpointAcceptanceKind.ReadbackMismatch, badReadback.Kind);
         Assert.Equal(1, badReadbackStore.ReplaceCalls);
@@ -81,7 +76,6 @@ public sealed class CampaignCheckpointStorePortTests
         var untouched = new MemoryStore(predecessor);
         var invalidAcceptance = await CampaignCheckpointAcceptance.AcceptAsync(
             untouched,
-            predecessor,
             invalid);
         Assert.Equal(CampaignCheckpointAcceptanceKind.InvalidTransition, invalidAcceptance.Kind);
         Assert.Equal(0, untouched.ReadCalls);
@@ -90,7 +84,7 @@ public sealed class CampaignCheckpointStorePortTests
     }
 
     [Fact]
-    public async Task Create_is_absence_only_and_never_replaces_a_concurrent_winner()
+    public async Task Non_initial_transition_cannot_create_an_absent_checkpoint()
     {
         var initial = CreateOpenArtifact();
         var transition = CampaignStateReducer.Stop(initial, CampaignTerminalKind.Cancelled);
@@ -98,12 +92,56 @@ public sealed class CampaignCheckpointStorePortTests
 
         var result = await CampaignCheckpointAcceptance.AcceptAsync(
             store,
-            expectedPredecessor: null,
             transition);
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, result.Kind);
+        Assert.Equal(0, store.CreateCalls);
+        Assert.Equal(0, store.ReplaceCalls);
+    }
+
+    [Fact]
+    public async Task Initial_create_requires_explicit_initial_authority_and_exact_readback()
+    {
+        var initial = CreateInitialArtifact();
+        var authority = CampaignCheckpointAcceptance.CreateInitialAuthority(initial);
+        var store = new MemoryStore(null);
+
+        var result = await CampaignCheckpointAcceptance.AcceptInitialAsync(store, authority);
+
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
+        Assert.NotNull(result.AcceptedCheckpoint);
         Assert.Equal(1, store.CreateCalls);
         Assert.Equal(0, store.ReplaceCalls);
+        Assert.Equal(2, store.ReadCalls);
+    }
+
+    [Fact]
+    public async Task Conditional_conflict_accepts_only_an_exact_concurrent_winner()
+    {
+        var predecessor = CreateOpenArtifact();
+        var transition = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        var store = new MemoryStore(predecessor)
+        {
+            ReplaceResult = CampaignCheckpointWriteKind.CurrentMismatch,
+            WinnerOnRejectedWrite = transition.Artifact,
+        };
+
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
+
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
+        Assert.Equal(1, store.ReplaceCalls);
+        Assert.Equal(2, store.ReadCalls);
+    }
+
+    [Fact]
+    public void Oversized_found_read_is_rejected_before_materialization()
+    {
+        var bytes = new byte[CampaignStateContract.MaximumArtifactUtf8Bytes + 1];
+
+        var result = CampaignCheckpointReadResult.Found(bytes, 0, new string('a', 64));
+
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, result.Kind);
+        Assert.True(result.ExactUtf8Json.IsDefault);
     }
 
     private static CampaignCheckpointArtifact CreateOpenArtifact()
@@ -125,12 +163,23 @@ public sealed class CampaignCheckpointStorePortTests
             terminalOutcome: null));
     }
 
+    private static CampaignCheckpointArtifact CreateInitialArtifact()
+    {
+        var path = Path.GetFullPath(Path.Join(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "fixtures", "campaign", "state", "empty-terminal.json"));
+        return Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateJson.Parse(File.ReadAllBytes(path)).Artifact);
+    }
+
     private sealed class MemoryStore : ICampaignCheckpointStore
     {
         public MemoryStore(CampaignCheckpointArtifact? artifact) => Artifact = artifact;
 
         public CampaignCheckpointArtifact? Artifact { get; private set; }
         public CampaignCheckpointWriteKind CreateResult { get; init; } = CampaignCheckpointWriteKind.Written;
+        public CampaignCheckpointWriteKind ReplaceResult { get; init; } = CampaignCheckpointWriteKind.Written;
+        public CampaignCheckpointArtifact? WinnerOnRejectedWrite { get; init; }
         public bool CorruptAfterWrite { get; init; }
         public int ReadCalls { get; private set; }
         public int CreateCalls { get; private set; }
@@ -188,6 +237,12 @@ public sealed class CampaignCheckpointStorePortTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReplaceCalls++;
+            if (ReplaceResult != CampaignCheckpointWriteKind.Written)
+            {
+                Artifact = WinnerOnRejectedWrite ?? Artifact;
+                return ValueTask.FromResult(new CampaignCheckpointWriteResult(ReplaceResult));
+            }
+
             if (Artifact is null)
             {
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(

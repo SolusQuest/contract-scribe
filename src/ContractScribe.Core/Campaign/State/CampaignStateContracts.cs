@@ -228,7 +228,8 @@ public sealed record CampaignWorkClosedOutcome
         string? scribeRequestSha256,
         DocumentationScribeAttemptId? attemptId,
         string? patchRequestSha256,
-        string? patchResultCommitmentSha256)
+        string? patchResultCommitmentSha256,
+        string boundWorkItemKey)
     {
         Stage = stage;
         Code = code;
@@ -237,6 +238,7 @@ public sealed record CampaignWorkClosedOutcome
         AttemptId = attemptId;
         PatchRequestSha256 = patchRequestSha256;
         PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        BoundWorkItemKey = boundWorkItemKey;
     }
 
     public CampaignWorkOutcomeStage Stage { get; }
@@ -246,6 +248,7 @@ public sealed record CampaignWorkClosedOutcome
     public DocumentationScribeAttemptId? AttemptId { get; }
     public string? PatchRequestSha256 { get; }
     public string? PatchResultCommitmentSha256 { get; }
+    internal string BoundWorkItemKey { get; }
 }
 
 public sealed record CampaignScribeExecutionAuthority(

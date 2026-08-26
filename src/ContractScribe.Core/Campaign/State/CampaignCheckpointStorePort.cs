@@ -36,12 +36,24 @@ public sealed class CampaignCheckpointReadResult
     public static CampaignCheckpointReadResult Found(
         ReadOnlySpan<byte> exactUtf8Json,
         long checkpointRevision,
-        string sha256) =>
-        new(
+        string sha256)
+    {
+        if (exactUtf8Json.Length > CampaignStateContract.MaximumArtifactUtf8Bytes
+            || checkpointRevision < 0
+            || checkpointRevision > CampaignStateContract.MaximumObservation
+            || sha256 is null
+            || sha256.Length != 64
+            || sha256.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            return Invalid();
+        }
+
+        return new(
             CampaignCheckpointReadKind.Found,
             ImmutableArray.CreateRange(exactUtf8Json.ToArray()),
             checkpointRevision,
             sha256);
+    }
 
     public static CampaignCheckpointReadResult Invalid() =>
         new(CampaignCheckpointReadKind.Invalid, default, null, null);
@@ -92,9 +104,38 @@ public enum CampaignCheckpointAcceptanceKind
     Cancelled,
 }
 
-public sealed record CampaignCheckpointAcceptanceResult(
-    CampaignCheckpointAcceptanceKind Kind,
-    CampaignCheckpointArtifact? Artifact);
+public sealed class CampaignAcceptedCheckpoint
+{
+    internal CampaignAcceptedCheckpoint(CampaignCheckpointArtifact artifact) => Artifact = artifact;
+
+    public CampaignCheckpointArtifact Artifact { get; }
+
+    public override string ToString() => nameof(CampaignAcceptedCheckpoint);
+}
+
+public sealed class CampaignInitialCheckpointAuthority
+{
+    internal CampaignInitialCheckpointAuthority(CampaignCheckpointArtifact artifact) => Artifact = artifact;
+
+    internal CampaignCheckpointArtifact Artifact { get; }
+
+    public override string ToString() => nameof(CampaignInitialCheckpointAuthority);
+}
+
+public sealed class CampaignCheckpointAcceptanceResult
+{
+    internal CampaignCheckpointAcceptanceResult(
+        CampaignCheckpointAcceptanceKind kind,
+        CampaignAcceptedCheckpoint? acceptedCheckpoint)
+    {
+        Kind = kind;
+        AcceptedCheckpoint = acceptedCheckpoint;
+    }
+
+    public CampaignCheckpointAcceptanceKind Kind { get; }
+    public CampaignAcceptedCheckpoint? AcceptedCheckpoint { get; }
+    public CampaignCheckpointArtifact? Artifact => AcceptedCheckpoint?.Artifact;
+}
 
 /// <summary>
 /// Applies a pure reducer result through a conditional store and accepts it
@@ -102,9 +143,85 @@ public sealed record CampaignCheckpointAcceptanceResult(
 /// </summary>
 public static class CampaignCheckpointAcceptance
 {
+    public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptCurrentAsync(
+        ICampaignCheckpointStore store,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        try
+        {
+            var read = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (read.Kind != CampaignCheckpointReadKind.Found
+                || read.CheckpointRevision is null
+                || read.Sha256 is null
+                || read.ExactUtf8Json.IsDefault)
+            {
+                return ReadFailure(read);
+            }
+
+            var bytes = read.ExactUtf8Json.AsSpan();
+            var recomputed = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            var parsed = CampaignStateJson.Parse(read.ExactUtf8Json.AsMemory());
+            if (!string.Equals(recomputed, read.Sha256, StringComparison.Ordinal)
+                || !parsed.IsValid
+                || parsed.Artifact is null
+                || parsed.Artifact.CheckpointRevision != read.CheckpointRevision
+                || !bytes.SequenceEqual(parsed.Artifact.ExactUtf8Json.AsSpan()))
+            {
+                return new CampaignCheckpointAcceptanceResult(
+                    CampaignCheckpointAcceptanceKind.InvalidRead,
+                    null);
+            }
+
+            return new CampaignCheckpointAcceptanceResult(
+                CampaignCheckpointAcceptanceKind.Accepted,
+                new CampaignAcceptedCheckpoint(parsed.Artifact));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Cancelled, null);
+        }
+    }
+
+    public static CampaignInitialCheckpointAuthority CreateInitialAuthority(
+        CampaignCheckpointArtifact initialArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(initialArtifact);
+        var state = initialArtifact.State;
+        if (state.CheckpointRevision != 0
+            || state.ActiveReservation is not null
+            || state.CandidateObservation is not null
+            || state.CumulativeOutcome is not null
+            || state.Predecessor is not null
+            || state.LineageCharges != CampaignStateFactory.EmptyChargesForAcceptance()
+            || state.WorkItems.Any(item =>
+                item.OuterAttemptCount != 0
+                || item.CandidateAttemptCount != 0
+                || item.TrustedProposal is not null
+                || item.Status is not (CampaignWorkStatus.Planned or CampaignWorkStatus.Closed)
+                || item.Status == CampaignWorkStatus.Closed
+                    && item.ClosedOutcome?.Stage != CampaignWorkOutcomeStage.Planning)
+            || state.TerminalOutcome != ExpectedInitialTerminal(state.WorkItems)
+            || !ArtifactsEqual(initialArtifact, CampaignStateJson.CreateArtifact(state)))
+        {
+            throw new ArgumentException("The artifact is not an exact initial checkpoint.", nameof(initialArtifact));
+        }
+
+        return new CampaignInitialCheckpointAuthority(initialArtifact);
+    }
+
+    public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptInitialAsync(
+        ICampaignCheckpointStore store,
+        CampaignInitialCheckpointAuthority authority,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(authority);
+        return await AcceptCoreAsync(store, null, authority.Artifact, cancellationToken).ConfigureAwait(false);
+    }
+
     public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptAsync(
         ICampaignCheckpointStore store,
-        CampaignCheckpointArtifact? expectedPredecessor,
         CampaignTransitionResult transition,
         CancellationToken cancellationToken = default)
     {
@@ -117,20 +234,31 @@ public static class CampaignCheckpointAcceptance
                 null);
         }
 
+        return await AcceptCoreAsync(
+            store,
+            transition.Predecessor,
+            transition.Artifact,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptCoreAsync(
+        ICampaignCheckpointStore store,
+        CampaignCheckpointArtifact? expectedPredecessor,
+        CampaignCheckpointArtifact intended,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var current = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
-            var currentMatch = Match(current, transition.Artifact);
+            var currentMatch = Match(current, intended);
             if (currentMatch == MatchKind.Invalid)
             {
                 return ReadFailure(current);
             }
 
-            if (transition.Kind == CampaignTransitionKind.Unchanged || currentMatch == MatchKind.Exact)
+            if (currentMatch == MatchKind.Exact)
             {
-                return currentMatch == MatchKind.Exact
-                    ? await VerifyReadbackAsync(store, transition.Artifact, cancellationToken).ConfigureAwait(false)
-                    : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Conflict, null);
+                return await VerifyReadbackAsync(store, intended, cancellationToken).ConfigureAwait(false);
             }
 
             CampaignCheckpointWriteResult write;
@@ -142,9 +270,9 @@ public static class CampaignCheckpointAcceptance
                 }
 
                 write = await store.CreateIfAbsentAsync(
-                    transition.Artifact.ExactUtf8Json.AsMemory(),
-                    transition.Artifact.CheckpointRevision,
-                    transition.Artifact.Sha256,
+                    intended.ExactUtf8Json.AsMemory(),
+                    intended.CheckpointRevision,
+                    intended.Sha256,
                     cancellationToken).ConfigureAwait(false);
             }
             else
@@ -157,14 +285,27 @@ public static class CampaignCheckpointAcceptance
                 write = await store.ReplaceIfCurrentAsync(
                     expectedPredecessor.CheckpointRevision,
                     expectedPredecessor.Sha256,
-                    transition.Artifact.ExactUtf8Json.AsMemory(),
-                    transition.Artifact.CheckpointRevision,
-                    transition.Artifact.Sha256,
+                    intended.ExactUtf8Json.AsMemory(),
+                    intended.CheckpointRevision,
+                    intended.Sha256,
                     cancellationToken).ConfigureAwait(false);
             }
 
             if (write.Kind != CampaignCheckpointWriteKind.Written)
             {
+                if (write.Kind is CampaignCheckpointWriteKind.AlreadyPresent
+                    or CampaignCheckpointWriteKind.PredecessorMissing
+                    or CampaignCheckpointWriteKind.CurrentMismatch)
+                {
+                    var concurrent = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+                    if (Match(concurrent, intended) == MatchKind.Exact)
+                    {
+                        return new CampaignCheckpointAcceptanceResult(
+                            CampaignCheckpointAcceptanceKind.Accepted,
+                            new CampaignAcceptedCheckpoint(intended));
+                    }
+                }
+
                 return new CampaignCheckpointAcceptanceResult(
                     write.Kind is CampaignCheckpointWriteKind.AlreadyPresent
                         or CampaignCheckpointWriteKind.PredecessorMissing
@@ -174,7 +315,7 @@ public static class CampaignCheckpointAcceptance
                     null);
             }
 
-            return await VerifyReadbackAsync(store, transition.Artifact, cancellationToken).ConfigureAwait(false);
+            return await VerifyReadbackAsync(store, intended, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -189,7 +330,9 @@ public static class CampaignCheckpointAcceptance
     {
         var readback = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
         return Match(readback, intended) == MatchKind.Exact
-            ? new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Accepted, intended)
+            ? new CampaignCheckpointAcceptanceResult(
+                CampaignCheckpointAcceptanceKind.Accepted,
+                new CampaignAcceptedCheckpoint(intended))
             : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.ReadbackMismatch, null);
     }
 
@@ -242,4 +385,16 @@ public static class CampaignCheckpointAcceptance
         Different,
         Invalid,
     }
+
+    private static bool ArtifactsEqual(CampaignCheckpointArtifact left, CampaignCheckpointArtifact right) =>
+        left.CheckpointRevision == right.CheckpointRevision
+        && string.Equals(left.Sha256, right.Sha256, StringComparison.Ordinal)
+        && left.ExactUtf8Json.AsSpan().SequenceEqual(right.ExactUtf8Json.AsSpan());
+
+    private static CampaignTerminalOutcome? ExpectedInitialTerminal(
+        ImmutableArray<CampaignWorkItemState> workItems) => workItems.IsEmpty
+            ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.NoWork)
+            : workItems.All(item => item.Status == CampaignWorkStatus.Closed)
+                ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed)
+                : null;
 }
