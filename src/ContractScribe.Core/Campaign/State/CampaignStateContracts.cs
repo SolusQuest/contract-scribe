@@ -66,6 +66,7 @@ public enum CampaignWorkOutcomeStage
 {
     Planning,
     Scribe,
+    Patch,
 }
 
 public enum CampaignWorkOutcomeCode
@@ -81,6 +82,7 @@ public enum CampaignWorkOutcomeCode
     CancelledByShutdown,
     Timeout,
     BudgetExhausted,
+    PatchRejected,
 }
 
 public enum CampaignProviderFinalDisposition
@@ -217,12 +219,34 @@ public sealed record CampaignTrustedProposal(
     string ToolPolicyId,
     string ProposalCommitmentSha256);
 
-public sealed record CampaignWorkClosedOutcome(
-    CampaignWorkOutcomeStage Stage,
-    CampaignWorkOutcomeCode Code,
-    CampaignProviderFinalDisposition? ProviderDisposition,
-    string? ScribeRequestSha256,
-    DocumentationScribeAttemptId? AttemptId);
+public sealed record CampaignWorkClosedOutcome
+{
+    internal CampaignWorkClosedOutcome(
+        CampaignWorkOutcomeStage stage,
+        CampaignWorkOutcomeCode code,
+        CampaignProviderFinalDisposition? providerDisposition,
+        string? scribeRequestSha256,
+        DocumentationScribeAttemptId? attemptId,
+        string? patchRequestSha256,
+        string? patchResultCommitmentSha256)
+    {
+        Stage = stage;
+        Code = code;
+        ProviderDisposition = providerDisposition;
+        ScribeRequestSha256 = scribeRequestSha256;
+        AttemptId = attemptId;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+    }
+
+    public CampaignWorkOutcomeStage Stage { get; }
+    public CampaignWorkOutcomeCode Code { get; }
+    public CampaignProviderFinalDisposition? ProviderDisposition { get; }
+    public string? ScribeRequestSha256 { get; }
+    public DocumentationScribeAttemptId? AttemptId { get; }
+    public string? PatchRequestSha256 { get; }
+    public string? PatchResultCommitmentSha256 { get; }
+}
 
 public sealed record CampaignScribeExecutionAuthority(
     string ProviderConfigurationId,
@@ -345,6 +369,51 @@ public sealed record CampaignPatchCompletion
 
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome CumulativeOutcome { get; }
+}
+
+public enum CampaignPatchRejectionDecisionKind
+{
+    Removable,
+    NonRemovable,
+}
+
+public sealed class CampaignPatchRejectionDecision
+{
+    internal CampaignPatchRejectionDecision(
+        CampaignPatchRejectionDecisionKind kind,
+        CampaignPatchRejectionReduction? reduction)
+    {
+        Kind = kind;
+        Reduction = reduction;
+    }
+
+    public CampaignPatchRejectionDecisionKind Kind { get; }
+    public CampaignPatchRejectionReduction? Reduction { get; }
+}
+
+public sealed class CampaignPatchRejectionReduction
+{
+    internal CampaignPatchRejectionReduction(
+        CampaignCheckpointArtifact predecessor,
+        string workItemKey,
+        string patchRequestSha256,
+        string patchResultCommitmentSha256,
+        CampaignWorkClosedOutcome closedOutcome)
+    {
+        Predecessor = predecessor;
+        WorkItemKey = workItemKey;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        ClosedOutcome = closedOutcome;
+    }
+
+    internal CampaignCheckpointArtifact Predecessor { get; }
+    internal string WorkItemKey { get; }
+    internal string PatchRequestSha256 { get; }
+    internal string PatchResultCommitmentSha256 { get; }
+    internal CampaignWorkClosedOutcome ClosedOutcome { get; }
+
+    public override string ToString() => nameof(CampaignPatchRejectionReduction);
 }
 
 public sealed record CampaignTerminalOutcome(

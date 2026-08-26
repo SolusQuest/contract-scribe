@@ -8,6 +8,15 @@ namespace ContractScribe.Core;
 
 public static class CampaignStateFactory
 {
+    private static readonly HashSet<string> RemovablePatchDiagnosticCodes = new(StringComparer.Ordinal)
+    {
+        "patch.rejected.unsupported-target",
+        "patch.rejected.ambiguous-target",
+        "patch.rejected.non-writable-target",
+        "patch.rejected.edit-state",
+        "patch.rejected.unsafe-change",
+    };
+
     public static CampaignStyleConfigurationAuthority CreateStyleConfigurationAuthority(
         string id,
         JsonElement validatedProjection)
@@ -81,6 +90,8 @@ public static class CampaignStateFactory
                     ? new CampaignWorkClosedOutcome(
                         CampaignWorkOutcomeStage.Planning,
                         CampaignWorkOutcomeCode.PlanningTerminal,
+                        null,
+                        null,
                         null,
                         null,
                         null)
@@ -204,7 +215,7 @@ public static class CampaignStateFactory
                         pair.First.Status != CampaignWorkStatus.Closed
                         || pair.First.ClosedOutcome is
                         {
-                            Stage: CampaignWorkOutcomeStage.Scribe,
+                            Stage: CampaignWorkOutcomeStage.Scribe or CampaignWorkOutcomeStage.Patch,
                             Code: not CampaignWorkOutcomeCode.PlanningTerminal,
                         },
                     _ => false,
@@ -638,6 +649,211 @@ public static class CampaignStateFactory
 
         return writer.Complete();
     }
+
+    public static CampaignPatchRejectionDecision CreatePatchRejectionReduction(
+        CampaignCheckpointArtifact predecessor,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan,
+        DocumentationPatchRequest request,
+        DocumentationPatchValidationResult result,
+        string workItemKey)
+    {
+        ArgumentNullException.ThrowIfNull(predecessor);
+        ArgumentNullException.ThrowIfNull(styleConfigurationId);
+        ArgumentNullException.ThrowIfNull(inputIdentity);
+        ArgumentNullException.ThrowIfNull(planningInput);
+        ArgumentNullException.ThrowIfNull(acceptedPlan);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(workItemKey);
+
+        try
+        {
+            var canonicalPredecessor = CampaignStateJson.CreateArtifact(predecessor.State);
+            if (!ArtifactsEqual(canonicalPredecessor, predecessor))
+            {
+                return NonRemovablePatchRejection();
+            }
+
+            var state = predecessor.State;
+            ValidateCurrentContext(
+                state,
+                styleConfigurationId,
+                validatedStyleConfigurationProjection,
+                inputIdentity,
+                planningInput,
+                acceptedPlan);
+
+            if (state.ActiveReservation is not CampaignPatchReservation reservation
+                || reservation.PatchAttemptCount != 1
+                || reservation.ExpectedCheckpointRevision != state.CheckpointRevision
+                || !string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
+                || result.Outcome != DocumentationPatchOutcome.Rejected
+                || !DocumentationPatchValidator.ValidateResult(request, result).IsValid)
+            {
+                return NonRemovablePatchRejection();
+            }
+
+            _ = ResolvePatchRequestProjection(state, request);
+            var selectedRows = state.WorkItems
+                .Where(item => string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal))
+                .ToImmutableArray();
+            if (selectedRows.Length != 1
+                || selectedRows[0].Status != CampaignWorkStatus.ProposalComplete
+                || selectedRows[0].TrustedProposal is null
+                || request.Blocks.Count(block => string.Equals(block.BlockId, workItemKey, StringComparison.Ordinal)) != 1)
+            {
+                return NonRemovablePatchRejection();
+            }
+
+            var selectedTargets = result.Targets
+                .Where(target => string.Equals(target.BlockId, workItemKey, StringComparison.Ordinal))
+                .ToImmutableArray();
+            if (selectedTargets.Length != 1
+                || selectedTargets[0].Status != DocumentationPatchTargetStatus.Invalid
+                || result.Targets.Any(target =>
+                    !string.Equals(target.BlockId, workItemKey, StringComparison.Ordinal)
+                    && target.Status != DocumentationPatchTargetStatus.Valid)
+                || result.Invariants.Any(invariant => invariant.Status == DocumentationPatchInvariantStatus.Failed)
+                || result.Diagnostics.Any(diagnostic =>
+                    !string.Equals(diagnostic.BlockId, workItemKey, StringComparison.Ordinal)
+                    || !RemovablePatchDiagnosticCodes.Contains(diagnostic.Code)))
+            {
+                return NonRemovablePatchRejection();
+            }
+
+            var planRows = acceptedPlan.WorkItems
+                .ToDictionary(item => item.WorkItemKey, StringComparer.Ordinal);
+            if (!planRows.TryGetValue(workItemKey, out var selectedPlanRow)
+                || state.WorkItems
+                    .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+                    .Any(item => !planRows.ContainsKey(item.WorkItemKey))
+                || state.WorkItems
+                    .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+                    .Where(item => !string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal))
+                    .Select(item => planRows[item.WorkItemKey])
+                    .Any(other => SharesPatchAuthority(selectedPlanRow, other)))
+            {
+                return NonRemovablePatchRejection();
+            }
+
+            var resultCommitment = CreatePatchResultCommitment(request, result);
+            var closedOutcome = new CampaignWorkClosedOutcome(
+                CampaignWorkOutcomeStage.Patch,
+                CampaignWorkOutcomeCode.PatchRejected,
+                null,
+                null,
+                null,
+                request.ArtifactSha256,
+                resultCommitment);
+            var remainingWork = state.WorkItems.Select(item =>
+                string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
+                    ? item with
+                    {
+                        Status = CampaignWorkStatus.Closed,
+                        TrustedProposal = null,
+                        ClosedOutcome = closedOutcome,
+                    }
+                    : item).ToImmutableArray();
+
+            var projectionCheck = new CampaignCheckpointState(
+                state.ProductRevision,
+                state.CampaignLineage,
+                state.Snapshot,
+                state.CheckpointRevision,
+                state.ConfiguredCeilings,
+                state.LineageCharges,
+                remainingWork,
+                activeReservation: null,
+                state.CandidateObservation,
+                state.CumulativeOutcome,
+                state.TerminalOutcome,
+                state.Predecessor);
+            Validate(projectionCheck);
+
+            return new CampaignPatchRejectionDecision(
+                CampaignPatchRejectionDecisionKind.Removable,
+                new CampaignPatchRejectionReduction(
+                    predecessor,
+                    workItemKey,
+                    request.ArtifactSha256,
+                    resultCommitment,
+                    closedOutcome));
+        }
+        catch (Exception exception) when (exception is CampaignStateValidationException
+            or CampaignPlanningValidationException
+            or ArgumentException
+            or InvalidOperationException
+            or OverflowException)
+        {
+            return NonRemovablePatchRejection();
+        }
+    }
+
+    private static CampaignPatchRejectionDecision NonRemovablePatchRejection() =>
+        new(CampaignPatchRejectionDecisionKind.NonRemovable, null);
+
+    private static bool ArtifactsEqual(
+        CampaignCheckpointArtifact left,
+        CampaignCheckpointArtifact right) =>
+        left.CheckpointRevision == right.CheckpointRevision
+        && string.Equals(left.Sha256, right.Sha256, StringComparison.Ordinal)
+        && left.ExactUtf8Json.AsSpan().SequenceEqual(right.ExactUtf8Json.AsSpan());
+
+    private static bool SharesPatchAuthority(
+        CampaignPlanningWorkItem selected,
+        CampaignPlanningWorkItem other)
+    {
+        if (string.Equals(selected.OwnerEquivalenceRef, other.OwnerEquivalenceRef, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return selected.Targets.Any(left => other.Targets.Any(right =>
+            SamePhysicalSource(left.Source, right.Source)
+            && SourceAuthoritySpans(left.Source).Any(leftSpan =>
+                SourceAuthoritySpans(right.Source).Any(rightSpan => SpansOverlap(leftSpan, rightSpan)))));
+    }
+
+    private static bool SamePhysicalSource(
+        CampaignPlanningSourceAuthority left,
+        CampaignPlanningSourceAuthority right) =>
+        (left, right) switch
+        {
+            (CampaignPlanningRepositorySourceAuthority leftRepository,
+                CampaignPlanningRepositorySourceAuthority rightRepository) =>
+                string.Equals(
+                    leftRepository.PhysicalSourceCommitmentSha256,
+                    rightRepository.PhysicalSourceCommitmentSha256,
+                    StringComparison.Ordinal),
+            (CampaignPlanningGeneratedSourceAuthority leftGenerated,
+                CampaignPlanningGeneratedSourceAuthority rightGenerated) =>
+                leftGenerated.Kind == rightGenerated.Kind
+                && string.Equals(leftGenerated.ProducerId, rightGenerated.ProducerId, StringComparison.Ordinal)
+                && string.Equals(leftGenerated.OutputId, rightGenerated.OutputId, StringComparison.Ordinal),
+            _ => false,
+        };
+
+    private static ImmutableArray<Utf16Span> SourceAuthoritySpans(CampaignPlanningSourceAuthority source)
+    {
+        var builder = ImmutableArray.CreateBuilder<Utf16Span>(5);
+        builder.Add(source.OwnerSpan);
+        builder.Add(source.ObservationDeclarationSpan);
+        builder.Add(source.RequestedDeclarationSpan);
+        builder.Add(source.CanonicalDeclarationSpan);
+        if (source.DocumentationSpan is { } documentationSpan)
+        {
+            builder.Add(documentationSpan);
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    private static bool SpansOverlap(Utf16Span left, Utf16Span right) =>
+        left.Start < right.End && right.Start < left.End;
 
     internal static void Validate(CampaignCheckpointState state)
     {
@@ -1193,18 +1409,34 @@ public static class CampaignStateFactory
             Require(outcome.Code == CampaignWorkOutcomeCode.PlanningTerminal
                 && outcome.ProviderDisposition is null
                 && outcome.ScribeRequestSha256 is null
-                && outcome.AttemptId is null,
+                && outcome.AttemptId is null
+                && outcome.PatchRequestSha256 is null
+                && outcome.PatchResultCommitmentSha256 is null,
                 CampaignStateValidationCode.InvalidShape);
         }
-        else
+        else if (outcome.Stage == CampaignWorkOutcomeStage.Scribe)
         {
-            Require(outcome.Code != CampaignWorkOutcomeCode.PlanningTerminal
+            Require(outcome.Code is not CampaignWorkOutcomeCode.PlanningTerminal
+                    and not CampaignWorkOutcomeCode.PatchRejected
                 && (outcome.Code == CampaignWorkOutcomeCode.ProviderFailure
                     ? outcome.ProviderDisposition is not null && Enum.IsDefined(outcome.ProviderDisposition.Value)
                     : outcome.ProviderDisposition is null)
                 && IsSha256(outcome.ScribeRequestSha256)
                 && outcome.AttemptId is { } attempt
-                && DocumentationScribeAttemptId.TryParse(attempt.Value, out _),
+                && DocumentationScribeAttemptId.TryParse(attempt.Value, out _)
+                && outcome.PatchRequestSha256 is null
+                && outcome.PatchResultCommitmentSha256 is null,
+                CampaignStateValidationCode.InvalidShape);
+        }
+        else
+        {
+            Require(outcome.Stage == CampaignWorkOutcomeStage.Patch
+                && outcome.Code == CampaignWorkOutcomeCode.PatchRejected
+                && outcome.ProviderDisposition is null
+                && outcome.ScribeRequestSha256 is null
+                && outcome.AttemptId is null
+                && IsSha256(outcome.PatchRequestSha256)
+                && IsSha256(outcome.PatchResultCommitmentSha256),
                 CampaignStateValidationCode.InvalidShape);
         }
     }

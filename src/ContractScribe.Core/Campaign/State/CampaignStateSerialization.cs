@@ -610,7 +610,13 @@ public static class CampaignStateJson
         }
 
         writer.WriteStartObject();
-        writer.WriteString("stage", outcome.Stage == CampaignWorkOutcomeStage.Planning ? "planning" : "scribe");
+        writer.WriteString("stage", outcome.Stage switch
+        {
+            CampaignWorkOutcomeStage.Planning => "planning",
+            CampaignWorkOutcomeStage.Scribe => "scribe",
+            CampaignWorkOutcomeStage.Patch => "patch",
+            _ => throw Vocabulary(),
+        });
         writer.WriteString("code", WorkOutcomeCodeId(outcome.Code));
         WriteNullableString(
             writer,
@@ -627,6 +633,8 @@ public static class CampaignStateJson
             writer,
             "attemptId",
             outcome.AttemptId is { } attempt ? attempt.Value : null);
+        WriteNullableString(writer, "patchRequestSha256", outcome.PatchRequestSha256);
+        WriteNullableString(writer, "patchResultCommitmentSha256", outcome.PatchResultCommitmentSha256);
         writer.WriteEndObject();
     }
 
@@ -1298,7 +1306,15 @@ public static class CampaignStateJson
             return null;
         }
 
-        ExpectObject(element, "stage", "code", "providerDisposition", "scribeRequestSha256", "attemptId");
+        ExpectObject(
+            element,
+            "stage",
+            "code",
+            "providerDisposition",
+            "scribeRequestSha256",
+            "attemptId",
+            "patchRequestSha256",
+            "patchResultCommitmentSha256");
         var attemptText = ReadNullableString(element, "attemptId");
         DocumentationScribeAttemptId? attempt = null;
         if (attemptText is not null)
@@ -1316,6 +1332,7 @@ public static class CampaignStateJson
             {
                 "planning" => CampaignWorkOutcomeStage.Planning,
                 "scribe" => CampaignWorkOutcomeStage.Scribe,
+                "patch" => CampaignWorkOutcomeStage.Patch,
                 _ => throw Vocabulary(),
             },
             ParseWorkOutcomeCode(ReadString(element, "code")),
@@ -1327,7 +1344,9 @@ public static class CampaignStateJson
                 _ => throw Vocabulary(),
             },
             ReadNullableString(element, "scribeRequestSha256"),
-            attempt);
+            attempt,
+            ReadNullableString(element, "patchRequestSha256"),
+            ReadNullableString(element, "patchResultCommitmentSha256"));
     }
 
     private static CampaignActiveReservation? ParseReservation(JsonElement element)
@@ -1875,6 +1894,7 @@ public static class CampaignStateJson
         CampaignWorkOutcomeCode.CancelledByShutdown => "cancelled-by-shutdown",
         CampaignWorkOutcomeCode.Timeout => "timeout",
         CampaignWorkOutcomeCode.BudgetExhausted => "budget-exhausted",
+        CampaignWorkOutcomeCode.PatchRejected => "patch-rejected",
         _ => throw Vocabulary(),
     };
 
@@ -1891,6 +1911,7 @@ public static class CampaignStateJson
         "cancelled-by-shutdown" => CampaignWorkOutcomeCode.CancelledByShutdown,
         "timeout" => CampaignWorkOutcomeCode.Timeout,
         "budget-exhausted" => CampaignWorkOutcomeCode.BudgetExhausted,
+        "patch-rejected" => CampaignWorkOutcomeCode.PatchRejected,
         _ => throw Vocabulary(),
     };
 

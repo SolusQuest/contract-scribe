@@ -1,12 +1,20 @@
 # Campaign State v1
 
-> **Status:** Current pre-release in-process draft introduced by M4-C2. It is the checkpoint contract consumed by the later reducer/store slice; it is not a storage implementation, migration format, or compatibility promise.
+> **Status:** Current pre-release in-process contract introduced by M4-C2 and
+> completed with the pure reducer and conditional store port in M4-C3. It is not
+> a physical storage implementation, migration format, or compatibility promise.
 
 ## Purpose and ownership
 
 `CampaignCheckpointState` is one complete, bounded, privacy-safe snapshot of the current campaign lineage. `CampaignStateFactory` is the only public construction boundary and `CampaignStateJson` owns exact canonical bytes plus the artifact SHA-256. A consumer either accepts the whole checkpoint or fails closed; partial recovery and best-effort parsing are forbidden.
 
-C2 owns the versioned state vocabulary, immutable typed state, validation, exact JSON projection, current-context revalidation, trusted M3-to-M2 proposal projection, M2 request reconstruction, and typed M2 result commitment. It does not own reducer transitions, compare-and-swap persistence, dispatch, retry selection, patch execution, repository mutation, compatibility aliases, migration, CLI wiring, publication, or GitHub state.
+C2 owns the versioned state vocabulary, immutable typed state, validation, exact
+JSON projection, current-context revalidation, trusted M3-to-M2 proposal
+projection, M2 request reconstruction, and typed M2 result commitment. C3 owns
+checked budget accounting, pure transitions, exact replay, and the conditional
+store/readback port. Neither slice owns physical persistence, dispatch, retry
+selection, patch execution, repository mutation, compatibility aliases,
+migration, CLI wiring, publication, or GitHub state.
 
 ## Authority and identity
 
@@ -31,9 +39,20 @@ Every C1 work item appears exactly once and in exact C1 order. Its closed status
 - `planned`: no proposal or terminal outcome;
 - `proposal-complete`: one fully validated trusted proposal;
 - `accepted`: that proposal is part of the current known candidate;
-- `closed`: no proposal and one planning/Scribe terminal outcome.
+- `closed`: no proposal and one planning, Scribe, or narrowly factory-derived
+  Patch terminal outcome.
 
-Current-context revalidation also preserves the C1 disposition matrix: planning-terminal work must remain `closed` with the planning-terminal outcome, while executable work may advance through the executable states or close only with a correlated Scribe outcome. A provider failure additionally carries exactly one provider-neutral final disposition, `retryable` or `terminal`; all other outcomes carry no provider disposition. Later retry policy consumes this durable fact and does not reclassify the historical provider result.
+Current-context revalidation also preserves the C1 disposition matrix:
+planning-terminal work must remain `closed` with the planning-terminal outcome,
+while executable work may advance through the executable states or close only
+with a correlated Scribe outcome or the exact factory-derived
+`Patch/PatchRejected` outcome. Planning carries no Scribe/Patch correlation;
+Scribe carries exact request/attempt correlation and no Patch correlation; Patch
+carries exact Patch Request and Patch Result commitments and no Scribe
+correlation. A provider failure additionally carries exactly one provider-neutral
+final disposition, `retryable` or `terminal`; all other outcomes carry no
+provider disposition. Later retry policy consumes this durable fact and does not
+reclassify the historical provider result.
 
 Per-work outer attempts and candidate attempts are persisted separately from lineage-wide charges. Charges distinguish observed values, conservative unobserved exposure, and total charged; `totalCharged = (observed ?? 0) + conservativeUnobserved` is checked. The single active reservation is separate from charged history and is either a provider reservation for one planned item or a patch reservation for the exact active M2 request.
 
@@ -51,6 +70,84 @@ For every patch attempt, `ReconstructPatchRequest` selects exactly work in `prop
 
 A cumulative `accepted`, `rejected`, or `stale` outcome represents a completed typed M2 validation result and therefore requires that result's exact commitment. `host-failure`, `cancelled`, and `timeout` are host-level completion families without a typed M2 result and require a null result commitment. An accepted outcome additionally matches the complete candidate observation's request and result commitments.
 
+### Patch rejection reduction
+
+`CreatePatchRejectionReduction` is the sole authority for turning one M2
+rejection into one closed Patch work row. It consumes the canonical predecessor
+artifact, current C1/style/input authority, exact cumulative request, validated
+rejected result, and selected work key. The selected row must be the only
+`Invalid` target and must be `proposal-complete`; every other target is `Valid`,
+every diagnostic is a supported block-local rejection attributed to the same
+key, and every global invariant passes. The selected C1 work may share neither
+physical-owner equivalence nor overlapping source/edit authority with another
+active row. Accepted, planned, already closed, stale, root, path-only,
+no-effective-change, candidate-state, multi-invalid, shared-owner, overlapping,
+wrong-revision, wrong-request, or wrong-result cases return a bounded
+non-removable decision without probing a subset.
+
+The removable decision contains an opaque immutable capability retaining the
+complete exact predecessor and internally derived closed outcome. The reducer
+has no overload that accepts a caller-selected key plus a generic Patch outcome.
+Applying the capability to its predecessor always derives the same canonical
+successor; applying it to that exact successor is unchanged; applying it to any
+other artifact is a conflict.
+
+## Budget and transition semantics
+
+`CampaignBudgetAccounting` is the only arithmetic authority for admission and
+settlement. Provider admission increments one durable outer invocation and one
+per-work outer ordinal, then reserves the complete persisted Scribe-run maxima
+for provider requests, input/uncached/output tokens, enabled same-currency cost,
+and active elapsed time. Patch admission increments exactly one validation
+invocation and the applicable proposal candidate counts. The Patch reservation
+always has `PatchAttemptCount = 1` and records the resulting checkpoint revision;
+there is no caller-supplied batch count. M2 dispatch/completion requires an
+opaque `CampaignPatchInvocationAuthority` derived from the exact persisted,
+read-back reserved artifact. Its complete artifact and revision binding prevents
+an earlier result from being attached to a later same-SHA retry.
+
+Settlement adds exact observations when present. A missing observation moves
+the entire reserved dimension to `conservativeUnobserved`; it never becomes
+zero. A typed retry first settles the old reservation once, then performs one
+new admission in the same revision transition. Fresh provider attempt identity
+is derived from immutable execution authority, work key, and the checked new
+outer ordinal. A same-SHA Patch retry receives a later reserved revision. Late
+results for retired attempt/revision authority fail correlation.
+
+`CampaignStateReducer` is pure and produces `Applied`, exact `Unchanged`, or a
+bounded rejection. Every applied mutation advances `checked(revision + 1)` once;
+the Campaign State observation ceiling is also the revision ceiling. A
+correlated authoritative M3/M2 completion settles and clears its reservation.
+Cancellation, timeout, or exhaustion without such a result conservatively
+settles and clears the active exposure before recording the terminal. Accepted
+M2 completion replaces the complete candidate observation; an over-ceiling
+candidate is omitted and becomes durable budget exhaustion. Patch rejection
+closes only the work proven by the opaque reduction capability.
+
+Supersession revalidates a fresh revision-zero C2 template against current C1
+authority. Product revision, lineage, complete ceilings, policy, target profile,
+and input identity remain equal, while opaque snapshot and execution commitments
+must both change. Active exposure is conservatively settled, lineage charges and
+revision continue, snapshot work/candidate facts reset from the template, and
+one bounded immediate-predecessor summary is retained.
+
+## Conditional store and readback
+
+`ICampaignCheckpointStore` exposes only typed read, create-if-absent, and
+replace-if-current operations. Reads distinguish not-found, found exact bytes,
+invalid, and unreadable. Create never overwrites, and replace requires both the
+exact predecessor revision and digest while distinguishing missing from current
+mismatch. The port exposes no path, stream, filesystem, lease, Git, or process
+capability.
+
+`CampaignCheckpointAcceptance` reads before writing. An applied transition is
+written only over its exact predecessor; an already exact successor is accepted
+as lost-ack replay without a write. An unchanged result never writes. Every
+accepted path performs an exact readback, recomputes SHA-256, parses and
+canonical-validates the bytes, and compares bytes, digest, revision, and the
+complete parsed artifact. A rejected reducer result performs zero port calls,
+and no conflict falls back from replace to create or from create to overwrite.
+
 ## Canonical JSON and validation
 
 The registry is `schemas/campaign-state/v1.schema.json`. Canonical JSON uses fixed writer order, no insignificant whitespace, JSON integers only, ordinal collection order, strict UTF-8 without BOM, and exactly one trailing LF. Parsing rejects malformed UTF-8/JSON, BOM, duplicate or unknown properties, unknown enum values, over-depth or over-byte artifacts, invalid bounds/references/correlation, and any byte sequence that is not the exact writer output.
@@ -63,4 +160,12 @@ The persisted artifact may contain stable symbol IDs, repository-relative paths,
 
 ## Conformance
 
-The normative implementation lives under `src/ContractScribe.Core/Campaign/State/**`. Fixtures under `tests/fixtures/campaign/state/**` and `CampaignStateContractTests` cover fixed known-answer bytes/digest, culture/process stability, canonical round-trip, duplicate/unknown/version/whitespace/BOM/UTF-8/bounds mutations, fail-closed privacy, and current M2 projection correlation. Later M4 slices consume this contract but must not weaken or silently reinterpret it.
+The normative implementation lives under
+`src/ContractScribe.Core/Campaign/State/**`. Fixtures under
+`tests/fixtures/campaign/state/**`, `CampaignStateContractTests`,
+`CampaignStateTransitionTests`, and `CampaignCheckpointStorePortTests` cover
+fixed known-answer bytes/digest, culture/process stability, canonical
+round-trip, Patch reduction, budget/revision boundaries, conservative
+settlement, exact/conflicting replay, conditional-write races, mandatory
+readback, fail-closed privacy, and current M2 projection correlation. Later M4
+slices consume this contract but must not weaken or silently reinterpret it.
