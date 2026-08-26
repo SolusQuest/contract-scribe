@@ -106,9 +106,20 @@ public enum CampaignCheckpointAcceptanceKind
 
 public sealed class CampaignAcceptedCheckpoint
 {
-    internal CampaignAcceptedCheckpoint(CampaignCheckpointArtifact artifact) => Artifact = artifact;
+    private int _dispatchGrant;
+
+    internal CampaignAcceptedCheckpoint(
+        CampaignCheckpointArtifact artifact,
+        bool grantsDispatch)
+    {
+        Artifact = artifact;
+        _dispatchGrant = grantsDispatch ? 1 : 0;
+    }
 
     public CampaignCheckpointArtifact Artifact { get; }
+
+    internal bool TryConsumeDispatchGrant() =>
+        Interlocked.CompareExchange(ref _dispatchGrant, 0, 1) == 1;
 
     public override string ToString() => nameof(CampaignAcceptedCheckpoint);
 }
@@ -175,7 +186,7 @@ public static class CampaignCheckpointAcceptance
 
             return new CampaignCheckpointAcceptanceResult(
                 CampaignCheckpointAcceptanceKind.Accepted,
-                new CampaignAcceptedCheckpoint(parsed.Artifact));
+                new CampaignAcceptedCheckpoint(parsed.Artifact, grantsDispatch: false));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -187,27 +198,32 @@ public static class CampaignCheckpointAcceptance
         CampaignCheckpointArtifact initialArtifact)
     {
         ArgumentNullException.ThrowIfNull(initialArtifact);
-        var state = initialArtifact.State;
-        if (state.CheckpointRevision != 0
-            || state.ActiveReservation is not null
-            || state.CandidateObservation is not null
-            || state.CumulativeOutcome is not null
-            || state.Predecessor is not null
-            || state.LineageCharges != CampaignStateFactory.EmptyChargesForAcceptance()
-            || state.WorkItems.Any(item =>
-                item.OuterAttemptCount != 0
-                || item.CandidateAttemptCount != 0
-                || item.TrustedProposal is not null
-                || item.Status is not (CampaignWorkStatus.Planned or CampaignWorkStatus.Closed)
-                || item.Status == CampaignWorkStatus.Closed
-                    && item.ClosedOutcome?.Stage != CampaignWorkOutcomeStage.Planning)
-            || state.TerminalOutcome != ExpectedInitialTerminal(state.WorkItems)
-            || !ArtifactsEqual(initialArtifact, CampaignStateJson.CreateArtifact(state)))
+        if (!IsExactInitialArtifact(initialArtifact))
         {
             throw new ArgumentException("The artifact is not an exact initial checkpoint.", nameof(initialArtifact));
         }
 
         return new CampaignInitialCheckpointAuthority(initialArtifact);
+    }
+
+    internal static bool IsExactInitialArtifact(CampaignCheckpointArtifact artifact)
+    {
+        var state = artifact.State;
+        return state.CheckpointRevision == 0
+            && state.ActiveReservation is null
+            && state.CandidateObservation is null
+            && state.CumulativeOutcome is null
+            && state.Predecessor is null
+            && state.LineageCharges == CampaignStateFactory.EmptyChargesForAcceptance()
+            && state.WorkItems.All(item =>
+                item.OuterAttemptCount == 0
+                && item.CandidateAttemptCount == 0
+                && item.TrustedProposal is null
+                && item.Status is CampaignWorkStatus.Planned or CampaignWorkStatus.Closed
+                && (item.Status != CampaignWorkStatus.Closed
+                    || item.ClosedOutcome?.Stage == CampaignWorkOutcomeStage.Planning))
+            && state.TerminalOutcome == ExpectedInitialTerminal(state.WorkItems)
+            && ArtifactsEqual(artifact, CampaignStateJson.CreateArtifact(state));
     }
 
     public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptInitialAsync(
@@ -258,7 +274,11 @@ public static class CampaignCheckpointAcceptance
 
             if (currentMatch == MatchKind.Exact)
             {
-                return await VerifyReadbackAsync(store, intended, cancellationToken).ConfigureAwait(false);
+                return await VerifyReadbackAsync(
+                    store,
+                    intended,
+                    grantsDispatch: false,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             CampaignCheckpointWriteResult write;
@@ -302,7 +322,7 @@ public static class CampaignCheckpointAcceptance
                     {
                         return new CampaignCheckpointAcceptanceResult(
                             CampaignCheckpointAcceptanceKind.Accepted,
-                            new CampaignAcceptedCheckpoint(intended));
+                            new CampaignAcceptedCheckpoint(intended, grantsDispatch: false));
                     }
                 }
 
@@ -315,7 +335,11 @@ public static class CampaignCheckpointAcceptance
                     null);
             }
 
-            return await VerifyReadbackAsync(store, intended, cancellationToken).ConfigureAwait(false);
+            return await VerifyReadbackAsync(
+                store,
+                intended,
+                grantsDispatch: intended.State.ActiveReservation is not null,
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -326,13 +350,14 @@ public static class CampaignCheckpointAcceptance
     private static async ValueTask<CampaignCheckpointAcceptanceResult> VerifyReadbackAsync(
         ICampaignCheckpointStore store,
         CampaignCheckpointArtifact intended,
+        bool grantsDispatch,
         CancellationToken cancellationToken)
     {
         var readback = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
         return Match(readback, intended) == MatchKind.Exact
             ? new CampaignCheckpointAcceptanceResult(
                 CampaignCheckpointAcceptanceKind.Accepted,
-                new CampaignAcceptedCheckpoint(intended))
+                new CampaignAcceptedCheckpoint(intended, grantsDispatch))
             : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.ReadbackMismatch, null);
     }
 

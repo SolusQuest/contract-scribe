@@ -6,6 +6,13 @@ using System.Text.Json;
 
 namespace ContractScribe.Core;
 
+internal enum CampaignTrustedProposalAdmissionKind
+{
+    Admitted,
+    OverBound,
+    Invalid,
+}
+
 public static class CampaignStateFactory
 {
     private static readonly HashSet<string> RemovablePatchDiagnosticCodes = new(StringComparer.Ordinal)
@@ -249,7 +256,15 @@ public static class CampaignStateFactory
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
-        ValidateExecutionAuthority(executionAuthority);
+        _ = ValidateProviderRequestAuthority(
+            state,
+            executionAuthority,
+            styleConfigurationId,
+            validatedStyleConfigurationProjection,
+            planningInput,
+            acceptedPlan,
+            workItemKey,
+            request);
         ValidateCurrentContext(
             state,
             styleConfigurationId,
@@ -402,6 +417,15 @@ public static class CampaignStateFactory
             request.ToolPolicyId,
             proposalCommitment);
         ValidateProposal(state, proposal, workItemKey);
+        return proposal;
+    }
+
+    internal static CampaignTrustedProposalAdmissionKind EvaluateTrustedProposalAdmission(
+        CampaignCheckpointState state,
+        string workItemKey,
+        CampaignTrustedProposal proposal,
+        DocumentationPatchContext context)
+    {
         var completeProjectionSet = state.WorkItems
             .Select(item => string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
                 ? proposal
@@ -411,16 +435,93 @@ public static class CampaignStateFactory
             .Where(item => item is not null)
             .Select(item => item!)
             .ToImmutableArray();
-        Require(completeProjectionSet.Length <= CampaignStateContract.MaximumActivePatchBlocks,
-            CampaignStateValidationCode.InvalidBound);
-        ValidateProjectionEvidenceConsistency(completeProjectionSet);
-        _ = ParsePatchRequest(
-            new DocumentationPatchContext(
-                request.Context.RepositoryContextRef,
-                request.Context.InputIdentity,
-                request.Context.TargetProfile),
-            completeProjectionSet);
-        return proposal;
+        if (completeProjectionSet.Length > CampaignStateContract.MaximumActivePatchBlocks
+            || completeProjectionSet.Length > state.ConfiguredCeilings.CampaignBudget.MaximumBlocks)
+        {
+            return CampaignTrustedProposalAdmissionKind.OverBound;
+        }
+
+        ImmutableArray<CampaignEvidenceProjection> catalog;
+        try
+        {
+            catalog = ValidateProjectionEvidenceConsistency(completeProjectionSet);
+        }
+        catch (CampaignStateValidationException exception)
+        {
+            return exception.Code == CampaignStateValidationCode.InvalidBound
+                ? CampaignTrustedProposalAdmissionKind.OverBound
+                : CampaignTrustedProposalAdmissionKind.Invalid;
+        }
+
+        var bytes = CampaignStateJson.WritePatchRequest(
+            context,
+            catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
+            completeProjectionSet.Select(item => item.PatchBlock).ToImmutableArray());
+        if (bytes.Length > DocumentationPatchValidator.MaximumArtifactUtf8Bytes)
+        {
+            return CampaignTrustedProposalAdmissionKind.OverBound;
+        }
+
+        return DocumentationPatchValidator.ParseRequest(bytes).IsValid
+            ? CampaignTrustedProposalAdmissionKind.Admitted
+            : CampaignTrustedProposalAdmissionKind.Invalid;
+    }
+
+    internal static CampaignPlanningWorkItem ValidateProviderRequestAuthority(
+        CampaignCheckpointState state,
+        CampaignScribeExecutionAuthority executionAuthority,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan,
+        string workItemKey,
+        DocumentationScribeRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(executionAuthority);
+        ArgumentNullException.ThrowIfNull(planningInput);
+        ArgumentNullException.ThrowIfNull(acceptedPlan);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateExecutionAuthority(executionAuthority);
+        ValidateCurrentContext(
+            state,
+            styleConfigurationId,
+            validatedStyleConfigurationProjection,
+            request.Context.InputIdentity,
+            planningInput,
+            acceptedPlan);
+        var stateWork = state.WorkItems.SingleOrDefault(item =>
+            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
+        var planWork = acceptedPlan.WorkItems.SingleOrDefault(item =>
+            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
+        var target = planWork is { Targets.Length: 1 } ? planWork.Targets[0] : null;
+        var expectedSource = target is null ? null : CreateScribeSourceLocator(target.Source);
+        var expectedComponents = target?.ApplicableComponents.Select(component =>
+            new DocumentationPatchApplicableComponent(
+                MapComponentKind(component.Kind),
+                component.Identity,
+                component.Name));
+        Require(stateWork is not null
+            && planWork is not null
+            && planWork.Disposition.Kind == CampaignPlanningDispositionKind.Executable
+            && target is not null
+            && target.M3Eligible
+            && target.StyleProfile is not null
+            && request.Context.TargetProfile == state.Snapshot.TargetProfile
+            && request.Context.AuditOutcome == target.AuditOutcome
+            && request.Target.SymbolRef == target.SymbolRef
+            && request.Target.SourceLocator == expectedSource
+            && string.Equals(request.Target.SourceSha256, target.Source.ContentSha256, StringComparison.Ordinal)
+            && expectedComponents is not null
+            && request.Target.ApplicableComponents.SequenceEqual(expectedComponents)
+            && string.Equals(
+                CreateStyleProfileCommitment(request.StyleProfile),
+                CreateStyleProfileCommitment(target.StyleProfile),
+                StringComparison.Ordinal)
+            && request.Limits == planningInput.ExecutionPolicy.ScribeRunLimits
+            && string.Equals(request.ToolPolicyId, executionAuthority.ToolPolicyId, StringComparison.Ordinal),
+            CampaignStateValidationCode.InvalidCorrelation);
+        return planWork;
     }
 
     public static DocumentationPatchRequest ReconstructPatchRequest(
@@ -512,6 +613,16 @@ public static class CampaignStateFactory
             state.CheckpointRevision,
             patchAttemptCount,
             elapsedMilliseconds);
+    }
+
+    internal static void ValidatePatchRequestAuthority(
+        CampaignCheckpointState state,
+        DocumentationPatchRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(request);
+        Validate(state);
+        _ = ResolvePatchRequestProjection(state, request);
     }
 
     public static CampaignPatchCompletion CreatePatchCompletion(
