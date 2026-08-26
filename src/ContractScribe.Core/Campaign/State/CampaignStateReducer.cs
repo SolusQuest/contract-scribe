@@ -221,6 +221,11 @@ public static class CampaignStateReducer
                 return Exhausted(predecessor);
             }
 
+            if (ActiveProjectionAtCapacity(state))
+            {
+                return Exhausted(predecessor);
+            }
+
             var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
             if (budget.Kind != CampaignBudgetDecisionKind.Admitted)
             {
@@ -353,22 +358,31 @@ public static class CampaignStateReducer
             }
             else if (terminal is DocumentationScribeProposalTerminal)
             {
-                var proposal = CampaignStateFactory.CreateTrustedProposal(
-                    state,
-                    executionAuthority,
-                    styleConfigurationId,
-                    validatedStyleConfigurationProjection,
-                    planningInput,
-                    acceptedPlan,
-                    reservation.WorkItemKey,
-                    outcome.Request,
-                    outcome.RunResult);
-                workItems = ReplaceWork(
-                    workItems,
-                    reservation.WorkItemKey,
-                    CampaignWorkStatus.ProposalComplete,
-                    proposal,
-                    null);
+                if (ActiveProjectionAtCapacity(state))
+                {
+                    campaignTerminal = new CampaignTerminalOutcome(
+                        CampaignTerminalKind.Exhausted,
+                        CampaignTerminalReason.Budget);
+                }
+                else
+                {
+                    var proposal = CampaignStateFactory.CreateTrustedProposal(
+                        state,
+                        executionAuthority,
+                        styleConfigurationId,
+                        validatedStyleConfigurationProjection,
+                        planningInput,
+                        acceptedPlan,
+                        reservation.WorkItemKey,
+                        outcome.Request,
+                        outcome.RunResult);
+                    workItems = ReplaceWork(
+                        workItems,
+                        reservation.WorkItemKey,
+                        CampaignWorkStatus.ProposalComplete,
+                        proposal,
+                        null);
+                }
             }
             else
             {
@@ -497,7 +511,8 @@ public static class CampaignStateReducer
             var settledCharges = activeRetry is null
                 ? state.LineageCharges
                 : CampaignBudgetAccounting.SettleActiveConservatively(state);
-            if (work.CandidateAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock)
+            if (work.CandidateAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock
+                || ActiveProjectionAtCapacity(state))
             {
                 return Applied(predecessor, CreateState(
                     state,
@@ -1438,6 +1453,13 @@ public static class CampaignStateReducer
             return false;
         }
     }
+
+    private static bool ActiveProjectionAtCapacity(CampaignCheckpointState state) =>
+        state.WorkItems.Count(item =>
+            item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+        >= Math.Min(
+            CampaignStateContract.MaximumActivePatchBlocks,
+            state.ConfiguredCeilings.CampaignBudget.MaximumBlocks);
 
     private static DocumentationScribeAttemptId CreateAttemptId(
         string executionCommitment,

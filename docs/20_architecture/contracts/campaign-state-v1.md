@@ -128,7 +128,10 @@ are charged and the reservation is cleared; they are not reclassified as an
 ambiguous invocation. Provider cost telemetry is ignored by the currency-less
 campaign ledger when cost enforcement is disabled. A valid successful proposal
 or candidate that cannot fit is omitted while prior authority is retained and a
-durable budget exhaustion is stored.
+durable budget exhaustion is stored. Provider admission also checks the complete
+active Patch projection capacity before dispatch; the completion boundary
+repeats that check so an authoritative result always settles even if it reaches
+an already-full projection.
 
 `CampaignStateReducer` is pure and produces `Applied`, exact `Unchanged`, or a
 bounded rejection. Each applied transition carries its exact predecessor and

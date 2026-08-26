@@ -1168,6 +1168,97 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
+    public void Full_active_projection_blocks_dispatch_and_authoritative_proposal_still_settles()
+    {
+        var scenario = CreateProposalScenario(
+            costCurrency: "currency.usd",
+            maximumBlocks: 1);
+        var firstWork = scenario.Plan.WorkItems[0];
+        var secondWork = scenario.Plan.WorkItems[1];
+        var firstExchange = CreateScribeExchange(firstWork);
+        var firstProposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(firstWork.WorkItemKey, firstExchange)),
+            firstWork,
+            firstExchange);
+        var atCapacity = WithState(
+            scenario.InitialState,
+            ReplaceWork(
+                scenario.InitialState,
+                firstWork.WorkItemKey,
+                CampaignWorkStatus.ProposalComplete,
+                firstProposal),
+            activeReservation: null);
+        var secondExchange = CreateScribeExchange(secondWork);
+        var secondAuthority = ExecutionAuthority(secondExchange);
+
+        var blocked = CampaignStateReducer.AdmitProviderInvocation(
+            CampaignStateJson.CreateArtifact(atCapacity),
+            secondAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            secondWork.WorkItemKey,
+            secondExchange.Request);
+
+        Assert.Equal(CampaignTransitionKind.Applied, blocked.Kind);
+        Assert.Null(blocked.Artifact.State.ActiveReservation);
+        Assert.Equal(CampaignTerminalKind.Exhausted, blocked.Artifact.State.TerminalOutcome!.Kind);
+        Assert.Equal(CampaignWorkStatus.ProposalComplete, blocked.Artifact.State.WorkItems[0].Status);
+
+        var admittedBeforeCapacity = CampaignStateReducer.AdmitProviderInvocation(
+            CampaignStateJson.CreateArtifact(scenario.InitialState),
+            secondAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            secondWork.WorkItemKey,
+            secondExchange.Request);
+        var reservation = Assert.IsType<CampaignProviderReservation>(
+            admittedBeforeCapacity.Artifact.State.ActiveReservation);
+        var correlatedAtCapacity = WithState(
+            admittedBeforeCapacity.Artifact.State,
+            ReplaceWork(
+                admittedBeforeCapacity.Artifact.State,
+                firstWork.WorkItemKey,
+                CampaignWorkStatus.ProposalComplete,
+                firstProposal),
+            admittedBeforeCapacity.Artifact.State.ActiveReservation);
+        var correlatedArtifact = CampaignStateJson.CreateArtifact(correlatedAtCapacity);
+        var completionExchange = CreateScribeExchange(secondWork, attemptId: reservation.AttemptId.Value);
+        var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
+            completionExchange.Request,
+            reservation.AttemptId,
+            completionExchange.Result);
+        var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(
+            AcceptForTest(correlatedArtifact),
+            completionExchange.Request);
+
+        var completed = CampaignStateReducer.CompleteProviderInvocation(
+            correlatedArtifact,
+            invocation,
+            secondAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            "samples/Synthetic.csproj",
+            scenario.Input,
+            scenario.Plan,
+            outcome,
+            completionExchange.Result.RunEnvelope.ElapsedMilliseconds);
+
+        Assert.True(completed.Kind == CampaignTransitionKind.Applied, completed.Failure.ToString());
+        Assert.Null(completed.Artifact.State.ActiveReservation);
+        Assert.Equal(CampaignTerminalKind.Exhausted, completed.Artifact.State.TerminalOutcome!.Kind);
+        Assert.Equal(CampaignWorkStatus.ProposalComplete, completed.Artifact.State.WorkItems[0].Status);
+        Assert.Equal(CampaignWorkStatus.Planned, completed.Artifact.State.WorkItems[1].Status);
+    }
+
+    [Fact]
     public void Valid_budget_terminal_overrun_is_settled_and_cleared_as_durable_exhaustion()
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
@@ -2400,7 +2491,9 @@ public sealed class CampaignStateContractTests
         string costCurrency = "USD",
         bool costEnforced = true,
         long maximumElapsedMilliseconds = 120_000,
-        long maximumPatchBytes = 1_000_000)
+        long maximumPatchBytes = 1_000_000,
+        int maximumBlocks = 100,
+        int maximumProviderRequests = 100)
     {
         const string Context = "synthetic.v1";
         var specifications = new[]
@@ -2609,10 +2702,10 @@ public sealed class CampaignStateContractTests
         var executionPolicy = new CampaignPlanningExecutionPolicy(
             requestTemplate.Limits,
             new CampaignPlanningBudgetPolicy(
-                100,
+                maximumBlocks,
                 20,
                 maximumPatchBytes,
-                100,
+                maximumProviderRequests,
                 3,
                 1_000_000,
                 500_000,
