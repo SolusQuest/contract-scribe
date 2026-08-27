@@ -25,10 +25,11 @@ The initial factory receives the exact `CampaignPlanningInput`, the caller-accep
 - a domain-separated commitment to the current input identity, without persisting the repository-relative path itself;
 - target profile and C1 execution commitment;
 - the complete typed campaign budget and Scribe limits;
+- one factory-owned Scribe execution authority containing the concrete provider, model, Scribe protocol, and Tool Policy IDs, the exact C1 Agent Protocol, Tool Policy/Registry, and Provider/Model Request Profile content authorities from which those IDs were read, and a domain-separated binding commitment over the complete set;
 - a target-independent, already validated style-configuration projection, represented only by a bounded ID and a domain-separated content commitment;
 - one composite campaign-configuration commitment over all correctness-bearing C1 content authorities and ceilings.
 
-Concrete Style Profiles remain per-work C1 facts and are rebound when a trusted proposal is created. C2 never invents or reverses a global Style Profile DSL. `RepositoryContextRef` is process-local and is never persisted. The caller supplies it transiently when reconstructing an M2 request. The stable repository-relative input identity is committed when the checkpoint is created; current-context validation, trusted-proposal admission, and both active and accepted reconstruction reject a different input identity even when target, source, and evidence commitments collide across two inputs.
+The execution authority is created only by `CreateScribeExecutionAuthority`, which recomputes each supplied C1 content projection and rejects any projection/authority mismatch before extracting its concrete IDs. Admission, retry, invocation grant, completion, and trusted-proposal construction all consume the exact persisted authority; a caller cannot substitute a coherent second provider/model/protocol/tool tuple. Concrete Style Profiles remain per-work C1 facts and are rebound when a trusted proposal is created. C2 never invents or reverses a global Style Profile DSL. `RepositoryContextRef` is process-local and is never persisted. The caller supplies it transiently when reconstructing an M2 request. The stable repository-relative input identity is committed when the checkpoint is created; current-context validation, trusted-proposal admission, and both active and accepted reconstruction reject a different input identity even when target, source, and evidence commitments collide across two inputs.
 
 The artifact digest is lowercase SHA-256 over the exact canonical UTF-8 JSON bytes, including the one trailing LF. It is a wrapper property and is not serialized into its own preimage.
 
@@ -49,6 +50,9 @@ with a correlated Scribe outcome or the exact factory-derived
 `Patch/PatchRejected` outcome. Planning carries no Scribe/Patch correlation;
 Scribe carries exact request/attempt correlation and no Patch correlation; Patch
 carries exact Patch Request and Patch Result commitments and no Scribe
+correlation. A Scribe proposal completion that is valid by itself but cannot join
+the bounded active M2 projection closes as `completed-over-bound` and carries the
+exact Scribe result/proposal commitment in addition to its request and attempt
 correlation. A provider failure additionally carries exactly one provider-neutral
 final disposition, `retryable` or `terminal`; all other outcomes carry no
 provider disposition. Later retry policy consumes this durable fact and does not
@@ -56,7 +60,7 @@ reclassify the historical provider result.
 
 Per-work outer attempts and candidate attempts are persisted separately from lineage-wide charges. Charges distinguish observed values, conservative unobserved exposure, and total charged; `totalCharged = (observed ?? 0) + conservativeUnobserved` is checked. The single active reservation is separate from charged history and is either a provider reservation for one planned item or a patch reservation for the exact active M2 request.
 
-Candidate observation records accepted work keys, one domain-separated commitment over the exact ordered accepted proposal/block projection, changed-file hashes/counts, and the historical request/result commitments of the accepted M2 execution. The stable projection commitment prevents a candidate from being combined with another valid proposal that retains the same C1 work key; the historical execution commitments remain mutually correlated evidence and are not reused as a fresh-process request identity. The observation contains no source or candidate bytes. Cumulative M2 outcome, campaign terminal outcome, and an optional bounded predecessor summary are independent facts; a predecessor summary is not an embedded historical checkpoint.
+Candidate observation records accepted work keys, one domain-separated commitment over the exact ordered accepted proposal/block projection, changed-file hashes/counts, and the historical request/result commitments of the accepted M2 execution. The stable projection commitment prevents a candidate from being combined with another valid proposal that retains the same C1 work key; the historical execution commitments remain mutually correlated evidence and are not reused as a fresh-process request identity. The observation contains no source or candidate bytes. Every cumulative M2 outcome carries the exact completed active-projection commitment. Cumulative M2 outcome, campaign terminal outcome, and an optional bounded predecessor summary are independent facts; a predecessor summary is not an embedded historical checkpoint.
 
 ## Trusted proposal and M2 closure
 
@@ -68,7 +72,7 @@ For every patch attempt, `ReconstructPatchRequest` selects exactly work in `prop
 
 `CreatePatchReservation` first applies the same target-profile and input-identity gate as reconstruction, then derives the reservation request digest and expected revision from either the exact active projection or the exact accepted-only reconstruction and checkpoint; callers cannot supply those correlation facts. Typed and host completion factories apply that shared state/request-context gate again while consuming the exact validated checkpoint containing the active patch reservation. They reject an input identity, request, expected revision, or proposal projection not owned by the reservation/state. `CreatePatchCompletion` then accepts only a result that passes `DocumentationPatchValidator.ValidateResult` for the exact request and, for an accepted result, derives accepted membership, the stable proposal/block commitment, every changed-file observation, and the cumulative result together. Host completion derives the same historical request/revision authority from the reserved state. The direct constructors for reservation, candidate, and cumulative-result DTOs are not public producer APIs. The domain-separated result commitment covers request identity, outcome, ordered target traces, changed-file facts, changed-block count, invariants, and bounded diagnostics.
 
-A cumulative `accepted`, `rejected`, or `stale` outcome represents a completed typed M2 validation result and therefore requires that result's exact commitment. `host-failure`, `cancelled`, and `timeout` are host-level completion families without a typed M2 result and require a null result commitment. An accepted outcome additionally matches the complete candidate observation's request and result commitments.
+A cumulative `accepted`, `over-bound`, `rejected`, or `stale` outcome represents a completed typed M2 validation result and therefore requires that result's exact commitment. `over-bound` records a valid completed result whose candidate cannot fit the configured campaign ceilings; it preserves the exact projection/result pair while omitting the incompatible candidate. `host-failure`, `cancelled`, and `timeout` are host-level completion families without a typed M2 result and require a null result commitment. An accepted outcome additionally matches the complete candidate observation's request and result commitments.
 
 ### Patch rejection reduction
 
@@ -121,14 +125,20 @@ change. Fresh provider attempt identity
 is derived from immutable execution authority, work key, and the checked new
 outer ordinal. Every Patch retry receives a later reserved revision. Late
 results for retired attempt/revision authority fail correlation.
+A retryable closed provider outcome does not own unresolved reservation exposure.
+If the retained active Patch projection is already at capacity, retry is rejected
+as `ProjectionCapacityUnavailable` with byte-identical state; only a still-active
+provider reservation may be conservatively settled and cleared at that boundary.
 
 Valid authoritative budget, timeout, or cancellation terminals may report
 bounded observations above the reserved run maxima. Those exact observations
 are charged and the reservation is cleared; they are not reclassified as an
 ambiguous invocation. Provider cost telemetry is ignored by the currency-less
 campaign ledger when cost enforcement is disabled. A valid successful proposal
-or candidate that cannot fit is omitted while prior authority is retained and a
-durable budget exhaustion is stored. Provider admission also checks the complete
+that cannot join the bounded aggregate M2 request is closed with a context-independent
+Scribe result commitment; a valid candidate that cannot fit is recorded as a
+cumulative `over-bound` projection/result pair. Both become durable budget
+exhaustion while prior authority is retained. Provider admission also checks the complete
 active Patch projection capacity before dispatch; the completion boundary
 repeats that check so an authoritative result always settles even if it reaches
 an already-full projection.
@@ -156,13 +166,21 @@ Rejected, stale, and host-failed cumulative Patch outcomes are durable stops
 unless the exact Patch rejection capability proves a sole removable item;
 cancelled and timed-out Patch host outcomes preserve their exact request and
 reserved-revision correlation.
+The over-bound projection marker is compared with a context-independent
+commitment over the current ordered active proposals. A fresh process may change
+`RepositoryContextRef` and therefore the reconstructed request SHA, but cannot
+reserve the same known-over-bound projection again. Completing a distinct retained
+projection cannot reopen a Scribe `completed-over-bound` work row.
 
 Supersession revalidates a fresh revision-zero C2 template against current C1
 authority. Product revision, lineage, complete ceilings, policy, target profile,
 and input identity remain equal, while opaque snapshot and execution commitments
 must both change. Active exposure is conservatively settled, lineage charges and
 revision continue, snapshot work/candidate facts reset from the template, and
-one bounded immediate-predecessor summary is retained. When a correlated old
+one bounded immediate-predecessor summary is retained. If the predecessor's last
+completed operation is an over-bound Scribe proposal or Patch projection, the
+summary also retains its bounded operation kind plus request/projection and
+result commitments so supersession does not erase the completion fact. When a correlated old
 snapshot transition is observed at the same boundary, supersession wins and the
 old transition is retained only as rejected late authority; it is not applied to
 the successor snapshot.
@@ -207,5 +225,7 @@ The normative implementation lives under
 fixed known-answer bytes/digest, culture/process stability, canonical
 round-trip, Patch reduction, budget/revision boundaries, conservative
 settlement, exact/conflicting replay, conditional-write races, mandatory
-readback, fail-closed privacy, and current M2 projection correlation. Later M4
+readback, fail-closed privacy, current M2 projection correlation, exact 1 MiB and
++1-byte aggregate admission, context-independent over-bound restart behavior,
+and coherent execution-authority substitution. Later M4
 slices consume this contract but must not weaken or silently reinterpret it.

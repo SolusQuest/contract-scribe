@@ -404,24 +404,33 @@ public static class CampaignStateReducer
             CampaignTerminalOutcome? campaignTerminal = null;
             if (terminal is DocumentationScribeProposalTerminal)
             {
+                var proposal = CampaignStateFactory.CreateTrustedProposal(
+                    state,
+                    executionAuthority,
+                    styleConfigurationId,
+                    validatedStyleConfigurationProjection,
+                    planningInput,
+                    acceptedPlan,
+                    reservation.WorkItemKey,
+                    outcome.Request,
+                    outcome.RunResult);
                 if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
                 {
+                    workItems = ReplaceWork(
+                        workItems,
+                        reservation.WorkItemKey,
+                        CampaignWorkStatus.Closed,
+                        null,
+                        CreateClosedScribeOverboundOutcome(
+                            outcome,
+                            reservation.WorkItemKey,
+                            proposal.ProposalCommitmentSha256));
                     campaignTerminal = new CampaignTerminalOutcome(
                         CampaignTerminalKind.Exhausted,
                         CampaignTerminalReason.Budget);
                 }
                 else
                 {
-                    var proposal = CampaignStateFactory.CreateTrustedProposal(
-                        state,
-                        executionAuthority,
-                        styleConfigurationId,
-                        validatedStyleConfigurationProjection,
-                        planningInput,
-                        acceptedPlan,
-                        reservation.WorkItemKey,
-                        outcome.Request,
-                        outcome.RunResult);
                     var patchContext = new DocumentationPatchContext(
                         outcome.Request.Context.RepositoryContextRef,
                         outcome.Request.Context.InputIdentity,
@@ -438,6 +447,15 @@ public static class CampaignStateReducer
 
                     if (admission == CampaignTrustedProposalAdmissionKind.OverBound)
                     {
+                        workItems = ReplaceWork(
+                            workItems,
+                            reservation.WorkItemKey,
+                            CampaignWorkStatus.Closed,
+                            null,
+                            CreateClosedScribeOverboundOutcome(
+                                outcome,
+                                reservation.WorkItemKey,
+                                proposal.ProposalCommitmentSha256));
                         campaignTerminal = new CampaignTerminalOutcome(
                             CampaignTerminalKind.Exhausted,
                             CampaignTerminalReason.Budget);
@@ -591,6 +609,13 @@ public static class CampaignStateReducer
 
             if (ActiveProjectionAtCapacity(state))
             {
+                if (activeRetry is null)
+                {
+                    return Reject(
+                        predecessor,
+                        CampaignTransitionFailure.ProjectionCapacityUnavailable);
+                }
+
                 return Applied(predecessor, CreateState(
                     state,
                     NextRevision(state.CheckpointRevision),
@@ -714,6 +739,12 @@ public static class CampaignStateReducer
         var state = predecessor.State;
         try
         {
+            if (state.ActiveReservation is null
+                && CampaignStateFactory.HasKnownOverboundActiveProjection(state))
+            {
+                return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
+            }
+
             if (state.ActiveReservation is not null
                 || !CanReservePatchFromTerminal(state))
             {
@@ -847,7 +878,10 @@ public static class CampaignStateReducer
                     terminal = new CampaignTerminalOutcome(
                         CampaignTerminalKind.Exhausted,
                         CampaignTerminalReason.Budget);
-                    cumulative = state.CumulativeOutcome;
+                    cumulative = completion.CumulativeOutcome with
+                    {
+                        Kind = CampaignCumulativeOutcomeKind.OverBound,
+                    };
                 }
                 else
                 {
@@ -1334,6 +1368,7 @@ public static class CampaignStateReducer
             CampaignCumulativeOutcomeKind.Rejected,
             reduction.PatchRequestSha256,
             reduction.PatchResultCommitmentSha256,
+            CampaignStateFactory.CreateActiveProjectionCommitment(state),
             reservation.ExpectedCheckpointRevision);
         return CampaignStateJson.CreateArtifact(CreateState(
             state,
@@ -1380,6 +1415,33 @@ public static class CampaignStateReducer
                 candidate.ChangedFiles.Sum(file => checked((long)file.CandidateDocumentationLineCount)),
                 candidate.PatchRequestSha256,
                 candidate.PatchResultCommitmentSha256);
+        var scribeOverbound = state.WorkItems
+            .Select(item => item.ClosedOutcome)
+            .SingleOrDefault(outcome => outcome is
+            {
+                Stage: CampaignWorkOutcomeStage.Scribe,
+                Code: CampaignWorkOutcomeCode.CompletedOverBound,
+            });
+        var completedOperation = state.CumulativeOutcome is
+        {
+            Kind: CampaignCumulativeOutcomeKind.OverBound,
+            ProjectionCommitmentSha256: { } projectionCommitment,
+            PatchResultCommitmentSha256: { } resultCommitment,
+        }
+            ? new CampaignPredecessorCompletedOperationSummary(
+                "patch-over-bound",
+                projectionCommitment,
+                resultCommitment)
+            : scribeOverbound is
+            {
+                ScribeRequestSha256: { } requestCommitment,
+                ScribeResultCommitmentSha256: { } scribeResultCommitment,
+            }
+                ? new CampaignPredecessorCompletedOperationSummary(
+                    "scribe-over-bound",
+                    requestCommitment,
+                    scribeResultCommitment)
+                : null;
         return new CampaignPredecessorSummary(
             state.ProductRevision,
             state.Snapshot,
@@ -1388,7 +1450,8 @@ public static class CampaignStateReducer
             artifact.Sha256,
             state.TerminalOutcome?.Kind ?? CampaignTerminalKind.Superseded,
             reservation,
-            candidateSummary);
+            candidateSummary,
+            completedOperation);
     }
 
     private static CampaignWorkClosedOutcome CreateClosedScribeOutcome(
@@ -1437,8 +1500,24 @@ public static class CampaignStateReducer
             outcome.RunResult.AttemptId,
             null,
             null,
+            null,
             workItemKey);
     }
+
+    private static CampaignWorkClosedOutcome CreateClosedScribeOverboundOutcome(
+        DocumentationScribeValidatedRunOutcome outcome,
+        string workItemKey,
+        string resultCommitmentSha256) =>
+        new(
+            CampaignWorkOutcomeStage.Scribe,
+            CampaignWorkOutcomeCode.CompletedOverBound,
+            null,
+            outcome.Request.ArtifactSha256,
+            outcome.RunResult.AttemptId,
+            null,
+            null,
+            resultCommitmentSha256,
+            workItemKey);
 
     private static CampaignTerminalOutcome? CompleteWhenResolved(
         ImmutableArray<CampaignWorkItemState> workItems) =>

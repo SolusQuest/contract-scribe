@@ -55,15 +55,70 @@ public static class CampaignStateFactory
         return new CampaignStyleConfigurationAuthority(id, commitment.Complete());
     }
 
+    public static CampaignScribeExecutionAuthority CreateScribeExecutionAuthority(
+        CampaignPlanningExecutionPolicy policy,
+        JsonElement validatedAgentProtocolProjection,
+        JsonElement validatedToolPolicyAndRegistryProjection,
+        JsonElement validatedProviderModelRequestProfileProjection)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ValidateExecutionProjectionAuthority(
+            policy.AgentProtocol,
+            CampaignPlanningContentFamily.AgentProtocol,
+            validatedAgentProtocolProjection);
+        ValidateExecutionProjectionAuthority(
+            policy.ToolPolicyAndRegistry,
+            CampaignPlanningContentFamily.ToolPolicyAndRegistry,
+            validatedToolPolicyAndRegistryProjection);
+        ValidateExecutionProjectionAuthority(
+            policy.ProviderModelRequestProfile,
+            CampaignPlanningContentFamily.ProviderModelRequestProfile,
+            validatedProviderModelRequestProfileProjection);
+
+        var providerConfigurationId = ReadExecutionProjectionId(
+            validatedProviderModelRequestProfileProjection,
+            "providerConfigurationId");
+        var modelConfigurationId = ReadExecutionProjectionId(
+            validatedProviderModelRequestProfileProjection,
+            "modelConfigurationId");
+        var scribeProtocolId = ReadExecutionProjectionId(
+            validatedAgentProtocolProjection,
+            "scribeProtocolId");
+        var toolPolicyId = ReadExecutionProjectionId(
+            validatedToolPolicyAndRegistryProjection,
+            "toolPolicyId");
+        var agent = ProjectContentAuthority(policy.AgentProtocol);
+        var tool = ProjectContentAuthority(policy.ToolPolicyAndRegistry);
+        var provider = ProjectContentAuthority(policy.ProviderModelRequestProfile);
+        return new CampaignScribeExecutionAuthority(
+            providerConfigurationId,
+            modelConfigurationId,
+            scribeProtocolId,
+            toolPolicyId,
+            agent,
+            tool,
+            provider,
+            CreateExecutionAuthorityCommitment(
+                providerConfigurationId,
+                modelConfigurationId,
+                scribeProtocolId,
+                toolPolicyId,
+                agent,
+                tool,
+                provider));
+    }
+
     public static CampaignCheckpointState CreateInitial(
         string styleConfigurationId,
         JsonElement validatedStyleConfigurationProjection,
+        CampaignScribeExecutionAuthority scribeExecutionAuthority,
         string inputIdentity,
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan)
     {
         ArgumentNullException.ThrowIfNull(planningInput);
         ArgumentNullException.ThrowIfNull(acceptedPlan);
+        ArgumentNullException.ThrowIfNull(scribeExecutionAuthority);
 
         var replanned = CampaignPlanner.Plan(planningInput);
         RequireSamePlan(replanned, acceptedPlan);
@@ -83,6 +138,7 @@ public static class CampaignStateFactory
                 ? new CampaignWorkClosedOutcome(
                     CampaignWorkOutcomeStage.Planning,
                     CampaignWorkOutcomeCode.PlanningTerminal,
+                    null,
                     null,
                     null,
                     null,
@@ -109,7 +165,7 @@ public static class CampaignStateFactory
                 planningInput.Snapshot.TargetProfile,
                 acceptedPlan.ExecutionCommitment),
             checkpointRevision: 0,
-            CreateCeilings(policy, styleAuthority),
+            CreateCeilings(policy, styleAuthority, scribeExecutionAuthority),
             EmptyCharges(),
             workItems,
             activeReservation: null,
@@ -179,7 +235,10 @@ public static class CampaignStateFactory
         var style = CreateStyleConfigurationAuthority(
             styleConfigurationId,
             validatedStyleConfigurationProjection);
-        var expectedCeilings = CreateCeilings(planningInput.ExecutionPolicy, style);
+        var expectedCeilings = CreateCeilings(
+            planningInput.ExecutionPolicy,
+            style,
+            state.ConfiguredCeilings.ScribeExecutionAuthority);
         var expectedProduct = planningInput.ExecutionPolicy.ProductContractRevision;
         var snapshot = planningInput.Snapshot;
         if (!string.Equals(state.ProductRevision.Id, expectedProduct.Id, StringComparison.Ordinal)
@@ -453,10 +512,19 @@ public static class CampaignStateFactory
                 : CampaignTrustedProposalAdmissionKind.Invalid;
         }
 
-        var bytes = CampaignStateJson.WritePatchRequest(
-            context,
-            catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
-            completeProjectionSet.Select(item => item.PatchBlock).ToImmutableArray());
+        byte[] bytes;
+        try
+        {
+            bytes = CampaignStateJson.WritePatchRequest(
+                context,
+                catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
+                completeProjectionSet.Select(item => item.PatchBlock).ToImmutableArray());
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.InvalidBound)
+        {
+            return CampaignTrustedProposalAdmissionKind.OverBound;
+        }
         if (bytes.Length > DocumentationPatchValidator.MaximumArtifactUtf8Bytes)
         {
             return CampaignTrustedProposalAdmissionKind.OverBound;
@@ -483,6 +551,9 @@ public static class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(acceptedPlan);
         ArgumentNullException.ThrowIfNull(request);
         ValidateExecutionAuthority(executionAuthority);
+        Require(
+            executionAuthority == state.ConfiguredCeilings.ScribeExecutionAuthority,
+            CampaignStateValidationCode.InvalidCorrelation);
         ValidateCurrentContext(
             state,
             styleConfigurationId,
@@ -673,6 +744,7 @@ public static class CampaignStateFactory
                 kind,
                 request.ArtifactSha256,
                 resultCommitment,
+                CreateAcceptedProjectionCommitment(proposals),
                 reservation!.ExpectedCheckpointRevision));
     }
 
@@ -693,12 +765,40 @@ public static class CampaignStateFactory
             && string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
             && reservation.ExpectedCheckpointRevision == state.CheckpointRevision,
             CampaignStateValidationCode.InvalidCorrelation);
-        _ = ResolvePatchRequestProjection(state, request);
+        var proposals = ResolvePatchRequestProjection(state, request);
         return new CampaignCumulativeOutcome(
             kind,
             request.ArtifactSha256,
             null,
+            CreateAcceptedProjectionCommitment(proposals),
             reservation!.ExpectedCheckpointRevision);
+    }
+
+    internal static bool HasKnownOverboundActiveProjection(CampaignCheckpointState state)
+    {
+        if (state.CumulativeOutcome is not
+            {
+                Kind: CampaignCumulativeOutcomeKind.OverBound,
+                ProjectionCommitmentSha256: { } knownProjection,
+            })
+        {
+            return false;
+        }
+
+        return string.Equals(
+            knownProjection,
+            CreateActiveProjectionCommitment(state),
+            StringComparison.Ordinal);
+    }
+
+    internal static string CreateActiveProjectionCommitment(CampaignCheckpointState state)
+    {
+        var proposals = state.WorkItems
+            .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            .Select(item => item.TrustedProposal!)
+            .ToImmutableArray();
+        Require(!proposals.IsEmpty, CampaignStateValidationCode.InvalidCorrelation);
+        return CreateAcceptedProjectionCommitment(proposals);
     }
 
     public static string CreatePatchResultCommitment(
@@ -869,6 +969,7 @@ public static class CampaignStateFactory
                 null,
                 request.ArtifactSha256,
                 resultCommitment,
+                null,
                 workItemKey);
             var remainingWork = state.WorkItems.Select(item =>
                 string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
@@ -991,6 +1092,7 @@ public static class CampaignStateFactory
         Require(state.WorkItems.Length <= CampaignStateContract.MaximumWorkItems, CampaignStateValidationCode.InvalidBound);
         var keys = new HashSet<string>(StringComparer.Ordinal);
         var activeBlocks = 0;
+        var completedOverboundScribeOperations = 0;
         for (var index = 0; index < state.WorkItems.Length; index++)
         {
             var work = state.WorkItems[index];
@@ -1023,9 +1125,18 @@ public static class CampaignStateFactory
             if (work.ClosedOutcome is not null)
             {
                 ValidateClosedOutcome(work.ClosedOutcome, work.WorkItemKey);
+                if (work.ClosedOutcome is
+                    {
+                        Stage: CampaignWorkOutcomeStage.Scribe,
+                        Code: CampaignWorkOutcomeCode.CompletedOverBound,
+                    })
+                {
+                    completedOverboundScribeOperations++;
+                }
             }
         }
 
+        Require(completedOverboundScribeOperations <= 1, CampaignStateValidationCode.InvalidBound);
         Require(activeBlocks <= CampaignStateContract.MaximumActivePatchBlocks
             && activeBlocks <= state.ConfiguredCeilings.CampaignBudget.MaximumBlocks,
             CampaignStateValidationCode.InvalidBound);
@@ -1104,8 +1215,94 @@ public static class CampaignStateFactory
             && IsOpaqueId(authority.ProviderConfigurationId, DocumentationScribeContract.MaximumIdentifierScalars)
             && IsOpaqueId(authority.ModelConfigurationId, DocumentationScribeContract.MaximumIdentifierScalars)
             && IsOpaqueId(authority.ScribeProtocolId, DocumentationScribeContract.MaximumIdentifierScalars)
-            && IsOpaqueId(authority.ToolPolicyId, DocumentationScribeContract.MaximumIdentifierScalars),
+            && IsOpaqueId(authority.ToolPolicyId, DocumentationScribeContract.MaximumIdentifierScalars)
+            && ValidContentAuthority(authority.AgentProtocolAuthority)
+            && ValidContentAuthority(authority.ToolPolicyAndRegistryAuthority)
+            && ValidContentAuthority(authority.ProviderModelRequestProfileAuthority)
+            && IsSha256(authority.BindingCommitmentSha256)
+            && string.Equals(
+                authority.BindingCommitmentSha256,
+                CreateExecutionAuthorityCommitment(
+                    authority.ProviderConfigurationId,
+                    authority.ModelConfigurationId,
+                    authority.ScribeProtocolId,
+                    authority.ToolPolicyId,
+                    authority.AgentProtocolAuthority,
+                    authority.ToolPolicyAndRegistryAuthority,
+                    authority.ProviderModelRequestProfileAuthority),
+                StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidVocabulary);
+    }
+
+    private static bool ValidContentAuthority(CampaignStateProductRevision? authority) =>
+        authority is not null
+        && IsOpaqueId(authority.Id, CampaignStateContract.MaximumIdentifierScalars)
+        && IsSha256(authority.ContentSha256);
+
+    private static void ValidateExecutionProjectionAuthority(
+        CampaignPlanningContentAuthority expected,
+        CampaignPlanningContentFamily family,
+        JsonElement projection)
+    {
+        try
+        {
+            var actual = CampaignPlanningContentAuthority.CreateValidatedJsonProjection(
+                family,
+                expected.Id,
+                projection);
+            Require(actual == expected, CampaignStateValidationCode.InvalidConfiguration);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+            && exception is not CampaignStateValidationException)
+        {
+            throw Fail(
+                CampaignStateValidationCode.InvalidConfiguration,
+                "Scribe execution configuration projection does not match its planning authority.");
+        }
+    }
+
+    private static string ReadExecutionProjectionId(JsonElement projection, string propertyName)
+    {
+        if (projection.ValueKind != JsonValueKind.Object
+            || !projection.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.String
+            || property.GetString() is not { } value
+            || !IsOpaqueId(value, DocumentationScribeContract.MaximumIdentifierScalars))
+        {
+            throw Fail(
+                CampaignStateValidationCode.InvalidConfiguration,
+                "Scribe execution configuration projection is missing a valid concrete identifier.");
+        }
+
+        return value;
+    }
+
+    private static CampaignStateProductRevision ProjectContentAuthority(
+        CampaignPlanningContentAuthority authority) =>
+        new(authority.Id, authority.ContentSha256);
+
+    private static string CreateExecutionAuthorityCommitment(
+        string providerConfigurationId,
+        string modelConfigurationId,
+        string scribeProtocolId,
+        string toolPolicyId,
+        CampaignStateProductRevision agent,
+        CampaignStateProductRevision tool,
+        CampaignStateProductRevision provider)
+    {
+        using var writer = new CampaignPlanningCommitmentWriter(
+            "contract-scribe/campaign-scribe-execution-authority/v1");
+        writer.Add("provider.id", providerConfigurationId);
+        writer.Add("model.id", modelConfigurationId);
+        writer.Add("protocol.id", scribeProtocolId);
+        writer.Add("tool-policy.id", toolPolicyId);
+        writer.Add("agent.authority.id", agent.Id);
+        writer.Add("agent.authority.sha", agent.ContentSha256);
+        writer.Add("tool.authority.id", tool.Id);
+        writer.Add("tool.authority.sha", tool.ContentSha256);
+        writer.Add("provider.authority.id", provider.Id);
+        writer.Add("provider.authority.sha", provider.ContentSha256);
+        return writer.Complete();
     }
 
     private static void ValidateCurrentEvidence(
@@ -1201,8 +1398,16 @@ public static class CampaignStateFactory
 
     private static CampaignStateConfiguredCeilings CreateCeilings(
         CampaignPlanningExecutionPolicy policy,
-        CampaignStyleConfigurationAuthority style)
+        CampaignStyleConfigurationAuthority style,
+        CampaignScribeExecutionAuthority executionAuthority)
     {
+        ValidateExecutionAuthority(executionAuthority);
+        Require(
+            executionAuthority.AgentProtocolAuthority == ProjectContentAuthority(policy.AgentProtocol)
+            && executionAuthority.ToolPolicyAndRegistryAuthority == ProjectContentAuthority(policy.ToolPolicyAndRegistry)
+            && executionAuthority.ProviderModelRequestProfileAuthority
+                == ProjectContentAuthority(policy.ProviderModelRequestProfile),
+            CampaignStateValidationCode.InvalidConfiguration);
         var budget = policy.CampaignBudget;
         var limits = policy.ScribeRunLimits;
         var projectedBudget = new CampaignStateCampaignBudget(
@@ -1246,6 +1451,7 @@ public static class CampaignStateFactory
         AddContentAuthority(writer, "provider", policy.ProviderModelRequestProfile);
         AddContentAuthority(writer, "retry", policy.RetryPolicy);
         AddContentAuthority(writer, "m2", policy.M2ProjectionPolicy);
+        writer.Add("scribe-execution", executionAuthority.BindingCommitmentSha256);
         writer.Add("cost.enforced", budget.CostEnforced);
         writer.AddOptional("cost.currency", budget.CostCurrency);
         writer.AddOptional("cost.rate.id", budget.CostRatePolicy?.Id);
@@ -1255,6 +1461,7 @@ public static class CampaignStateFactory
         return new CampaignStateConfiguredCeilings(
             projectedBudget,
             projectedLimits,
+            executionAuthority,
             style,
             writer.Complete());
     }
@@ -1302,6 +1509,7 @@ public static class CampaignStateFactory
         Require(ceilings is not null
             && ceilings.CampaignBudget is not null
             && ceilings.ScribeRunLimits is not null
+            && ceilings.ScribeExecutionAuthority is not null
             && ceilings.StyleConfigurationAuthority is not null,
             CampaignStateValidationCode.InvalidShape);
         var budget = ceilings.CampaignBudget;
@@ -1344,6 +1552,7 @@ public static class CampaignStateFactory
             CampaignStateValidationCode.InvalidBound);
         Require(IsOpaqueId(ceilings.StyleConfigurationAuthority.Id, 512), CampaignStateValidationCode.InvalidVocabulary);
         RequireSha(ceilings.StyleConfigurationAuthority.ContentSha256);
+        ValidateExecutionAuthority(ceilings.ScribeExecutionAuthority);
         RequireSha(ceilings.CampaignConfigurationCommitmentSha256);
     }
 
@@ -1390,11 +1599,26 @@ public static class CampaignStateFactory
     {
         RequireSha(proposal.HistoricalScribeRequestSha256);
         Require(DocumentationScribeAttemptId.TryParse(proposal.HistoricalAttemptId.Value, out _), CampaignStateValidationCode.InvalidVocabulary);
-        ValidateExecutionAuthority(new CampaignScribeExecutionAuthority(
-            proposal.ProviderConfigurationId,
-            proposal.ModelConfigurationId,
-            proposal.ScribeProtocolId,
-            proposal.ToolPolicyId));
+        var executionAuthority = state.ConfiguredCeilings.ScribeExecutionAuthority;
+        ValidateExecutionAuthority(executionAuthority);
+        Require(
+            string.Equals(
+                proposal.ProviderConfigurationId,
+                executionAuthority.ProviderConfigurationId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                proposal.ModelConfigurationId,
+                executionAuthority.ModelConfigurationId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                proposal.ScribeProtocolId,
+                executionAuthority.ScribeProtocolId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                proposal.ToolPolicyId,
+                executionAuthority.ToolPolicyId,
+                StringComparison.Ordinal),
+            CampaignStateValidationCode.InvalidCorrelation);
         Require(proposal.PatchBlock is not null
             && string.Equals(proposal.PatchBlock.BlockId, workItemKey, StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
@@ -1536,7 +1760,8 @@ public static class CampaignStateFactory
                 && outcome.ScribeRequestSha256 is null
                 && outcome.AttemptId is null
                 && outcome.PatchRequestSha256 is null
-                && outcome.PatchResultCommitmentSha256 is null,
+                && outcome.PatchResultCommitmentSha256 is null
+                && outcome.ScribeResultCommitmentSha256 is null,
                 CampaignStateValidationCode.InvalidShape);
         }
         else if (outcome.Stage == CampaignWorkOutcomeStage.Scribe)
@@ -1550,7 +1775,10 @@ public static class CampaignStateFactory
                 && outcome.AttemptId is { } attempt
                 && DocumentationScribeAttemptId.TryParse(attempt.Value, out _)
                 && outcome.PatchRequestSha256 is null
-                && outcome.PatchResultCommitmentSha256 is null,
+                && outcome.PatchResultCommitmentSha256 is null
+                && (outcome.Code == CampaignWorkOutcomeCode.CompletedOverBound
+                    ? IsSha256(outcome.ScribeResultCommitmentSha256)
+                    : outcome.ScribeResultCommitmentSha256 is null),
                 CampaignStateValidationCode.InvalidShape);
         }
         else
@@ -1561,7 +1789,8 @@ public static class CampaignStateFactory
                 && outcome.ScribeRequestSha256 is null
                 && outcome.AttemptId is null
                 && IsSha256(outcome.PatchRequestSha256)
-                && IsSha256(outcome.PatchResultCommitmentSha256),
+                && IsSha256(outcome.PatchResultCommitmentSha256)
+                && outcome.ScribeResultCommitmentSha256 is null,
                 CampaignStateValidationCode.InvalidShape);
         }
     }
@@ -1702,11 +1931,13 @@ public static class CampaignStateFactory
         var outcome = state.CumulativeOutcome;
         Require(Enum.IsDefined(outcome.Kind)
             && IsSha256(outcome.PatchRequestSha256)
+            && IsSha256(outcome.ProjectionCommitmentSha256)
             && outcome.CompletedFromCheckpointRevision >= 0
             && outcome.CompletedFromCheckpointRevision <= state.CheckpointRevision,
             CampaignStateValidationCode.InvalidCorrelation);
         var requiresResultCommitment = outcome.Kind is
             CampaignCumulativeOutcomeKind.Accepted
+            or CampaignCumulativeOutcomeKind.OverBound
             or CampaignCumulativeOutcomeKind.Rejected
             or CampaignCumulativeOutcomeKind.Stale;
         Require(requiresResultCommitment
@@ -1806,6 +2037,14 @@ public static class CampaignStateFactory
             Require(predecessor.Reservation.Kind is "provider" or "patch"
                 && IsSha256(predecessor.Reservation.CorrelationSha256)
                 && predecessor.Reservation.ConservativeCharge is >= 0 and <= CampaignStateContract.MaximumObservation,
+                CampaignStateValidationCode.InvalidShape);
+        }
+        if (predecessor.CompletedOperation is not null)
+        {
+            Require(
+                predecessor.CompletedOperation.Kind is "scribe-over-bound" or "patch-over-bound"
+                && IsSha256(predecessor.CompletedOperation.ProjectionCommitmentSha256)
+                && IsSha256(predecessor.CompletedOperation.ResultCommitmentSha256),
                 CampaignStateValidationCode.InvalidShape);
         }
     }
