@@ -671,7 +671,7 @@ public static class CampaignStateFactory
             .Where(item => item.Status == CampaignWorkStatus.Accepted)
             .Select(item => item.TrustedProposal!)
             .ToImmutableArray();
-        var evidence = currentEvidence.ToImmutableArray();
+        var evidence = CollectCurrentEvidence(currentEvidence);
         ImmutableArray<CampaignTrustedProposal> proposals;
         try
         {
@@ -724,7 +724,8 @@ public static class CampaignStateFactory
         Require(
             proposals.Length is >= 1 and <= CampaignStateContract.MaximumActivePatchBlocks,
             CampaignStateValidationCode.InvalidBound);
-        ValidateCurrentEvidence(proposals, context, currentEvidence);
+        var evidence = CollectCurrentEvidence(currentEvidence);
+        ValidateCurrentEvidence(proposals, context, evidence);
         var request = ParsePatchRequest(context, proposals);
         Require(
             state.CandidateObservation is { } candidate
@@ -1396,23 +1397,26 @@ public static class CampaignStateFactory
         return writer.Complete();
     }
 
-    private static void ValidateCurrentEvidence(
-        ImmutableArray<CampaignTrustedProposal> proposals,
-        DocumentationPatchContext context,
-        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence)
-    {
-        var expected = ValidateProjectionEvidenceConsistency(proposals);
-        var actual = CollectBounded(
+    private static ImmutableArray<DocumentationScribeEvidenceReference> CollectCurrentEvidence(
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence) =>
+        CollectBounded(
             currentEvidence,
             CampaignStateContract.MaximumEvidenceReferences,
             "Current evidence contains too many references.");
-        Require(actual.Length == expected.Length,
+
+    private static void ValidateCurrentEvidence(
+        ImmutableArray<CampaignTrustedProposal> proposals,
+        DocumentationPatchContext context,
+        ImmutableArray<DocumentationScribeEvidenceReference> currentEvidence)
+    {
+        var expected = ValidateProjectionEvidenceConsistency(proposals);
+        Require(currentEvidence.Length == expected.Length,
             CampaignStateValidationCode.InvalidCorrelation);
-        for (var index = 0; index < actual.Length; index++)
+        for (var index = 0; index < currentEvidence.Length; index++)
         {
-            Require(actual[index] is not null
-                && actual[index].RepositoryContextRef == context.RepositoryContextRef
-                && EvidenceProjectionEquals(ProjectEvidence(actual[index]), expected[index]),
+            Require(currentEvidence[index] is not null
+                && currentEvidence[index].RepositoryContextRef == context.RepositoryContextRef
+                && EvidenceProjectionEquals(ProjectEvidence(currentEvidence[index]), expected[index]),
                 CampaignStateValidationCode.InvalidCorrelation);
         }
     }

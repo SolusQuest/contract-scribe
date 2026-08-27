@@ -770,12 +770,34 @@ public sealed class CampaignStateContractTests
             mixed,
             PatchContext(firstExchange.Request),
             CurrentEvidence(firstExchange));
+        var fallbackEnumerationCount = 0;
+
+        IEnumerable<DocumentationScribeEvidenceReference> AcceptedEvidenceOnce()
+        {
+            fallbackEnumerationCount++;
+            if (fallbackEnumerationCount > 1)
+            {
+                throw new InvalidOperationException("Current evidence was enumerated more than once.");
+            }
+
+            foreach (var evidence in CurrentEvidence(firstExchange))
+            {
+                yield return evidence;
+            }
+        }
+
+        var acceptedThroughFallback = CampaignStateFactory.ReconstructPatchRequest(
+            mixed,
+            PatchContext(firstExchange.Request),
+            AcceptedEvidenceOnce());
 
         Assert.Equal(2, active.Blocks.Length);
         Assert.Equal([first.WorkItemKey, second.WorkItemKey], active.Blocks.Select(block => block.BlockId));
         Assert.Single(accepted.Blocks);
         Assert.Equal(first.WorkItemKey, accepted.Blocks[0].BlockId);
         Assert.Equal(firstRequest.ArtifactSha256, accepted.ArtifactSha256);
+        Assert.Equal(firstRequest.ArtifactSha256, acceptedThroughFallback.ArtifactSha256);
+        Assert.Equal(1, fallbackEnumerationCount);
         var activeProjectionCommitment = CampaignStateFactory.CreateHostPatchOutcome(
             WithPatchReservation(mixed, active),
             active,
@@ -3684,6 +3706,61 @@ public sealed class CampaignStateContractTests
             scenario.InitialState.LineageCharges,
             OverBound()));
         Assert.Equal(CampaignStateContract.MaximumWorkItems + 1, enumerated);
+    }
+
+    [Fact]
+    public void Current_evidence_collection_stops_at_the_contract_cap_for_every_reconstruction_entrypoint()
+    {
+        var proposalState = CreateProposalCompleteState();
+        var acceptedState = CreateAcceptedCandidateScenario().State;
+        var scenario = CreateProposalScenario();
+        var exchange = CreateScribeExchange(scenario.Plan.WorkItems[0]);
+        var evidence = CurrentEvidence(exchange)[0];
+        var reconstructors = new Action<IEnumerable<DocumentationScribeEvidenceReference>>[]
+        {
+            current => CampaignStateFactory.ReconstructPatchRequest(
+                proposalState,
+                PatchContext(exchange.Request),
+                current),
+            current => CampaignStateFactory.ReconstructAcceptedPatchRequest(
+                acceptedState,
+                PatchContext(exchange.Request),
+                current),
+        };
+
+        foreach (var reconstruct in reconstructors)
+        {
+            var atBoundEnumerated = 0;
+
+            IEnumerable<DocumentationScribeEvidenceReference> AtBound()
+            {
+                for (var index = 0; index < CampaignStateContract.MaximumEvidenceReferences; index++)
+                {
+                    atBoundEnumerated++;
+                    yield return evidence;
+                }
+            }
+
+            AssertInvalidCorrelation(() => reconstruct(AtBound()));
+            Assert.Equal(CampaignStateContract.MaximumEvidenceReferences, atBoundEnumerated);
+
+            var overBoundEnumerated = 0;
+
+            IEnumerable<DocumentationScribeEvidenceReference> OverBound()
+            {
+                for (var index = 0; index <= CampaignStateContract.MaximumEvidenceReferences; index++)
+                {
+                    overBoundEnumerated++;
+                    yield return evidence;
+                }
+
+                throw new InvalidOperationException(
+                    "The capped collector enumerated past the first over-bound evidence reference.");
+            }
+
+            AssertInvalidBound(() => reconstruct(OverBound()));
+            Assert.Equal(CampaignStateContract.MaximumEvidenceReferences + 1, overBoundEnumerated);
+        }
     }
 
     [Fact]
