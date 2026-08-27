@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -17,6 +17,7 @@
     "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
     "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
     "cumulativeOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }] },
+    "knownCompletedOperations": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/knownCompletedOperation" } },
     "terminalOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminal" }] },
     "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
   },
@@ -239,13 +240,18 @@
         { "if": { "properties": { "kind": { "enum": ["host-failure", "cancelled", "timeout"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "type": "null" } } } }
       ]
     },
+    "knownCompletedOperation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "requestCommitmentSha256", "projectionCommitmentSha256", "resultCommitmentSha256", "bindingCommitmentSha256"],
+      "properties": { "kind": { "const": "patch-over-bound" }, "requestCommitmentSha256": { "$ref": "#/$defs/sha256" }, "projectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "resultCommitmentSha256": { "$ref": "#/$defs/sha256" }, "bindingCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
     "terminal": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
       "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "budget", "caller", "deadline", "host", "new-snapshot"] } }
     },
     "predecessor": {
-      "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate", "completedOperation"],
-      "properties": { "productRevision": { "$ref": "#/$defs/revision" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" }, "finalCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "finalCheckpointSha256": { "$ref": "#/$defs/sha256" }, "terminalKind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorReservation" }] }, "candidate": { "$ref": "#/$defs/predecessorCandidate" }, "completedOperation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorCompletedOperation" }] } }
+      "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate", "completedOperations"],
+      "properties": { "productRevision": { "$ref": "#/$defs/revision" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" }, "finalCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "finalCheckpointSha256": { "$ref": "#/$defs/sha256" }, "terminalKind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorReservation" }] }, "candidate": { "$ref": "#/$defs/predecessorCandidate" }, "completedOperations": { "type": "array", "maxItems": 513, "items": { "$ref": "#/$defs/predecessorCompletedOperation" } } }
     },
     "predecessorReservation": {
       "type": "object", "additionalProperties": false, "required": ["kind", "correlationSha256", "conservativeCharge"],

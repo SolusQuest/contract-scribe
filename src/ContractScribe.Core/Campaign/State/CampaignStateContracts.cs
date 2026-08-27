@@ -10,6 +10,8 @@ public static class CampaignStateContract
     public const int MaximumWorkItems = 4_096;
     public const int MaximumActivePatchBlocks = 512;
     public const int MaximumChangedFiles = 512;
+    public const int MaximumKnownCompletedOperations = 513;
+    public const int MaximumKnownPatchCompletedOperations = 512;
     public const int MaximumEvidenceReferences = 4_096;
     public const int MaximumEvidenceReferencesPerBlock = 64;
     public const int MaximumDiagnostics = 128;
@@ -289,6 +291,22 @@ public sealed record CampaignScribeExecutionAuthority
     public string BindingCommitmentSha256 { get; }
 }
 
+/// <summary>
+/// Nonserialized proof that the current process rederived the persisted Scribe
+/// execution projection from the current canonical execution inputs.
+/// </summary>
+public sealed class CampaignScribeExecutionCapability
+{
+    internal CampaignScribeExecutionCapability(CampaignScribeExecutionAuthority projection) =>
+        Projection = projection;
+
+    public CampaignScribeExecutionAuthority PersistedProjection => Projection;
+
+    internal CampaignScribeExecutionAuthority Projection { get; }
+
+    public override string ToString() => nameof(CampaignScribeExecutionCapability);
+}
+
 public sealed record CampaignWorkItemState(
     string WorkItemKey,
     int OuterAttemptCount,
@@ -395,6 +413,29 @@ public sealed record CampaignCumulativeOutcome
     public long CompletedFromCheckpointRevision { get; internal init; }
 }
 
+public sealed record CampaignKnownCompletedOperation
+{
+    internal CampaignKnownCompletedOperation(
+        string kind,
+        string requestCommitmentSha256,
+        string projectionCommitmentSha256,
+        string resultCommitmentSha256,
+        string bindingCommitmentSha256)
+    {
+        Kind = kind;
+        RequestCommitmentSha256 = requestCommitmentSha256;
+        ProjectionCommitmentSha256 = projectionCommitmentSha256;
+        ResultCommitmentSha256 = resultCommitmentSha256;
+        BindingCommitmentSha256 = bindingCommitmentSha256;
+    }
+
+    public string Kind { get; }
+    public string RequestCommitmentSha256 { get; }
+    public string ProjectionCommitmentSha256 { get; }
+    public string ResultCommitmentSha256 { get; }
+    public string BindingCommitmentSha256 { get; }
+}
+
 public sealed record CampaignPatchCompletion
 {
     internal CampaignPatchCompletion(
@@ -487,7 +528,7 @@ public sealed record CampaignPredecessorSummary(
     CampaignTerminalKind TerminalKind,
     CampaignPredecessorReservationSummary? Reservation,
     CampaignPredecessorCandidateSummary Candidate,
-    CampaignPredecessorCompletedOperationSummary? CompletedOperation);
+    ImmutableArray<CampaignPredecessorCompletedOperationSummary> CompletedOperations);
 
 public sealed record CampaignCheckpointState
 {
@@ -502,6 +543,7 @@ public sealed record CampaignCheckpointState
         CampaignActiveReservation? activeReservation,
         CampaignCandidateObservation? candidateObservation,
         CampaignCumulativeOutcome? cumulativeOutcome,
+        ImmutableArray<CampaignKnownCompletedOperation> knownCompletedOperations,
         CampaignTerminalOutcome? terminalOutcome,
         CampaignPredecessorSummary? predecessor)
     {
@@ -515,6 +557,7 @@ public sealed record CampaignCheckpointState
         ActiveReservation = activeReservation;
         CandidateObservation = candidateObservation;
         CumulativeOutcome = cumulativeOutcome;
+        KnownCompletedOperations = knownCompletedOperations;
         TerminalOutcome = terminalOutcome;
         Predecessor = predecessor;
     }
@@ -530,6 +573,7 @@ public sealed record CampaignCheckpointState
     public CampaignActiveReservation? ActiveReservation { get; }
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome? CumulativeOutcome { get; }
+    public ImmutableArray<CampaignKnownCompletedOperation> KnownCompletedOperations { get; }
     public CampaignTerminalOutcome? TerminalOutcome { get; }
     public CampaignPredecessorSummary? Predecessor { get; }
 }

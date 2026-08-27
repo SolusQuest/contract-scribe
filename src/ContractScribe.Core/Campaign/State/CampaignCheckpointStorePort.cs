@@ -106,22 +106,56 @@ public enum CampaignCheckpointAcceptanceKind
 
 public sealed class CampaignAcceptedCheckpoint
 {
-    private int _dispatchGrant;
+    private readonly CampaignReservationLifecycleAuthority? _reservationLifecycle;
+    private int _invocationGrant;
 
     internal CampaignAcceptedCheckpoint(
         CampaignCheckpointArtifact artifact,
-        bool grantsDispatch)
+        CampaignAcceptedCheckpointAuthorityKind authorityKind)
     {
         Artifact = artifact;
-        _dispatchGrant = grantsDispatch ? 1 : 0;
+        _invocationGrant = authorityKind == CampaignAcceptedCheckpointAuthorityKind.Writer ? 1 : 0;
+        _reservationLifecycle = authorityKind == CampaignAcceptedCheckpointAuthorityKind.Observer
+            ? null
+            : new CampaignReservationLifecycleAuthority();
     }
 
     public CampaignCheckpointArtifact Artifact { get; }
 
-    internal bool TryConsumeDispatchGrant() =>
-        Interlocked.CompareExchange(ref _dispatchGrant, 0, 1) == 1;
+    internal CampaignReservationLifecycleAuthority ReservationLifecycle =>
+        _reservationLifecycle ?? throw new InvalidOperationException("The checkpoint is observation-only.");
+
+    internal bool TryIssueInvocation() =>
+        _reservationLifecycle?.IsAvailable == true
+        && Interlocked.CompareExchange(ref _invocationGrant, 0, 1) == 1;
+
+    internal bool TryRetireReservation() => _reservationLifecycle?.TryRetire() == true;
 
     public override string ToString() => nameof(CampaignAcceptedCheckpoint);
+}
+
+internal enum CampaignAcceptedCheckpointAuthorityKind
+{
+    Observer,
+    RetirementOnly,
+    Writer,
+}
+
+internal sealed class CampaignReservationLifecycleAuthority
+{
+    private const int Available = 0;
+    private const int DispatchStarted = 1;
+    private const int Retired = 2;
+    private int _state;
+
+    internal bool IsAvailable => Volatile.Read(ref _state) == Available;
+    internal bool IsDispatchStarted => Volatile.Read(ref _state) == DispatchStarted;
+
+    internal bool TryBeginDispatch() =>
+        Interlocked.CompareExchange(ref _state, DispatchStarted, Available) == Available;
+
+    internal bool TryRetire() =>
+        Interlocked.CompareExchange(ref _state, Retired, Available) == Available;
 }
 
 public sealed class CampaignInitialCheckpointAuthority
@@ -186,7 +220,9 @@ public static class CampaignCheckpointAcceptance
 
             return new CampaignCheckpointAcceptanceResult(
                 CampaignCheckpointAcceptanceKind.Accepted,
-                new CampaignAcceptedCheckpoint(parsed.Artifact, grantsDispatch: false));
+                new CampaignAcceptedCheckpoint(
+                    parsed.Artifact,
+                    CampaignAcceptedCheckpointAuthorityKind.RetirementOnly));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -322,7 +358,9 @@ public static class CampaignCheckpointAcceptance
                     {
                         return new CampaignCheckpointAcceptanceResult(
                             CampaignCheckpointAcceptanceKind.Accepted,
-                            new CampaignAcceptedCheckpoint(intended, grantsDispatch: false));
+                            new CampaignAcceptedCheckpoint(
+                                intended,
+                                CampaignAcceptedCheckpointAuthorityKind.Observer));
                     }
                 }
 
@@ -357,7 +395,11 @@ public static class CampaignCheckpointAcceptance
         return Match(readback, intended) == MatchKind.Exact
             ? new CampaignCheckpointAcceptanceResult(
                 CampaignCheckpointAcceptanceKind.Accepted,
-                new CampaignAcceptedCheckpoint(intended, grantsDispatch))
+                new CampaignAcceptedCheckpoint(
+                    intended,
+                    grantsDispatch
+                        ? CampaignAcceptedCheckpointAuthorityKind.Writer
+                        : CampaignAcceptedCheckpointAuthorityKind.Observer))
             : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.ReadbackMismatch, null);
     }
 

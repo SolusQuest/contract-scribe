@@ -23,7 +23,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("fd39618099756a489887c37f8e4f76452a29af0192ae7f8c9a9c130ae50b9042", artifact.Sha256);
+        Assert.Equal("1ce04ed0b5713a3b08f00cb452315894cba1da3dc21ac959ba564dbec6a648cc", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -463,7 +463,7 @@ public sealed class CampaignStateContractTests
                 "provider.substituted",
                 substitutedProvider),
         };
-        var substitutedAuthority = CampaignStateFactory.CreateScribeExecutionAuthority(
+        var substitutedAuthority = CampaignStateFactory.CreateScribeExecutionCapability(
             substitutedPolicy,
             substitutedAgent,
             substitutedTool,
@@ -479,6 +479,46 @@ public sealed class CampaignStateContractTests
             substitutedExchange.Request);
         Assert.Equal(CampaignTransitionKind.Rejected, rejectedAdmission.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, rejectedAdmission.Failure);
+
+        var substitutedProjection = substitutedAuthority.PersistedProjection;
+        var coherentlySubstitutedCheckpoint = MutateValidState(scenario.InitialState, root =>
+        {
+            var ceilings = root["configuredCeilings"]!.AsObject();
+            var execution = ceilings["scribeExecutionAuthority"]!.AsObject();
+            execution["providerConfigurationId"] = substitutedProjection.ProviderConfigurationId;
+            execution["modelConfigurationId"] = substitutedProjection.ModelConfigurationId;
+            execution["scribeProtocolId"] = substitutedProjection.ScribeProtocolId;
+            execution["toolPolicyId"] = substitutedProjection.ToolPolicyId;
+            execution["agentProtocolAuthority"] = new JsonObject
+            {
+                ["id"] = substitutedProjection.AgentProtocolAuthority.Id,
+                ["contentSha256"] = substitutedProjection.AgentProtocolAuthority.ContentSha256,
+            };
+            execution["toolPolicyAndRegistryAuthority"] = new JsonObject
+            {
+                ["id"] = substitutedProjection.ToolPolicyAndRegistryAuthority.Id,
+                ["contentSha256"] = substitutedProjection.ToolPolicyAndRegistryAuthority.ContentSha256,
+            };
+            execution["providerModelRequestProfileAuthority"] = new JsonObject
+            {
+                ["id"] = substitutedProjection.ProviderModelRequestProfileAuthority.Id,
+                ["contentSha256"] = substitutedProjection.ProviderModelRequestProfileAuthority.ContentSha256,
+            };
+            execution["bindingCommitmentSha256"] = substitutedProjection.BindingCommitmentSha256;
+            ceilings["campaignConfigurationCommitmentSha256"] = Hash('e');
+        });
+        var currentCapabilityRejected = CampaignStateReducer.AdmitProviderInvocation(
+            CampaignStateJson.CreateArtifact(coherentlySubstitutedCheckpoint),
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            CreateScribeExchange(work).Request);
+        Assert.Equal(CampaignTransitionKind.Rejected, currentCapabilityRejected.Kind);
+        Assert.Equal(CampaignTransitionFailure.InvalidAuthority, currentCapabilityRejected.Failure);
+        Assert.Null(currentCapabilityRejected.Artifact.State.ActiveReservation);
 
         var reserved = WithState(
             scenario.InitialState,
@@ -823,6 +863,7 @@ public sealed class CampaignStateContractTests
 
         CampaignStateFactory.ValidateCurrentContext(
             retryable,
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -860,6 +901,7 @@ public sealed class CampaignStateContractTests
         });
         AssertInvalidCorrelation(() => CampaignStateFactory.ValidateCurrentContext(
             planningRollback,
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -883,6 +925,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(Hash('b'), patch.WorkItems[0].ClosedOutcome!.PatchResultCommitmentSha256);
         CampaignStateFactory.ValidateCurrentContext(
             patch,
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -942,6 +985,7 @@ public sealed class CampaignStateContractTests
 
         var decision = CampaignStateFactory.CreatePatchRejectionReduction(
             scenario.Predecessor,
+            scenario.ProposalScenario.ExecutionAuthority,
             "style.synthetic",
             scenario.ProposalScenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -1023,6 +1067,7 @@ public sealed class CampaignStateContractTests
         {
             var decision = CampaignStateFactory.CreatePatchRejectionReduction(
                 CampaignStateJson.CreateArtifact(state),
+                scenario.ProposalScenario.ExecutionAuthority,
                 "style.synthetic",
                 scenario.ProposalScenario.StyleProjection,
                 "samples/Synthetic.csproj",
@@ -1053,6 +1098,7 @@ public sealed class CampaignStateContractTests
         {
             var decision = CampaignStateFactory.CreatePatchRejectionReduction(
                 scenario.Predecessor,
+                scenario.ProposalScenario.ExecutionAuthority,
                 "style.synthetic",
                 scenario.ProposalScenario.StyleProjection,
                 "samples/Synthetic.csproj",
@@ -1143,6 +1189,23 @@ public sealed class CampaignStateContractTests
         Assert.True(invocationAuthority.TryBeginDispatch(out var dispatchedAttempt));
         Assert.Equal(attemptId, dispatchedAttempt);
         Assert.False(invocationAuthority.TryBeginDispatch(out _));
+        var remintedCapability = CampaignStateFactory.CreateScribeExecutionCapability(
+            scenario.Input.ExecutionPolicy,
+            scenario.AgentProtocolProjection,
+            scenario.ToolPolicyProjection,
+            scenario.ProviderModelProjection);
+        var capabilitySubstitution = CampaignStateReducer.CompleteProviderInvocation(
+            admitted.Artifact,
+            invocationAuthority,
+            remintedCapability,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            outcome,
+            completionExchange.Result.RunEnvelope.ElapsedMilliseconds);
+        Assert.Equal(CampaignTransitionKind.Rejected, capabilitySubstitution.Kind);
+        Assert.Equal(CampaignTransitionFailure.InvalidCorrelation, capabilitySubstitution.Failure);
         var completed = CampaignStateReducer.CompleteProviderInvocation(
             admitted.Artifact,
             invocationAuthority,
@@ -1232,6 +1295,286 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
+    public void Provider_retry_and_dispatch_share_one_linearizable_reservation_lifecycle()
+    {
+        var scenario = CreateProposalScenario(
+            costEnforced: false,
+            maximumElapsedMilliseconds: 300_000);
+        var work = scenario.Plan.WorkItems[0];
+        var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var firstExchange = CreateScribeExchange(work);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(
+            predecessor,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            firstExchange.Request);
+        var accepted = AcceptForTest(predecessor, admitted);
+        var issued = CampaignStateReducer.CreateProviderInvocationAuthority(
+            accepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            firstExchange.Request);
+
+        var fresh = CreateFreshContextExchange(work);
+        var retry = CampaignStateReducer.RetryProviderInvocation(
+            admitted.Artifact,
+            accepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            fresh.Request);
+
+        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        Assert.False(issued.TryBeginDispatch(out _));
+        Assert.Equal(
+            fresh.Request.ArtifactSha256,
+            Assert.IsType<CampaignProviderReservation>(retry.Artifact.State.ActiveReservation).ScribeRequestSha256);
+        var successorAccepted = AcceptForTest(admitted.Artifact, retry);
+        var successor = CampaignStateReducer.CreateProviderInvocationAuthority(
+            successorAccepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            fresh.Request);
+        Assert.True(successor.TryBeginDispatch(out _));
+
+        var stopAfterDispatch = CampaignStateReducer.StopActiveInvocation(
+            retry.Artifact,
+            successorAccepted,
+            CampaignTerminalKind.Cancelled);
+        Assert.Equal(CampaignTransitionKind.Rejected, stopAfterDispatch.Kind);
+        Assert.Equal(CampaignTransitionFailure.InvalidAuthority, stopAfterDispatch.Failure);
+        Assert.True(retry.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+            stopAfterDispatch.Artifact.ExactUtf8Json.AsSpan()));
+    }
+
+    [Fact]
+    public async Task Provider_dispatch_and_retirement_have_exactly_one_winner()
+    {
+        var scenario = CreateProposalScenario(costEnforced: false);
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work);
+        var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(
+            predecessor,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            exchange.Request);
+        var accepted = AcceptForTest(predecessor, admitted);
+        var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(
+            accepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            exchange.Request);
+        using var start = new ManualResetEventSlim();
+        var dispatch = Task.Run(() =>
+        {
+            start.Wait();
+            return invocation.TryBeginDispatch(out _);
+        });
+        var retirement = Task.Run(() =>
+        {
+            start.Wait();
+            return CampaignStateReducer.StopActiveInvocation(
+                admitted.Artifact,
+                accepted,
+                CampaignTerminalKind.Cancelled);
+        });
+
+        start.Set();
+        var dispatchWon = await dispatch;
+        var retirementResult = await retirement;
+
+        Assert.Equal(
+            dispatchWon ? CampaignTransitionKind.Rejected : CampaignTransitionKind.Applied,
+            retirementResult.Kind);
+        if (dispatchWon)
+        {
+            Assert.Equal(CampaignTransitionFailure.InvalidAuthority, retirementResult.Failure);
+            Assert.True(admitted.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+                retirementResult.Artifact.ExactUtf8Json.AsSpan()));
+        }
+        else
+        {
+            Assert.Equal(CampaignTerminalKind.Cancelled, retirementResult.Artifact.State.TerminalOutcome!.Kind);
+            Assert.False(invocation.TryBeginDispatch(out _));
+        }
+    }
+
+    [Fact]
+    public void Retirement_before_invocation_issuance_revokes_the_dispatch_grant()
+    {
+        var scenario = CreateProposalScenario(costEnforced: false);
+        var work = scenario.Plan.WorkItems[0];
+
+        (CampaignCheckpointArtifact Predecessor,
+            CampaignTransitionResult Admitted,
+            CampaignAcceptedCheckpoint Accepted,
+            DocumentationScribeRequest Request) Admit(string attemptId)
+        {
+            var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+            var request = CreateScribeExchange(work, attemptId: attemptId).Request;
+            var admitted = CampaignStateReducer.AdmitProviderInvocation(
+                predecessor,
+                scenario.ExecutionAuthority,
+                "style.synthetic",
+                scenario.StyleProjection,
+                scenario.Input,
+                scenario.Plan,
+                work.WorkItemKey,
+                request);
+            return (predecessor, admitted, AcceptForTest(predecessor, admitted), request);
+        }
+
+        void AssertOldGrantRevoked(
+            CampaignAcceptedCheckpoint accepted,
+            DocumentationScribeRequest request)
+        {
+            var exception = Assert.Throws<ArgumentException>(() =>
+                CampaignStateReducer.CreateProviderInvocationAuthority(
+                    accepted,
+                    scenario.ExecutionAuthority,
+                    "style.synthetic",
+                    scenario.StyleProjection,
+                    scenario.Input,
+                    scenario.Plan,
+                    request));
+            Assert.Contains("does not grant this dispatch", exception.Message, StringComparison.Ordinal);
+        }
+
+        var retryCase = Admit("scribe-attempt.11111111111111111111111111111111");
+        var retry = CampaignStateReducer.RetryProviderInvocation(
+            retryCase.Admitted.Artifact,
+            retryCase.Accepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            CreateFreshContextExchange(work).Request);
+        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        AssertOldGrantRevoked(retryCase.Accepted, retryCase.Request);
+
+        var stopCase = Admit("scribe-attempt.22222222222222222222222222222222");
+        var stopped = CampaignStateReducer.StopActiveInvocation(
+            stopCase.Admitted.Artifact,
+            stopCase.Accepted,
+            CampaignTerminalKind.Cancelled);
+        Assert.Equal(CampaignTransitionKind.Applied, stopped.Kind);
+        AssertOldGrantRevoked(stopCase.Accepted, stopCase.Request);
+
+        var supersedeCase = Admit("scribe-attempt.33333333333333333333333333333333");
+        var successorInput = scenario.Input with
+        {
+            Snapshot = scenario.Input.Snapshot with
+            {
+                OpaqueSnapshotBinding = "snapshot.pre-issuance-supersession",
+                RepositoryCommitmentSha256 = Hash('6'),
+                InputCommitmentSha256 = Hash('7'),
+            },
+        };
+        var successorPlan = CampaignPlanner.Plan(successorInput);
+        var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateInitial(
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.ExecutionAuthority,
+            "samples/Synthetic.csproj",
+            successorInput,
+            successorPlan));
+        var superseded = CampaignStateReducer.Supersede(
+            supersedeCase.Admitted.Artifact,
+            supersedeCase.Accepted,
+            CampaignCheckpointAcceptance.CreateInitialAuthority(successorTemplate),
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            "samples/Synthetic.csproj",
+            successorInput,
+            successorPlan);
+        Assert.Equal(CampaignTransitionKind.Applied, superseded.Kind);
+        AssertOldGrantRevoked(supersedeCase.Accepted, supersedeCase.Request);
+    }
+
+    [Fact]
+    public void Supersession_retires_an_issued_but_not_dispatched_reservation()
+    {
+        var scenario = CreateProposalScenario(costEnforced: false);
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work);
+        var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(
+            predecessor,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            work.WorkItemKey,
+            exchange.Request);
+        var accepted = AcceptForTest(predecessor, admitted);
+        var issued = CampaignStateReducer.CreateProviderInvocationAuthority(
+            accepted,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            exchange.Request);
+        var successorInput = scenario.Input with
+        {
+            Snapshot = scenario.Input.Snapshot with
+            {
+                OpaqueSnapshotBinding = "snapshot.supersession-retirement",
+                RepositoryCommitmentSha256 = Hash('d'),
+                InputCommitmentSha256 = Hash('e'),
+            },
+        };
+        var successorPlan = CampaignPlanner.Plan(successorInput);
+        var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateInitial(
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.ExecutionAuthority,
+            "samples/Synthetic.csproj",
+            successorInput,
+            successorPlan));
+
+        var superseded = CampaignStateReducer.Supersede(
+            admitted.Artifact,
+            accepted,
+            CampaignCheckpointAcceptance.CreateInitialAuthority(successorTemplate),
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            "samples/Synthetic.csproj",
+            successorInput,
+            successorPlan);
+
+        Assert.Equal(CampaignTransitionKind.Applied, superseded.Kind);
+        Assert.False(issued.TryBeginDispatch(out _));
+        Assert.NotNull(superseded.Artifact.State.Predecessor!.Reservation);
+    }
+
+    [Fact]
     public void Closed_retryable_provider_outcome_admits_a_fresh_changed_request_and_retires_the_old_attempt()
     {
         var scenario = CreateProposalScenario(
@@ -1293,6 +1636,7 @@ public sealed class CampaignStateContractTests
             inputIdentity: "samples/Alternate.csproj");
         var rejectedForeignInput = CampaignStateReducer.RetryProviderInvocation(
             completed.Artifact,
+            null,
             authority,
             "style.synthetic",
             scenario.StyleProjection,
@@ -1304,6 +1648,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, rejectedForeignInput.Failure);
         var retry = CampaignStateReducer.RetryProviderInvocation(
             completed.Artifact,
+            null,
             authority,
             "style.synthetic",
             scenario.StyleProjection,
@@ -1437,13 +1782,22 @@ public sealed class CampaignStateContractTests
                 ProviderReservation(firstWork.WorkItemKey, firstExchange)),
             firstWork,
             firstExchange);
-        var atCapacity = WithState(
-            scenario.InitialState,
-            ReplaceWork(
+        var atCapacityWork = ReplaceWork(
                 scenario.InitialState,
                 firstWork.WorkItemKey,
                 CampaignWorkStatus.ProposalComplete,
-                firstProposal),
+                firstProposal)
+            .Select(item => string.Equals(item.WorkItemKey, secondWork.WorkItemKey, StringComparison.Ordinal)
+                ? item with
+                {
+                    CandidateAttemptCount =
+                        scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock,
+                }
+                : item)
+            .ToImmutableArray();
+        var atCapacity = WithState(
+            scenario.InitialState,
+            atCapacityWork,
             activeReservation: null);
         var secondExchange = CreateScribeExchange(secondWork);
         var secondAuthority = scenario.ExecutionAuthority;
@@ -1479,6 +1833,8 @@ public sealed class CampaignStateContractTests
         {
             var item = root["workItems"]![1]!;
             item["outerAttemptCount"] = 1;
+            item["candidateAttemptCount"] =
+                scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock;
             item["status"] = "closed";
             item["closedOutcome"] = new JsonObject
             {
@@ -1495,6 +1851,7 @@ public sealed class CampaignStateContractTests
         var durableClosedArtifact = CampaignStateJson.CreateArtifact(durableClosedRetry);
         var blockedRetry = CampaignStateReducer.RetryProviderInvocation(
             durableClosedArtifact,
+            null,
             secondAuthority,
             "style.synthetic",
             scenario.StyleProjection,
@@ -1846,6 +2203,28 @@ public sealed class CampaignStateContractTests
         Assert.Equal(
             DocumentationPatchValidator.MaximumArtifactUtf8Bytes,
             WritePatchRequestBytes(exactRequest).Length);
+        var remainingKey = exact.Artifact.State.WorkItems
+            .First(item => item.Status == CampaignWorkStatus.Planned)
+            .WorkItemKey;
+        var remainingWork = scenario.Plan.WorkItems.Single(item =>
+            string.Equals(item.WorkItemKey, remainingKey, StringComparison.Ordinal));
+        var remainingExchange = CreateSizedContentScribeExchange(
+            remainingWork,
+            payloadScalars: 3,
+            inputIdentity: maximumInputIdentity);
+        var capacityBlocked = CampaignStateReducer.AdmitProviderInvocation(
+            exact.Artifact,
+            scenario.ExecutionAuthority,
+            "style.synthetic",
+            scenario.StyleProjection,
+            scenario.Input,
+            scenario.Plan,
+            remainingWork.WorkItemKey,
+            remainingExchange.Request);
+        Assert.Equal(CampaignTransitionKind.Rejected, capacityBlocked.Kind);
+        Assert.Equal(CampaignTransitionFailure.ProjectionCapacityUnavailable, capacityBlocked.Failure);
+        Assert.True(exact.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+            capacityBlocked.Artifact.ExactUtf8Json.AsSpan()));
 
         var over = CompleteTunable(exactExtraBytes + 1);
         Assert.Equal(CampaignTransitionKind.Applied, over.Kind);
@@ -1877,15 +2256,16 @@ public sealed class CampaignStateContractTests
             successorPlan));
         var superseded = CampaignStateReducer.Supersede(
             over.Artifact,
+            null,
             CampaignCheckpointAcceptance.CreateInitialAuthority(successorTemplate),
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             maximumInputIdentity,
             successorInput,
             successorPlan);
         Assert.Equal(CampaignTransitionKind.Applied, superseded.Kind);
-        var scribeSummary = Assert.IsType<CampaignPredecessorCompletedOperationSummary>(
-            superseded.Artifact.State.Predecessor!.CompletedOperation);
+        var scribeSummary = Assert.Single(superseded.Artifact.State.Predecessor!.CompletedOperations);
         Assert.Equal("scribe-over-bound", scribeSummary.Kind);
         Assert.Equal(overWork.ClosedOutcome.ScribeRequestSha256, scribeSummary.ProjectionCommitmentSha256);
         Assert.Equal(
@@ -2097,6 +2477,7 @@ public sealed class CampaignStateContractTests
         var scenario = CreatePatchRejectionScenario();
         var decision = CampaignStateFactory.CreatePatchRejectionReduction(
             scenario.Predecessor,
+            scenario.ProposalScenario.ExecutionAuthority,
             "style.synthetic",
             scenario.ProposalScenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -2195,25 +2576,41 @@ public sealed class CampaignStateContractTests
         var firstReservation = Assert.IsType<CampaignPatchReservation>(first.Artifact.State.ActiveReservation);
         Assert.Equal(first.Artifact.CheckpointRevision, firstReservation.ExpectedCheckpointRevision);
         Assert.Equal(1, firstReservation.PatchAttemptCount);
+        var firstAccepted = AcceptForTest(CampaignStateJson.CreateArtifact(proposalComplete), first);
         var oldAuthority = CampaignStateReducer.CreatePatchInvocationAuthority(
-            AcceptForTest(CampaignStateJson.CreateArtifact(proposalComplete), first),
+            firstAccepted,
             request);
-        Assert.True(oldAuthority.TryBeginDispatch());
         var invalidRetry = CampaignStateReducer.RetryPatchInvocation(
             first.Artifact,
+            firstAccepted,
             request,
             elapsedMilliseconds: -1);
         Assert.Equal(CampaignTransitionKind.Rejected, invalidRetry.Kind);
         Assert.True(first.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
             invalidRetry.Artifact.ExactUtf8Json.AsSpan()));
+        var foreignExchange = CreateFreshContextExchange(
+            work,
+            inputIdentity: "samples/Alternate.csproj");
+        var foreignRequest = RebindPatchRequest(request, PatchContext(foreignExchange.Request));
+        var foreignRetry = CampaignStateReducer.RetryPatchInvocation(
+            first.Artifact,
+            firstAccepted,
+            foreignRequest,
+            elapsedMilliseconds: long.MaxValue);
+        Assert.Equal(CampaignTransitionKind.Rejected, foreignRetry.Kind);
+        Assert.Equal(CampaignTransitionFailure.InvalidCorrelation, foreignRetry.Failure);
+        Assert.True(first.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+            foreignRetry.Artifact.ExactUtf8Json.AsSpan()));
 
         var sameRequestRetry = CampaignStateReducer.RetryPatchInvocation(
             first.Artifact,
+            firstAccepted,
             request,
             elapsedMilliseconds: 1_000);
         Assert.Equal(CampaignTransitionKind.Applied, sameRequestRetry.Kind);
         Assert.Equal(request.ArtifactSha256,
             Assert.IsType<CampaignPatchReservation>(sameRequestRetry.Artifact.State.ActiveReservation).PatchRequestSha256);
+        Assert.False(oldAuthority.TryBeginDispatch());
 
         var freshExchange = CreateFreshContextExchange(work);
         var freshRequest = CampaignStateFactory.ReconstructPatchRequest(
@@ -2223,6 +2620,7 @@ public sealed class CampaignStateContractTests
         Assert.NotEqual(request.ArtifactSha256, freshRequest.ArtifactSha256);
         var retry = CampaignStateReducer.RetryPatchInvocation(
             first.Artifact,
+            AcceptCurrentForTest(first.Artifact),
             freshRequest,
             elapsedMilliseconds: 1_000);
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
@@ -2405,18 +2803,177 @@ public sealed class CampaignStateContractTests
             successorPlan));
         var superseded = CampaignStateReducer.Supersede(
             completed.Artifact,
+            null,
             CampaignCheckpointAcceptance.CreateInitialAuthority(successorTemplate),
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
             successorInput,
             successorPlan);
         Assert.Equal(CampaignTransitionKind.Applied, superseded.Kind);
-        var patchSummary = Assert.IsType<CampaignPredecessorCompletedOperationSummary>(
-            superseded.Artifact.State.Predecessor!.CompletedOperation);
+        var patchSummary = Assert.Single(superseded.Artifact.State.Predecessor!.CompletedOperations);
         Assert.Equal("patch-over-bound", patchSummary.Kind);
         Assert.Equal(cumulative.ProjectionCommitmentSha256, patchSummary.ProjectionCommitmentSha256);
         Assert.Equal(cumulative.PatchResultCommitmentSha256, patchSummary.ResultCommitmentSha256);
+    }
+
+    [Fact]
+    public void Mixed_retained_projections_preserve_each_known_completion_across_later_patch_outcomes()
+    {
+        var scenario = CreateProposalScenario(maximumPatchBytes: 48, workItemCount: 2);
+        var first = scenario.Plan.WorkItems[0];
+        var second = scenario.Plan.WorkItems[1];
+        var firstExchange = CreateScribeExchange(first);
+        var secondExchange = CreateScribeExchange(second);
+        var firstProposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(first.WorkItemKey, firstExchange)),
+            first,
+            firstExchange);
+        var secondProposal = AdmitProposal(
+            scenario,
+            WithState(
+                scenario.InitialState,
+                scenario.InitialState.WorkItems,
+                ProviderReservation(second.WorkItemKey, secondExchange)),
+            second,
+            secondExchange);
+        var firstProposalComplete = WithState(
+            scenario.InitialState,
+            ReplaceWork(
+                scenario.InitialState,
+                first.WorkItemKey,
+                CampaignWorkStatus.ProposalComplete,
+                firstProposal),
+            activeReservation: null);
+        var firstRequest = CampaignStateFactory.ReconstructPatchRequest(
+            firstProposalComplete,
+            PatchContext(firstExchange.Request),
+            CurrentEvidence(firstExchange));
+        var firstReserved = WithPatchReservation(firstProposalComplete, firstRequest);
+        var firstCompletion = CreateAcceptedCompletion(firstReserved, firstRequest, firstProposal);
+        var mixedWork = scenario.InitialState.WorkItems.Select(item =>
+            string.Equals(item.WorkItemKey, first.WorkItemKey, StringComparison.Ordinal)
+                ? item with
+                {
+                    Status = CampaignWorkStatus.Accepted,
+                    TrustedProposal = firstProposal,
+                    ClosedOutcome = null,
+                }
+                : item with
+                {
+                    Status = CampaignWorkStatus.ProposalComplete,
+                    TrustedProposal = secondProposal,
+                    ClosedOutcome = null,
+                }).ToImmutableArray();
+        var mixed = WithState(
+            scenario.InitialState,
+            mixedWork,
+            activeReservation: null,
+            candidateObservation: firstCompletion.CandidateObservation,
+            cumulativeOutcome: firstCompletion.CumulativeOutcome);
+        var combinedRequest = CampaignStateFactory.ReconstructPatchRequest(
+            mixed,
+            PatchContext(firstExchange.Request),
+            CurrentEvidence(firstExchange, secondExchange));
+        var combinedPredecessor = CampaignStateJson.CreateArtifact(mixed);
+        var combinedReservation = CampaignStateReducer.ReservePatchInvocation(
+            combinedPredecessor,
+            combinedRequest,
+            elapsedMilliseconds: 1_000);
+        var combinedAccepted = AcceptForTest(combinedPredecessor, combinedReservation);
+        var combinedInvocation = CampaignStateReducer.CreatePatchInvocationAuthority(
+            combinedAccepted,
+            combinedRequest);
+        Assert.True(combinedInvocation.TryBeginDispatch());
+        var overbound = CampaignStateReducer.CompletePatchInvocation(
+            combinedReservation.Artifact,
+            combinedInvocation,
+            combinedRequest,
+            CreateAcceptedPatchResult(combinedRequest, firstProposal),
+            activeElapsedMilliseconds: 500);
+        Assert.Equal(CampaignTransitionKind.Applied, overbound.Kind);
+        var combinedMarker = Assert.Single(overbound.Artifact.State.KnownCompletedOperations);
+        Assert.Equal("patch-over-bound", combinedMarker.Kind);
+        Assert.Equal(CampaignTerminalKind.Exhausted, overbound.Artifact.State.TerminalOutcome!.Kind);
+
+        var restarted = CampaignStateJson.Parse(overbound.Artifact.ExactUtf8Json.AsMemory());
+        Assert.True(restarted.IsValid, restarted.FailureCode?.ToString());
+        var acceptedOnlyRequest = CampaignStateFactory.ReconstructPatchRequest(
+            restarted.Artifact!.State,
+            PatchContext(firstExchange.Request),
+            CurrentEvidence(firstExchange));
+        Assert.NotEqual(combinedRequest.ArtifactSha256, acceptedOnlyRequest.ArtifactSha256);
+
+        CampaignCheckpointArtifact CompleteAcceptedOnly(
+            DocumentationPatchValidationResult? result,
+            CampaignCumulativeOutcomeKind? hostKind = null,
+            long activeElapsedMilliseconds = 500)
+        {
+            var reservation = CampaignStateReducer.ReservePatchInvocation(
+                restarted.Artifact,
+                acceptedOnlyRequest,
+                elapsedMilliseconds: 1_000);
+            Assert.Equal(CampaignTransitionKind.Applied, reservation.Kind);
+            var accepted = AcceptForTest(restarted.Artifact, reservation);
+            var invocation = CampaignStateReducer.CreatePatchInvocationAuthority(
+                accepted,
+                acceptedOnlyRequest);
+            Assert.True(invocation.TryBeginDispatch());
+            var completed = hostKind is { } kind
+                ? CampaignStateReducer.CompletePatchHostInvocation(
+                    reservation.Artifact,
+                    invocation,
+                    acceptedOnlyRequest,
+                    kind,
+                    activeElapsedMilliseconds)
+                : CampaignStateReducer.CompletePatchInvocation(
+                    reservation.Artifact,
+                    invocation,
+                    acceptedOnlyRequest,
+                    result!,
+                    activeElapsedMilliseconds);
+            Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+            Assert.Equal(CampaignTerminalKind.Exhausted, completed.Artifact.State.TerminalOutcome!.Kind);
+            Assert.Contains(completed.Artifact.State.KnownCompletedOperations, marker => marker == combinedMarker);
+            var blocked = CampaignStateReducer.ReservePatchInvocation(
+                completed.Artifact,
+                combinedRequest,
+                elapsedMilliseconds: 1_000);
+            Assert.Equal(CampaignTransitionKind.Rejected, blocked.Kind);
+            Assert.Equal(CampaignTransitionFailure.BudgetExhausted, blocked.Failure);
+            return completed.Artifact;
+        }
+
+        _ = CompleteAcceptedOnly(CreateAcceptedPatchResult(acceptedOnlyRequest, firstProposal));
+        _ = CompleteAcceptedOnly(CreateRejectedPatchResult(
+            acceptedOnlyRequest,
+            first.WorkItemKey,
+            "patch.rejected.unsafe-change"));
+        _ = CompleteAcceptedOnly(CreateStalePatchResult(acceptedOnlyRequest));
+        _ = CompleteAcceptedOnly(null, CampaignCumulativeOutcomeKind.HostFailure);
+        var twoKnown = CompleteAcceptedOnly(
+            CreateAcceptedPatchResult(acceptedOnlyRequest, firstProposal),
+            activeElapsedMilliseconds:
+                scenario.Input.ExecutionPolicy.CampaignBudget.MaximumElapsedMilliseconds + 1);
+        Assert.Equal(2, twoKnown.State.KnownCompletedOperations.Length);
+
+        AssertMutationFailure(
+            overbound.Artifact.State,
+            root => root["knownCompletedOperations"]![0]!["projectionCommitmentSha256"] = Hash('f'),
+            CampaignStateValidationCode.InvalidCorrelation);
+        AssertMutationFailure(
+            overbound.Artifact.State,
+            root => root["knownCompletedOperations"]![0]!["requestCommitmentSha256"] = Hash('e'),
+            CampaignStateValidationCode.InvalidCorrelation);
+        AssertMutationFailure(
+            overbound.Artifact.State,
+            root => root["knownCompletedOperations"]![0]!["resultCommitmentSha256"] = Hash('d'),
+            CampaignStateValidationCode.InvalidCorrelation);
     }
 
     [Fact]
@@ -2447,7 +3004,9 @@ public sealed class CampaignStateContractTests
 
         var applied = CampaignStateReducer.Supersede(
             predecessor,
+            null,
             CampaignCheckpointAcceptance.CreateInitialAuthority(successorTemplate),
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -2480,7 +3039,9 @@ public sealed class CampaignStateContractTests
             scenario.Plan));
         var rejected = CampaignStateReducer.Supersede(
             predecessor,
+            null,
             CampaignCheckpointAcceptance.CreateInitialAuthority(sameSnapshotTemplate),
+            scenario.ExecutionAuthority,
             "style.synthetic",
             scenario.StyleProjection,
             "samples/Synthetic.csproj",
@@ -2778,7 +3339,7 @@ public sealed class CampaignStateContractTests
             CampaignTerminalKind.Complete,
             null,
             new CampaignPredecessorCandidateSummary(1, 2, 0, 0, 0, 0, null, null),
-            null);
+            []);
 
         var failure = Assert.Throws<CampaignStateValidationException>(() =>
             CampaignStateFactory.CreateValidated(
@@ -2807,7 +3368,7 @@ public sealed class CampaignStateContractTests
             CampaignTerminalKind.Complete,
             null,
             new CampaignPredecessorCandidateSummary(0, 0, 0, 0, 0, 0, null, null),
-            null);
+            []);
         var state = CampaignStateFactory.CreateValidated(
             ProductRevision(), "campaign.test", Snapshot(), 0, Ceilings(), EmptyCharges(), [],
             terminalOutcome: new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.NoWork),
@@ -3664,7 +4225,7 @@ public sealed class CampaignStateContractTests
         var plan = CampaignPlanner.Plan(input);
         Assert.Equal(workItemCount, plan.WorkItems.Length);
         var styleProjection = JsonSerializer.SerializeToElement(new { style = "synthetic-v1" });
-        var executionAuthority = CampaignStateFactory.CreateScribeExecutionAuthority(
+        var executionAuthority = CampaignStateFactory.CreateScribeExecutionCapability(
             executionPolicy,
             agentProtocolProjection,
             toolPolicyProjection,
@@ -4116,6 +4677,28 @@ public sealed class CampaignStateContractTests
                 Pointer: null)]);
     }
 
+    private static DocumentationPatchValidationResult CreateStalePatchResult(
+        DocumentationPatchRequest request) =>
+        DocumentationPatchValidator.CreateResult(
+            request,
+            DocumentationPatchOutcome.Stale,
+            Enumerable.Repeat(
+                DocumentationPatchTargetStatus.NotEvaluated,
+                request.Blocks.Length),
+            [],
+            DocumentationPatchValidator.InvariantIds.Select((id, index) =>
+                new DocumentationPatchInvariantResult(
+                    id,
+                    index == DocumentationPatchValidator.InvariantIds.Length - 1
+                        ? DocumentationPatchInvariantStatus.Passed
+                        : DocumentationPatchInvariantStatus.NotRun)),
+            [new DocumentationPatchDiagnostic(
+                DocumentationPatchDiagnosticSeverity.Error,
+                "patch.stale.repository-state",
+                BlockId: null,
+                Path: null,
+                Pointer: null)]);
+
     private static CampaignCheckpointState WithPatchReservation(
         CampaignCheckpointState state,
         DocumentationPatchRequest request) =>
@@ -4209,6 +4792,7 @@ public sealed class CampaignStateContractTests
             activeReservation,
             candidateObservation,
             cumulativeOutcome,
+            basis.KnownCompletedOperations,
             basis.TerminalOutcome,
             basis.Predecessor);
 
@@ -4507,7 +5091,7 @@ public sealed class CampaignStateContractTests
         JsonElement AgentProtocolProjection,
         JsonElement ToolPolicyProjection,
         JsonElement ProviderModelProjection,
-        CampaignScribeExecutionAuthority ExecutionAuthority,
+        CampaignScribeExecutionCapability ExecutionAuthority,
         CampaignPlanningInput Input,
         CampaignWorkPlan Plan,
         CampaignCheckpointState InitialState);
@@ -4563,11 +5147,11 @@ public sealed class CampaignStateContractTests
             new CampaignStateScribeLimits(
                 32, 262_144, 64, 262_144, 8, 8, 16, 3,
                 100_000, 100_000, 100_000, 1_000_000, 60_000),
-            TestExecutionAuthority(),
+            TestExecutionCapability().PersistedProjection,
             new CampaignStyleConfigurationAuthority("style.test", Hash('6')),
             Hash('7'));
 
-    private static CampaignScribeExecutionAuthority TestExecutionAuthority()
+    private static CampaignScribeExecutionCapability TestExecutionCapability()
     {
         var request = ReadScribeRequest();
         var agent = JsonSerializer.SerializeToElement(new
@@ -4596,7 +5180,7 @@ public sealed class CampaignStateContractTests
             Content(CampaignPlanningContentFamily.RetryPolicy, "retry", "retry-v1"),
             Content(CampaignPlanningContentFamily.M2ProjectionPolicy, "m2", "m2-v1"),
             Content(CampaignPlanningContentFamily.ProductContractRevision, "product", "product-v1"));
-        return CampaignStateFactory.CreateScribeExecutionAuthority(
+        return CampaignStateFactory.CreateScribeExecutionCapability(
             policy,
             agent,
             tool,
