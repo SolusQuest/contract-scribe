@@ -206,7 +206,10 @@ public static class CampaignStateReducer
             throw new ArgumentException("The persisted Patch reservation does not authorize this invocation.");
         }
         CampaignStateFactory.ValidatePatchRequestAuthority(persistedReservedArtifact.State, request);
-        if (!acceptedCheckpoint.TryIssueInvocation())
+        if (CampaignStateFactory.HasKnownCompletedPatchProjection(
+                persistedReservedArtifact.State,
+                request)
+            || !acceptedCheckpoint.TryIssueInvocation())
         {
             throw new ArgumentException("The accepted Patch reservation does not grant this dispatch.");
         }
@@ -826,7 +829,9 @@ public static class CampaignStateReducer
                 null,
                 state.CandidateObservation,
                 state.CumulativeOutcome,
-                state.TerminalOutcome,
+                HasDurableKnownCompletion(state.WorkItems, state.KnownCompletedOperations)
+                    ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget)
+                    : state.TerminalOutcome,
                 state.Predecessor);
             var reservation = CampaignStateFactory.CreatePatchReservation(
                 reservable,
@@ -1007,20 +1012,16 @@ public static class CampaignStateReducer
         try
         {
             CampaignStateFactory.ValidatePatchRequestAuthority(state, request);
+            if (CampaignStateFactory.HasKnownCompletedPatchProjection(state, request))
+            {
+                return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
+            }
+
             var settledCharges = CampaignBudgetAccounting.SettleActiveConservatively(state);
-            var settled = CreateState(
-                state,
-                state.CheckpointRevision,
+            var budget = CampaignBudgetAccounting.ReservePatchInvocation(
                 settledCharges,
-                state.WorkItems,
-                null,
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                HasDurableKnownCompletion(state.WorkItems, state.KnownCompletedOperations)
-                    ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget)
-                    : state.TerminalOutcome,
-                state.Predecessor);
-            var budget = CampaignBudgetAccounting.ReservePatchInvocation(settled, elapsedMilliseconds);
+                state.ConfiguredCeilings.CampaignBudget,
+                elapsedMilliseconds);
             if (budget.Kind == CampaignBudgetDecisionKind.Invalid)
             {
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
@@ -1072,7 +1073,9 @@ public static class CampaignStateReducer
                 null,
                 state.CandidateObservation,
                 state.CumulativeOutcome,
-                state.TerminalOutcome,
+                HasDurableKnownCompletion(state.WorkItems, state.KnownCompletedOperations)
+                    ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget)
+                    : state.TerminalOutcome,
                 state.Predecessor);
             var reservation = CampaignStateFactory.CreatePatchReservation(
                 reservable,
@@ -1283,6 +1286,13 @@ public static class CampaignStateReducer
             }
 
             var charges = CampaignBudgetAccounting.SettleActiveConservatively(state);
+            var terminal = HasDurableKnownCompletion(
+                    state.WorkItems,
+                    state.KnownCompletedOperations)
+                ? new CampaignTerminalOutcome(
+                    CampaignTerminalKind.Exhausted,
+                    CampaignTerminalReason.Budget)
+                : new CampaignTerminalOutcome(kind, reason.Value);
             return Applied(predecessor, CreateState(
                 state,
                 NextRevision(state.CheckpointRevision),
@@ -1291,7 +1301,7 @@ public static class CampaignStateReducer
                 null,
                 state.CandidateObservation,
                 state.CumulativeOutcome,
-                new CampaignTerminalOutcome(kind, reason.Value),
+                terminal,
                 state.Predecessor));
         }
         catch (OverflowException)

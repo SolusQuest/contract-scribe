@@ -2819,7 +2819,7 @@ public sealed class CampaignStateContractTests
     }
 
     [Fact]
-    public void Mixed_retained_projections_preserve_each_known_completion_across_later_patch_outcomes()
+    public async Task Mixed_retained_projections_preserve_each_known_completion_across_later_patch_outcomes()
     {
         var scenario = CreateProposalScenario(maximumPatchBytes: 48, workItemCount: 2);
         var first = scenario.Plan.WorkItems[0];
@@ -2908,6 +2908,120 @@ public sealed class CampaignStateContractTests
             PatchContext(firstExchange.Request),
             CurrentEvidence(firstExchange));
         Assert.NotEqual(combinedRequest.ArtifactSha256, acceptedOnlyRequest.ArtifactSha256);
+
+        var freshFirstExchange = CreateFreshContextExchange(first);
+        var freshSecondExchange = CreateFreshContextExchange(second);
+        var freshCombinedRequest = CampaignStateFactory.ReconstructPatchRequest(
+            restarted.Artifact.State,
+            PatchContext(freshFirstExchange.Request),
+            CurrentEvidence(freshFirstExchange, freshSecondExchange));
+        var freshAcceptedOnlyRequest = CampaignStateFactory.ReconstructPatchRequest(
+            restarted.Artifact.State,
+            PatchContext(freshFirstExchange.Request),
+            CurrentEvidence(freshFirstExchange));
+        Assert.NotEqual(combinedRequest.ArtifactSha256, freshCombinedRequest.ArtifactSha256);
+        Assert.NotEqual(acceptedOnlyRequest.ArtifactSha256, freshAcceptedOnlyRequest.ArtifactSha256);
+
+        var ambiguousAcceptedOnly = CampaignStateReducer.ReservePatchInvocation(
+            restarted.Artifact,
+            acceptedOnlyRequest,
+            elapsedMilliseconds: 1_000);
+        Assert.Equal(CampaignTransitionKind.Applied, ambiguousAcceptedOnly.Kind);
+        var restartRetirementAuthority = AcceptCurrentForTest(ambiguousAcceptedOnly.Artifact);
+        var blockedKnownRetry = CampaignStateReducer.RetryPatchInvocation(
+            ambiguousAcceptedOnly.Artifact,
+            restartRetirementAuthority,
+            freshCombinedRequest,
+            elapsedMilliseconds: 2_000);
+        Assert.Equal(CampaignTransitionKind.Rejected, blockedKnownRetry.Kind);
+        Assert.Equal(CampaignTransitionFailure.BudgetExhausted, blockedKnownRetry.Failure);
+        Assert.True(ambiguousAcceptedOnly.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+            blockedKnownRetry.Artifact.ExactUtf8Json.AsSpan()));
+
+        var allowedRetainedRetry = CampaignStateReducer.RetryPatchInvocation(
+            ambiguousAcceptedOnly.Artifact,
+            restartRetirementAuthority,
+            freshAcceptedOnlyRequest,
+            elapsedMilliseconds: 2_000);
+        Assert.True(
+            allowedRetainedRetry.Kind == CampaignTransitionKind.Applied,
+            allowedRetainedRetry.Failure.ToString());
+        Assert.Equal(
+            freshAcceptedOnlyRequest.ArtifactSha256,
+            Assert.IsType<CampaignPatchReservation>(
+                allowedRetainedRetry.Artifact.State.ActiveReservation).PatchRequestSha256);
+        Assert.Contains(
+            allowedRetainedRetry.Artifact.State.KnownCompletedOperations,
+            marker => marker == combinedMarker);
+
+        var craftedKnownReservation = MutateValidState(
+            ambiguousAcceptedOnly.Artifact.State,
+            root => root["activeReservation"]!["patchRequestSha256"] =
+                freshCombinedRequest.ArtifactSha256);
+        var craftedKnownArtifact = CampaignStateJson.CreateArtifact(craftedKnownReservation);
+        var craftedKnownWriter = AcceptCurrentForTest(craftedKnownArtifact);
+        var knownDispatch = Assert.Throws<ArgumentException>(() =>
+            CampaignStateReducer.CreatePatchInvocationAuthority(
+                craftedKnownWriter,
+                freshCombinedRequest));
+        Assert.Contains("does not grant this dispatch", knownDispatch.Message, StringComparison.Ordinal);
+
+        (CampaignTransitionResult Transition, CampaignCheckpointArtifact Predecessor)
+            StopAmbiguousRetained(CampaignTerminalKind requestedKind)
+        {
+            var reservation = CampaignStateReducer.ReservePatchInvocation(
+                restarted.Artifact,
+                acceptedOnlyRequest,
+                elapsedMilliseconds: 1_000);
+            Assert.Equal(CampaignTransitionKind.Applied, reservation.Kind);
+            var active = reservation.Artifact;
+            var acceptedAfterRestart = AcceptCurrentForTest(active);
+            var stopped = CampaignStateReducer.StopActiveInvocation(
+                active,
+                acceptedAfterRestart,
+                requestedKind);
+            Assert.Equal(CampaignTransitionKind.Applied, stopped.Kind);
+            Assert.Null(stopped.Artifact.State.ActiveReservation);
+            Assert.Equal(CampaignTerminalKind.Exhausted, stopped.Artifact.State.TerminalOutcome!.Kind);
+            Assert.Equal(CampaignTerminalReason.Budget, stopped.Artifact.State.TerminalOutcome.Reason);
+            Assert.Contains(stopped.Artifact.State.KnownCompletedOperations, marker => marker == combinedMarker);
+            Assert.Equal(
+                active.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved + 1_000,
+                stopped.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+            Assert.Equal(
+                active.State.CandidateObservation!.PatchRequestSha256,
+                stopped.Artifact.State.CandidateObservation!.PatchRequestSha256);
+            Assert.Equal(
+                active.State.CumulativeOutcome!.PatchRequestSha256,
+                stopped.Artifact.State.CumulativeOutcome!.PatchRequestSha256);
+            var replay = CampaignStateReducer.Stop(
+                stopped.Artifact,
+                CampaignTerminalKind.Exhausted);
+            Assert.Equal(CampaignTransitionKind.Unchanged, replay.Kind);
+            Assert.True(stopped.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+                replay.Artifact.ExactUtf8Json.AsSpan()));
+            return (stopped, active);
+        }
+
+        var cancelledBeforeDispatch = StopAmbiguousRetained(CampaignTerminalKind.Cancelled);
+        _ = StopAmbiguousRetained(CampaignTerminalKind.Timeout);
+        var acceptedStopStore = new TransitionCheckpointStore(cancelledBeforeDispatch.Predecessor);
+        var acceptedStop = await CampaignCheckpointAcceptance.AcceptAsync(
+            acceptedStopStore,
+            cancelledBeforeDispatch.Transition);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, acceptedStop.Kind);
+        var replayedStop = await CampaignCheckpointAcceptance.AcceptAsync(
+            acceptedStopStore,
+            cancelledBeforeDispatch.Transition);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, replayedStop.Kind);
+        var concurrentStop = await CampaignCheckpointAcceptance.AcceptAsync(
+            new TransitionCheckpointStore(cancelledBeforeDispatch.Predecessor)
+            {
+                ReplaceResult = CampaignCheckpointWriteKind.CurrentMismatch,
+                WinnerOnRejectedWrite = cancelledBeforeDispatch.Transition.Artifact,
+            },
+            cancelledBeforeDispatch.Transition);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, concurrentStop.Kind);
 
         CampaignCheckpointArtifact CompleteAcceptedOnly(
             DocumentationPatchValidationResult? result,

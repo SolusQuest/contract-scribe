@@ -156,6 +156,19 @@ public static class CampaignBudgetAccounting
         long elapsedMilliseconds)
     {
         ArgumentNullException.ThrowIfNull(state);
+        return ReservePatchInvocation(
+            state.LineageCharges,
+            state.ConfiguredCeilings.CampaignBudget,
+            elapsedMilliseconds);
+    }
+
+    internal static CampaignSettlementDecision ReservePatchInvocation(
+        CampaignLineageCharges settledCharges,
+        CampaignStateCampaignBudget budget,
+        long elapsedMilliseconds)
+    {
+        ArgumentNullException.ThrowIfNull(settledCharges);
+        ArgumentNullException.ThrowIfNull(budget);
         if (elapsedMilliseconds <= 0
             || elapsedMilliseconds > CampaignStateContract.MaximumObservation)
         {
@@ -164,11 +177,10 @@ public static class CampaignBudgetAccounting
 
         try
         {
-            var charges = state.LineageCharges with
+            var charges = settledCharges with
             {
-                PatchValidationInvocations = checked(state.LineageCharges.PatchValidationInvocations + 1),
+                PatchValidationInvocations = checked(settledCharges.PatchValidationInvocations + 1),
             };
-            var budget = state.ConfiguredCeilings.CampaignBudget;
             return charges.ActiveElapsedMilliseconds.TotalCharged + elapsedMilliseconds <= budget.MaximumElapsedMilliseconds
                 ? new CampaignSettlementDecision(CampaignBudgetDecisionKind.Admitted, charges)
                 : new CampaignSettlementDecision(CampaignBudgetDecisionKind.Exhausted, null);
