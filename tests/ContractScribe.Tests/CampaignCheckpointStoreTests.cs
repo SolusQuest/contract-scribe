@@ -475,6 +475,430 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
+    public static IEnumerable<object[]> PostPublicationCleanupMutations()
+    {
+        foreach (var replace in new[] { false, true })
+        {
+            foreach (var hook in new[] { "after-readback-before-cleanup", "before-lease-cleanup" })
+            {
+                foreach (var mutation in new[]
+                         {
+                             "truncate", "append", "same-size", "other-c2", "marker", "mode", "hard-link",
+                             "replace-path", "temp-collision", "lease-record",
+                         })
+                {
+                    yield return [replace, hook, mutation];
+                }
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(PostPublicationCleanupMutations))]
+    [SupportedOSPlatform("linux")]
+    public async Task Postpublication_cleanup_revalidates_the_complete_authority_graph(
+        bool replace,
+        string hook,
+        string mutation)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        using var fixture = StoreFixture.Create();
+        var predecessor = CreateOpenArtifact();
+        var successor = Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
+        if (replace)
+        {
+            Assert.Equal(
+                CampaignCheckpointWriteKind.Written,
+                (await WriteInitialAsync(fixture.Store, predecessor)).Kind);
+        }
+        var intended = replace ? successor : predecessor;
+        var alternate = replace ? predecessor : successor;
+        var mutated = false;
+        var store = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase =>
+            {
+                if (phase == hook && !mutated)
+                {
+                    mutated = true;
+                    ApplyCleanupMutation(fixture, intended, alternate, mutation);
+                }
+            });
+
+        var result = replace
+            ? await store.ReplaceIfCurrentAsync(
+                predecessor.CheckpointRevision,
+                predecessor.Sha256,
+                intended.ExactUtf8Json.AsMemory(),
+                intended.CheckpointRevision,
+                intended.Sha256,
+                CancellationToken.None)
+            : await WriteInitialAsync(store, intended);
+
+        Assert.True(mutated);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.True(File.Exists(LeasePath(fixture)));
+        AssertCleanupMutationPreserved(fixture, alternate, mutation);
+    }
+
+    [Theory]
+    [InlineData(false, "after-readback-before-cleanup")]
+    [InlineData(true, "after-readback-before-cleanup")]
+    [InlineData(false, "before-lease-cleanup")]
+    [InlineData(true, "before-lease-cleanup")]
+    [SupportedOSPlatform("linux")]
+    public async Task Unsafe_postpublication_cleanup_wins_over_cancellation(
+        bool replace,
+        string hook)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        using var fixture = StoreFixture.Create();
+        var predecessor = CreateOpenArtifact();
+        var successor = Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
+        if (replace)
+        {
+            Assert.Equal(
+                CampaignCheckpointWriteKind.Written,
+                (await WriteInitialAsync(fixture.Store, predecessor)).Kind);
+        }
+        var intended = replace ? successor : predecessor;
+        var alternate = replace ? predecessor : successor;
+        using var cancellation = new CancellationTokenSource();
+        var mutated = false;
+        var store = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase =>
+            {
+                if (phase == hook && !mutated)
+                {
+                    mutated = true;
+                    cancellation.Cancel();
+                    ApplyCleanupMutation(fixture, intended, alternate, "truncate");
+                }
+            });
+
+        var result = replace
+            ? await store.ReplaceIfCurrentAsync(
+                predecessor.CheckpointRevision,
+                predecessor.Sha256,
+                intended.ExactUtf8Json.AsMemory(),
+                intended.CheckpointRevision,
+                intended.Sha256,
+                cancellation.Token)
+            : await store.CreateIfAbsentAsync(
+                intended.ExactUtf8Json.AsMemory(),
+                intended.CheckpointRevision,
+                intended.Sha256,
+                cancellation.Token);
+
+        Assert.True(mutated);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.True(File.Exists(LeasePath(fixture)));
+        AssertCleanupMutationPreserved(fixture, alternate, "truncate");
+    }
+
+    public static IEnumerable<object[]> UnsafeConflictCleanupMutations()
+    {
+        foreach (var scenario in new[] { "create-existing", "replace-missing", "replace-mismatch" })
+        {
+            yield return [scenario, "before-temp-cleanup", "lease-record"];
+            yield return [scenario, "before-lease-cleanup", "temp-collision"];
+            yield return [scenario, "before-lease-cleanup", "lease-record"];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(UnsafeConflictCleanupMutations))]
+    [SupportedOSPlatform("linux")]
+    public async Task Unsafe_conflict_cleanup_wins_over_cancellation_and_preserves_authority(
+        string scenario,
+        string hook,
+        string mutation)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        using var fixture = StoreFixture.Create();
+        var predecessor = CreateOpenArtifact();
+        var successor = Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Timeout).Artifact);
+        if (scenario is "create-existing" or "replace-mismatch")
+        {
+            Assert.Equal(
+                CampaignCheckpointWriteKind.Written,
+                (await WriteInitialAsync(fixture.Store, predecessor)).Kind);
+        }
+        using var cancellation = new CancellationTokenSource();
+        var mutated = false;
+        var store = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase =>
+            {
+                if (phase == hook && !mutated)
+                {
+                    mutated = true;
+                    cancellation.Cancel();
+                    ApplyCleanupMutation(
+                        fixture,
+                        scenario == "create-existing" ? predecessor : successor,
+                        predecessor,
+                        mutation);
+                }
+            });
+
+        var result = scenario == "create-existing"
+            ? await store.CreateIfAbsentAsync(
+                predecessor.ExactUtf8Json.AsMemory(),
+                predecessor.CheckpointRevision,
+                predecessor.Sha256,
+                cancellation.Token)
+            : await store.ReplaceIfCurrentAsync(
+                predecessor.CheckpointRevision,
+                scenario == "replace-mismatch" ? new string('a', 64) : predecessor.Sha256,
+                successor.ExactUtf8Json.AsMemory(),
+                successor.CheckpointRevision,
+                successor.Sha256,
+                cancellation.Token);
+
+        Assert.True(mutated);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.True(File.Exists(LeasePath(fixture)));
+        var authoritative = await fixture.Store.ReadAsync(CancellationToken.None);
+        if (scenario == "replace-missing")
+        {
+            Assert.Equal(CampaignCheckpointReadKind.NotFound, authoritative.Kind);
+        }
+        else
+        {
+            AssertExact(authoritative, predecessor);
+        }
+        AssertCleanupMutationPreserved(fixture, predecessor, mutation);
+    }
+
+    [Theory]
+    [InlineData(false, "before-publish")]
+    [InlineData(true, "before-publish")]
+    [InlineData(false, "after-readback-before-cleanup")]
+    [InlineData(true, "after-readback-before-cleanup")]
+    [InlineData(false, "before-lease-cleanup")]
+    [InlineData(true, "before-lease-cleanup")]
+    [SupportedOSPlatform("linux")]
+    public async Task Complete_absolute_path_binding_rejects_moved_ancestor_trees(
+        bool replace,
+        string hook)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        var anchor = Path.Join(Path.GetTempPath(), $"contractscribe-path-{Guid.NewGuid():N}");
+        var movedAnchor = anchor + "-moved";
+        var stateDirectory = Path.Join(anchor, "container", "state");
+        var movedStateDirectory = Path.Join(movedAnchor, "container", "state");
+        var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+        try
+        {
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(
+                stateDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var predecessor = CreateOpenArtifact();
+            var successor = Assert.IsType<CampaignCheckpointArtifact>(
+                CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
+            var baseline = new FileCampaignCheckpointStore(checkpointPath, RepositoryRoot());
+            if (replace)
+            {
+                Assert.Equal(
+                    CampaignCheckpointWriteKind.Written,
+                    (await WriteInitialAsync(baseline, predecessor)).Kind);
+            }
+            var swapped = false;
+            var store = new FileCampaignCheckpointStore(
+                checkpointPath,
+                RepositoryRoot(),
+                phase =>
+                {
+                    if (phase != hook || swapped)
+                    {
+                        return;
+                    }
+                    swapped = true;
+                    Directory.Move(anchor, movedAnchor);
+                    Directory.CreateDirectory(stateDirectory);
+                    File.SetUnixFileMode(
+                        stateDirectory,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                });
+            var intended = replace ? successor : predecessor;
+
+            var result = replace
+                ? await store.ReplaceIfCurrentAsync(
+                    predecessor.CheckpointRevision,
+                    predecessor.Sha256,
+                    intended.ExactUtf8Json.AsMemory(),
+                    intended.CheckpointRevision,
+                    intended.Sha256,
+                    CancellationToken.None)
+                : await WriteInitialAsync(store, intended);
+
+            Assert.True(swapped);
+            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(
+                CampaignCheckpointReadKind.NotFound,
+                (await new FileCampaignCheckpointStore(checkpointPath, RepositoryRoot())
+                    .ReadAsync(CancellationToken.None)).Kind);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
+            Assert.NotEmpty(Directory.EnumerateFileSystemEntries(movedStateDirectory));
+        }
+        finally
+        {
+            if (Directory.Exists(anchor))
+            {
+                Directory.Delete(anchor, recursive: true);
+            }
+            if (Directory.Exists(movedAnchor))
+            {
+                Directory.Delete(movedAnchor, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task Read_rejects_a_checkpoint_from_an_ancestor_tree_moved_after_open()
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        var anchor = Path.Join(Path.GetTempPath(), $"contractscribe-read-path-{Guid.NewGuid():N}");
+        var movedAnchor = anchor + "-moved";
+        var stateDirectory = Path.Join(anchor, "container", "state");
+        var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+        try
+        {
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(
+                stateDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var artifact = CreateOpenArtifact();
+            Assert.Equal(
+                CampaignCheckpointWriteKind.Written,
+                (await WriteInitialAsync(
+                    new FileCampaignCheckpointStore(checkpointPath, RepositoryRoot()),
+                    artifact)).Kind);
+            var swapped = false;
+            var store = new FileCampaignCheckpointStore(
+                checkpointPath,
+                RepositoryRoot(),
+                phase =>
+                {
+                    if (phase != "before-read" || swapped)
+                    {
+                        return;
+                    }
+                    swapped = true;
+                    Directory.Move(anchor, movedAnchor);
+                    Directory.CreateDirectory(stateDirectory);
+                    File.SetUnixFileMode(
+                        stateDirectory,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                });
+
+            var result = await store.ReadAsync(CancellationToken.None);
+
+            Assert.True(swapped);
+            Assert.Equal(CampaignCheckpointReadKind.Unreadable, result.Kind);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
+            Assert.True(File.Exists(Path.Join(movedAnchor, "container", "state", "campaign.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(anchor))
+            {
+                Directory.Delete(anchor, recursive: true);
+            }
+            if (Directory.Exists(movedAnchor))
+            {
+                Directory.Delete(movedAnchor, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task Publication_rejects_a_rebound_repository_path_used_for_confinement()
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        var stateRoot = Path.Join(Path.GetTempPath(), $"contractscribe-state-{Guid.NewGuid():N}");
+        var stateDirectory = Path.Join(stateRoot, "state");
+        var repositoryAnchor = Path.Join(Path.GetTempPath(), $"contractscribe-repository-{Guid.NewGuid():N}");
+        var movedRepositoryAnchor = repositoryAnchor + "-moved";
+        var repositoryPath = Path.Join(repositoryAnchor, "repository");
+        try
+        {
+            Directory.CreateDirectory(stateDirectory);
+            Directory.CreateDirectory(repositoryPath);
+            File.SetUnixFileMode(
+                stateDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+            var swapped = false;
+            var store = new FileCampaignCheckpointStore(
+                checkpointPath,
+                repositoryPath,
+                phase =>
+                {
+                    if (phase != "before-publish" || swapped)
+                    {
+                        return;
+                    }
+                    swapped = true;
+                    Directory.Move(repositoryAnchor, movedRepositoryAnchor);
+                    Directory.CreateDirectory(repositoryPath);
+                });
+            var artifact = CreateOpenArtifact();
+
+            var result = await WriteInitialAsync(store, artifact);
+
+            Assert.True(swapped);
+            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(2, Directory.EnumerateFileSystemEntries(stateDirectory).Count());
+            Assert.Empty(Directory.EnumerateFileSystemEntries(repositoryPath));
+        }
+        finally
+        {
+            foreach (var path in new[] { stateRoot, repositoryAnchor, movedRepositoryAnchor })
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            }
+        }
+    }
+
     [Theory]
     [InlineData("create-existing", "before-temp-cleanup")]
     [InlineData("create-existing", "before-lease-cleanup")]
@@ -593,6 +1017,192 @@ public sealed class CampaignCheckpointStoreTests
         Assert.Equal("collision", File.ReadAllText(collisionPath));
     }
 
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task Setup_cleanup_preserves_a_changed_canonical_record_and_releases_flock()
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        using var fixture = StoreFixture.Create();
+        var artifact = CreateOpenArtifact();
+        var alternate = Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateReducer.Stop(artifact, CampaignTerminalKind.Cancelled).Artifact);
+        var store = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase =>
+            {
+                if (phase == "after-lease-record")
+                {
+                    ApplyCleanupMutation(fixture, artifact, alternate, "lease-record");
+                    throw new IOException("test setup failure");
+                }
+            });
+
+        var failed = await WriteInitialAsync(store, artifact);
+        var staleLockAcquired = false;
+        var retry = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase => staleLockAcquired |= phase == "after-stale-lease-lock");
+        var retried = await WriteInitialAsync(retry, artifact);
+
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retried.Kind);
+        Assert.True(staleLockAcquired);
+        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static void ApplyCleanupMutation(
+        StoreFixture fixture,
+        CampaignCheckpointArtifact intended,
+        CampaignCheckpointArtifact alternate,
+        string mutation)
+    {
+        var leasePath = LeasePath(fixture);
+        var record = File.ReadAllText(leasePath);
+        var tempPath = Path.Join(fixture.StateDirectory, LeaseValue(record, "temp="));
+        switch (mutation)
+        {
+            case "truncate":
+                File.WriteAllBytes(fixture.CheckpointPath, [0x7B]);
+                break;
+            case "append":
+                using (var stream = new FileStream(
+                           fixture.CheckpointPath,
+                           FileMode.Append,
+                           FileAccess.Write,
+                           FileShare.ReadWrite))
+                {
+                    stream.WriteByte(0x20);
+                }
+                break;
+            case "same-size":
+                var bytes = File.ReadAllBytes(fixture.CheckpointPath);
+                bytes[bytes.Length / 2] ^= 1;
+                File.WriteAllBytes(fixture.CheckpointPath, bytes);
+                break;
+            case "other-c2":
+                File.WriteAllBytes(fixture.CheckpointPath, alternate.ExactUtf8Json.ToArray());
+                break;
+            case "marker":
+                Assert.Equal(
+                    0,
+                    RemoveExtendedAttribute(
+                        fixture.CheckpointPath,
+                        "user.contractscribe.checkpoint-object"));
+                break;
+            case "mode":
+                File.SetUnixFileMode(
+                    fixture.CheckpointPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+                break;
+            case "hard-link":
+                Assert.Equal(
+                    0,
+                    CreateHardLink(
+                        fixture.CheckpointPath,
+                        Path.Join(fixture.Root, "checkpoint-cleanup-link")));
+                break;
+            case "replace-path":
+                File.Move(
+                    fixture.CheckpointPath,
+                    Path.Join(fixture.Root, "retained-checkpoint"));
+                File.WriteAllBytes(fixture.CheckpointPath, intended.ExactUtf8Json.ToArray());
+                File.SetUnixFileMode(
+                    fixture.CheckpointPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                break;
+            case "temp-collision":
+                File.WriteAllText(tempPath, "collision");
+                File.SetUnixFileMode(
+                    tempPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                break;
+            case "lease-record":
+                var changedRecord = record.Contains("operation=create", StringComparison.Ordinal)
+                    ? record
+                        .Replace("operation=create", "operation=replace", StringComparison.Ordinal)
+                        .Replace(
+                            "expected-revision=-",
+                            $"expected-revision={intended.CheckpointRevision}",
+                            StringComparison.Ordinal)
+                        .Replace(
+                            "expected-sha256=-",
+                            $"expected-sha256={intended.Sha256}",
+                            StringComparison.Ordinal)
+                    : record
+                        .Replace("operation=replace", "operation=create", StringComparison.Ordinal)
+                        .Replace(
+                            $"expected-revision={LeaseValue(record, "expected-revision=")}",
+                            "expected-revision=-",
+                            StringComparison.Ordinal)
+                        .Replace(
+                            $"expected-sha256={LeaseValue(record, "expected-sha256=")}",
+                            "expected-sha256=-",
+                            StringComparison.Ordinal);
+                File.WriteAllText(leasePath, changedRecord);
+                break;
+            default:
+                throw new InvalidOperationException("unknown cleanup mutation");
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static void AssertCleanupMutationPreserved(
+        StoreFixture fixture,
+        CampaignCheckpointArtifact alternate,
+        string mutation)
+    {
+        switch (mutation)
+        {
+            case "truncate":
+                Assert.Equal([0x7B], File.ReadAllBytes(fixture.CheckpointPath));
+                break;
+            case "append":
+                Assert.Equal(0x20, File.ReadAllBytes(fixture.CheckpointPath)[^1]);
+                break;
+            case "same-size":
+            case "marker":
+                Assert.True(File.Exists(fixture.CheckpointPath));
+                break;
+            case "other-c2":
+                Assert.Equal(alternate.ExactUtf8Json.ToArray(), File.ReadAllBytes(fixture.CheckpointPath));
+                break;
+            case "mode":
+                Assert.True(File.GetUnixFileMode(fixture.CheckpointPath).HasFlag(UnixFileMode.GroupRead));
+                break;
+            case "hard-link":
+                Assert.True(File.Exists(Path.Join(fixture.Root, "checkpoint-cleanup-link")));
+                break;
+            case "replace-path":
+                Assert.True(File.Exists(Path.Join(fixture.Root, "retained-checkpoint")));
+                Assert.True(File.Exists(fixture.CheckpointPath));
+                break;
+            case "temp-collision":
+                var record = File.ReadAllText(LeasePath(fixture));
+                var tempPath = Path.Join(fixture.StateDirectory, LeaseValue(record, "temp="));
+                Assert.Equal("collision", File.ReadAllText(tempPath));
+                break;
+            case "lease-record":
+                Assert.Contains("operation=", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+                break;
+        }
+    }
+
+    private static string LeasePath(StoreFixture fixture) => Path.Join(
+        fixture.StateDirectory,
+        ".campaign.json.contractscribe-checkpoint-lease");
+
+    private static string LeaseValue(string record, string prefix) => Assert.Single(
+        record.Split('\n'),
+        line => line.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
+
     private static ValueTask<CampaignCheckpointWriteResult> WriteInitialAsync(
         FileCampaignCheckpointStore store,
         CampaignCheckpointArtifact artifact) => store.CreateIfAbsentAsync(
@@ -640,6 +1250,9 @@ public sealed class CampaignCheckpointStoreTests
 
     [DllImport("libc", EntryPoint = "link", SetLastError = true)]
     private static extern int CreateHardLink(string existingPath, string newPath);
+
+    [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
+    private static extern int RemoveExtendedAttribute(string path, string name);
 
     private sealed class StoreFixture : IDisposable
     {

@@ -214,6 +214,78 @@ public sealed class CampaignCheckpointStoreProcessTests
 
     [Fact]
     [SupportedOSPlatform("linux")]
+    public async Task Stale_recovery_rejects_an_ancestor_swap_and_preserves_the_moved_residue()
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        var anchor = Path.Join(Path.GetTempPath(), $"contractscribe-recovery-path-{Guid.NewGuid():N}");
+        var movedAnchor = anchor + "-moved";
+        var control = anchor + "-control";
+        var stateDirectory = Path.Join(anchor, "container", "state");
+        var movedStateDirectory = Path.Join(movedAnchor, "container", "state");
+        var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+        var resultPath = Path.Join(control, "worker.result");
+        var readyPath = Path.Join(control, "ready");
+        var releasePath = Path.Join(control, "release");
+        try
+        {
+            Directory.CreateDirectory(stateDirectory);
+            Directory.CreateDirectory(control);
+            File.SetUnixFileMode(
+                stateDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => RunWorkerAsync(
+                checkpointPath,
+                resultPath,
+                readyPath,
+                releasePath,
+                "crash-after-record"));
+            var swapped = false;
+            var store = CreateStore(
+                checkpointPath,
+                phase =>
+                {
+                    if (phase != "after-stale-lease-lock" || swapped)
+                    {
+                        return;
+                    }
+                    swapped = true;
+                    Directory.Move(anchor, movedAnchor);
+                    Directory.CreateDirectory(stateDirectory);
+                    File.SetUnixFileMode(
+                        stateDirectory,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                });
+            var artifact = CreateArtifact();
+
+            var result = await store.CreateIfAbsentAsync(
+                artifact.ExactUtf8Json.AsMemory(),
+                artifact.CheckpointRevision,
+                artifact.Sha256,
+                CancellationToken.None);
+
+            Assert.True(swapped);
+            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
+            Assert.Equal(2, Directory.EnumerateFileSystemEntries(movedStateDirectory).Count());
+        }
+        finally
+        {
+            foreach (var path in new[] { anchor, movedAnchor, control })
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
     public async Task Witnessed_partial_temp_is_deleted_but_never_adopted()
     {
         if (!IsLinuxX64())
@@ -569,13 +641,28 @@ public sealed class CampaignCheckpointStoreProcessTests
 
     private static async Task RunWorkerAsync(ProcessFixture fixture, string operation, string resultName)
     {
+        await RunWorkerAsync(
+            fixture.CheckpointPath,
+            fixture.ResultPath(resultName),
+            fixture.ReadyPath,
+            fixture.ReleasePath,
+            operation);
+    }
+
+    private static async Task RunWorkerAsync(
+        string checkpointPath,
+        string resultPath,
+        string readyPath,
+        string releasePath,
+        string operation)
+    {
         var environment = new Dictionary<string, string?>
         {
             [WorkerVariable] = operation,
-            ["CONTRACTSCRIBE_CHECKPOINT_PATH"] = fixture.CheckpointPath,
-            ["CONTRACTSCRIBE_CHECKPOINT_RESULT"] = fixture.ResultPath(resultName),
-            ["CONTRACTSCRIBE_CHECKPOINT_READY"] = fixture.ReadyPath,
-            ["CONTRACTSCRIBE_CHECKPOINT_RELEASE"] = fixture.ReleasePath,
+            ["CONTRACTSCRIBE_CHECKPOINT_PATH"] = checkpointPath,
+            ["CONTRACTSCRIBE_CHECKPOINT_RESULT"] = resultPath,
+            ["CONTRACTSCRIBE_CHECKPOINT_READY"] = readyPath,
+            ["CONTRACTSCRIBE_CHECKPOINT_RELEASE"] = releasePath,
         };
         await OwnedProcessRunner.RunAsync(
             "dotnet",

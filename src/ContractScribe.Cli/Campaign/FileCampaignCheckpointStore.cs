@@ -94,6 +94,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         try
         {
             using var context = OpenContext();
+            testHook?.Invoke("before-read");
             var observation = ReadEntry(context, checkpointName, cancellationToken);
             return ValueTask.FromResult(observation.ToPublicResult());
         }
@@ -164,6 +165,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         DirectoryContext? context = null;
         var published = false;
         var cleanupComplete = false;
+        var cleanupAttempted = false;
         try
         {
             context = OpenContext();
@@ -198,6 +200,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             var conditional = ClassifyConditional(operation, current, expectedRevision, expectedSha256);
             if (conditional != CampaignCheckpointWriteKind.Written)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 if (!cleanupComplete)
                 {
@@ -218,6 +221,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (!staged.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || staged.Identity != active.Record.TempIdentity)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 return Unwritable();
             }
@@ -234,6 +238,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 .AsSpan()
                 .SequenceEqual(active.Record.Encode()))
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 return Unwritable();
             }
@@ -247,6 +252,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (!finalStaged.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || finalStaged.Identity != active.Record.TempIdentity)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 return Unwritable();
             }
@@ -254,6 +260,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (ClassifyConditional(operation, finalCurrent, expectedRevision, expectedSha256)
                 != CampaignCheckpointWriteKind.Written)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 return Unwritable();
             }
@@ -264,6 +271,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                     checkpointName,
                     operation == OperationKind.Create ? RenameNoReplace : 0) != 0)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
                 return Unwritable();
             }
@@ -282,7 +290,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
 
             testHook?.Invoke("after-readback-before-cleanup");
-            cleanupComplete = CleanupAfterPublication(context, active, readback);
+            cleanupAttempted = true;
+            cleanupComplete = CleanupAfterPublication(
+                context,
+                active,
+                intendedBytes.Span,
+                intendedRevision,
+                intendedSha256);
             if (!cleanupComplete)
             {
                 return Unwritable();
@@ -296,12 +310,20 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            cleanupComplete = cleanupComplete
-                || active is null
-                || context is not null
-                    && (published
-                        ? TryCleanupPublishedCancellation(context, active, intendedBytes.Span, intendedRevision, intendedSha256)
-                        : CleanupBeforePublication(context, active));
+            if (!cleanupComplete && !cleanupAttempted)
+            {
+                cleanupAttempted = true;
+                cleanupComplete = active is null
+                    || context is not null
+                        && (published
+                            ? TryCleanupPublishedCancellation(
+                                context,
+                                active,
+                                intendedBytes.Span,
+                                intendedRevision,
+                                intendedSha256)
+                            : CleanupBeforePublication(context, active));
+            }
             if (cleanupComplete)
             {
                 throw;
@@ -310,15 +332,16 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
-            if (active is not null && context is not null && !published)
+            if (active is not null && context is not null && !published && !cleanupAttempted)
             {
+                cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
             }
             return Unwritable();
         }
         finally
         {
-            if (active is not null && !cleanupComplete && !published && context is not null)
+            if (active is not null && !cleanupAttempted && !published && context is not null)
             {
                 CleanupBeforePublication(context, active);
             }
@@ -355,7 +378,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         string? tempName = null;
         byte[]? leaseMarker = null;
         byte[]? tempMarker = null;
+        LeaseRecord? record = null;
         var leaseLocked = false;
+        var recordCommitted = false;
         try
         {
             leaseIdentity = ValidatePrivateFile(leaseHandle);
@@ -388,7 +413,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             var intendedTempMarker = TempMarker(token, intendedRevision);
             CreateObjectMarker(tempHandle, intendedTempMarker);
             tempMarker = intendedTempMarker;
-            var record = new LeaseRecord(
+            record = new LeaseRecord(
                 operation,
                 expectedRevision,
                 expectedSha256,
@@ -406,6 +431,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
             ValidateObjectMarker(leaseHandle, record.LeaseMarkerBytes);
             ValidateObjectMarker(tempHandle, record.TempMarkerBytes);
+            recordCommitted = true;
             testHook?.Invoke("after-lease-record");
             return new ActiveLease(leaseHandle, leaseIdentity.Value, tempHandle, record);
         }
@@ -416,6 +442,18 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 if (tempHandle is not null && tempIdentity is not null && tempName is not null)
                 {
+                    if (recordCommitted)
+                    {
+                        RevalidateContext(context);
+                        ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity!.Value);
+                        ValidateObjectMarker(leaseHandle, record!.LeaseMarkerBytes);
+                        if (!ReadExactBytes(leaseHandle, MaximumLeaseBytes)
+                            .AsSpan()
+                            .SequenceEqual(record.Encode()))
+                        {
+                            throw InvalidFault();
+                        }
+                    }
                     tempClean = TryDeleteExact(
                         context,
                         tempName,
@@ -437,6 +475,19 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 if (tempClean && leaseLocked && leaseIdentity is not null)
                 {
+                    if (recordCommitted)
+                    {
+                        RevalidateContext(context);
+                        ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
+                        ValidateObjectMarker(leaseHandle, record!.LeaseMarkerBytes);
+                        if (!ReadExactBytes(leaseHandle, MaximumLeaseBytes)
+                                .AsSpan()
+                                .SequenceEqual(record.Encode())
+                            || InspectName(context, record.TempName).Kind != NameKind.Absent)
+                        {
+                            throw InvalidFault();
+                        }
+                    }
                     TryDeleteExact(
                         context,
                         leaseName,
@@ -596,6 +647,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         try
         {
             testHook?.Invoke("before-temp-cleanup");
+            ValidateExactActiveLease(context, active);
             if (!TryDeleteExact(
                 context,
                 active.Record.TempName,
@@ -605,10 +657,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 return false;
             }
-            RevalidateContext(context);
-            ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
-            ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
             testHook?.Invoke("before-lease-cleanup");
+            ValidateExactActiveLease(context, active);
+            if (InspectName(context, active.Record.TempName).Kind != NameKind.Absent)
+            {
+                return false;
+            }
             return TryDeleteExact(
                 context,
                 leaseName,
@@ -625,19 +679,25 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private bool CleanupAfterPublication(
         DirectoryContext context,
         ActiveLease active,
-        ReadObservation readback)
+        ReadOnlySpan<byte> intendedBytes,
+        long intendedRevision,
+        string intendedSha256)
     {
         try
         {
-            if (readback.Identity != active.Record.TempIdentity
+            testHook?.Invoke("before-lease-cleanup");
+            var finalCheckpoint = ReadEntry(
+                context,
+                checkpointName,
+                CancellationToken.None,
+                active.Record.TempMarkerBytes);
+            if (!finalCheckpoint.IsExact(intendedBytes, intendedRevision, intendedSha256)
+                || finalCheckpoint.Identity != active.Record.TempIdentity
                 || InspectName(context, active.Record.TempName).Kind != NameKind.Absent)
             {
                 return false;
             }
-            RevalidateContext(context);
-            ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
-            ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
-            testHook?.Invoke("before-lease-cleanup");
+            ValidateExactActiveLease(context, active);
             return TryDeleteExact(
                 context,
                 leaseName,
@@ -660,17 +720,29 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         try
         {
-            var readback = ReadEntry(
+            return CleanupAfterPublication(
                 context,
-                checkpointName,
-                CancellationToken.None,
-                active.Record.TempMarkerBytes);
-            return readback.IsExact(intendedBytes, intendedRevision, intendedSha256)
-                && CleanupAfterPublication(context, active, readback);
+                active,
+                intendedBytes,
+                intendedRevision,
+                intendedSha256);
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
             return false;
+        }
+    }
+
+    private void ValidateExactActiveLease(DirectoryContext context, ActiveLease active)
+    {
+        RevalidateContext(context);
+        ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+        ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
+        if (!ReadExactBytes(active.LeaseHandle, MaximumLeaseBytes)
+            .AsSpan()
+            .SequenceEqual(active.Record.Encode()))
+        {
+            throw InvalidFault();
         }
     }
 
@@ -776,26 +848,26 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private DirectoryContext OpenContext()
     {
+        DirectoryContext? repository = null;
+        DirectoryContext? state = null;
         try
         {
-            using var repository = OpenDirectoryChain(repositoryRoot, requirePrivateFinal: false);
-            var state = OpenDirectoryChain(stateDirectoryPath, requirePrivateFinal: true);
-            try
+            repository = OpenDirectoryChain(repositoryRoot, requirePrivateFinal: false);
+            state = OpenDirectoryChain(stateDirectoryPath, requirePrivateFinal: true);
+            RevalidateDirectoryBinding(repository);
+            RevalidateDirectoryBinding(state);
+            if (state.AncestorIdentities.Contains(repository.DirectoryIdentity)
+                || repository.AncestorIdentities.Contains(state.DirectoryIdentity))
             {
-                RevalidateDirectoryBinding(repository);
-                if (state.AncestorIdentities.Contains(repository.DirectoryIdentity))
-                {
-                    throw InvalidFault();
-                }
-                ValidatePrivateDirectory(state.DirectoryHandle);
-                RevalidateContext(state);
-                return state;
+                throw InvalidFault();
             }
-            catch
-            {
-                state.Dispose();
-                throw;
-            }
+            ValidatePrivateDirectory(state.DirectoryHandle);
+            state.AttachRepository(repository);
+            repository = null;
+            RevalidateContext(state);
+            var result = state;
+            state = null;
+            return result;
         }
         catch (StoreFault)
         {
@@ -804,6 +876,11 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
             throw UnreadableFault();
+        }
+        finally
+        {
+            state?.Dispose();
+            repository?.Dispose();
         }
     }
 
@@ -817,12 +894,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             throw UnreadableFault();
         }
 
-        var current = new SafeFileHandle((nint)rootDescriptor, ownsHandle: true);
-        var currentIdentity = ReadIdentity(current);
-        var ancestors = new HashSet<FileIdentity> { currentIdentity };
-        SafeFileHandle? parent = null;
-        FileIdentity parentIdentity = default;
-        var finalName = string.Empty;
+        var rootHandle = new SafeFileHandle((nint)rootDescriptor, ownsHandle: true);
+        var rootIdentity = ReadIdentity(rootHandle);
+        var handles = new List<SafeFileHandle> { rootHandle };
+        var identities = new List<FileIdentity> { rootIdentity };
+        var segmentNames = new List<string>();
+        var ancestors = new HashSet<FileIdentity> { rootIdentity };
         try
         {
             var relative = fullPath[rootPath.Length..];
@@ -836,6 +913,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             for (var index = 0; index < segments.Length; index++)
             {
                 var segment = segments[index];
+                var current = handles[^1];
                 var observed = InspectAt(current, segment);
                 if (observed.Kind != NameKind.Directory)
                 {
@@ -864,43 +942,54 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                     throw UnreadableFault();
                 }
                 ancestors.Add(nextIdentity);
-                parent?.Dispose();
-                parent = current;
-                parentIdentity = currentIdentity;
-                current = next;
-                currentIdentity = nextIdentity;
-                finalName = segment;
+                handles.Add(next);
+                identities.Add(nextIdentity);
+                segmentNames.Add(segment);
             }
             return new DirectoryContext(
-                parent ?? throw InvalidFault(),
-                parentIdentity,
-                current,
-                currentIdentity,
-                finalName,
+                handles,
+                identities,
+                segmentNames,
                 ancestors);
         }
         catch
         {
-            parent?.Dispose();
-            current.Dispose();
+            for (var index = handles.Count - 1; index >= 0; index--)
+            {
+                handles[index].Dispose();
+            }
             throw;
         }
     }
 
     private static void RevalidateContext(DirectoryContext context)
     {
+        var repository = context.RepositoryBinding ?? throw UnreadableFault();
+        RevalidateDirectoryBinding(repository);
         RevalidateDirectoryBinding(context);
+        if (context.AncestorIdentities.Contains(repository.DirectoryIdentity)
+            || repository.AncestorIdentities.Contains(context.DirectoryIdentity))
+        {
+            throw InvalidFault();
+        }
         ValidatePrivateDirectory(context.DirectoryHandle);
     }
 
     private static void RevalidateDirectoryBinding(DirectoryContext context)
     {
-        if (ReadIdentity(context.ParentHandle) != context.ParentIdentity
-            || ReadIdentity(context.DirectoryHandle) != context.DirectoryIdentity
-            || InspectAt(context.ParentHandle, context.DirectoryName) is not { Kind: NameKind.Directory } rebound
-            || rebound.Identity != context.DirectoryIdentity)
+        for (var index = 0; index < context.SegmentNames.Count; index++)
         {
-            throw UnreadableFault();
+            var parent = context.ChainHandles[index];
+            var child = context.ChainHandles[index + 1];
+            var parentIdentity = context.ChainIdentities[index];
+            var childIdentity = context.ChainIdentities[index + 1];
+            if (ReadIdentity(parent) != parentIdentity
+                || ReadIdentity(child) != childIdentity
+                || InspectAt(parent, context.SegmentNames[index]) is not { Kind: NameKind.Directory } rebound
+                || rebound.Identity != childIdentity)
+            {
+                throw UnreadableFault();
+            }
         }
     }
 
@@ -1303,24 +1392,35 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     }
 
     private sealed class DirectoryContext(
-        SafeFileHandle parentHandle,
-        FileIdentity parentIdentity,
-        SafeFileHandle directoryHandle,
-        FileIdentity directoryIdentity,
-        string directoryName,
+        List<SafeFileHandle> chainHandles,
+        List<FileIdentity> chainIdentities,
+        List<string> segmentNames,
         HashSet<FileIdentity> ancestorIdentities) : IDisposable
     {
-        internal SafeFileHandle ParentHandle { get; } = parentHandle;
-        internal FileIdentity ParentIdentity { get; } = parentIdentity;
-        internal SafeFileHandle DirectoryHandle { get; } = directoryHandle;
-        internal FileIdentity DirectoryIdentity { get; } = directoryIdentity;
-        internal string DirectoryName { get; } = directoryName;
+        internal IReadOnlyList<SafeFileHandle> ChainHandles { get; } = chainHandles;
+        internal IReadOnlyList<FileIdentity> ChainIdentities { get; } = chainIdentities;
+        internal IReadOnlyList<string> SegmentNames { get; } = segmentNames;
+        internal SafeFileHandle DirectoryHandle => ChainHandles[^1];
+        internal FileIdentity DirectoryIdentity => ChainIdentities[^1];
         internal HashSet<FileIdentity> AncestorIdentities { get; } = ancestorIdentities;
+        internal DirectoryContext? RepositoryBinding { get; private set; }
+
+        internal void AttachRepository(DirectoryContext repository)
+        {
+            if (RepositoryBinding is not null)
+            {
+                throw new InvalidOperationException("repository binding already attached");
+            }
+            RepositoryBinding = repository;
+        }
 
         public void Dispose()
         {
-            DirectoryHandle.Dispose();
-            ParentHandle.Dispose();
+            RepositoryBinding?.Dispose();
+            for (var index = ChainHandles.Count - 1; index >= 0; index--)
+            {
+                ChainHandles[index].Dispose();
+            }
         }
     }
 
