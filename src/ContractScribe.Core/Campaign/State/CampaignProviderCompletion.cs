@@ -1,6 +1,6 @@
 namespace ContractScribe.Core;
 
-public enum CampaignProviderCompletionKind
+internal enum CampaignProviderCompletionKind
 {
     Ordinary,
     ProposalInvalid,
@@ -11,7 +11,7 @@ public enum CampaignProviderCompletionKind
     BudgetExhausted,
 }
 
-public sealed class CampaignProviderCompletionRegistrar
+internal sealed class CampaignProviderCompletionRegistrar
 {
     private readonly CampaignProviderInvocationAuthority invocation;
     private int registrationGrant = 1;
@@ -19,7 +19,7 @@ public sealed class CampaignProviderCompletionRegistrar
     internal CampaignProviderCompletionRegistrar(CampaignProviderInvocationAuthority invocation) =>
         this.invocation = invocation;
 
-    public bool TryAuthorizePreparation(
+    internal bool TryAuthorizePreparation(
         DocumentationScribeRequest request,
         string providerConfigurationId,
         string modelConfigurationId,
@@ -41,7 +41,7 @@ public sealed class CampaignProviderCompletionRegistrar
         return true;
     }
 
-    public bool TryRegister(
+    internal bool TryRegister(
         CampaignProviderCompletionKind kind,
         DocumentationScribeValidatedRunOutcome? outcome,
         long? activeElapsedMilliseconds,

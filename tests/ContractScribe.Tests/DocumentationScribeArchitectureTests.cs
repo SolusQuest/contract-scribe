@@ -14,12 +14,29 @@ namespace ContractScribe.Tests;
 public sealed class DocumentationScribeArchitectureTests
 {
     [Fact]
-    public void Campaign_completion_registrar_is_confined_to_the_X1_binder_without_a_production_friend_edge()
+    public void Campaign_completion_registrar_is_internal_to_the_explicit_X1_friend_boundary()
     {
         var core = typeof(CampaignProviderCompletionRegistrar).Assembly;
-        Assert.DoesNotContain(
-            core.GetCustomAttributes<InternalsVisibleToAttribute>(),
-            attribute => attribute.AssemblyName.StartsWith("ContractScribe.Cli", StringComparison.Ordinal));
+        var friends = core.GetCustomAttributes<InternalsVisibleToAttribute>()
+            .Select(attribute => attribute.AssemblyName)
+            .ToArray();
+        Assert.Contains("ContractScribe.Cli", friends);
+        Assert.Equal(
+            ["ContractScribe.Cli"],
+            friends.Where(name => name.StartsWith("ContractScribe.", StringComparison.Ordinal)
+                    && !name.Contains("Tests", StringComparison.Ordinal))
+                .ToArray());
+        Assert.False(typeof(CampaignProviderCompletionRegistrar).IsPublic);
+        Assert.False(typeof(CampaignProviderCompletionKind).IsPublic);
+        Assert.True(typeof(CampaignProviderInvocationAuthority)
+            .GetMethod("TryCreateCompletionRegistrar", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
+        Assert.True(typeof(CampaignProviderCompletionRegistrar)
+            .GetMethod("TryAuthorizePreparation", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
+        Assert.True(typeof(CampaignProviderCompletionRegistrar)
+            .GetMethod("TryRegister", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
 
         var root = FindRepositoryRoot();
         var productionUses = Directory.EnumerateFiles(Path.Join(root, "src"), "*.cs", SearchOption.AllDirectories)

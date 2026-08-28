@@ -120,7 +120,7 @@ public sealed class CampaignProviderInvocationAuthority
         return true;
     }
 
-    public CampaignProviderCompletionRegistrar? TryCreateCompletionRegistrar() =>
+    internal CampaignProviderCompletionRegistrar? TryCreateCompletionRegistrar() =>
         Interlocked.CompareExchange(ref registrarGrant, 0, 1) == 1
             ? new CampaignProviderCompletionRegistrar(this)
             : null;
