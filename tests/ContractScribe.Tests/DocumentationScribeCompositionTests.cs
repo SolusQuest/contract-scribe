@@ -286,6 +286,74 @@ public sealed class DocumentationScribeCompositionTests
     }
 
     [Fact]
+    public async Task Proposal_executor_validates_current_audit_authority_before_initial_or_replay_work()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var invalidStore = new MemoryCampaignStore(initial);
+        var invalidExchange = new CountingExchange();
+        var invalidInput = campaign.Input(fixture, invalidStore, invalidExchange, RuntimeOptions()) with
+        {
+            AcceptedAuditInputs = ImmutableArray<AuditRecordInput>.Empty,
+        };
+
+        var invalid = await DocumentationCampaignProposalExecutor.ExecuteAsync(invalidInput);
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, invalid.Kind);
+        Assert.Equal("campaign.context.invalid", invalid.Code);
+        Assert.Equal(0, invalidExchange.RequestCount);
+        Assert.Equal(0, invalidStore.SuccessfulReplaceCount);
+
+        var replayStore = new MemoryCampaignStore(initial);
+        var completed = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, replayStore, new ProposalExchange(fixture.Request), RuntimeOptions()));
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, completed.Kind);
+        var writesBeforeReplay = replayStore.SuccessfulReplaceCount;
+        var replayExchange = new CountingExchange();
+
+        var replay = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, replayStore, replayExchange, RuntimeOptions()) with
+            {
+                AcceptedAuditInputs = ImmutableArray<AuditRecordInput>.Empty,
+            });
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, replay.Kind);
+        Assert.Equal("campaign.context.invalid", replay.Code);
+        Assert.Equal(0, replayExchange.RequestCount);
+        Assert.Equal(writesBeforeReplay, replayStore.SuccessfulReplaceCount);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_owns_request_bytes_before_reservation_and_provider_execution()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var callerBuffer = fixture.RequestBytes.ToArray();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState))
+        {
+            AfterSuccessfulReplace = attempt =>
+            {
+                if (attempt == 1)
+                {
+                    callerBuffer.AsSpan().Fill(0x20);
+                }
+            },
+        };
+        var exchange = new CountingProposalExchange(fixture.Request);
+        var input = campaign.Input(fixture, store, exchange, RuntimeOptions()) with
+        {
+            RequestUtf8Json = callerBuffer,
+        };
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
+        Assert.Equal(1, exchange.RequestCount);
+        Assert.Equal(2, store.SuccessfulReplaceCount);
+    }
+
+    [Fact]
     public async Task Proposal_executor_separates_pre_send_cancellation_from_authoritative_settlement()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
@@ -378,6 +446,76 @@ public sealed class DocumentationScribeCompositionTests
         Assert.Equal(0, lostAckExchange.RequestCount);
         Assert.Equal(1, lostAckStore.SuccessfulReplaceCount);
         Assert.IsType<CampaignProviderReservation>(lostAckStore.Current!.State.ActiveReservation);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_classifies_deterministic_completion_failure_and_settlement_conflict()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var invalidStore = new MemoryCampaignStore(initial);
+        var invalidExchange = new CountingProposalExchange(fixture.Request);
+
+        var invalid = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(
+                fixture,
+                invalidStore,
+                invalidExchange,
+                RuntimeOptions(),
+                timeProvider: new SequencedTimeProvider(0)));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, invalid.Kind);
+        Assert.Equal("campaign.settlement.invalid", invalid.Code);
+        Assert.Equal(1, invalidExchange.RequestCount);
+        Assert.Equal(1, invalidStore.SuccessfulReplaceCount);
+        Assert.IsType<CampaignProviderReservation>(invalidStore.Current!.State.ActiveReservation);
+
+        var conflictStore = new MemoryCampaignStore(initial)
+        {
+            ReportedReplaceAttempt = 2,
+            ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
+        };
+        var conflictExchange = new CountingProposalExchange(fixture.Request);
+        var conflict = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, conflictStore, conflictExchange, RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
+        Assert.Equal("campaign.settlement.conflict", conflict.Code);
+        Assert.Equal(1, conflictExchange.RequestCount);
+        Assert.Equal(1, conflictStore.SuccessfulReplaceCount);
+        Assert.IsType<CampaignProviderReservation>(conflictStore.Current!.State.ActiveReservation);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_preserves_completion_revision_headroom_without_dispatch()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+
+        var nearMaximumStore = new MemoryCampaignStore(
+            WithCheckpointRevision(initial, CampaignStateContract.MaximumObservation - 1));
+        var nearMaximumExchange = new CountingExchange();
+        var nearMaximum = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, nearMaximumStore, nearMaximumExchange, RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.BudgetExhausted, nearMaximum.Kind);
+        Assert.Equal(0, nearMaximumExchange.RequestCount);
+        Assert.Equal(1, nearMaximumStore.SuccessfulReplaceCount);
+        Assert.Equal(CampaignStateContract.MaximumObservation, nearMaximumStore.Current!.CheckpointRevision);
+        Assert.Null(nearMaximumStore.Current.State.ActiveReservation);
+
+        var maximumStore = new MemoryCampaignStore(
+            WithCheckpointRevision(initial, CampaignStateContract.MaximumObservation));
+        var maximumExchange = new CountingExchange();
+        var maximum = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, maximumStore, maximumExchange, RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, maximum.Kind);
+        Assert.Equal("campaign.reservation.invalid", maximum.Code);
+        Assert.Equal(0, maximumExchange.RequestCount);
+        Assert.Equal(0, maximumStore.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -503,6 +641,17 @@ public sealed class DocumentationScribeCompositionTests
             fixture.Request);
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         return admitted;
+    }
+
+    private static CampaignCheckpointArtifact WithCheckpointRevision(
+        CampaignCheckpointArtifact artifact,
+        long checkpointRevision)
+    {
+        var root = JsonNode.Parse(CampaignStateJson.Write(artifact.State))!.AsObject();
+        root["checkpointRevision"] = checkpointRevision;
+        var parsed = CampaignStateJson.Parse(Encoding.UTF8.GetBytes(root.ToJsonString() + "\n"));
+        Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
+        return Assert.IsType<CampaignCheckpointArtifact>(parsed.Artifact);
     }
 
     private static Task<IDocumentationScribePreparedOutcome> PrepareAsync(
@@ -1400,6 +1549,7 @@ public sealed class DocumentationScribeCompositionTests
     {
         private readonly object gate = new();
         private CampaignCheckpointArtifact? current = initial;
+        private int replaceAttemptCount;
 
         internal CampaignCheckpointArtifact? Current
         {
@@ -1415,6 +1565,9 @@ public sealed class DocumentationScribeCompositionTests
         internal int SuccessfulReplaceCount { get; private set; }
         internal CampaignCheckpointWriteKind? NextReportedReplaceKind { get; init; }
         internal bool ApplyNextReplaceBeforeReporting { get; init; }
+        internal int? ReportedReplaceAttempt { get; init; }
+        internal CampaignCheckpointWriteKind? ReportedReplaceKind { get; init; }
+        internal Action<int>? AfterSuccessfulReplace { get; init; }
 
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
         {
@@ -1461,6 +1614,7 @@ public sealed class DocumentationScribeCompositionTests
             cancellationToken.ThrowIfCancellationRequested();
             lock (gate)
             {
+                var replaceAttempt = ++replaceAttemptCount;
                 if (current is null)
                 {
                     return ValueTask.FromResult(new CampaignCheckpointWriteResult(
@@ -1473,18 +1627,23 @@ public sealed class DocumentationScribeCompositionTests
                         CampaignCheckpointWriteKind.CurrentMismatch));
                 }
 
-                if (NextReportedReplaceKind is { } reported)
+                var reportedAttempt = ReportedReplaceAttempt
+                    ?? (NextReportedReplaceKind is null ? null : 1);
+                var reportedKind = ReportedReplaceKind ?? NextReportedReplaceKind;
+                if (reportedAttempt == replaceAttempt && reportedKind is { } reported)
                 {
                     if (ApplyNextReplaceBeforeReporting)
                     {
                         current = Parse(exactUtf8Json);
                         SuccessfulReplaceCount++;
+                        AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
                     }
                     return ValueTask.FromResult(new CampaignCheckpointWriteResult(reported));
                 }
 
                 current = Parse(exactUtf8Json);
                 SuccessfulReplaceCount++;
+                AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
             }
         }
