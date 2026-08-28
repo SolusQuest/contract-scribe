@@ -377,14 +377,14 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private bool TryRecoverStaleLease(DirectoryContext context)
     {
         var leaseStatus = InspectName(context, leaseName);
-        if (leaseStatus.Kind != NameKind.Regular)
+        if (leaseStatus is not { Kind: NameKind.Regular, Identity: { } observedLeaseIdentity })
         {
             return false;
         }
 
-        using var lease = OpenObserved(context, leaseName, leaseStatus.Identity!.Value, write: true);
+        using var lease = OpenObserved(context, leaseName, observedLeaseIdentity, write: true);
         var leaseIdentity = ValidatePrivateFile(lease);
-        if (leaseIdentity != leaseStatus.Identity.Value)
+        if (leaseIdentity != observedLeaseIdentity)
         {
             return false;
         }
@@ -551,16 +551,16 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             return ReadObservation.NotFound();
         }
-        if (status.Kind != NameKind.Regular)
+        if (status is not { Kind: NameKind.Regular, Identity: { } observedIdentity })
         {
             return ReadObservation.Invalid();
         }
 
         try
         {
-            using var handle = OpenObserved(context, name, status.Identity!.Value, write: false);
+            using var handle = OpenObserved(context, name, observedIdentity, write: false);
             var identity = ValidatePrivateFile(handle);
-            if (identity != status.Identity.Value)
+            if (identity != observedIdentity)
             {
                 return ReadObservation.Unreadable();
             }
