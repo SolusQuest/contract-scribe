@@ -296,7 +296,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            cleanupComplete = active is null
+            cleanupComplete = cleanupComplete
+                || active is null
                 || context is not null
                     && (published
                         ? TryCleanupPublishedCancellation(context, active, intendedBytes.Span, intendedRevision, intendedSha256)

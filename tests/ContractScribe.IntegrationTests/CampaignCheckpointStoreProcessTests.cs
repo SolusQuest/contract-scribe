@@ -207,7 +207,7 @@ public sealed class CampaignCheckpointStoreProcessTests
         await File.WriteAllTextAsync(fixture.ReleasePath, "release");
         await recovering;
 
-        Assert.Equal("Unwritable", await File.ReadAllTextAsync(fixture.ResultPath("recovering")));
+        Assert.Equal("AlreadyPresent", await File.ReadAllTextAsync(fixture.ResultPath("recovering")));
         AssertExact(await CreateStore(fixture.CheckpointPath).ReadAsync(CancellationToken.None));
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
