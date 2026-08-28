@@ -40,6 +40,7 @@ internal static class DocumentationCampaignProposalExecutor
         }
 
         var current = accepted.AcceptedCheckpoint;
+        DocumentationScribeAuditAuthority auditAuthority;
         try
         {
             if (!ReferenceEquals(input.Session.Classification.ClassificationSet, input.PlanningInput.Classifications)
@@ -51,6 +52,9 @@ internal static class DocumentationCampaignProposalExecutor
                 current.Artifact.State, input.ExecutionCapability, input.StyleConfigurationId,
                 input.StyleConfigurationProjection, input.Session.RepositorySession.InputIdentity,
                 input.PlanningInput, input.AcceptedPlan);
+            auditAuthority = DocumentationScribeAuditAuthority.Create(
+                input.Session, input.Observations, input.AcceptedPolicy,
+                input.AcceptedAuditInputs, input.AcceptedAuditDocument);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
@@ -69,6 +73,13 @@ internal static class DocumentationCampaignProposalExecutor
             var work = pair.First;
             if (work.Status == CampaignWorkStatus.ProposalComplete)
             {
+                if (!TrySelectAudit(auditAuthority, input.PlanningInput, pair.Second, out _))
+                {
+                    return Outcome(
+                        DocumentationCampaignProposalOutcomeKind.HostContractError,
+                        "campaign.context.audit-invalid");
+                }
+
                 return new(DocumentationCampaignProposalOutcomeKind.ProposalReady,
                     "campaign.proposal.replay", work.WorkItemKey, current.Artifact);
             }
@@ -100,7 +111,20 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.foreign");
         }
 
-        var parsed = DocumentationScribeValidation.ParseRequest(input.RequestUtf8Json);
+        if (!TrySelectAudit(auditAuthority, input.PlanningInput, selectedPlan, out var selectedAudit))
+        {
+            return Outcome(
+                DocumentationCampaignProposalOutcomeKind.HostContractError,
+                "campaign.context.audit-invalid");
+        }
+
+        if (input.RequestUtf8Json.Length > DocumentationScribeContract.MaximumArtifactUtf8Bytes)
+        {
+            return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid");
+        }
+
+        var ownedRequestUtf8Json = input.RequestUtf8Json.ToArray().AsMemory();
+        var parsed = DocumentationScribeValidation.ParseRequest(ownedRequestUtf8Json);
         if (!parsed.IsValid || parsed.Request is not { } request)
         {
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid");
@@ -155,13 +179,8 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.observer");
         }
 
-        var targetFact = selectedPlan.Targets.Single();
-        var target = input.PlanningInput.Classifications.Targets.Single(candidate => candidate.SymbolRef == targetFact.SymbolRef);
-        var audit = DocumentationScribeAuditAuthority.Create(
-            input.Session, input.Observations, input.AcceptedPolicy,
-            input.AcceptedAuditInputs, input.AcceptedAuditDocument).Select(target);
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
-            audit, input.RequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
+            selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, input.Exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
         CampaignTransitionResult completed;
         if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
@@ -188,11 +207,47 @@ internal static class DocumentationCampaignProposalExecutor
         {
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid");
         }
+        if (completed.Kind == CampaignTransitionKind.Rejected)
+        {
+            return Outcome(
+                DocumentationCampaignProposalOutcomeKind.HostContractError,
+                "campaign.settlement.invalid");
+        }
+
         var settled = await CampaignCheckpointAcceptance.AcceptAsync(
             input.Store, completed, input.SettlementToken).ConfigureAwait(false);
-        return settled.Kind == CampaignCheckpointAcceptanceKind.Accepted && settled.Artifact is not null
-            ? FromArtifact(settled.Artifact, selectedState.WorkItemKey)
+        if (settled.Kind == CampaignCheckpointAcceptanceKind.Accepted && settled.Artifact is not null)
+        {
+            return FromArtifact(settled.Artifact, selectedState.WorkItemKey);
+        }
+
+        return settled.Kind is CampaignCheckpointAcceptanceKind.Conflict
+            or CampaignCheckpointAcceptanceKind.InvalidRead
+            or CampaignCheckpointAcceptanceKind.Unreadable
+            or CampaignCheckpointAcceptanceKind.WriteRejected
+            ? Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict")
             : Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.settlement.unconfirmed");
+    }
+
+    private static bool TrySelectAudit(
+        DocumentationScribeAuditAuthority auditAuthority,
+        CampaignPlanningInput planningInput,
+        CampaignPlanningWorkItem planWork,
+        out DocumentationScribeSelectedAudit? selectedAudit)
+    {
+        selectedAudit = null;
+        try
+        {
+            var targetFact = planWork.Targets.Single();
+            var target = planningInput.Classifications.Targets.Single(candidate =>
+                candidate.SymbolRef == targetFact.SymbolRef);
+            selectedAudit = auditAuthority.Select(target);
+            return true;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return false;
+        }
     }
 
     private static DocumentationCampaignProposalOutcome FromArtifact(CampaignCheckpointArtifact artifact, string workKey)

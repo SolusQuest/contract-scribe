@@ -67,7 +67,9 @@ public sealed class CampaignProviderCompletionRegistrar
         DocumentationScribeValidatedRunOutcome? outcome,
         long? activeElapsedMilliseconds)
     {
-        if (activeElapsedMilliseconds is < 0 or > CampaignStateContract.MaximumObservation)
+        if (!Enum.IsDefined(kind)
+            || activeElapsedMilliseconds is < 0 or > CampaignStateContract.MaximumObservation
+            || outcome is null != activeElapsedMilliseconds is null)
         {
             return false;
         }
@@ -79,19 +81,45 @@ public sealed class CampaignProviderCompletionRegistrar
         }
         if (kind == CampaignProviderCompletionKind.Ordinary)
         {
-            return outcome is not null
-                && invocation.ValidateOutcome(outcome);
+            if (outcome is null || !invocation.ValidateOutcome(outcome))
+            {
+                return false;
+            }
+
+            return dispatched || AvailableOrdinaryOutcome(outcome);
         }
 
-        if (!dispatched && kind is not (CampaignProviderCompletionKind.ProposalInvalid
-            or CampaignProviderCompletionKind.HostFailure))
+        if (!dispatched)
         {
-            return false;
+            return outcome is null
+                && kind is CampaignProviderCompletionKind.ProposalInvalid
+                    or CampaignProviderCompletionKind.HostFailure;
         }
 
         return outcome is null
             || outcome.RunResult.Terminal is DocumentationScribeProposalTerminal
                 && invocation.ValidateOutcome(outcome);
+    }
+
+    private static bool AvailableOrdinaryOutcome(DocumentationScribeValidatedRunOutcome outcome)
+    {
+        if (outcome.RunResult.RunEnvelope.ProviderRequestCount != 0)
+        {
+            return false;
+        }
+
+        return outcome.RunResult.Terminal switch
+        {
+            DocumentationScribeCancelledTerminal => true,
+            DocumentationScribeFailureTerminal
+            {
+                Code: DocumentationScribeFailureCode.Validation
+                    or DocumentationScribeFailureCode.Internal
+                    or DocumentationScribeFailureCode.Timeout
+                    or DocumentationScribeFailureCode.Budget,
+            } => true,
+            _ => false,
+        };
     }
 
     public override string ToString() => nameof(CampaignProviderCompletionRegistrar);

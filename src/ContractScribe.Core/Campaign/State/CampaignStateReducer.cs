@@ -364,6 +364,11 @@ public static class CampaignStateReducer
                 return Exhausted(predecessor);
             }
 
+            if (!HasProviderCompletionRevisionHeadroom(state))
+            {
+                return Exhausted(predecessor);
+            }
+
             var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
             if (budget.Kind != CampaignBudgetDecisionKind.Admitted)
             {
@@ -614,13 +619,7 @@ public static class CampaignStateReducer
                 }
             }
 
-            if (!completionAuthority.TryConsume()
-                || !invocationAuthority.TryCompleteLifecycle(invocationAuthority.DispatchStarted))
-            {
-                return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
-            }
-
-            return Applied(predecessor, CreateState(
+            var transition = Applied(predecessor, CreateState(
                 state,
                 NextRevision(state.CheckpointRevision),
                 settlement.Charges!,
@@ -630,6 +629,13 @@ public static class CampaignStateReducer
                 state.CumulativeOutcome,
                 campaignTerminal,
                 state.Predecessor));
+            if (!completionAuthority.TryConsume()
+                || !invocationAuthority.TryCompleteLifecycle(invocationAuthority.DispatchStarted))
+            {
+                return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
+            }
+
+            return transition;
         }
         catch (OverflowException)
         {
@@ -726,24 +732,7 @@ public static class CampaignStateReducer
         {
             terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
         }
-        if (terminal is null && simultaneousStop is { } stop)
-        {
-            terminal = stop switch
-            {
-                CampaignTerminalKind.Cancelled => new CampaignTerminalOutcome(stop, CampaignTerminalReason.Caller),
-                CampaignTerminalKind.Timeout => new CampaignTerminalOutcome(stop, CampaignTerminalReason.Deadline),
-                CampaignTerminalKind.Exhausted => new CampaignTerminalOutcome(stop, CampaignTerminalReason.Budget),
-                _ => null,
-            };
-        }
-
-        if (!completionAuthority.TryConsume()
-            || !invocation.TryCompleteLifecycle(dispatched))
-        {
-            return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
-        }
-
-        return Applied(predecessor, CreateState(
+        var transition = Applied(predecessor, CreateState(
             state,
             NextRevision(state.CheckpointRevision),
             charges,
@@ -753,6 +742,13 @@ public static class CampaignStateReducer
             state.CumulativeOutcome,
             terminal,
             state.Predecessor));
+        if (!completionAuthority.TryConsume()
+            || !invocation.TryCompleteLifecycle(dispatched))
+        {
+            return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
+        }
+
+        return transition;
     }
 
     public static CampaignTransitionResult RetryProviderInvocation(
@@ -823,6 +819,11 @@ public static class CampaignStateReducer
                     work.OuterAttemptCount) != historicalAttempt)
             {
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
+            }
+
+            if (!HasProviderCompletionRevisionHeadroom(state))
+            {
+                return Finish(Exhausted(predecessor));
             }
 
             var settledCharges = activeRetry is null
@@ -2012,6 +2013,9 @@ public static class CampaignStateReducer
         or CampaignTerminalKind.Cancelled
         or CampaignTerminalKind.Timeout
         or CampaignTerminalKind.Exhausted;
+
+    private static bool HasProviderCompletionRevisionHeadroom(CampaignCheckpointState state) =>
+        state.CheckpointRevision <= CampaignStateContract.MaximumObservation - 2;
 
     private static long NextRevision(long revision)
     {

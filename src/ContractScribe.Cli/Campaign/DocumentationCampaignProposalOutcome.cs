@@ -55,11 +55,13 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.checkpoint.unaccepted")
             or (DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.patch-active")
             or (DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.conflict")
+            or (DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.context.session-mismatch")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.context.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.foreign")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.runtime.mismatch")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid")
-            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid");
+            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid")
+            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid");
 }
