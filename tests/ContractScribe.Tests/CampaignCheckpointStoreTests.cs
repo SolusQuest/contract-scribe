@@ -793,6 +793,126 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [SupportedOSPlatform("linux")]
+    public async Task Fresh_lease_initialization_revalidates_confinement_after_creator_hook(bool replace)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        var root = Path.Join(Path.GetTempPath(), $"contractscribe-lease-confinement-{Guid.NewGuid():N}");
+        var repository = Path.Join(root, "repository");
+        var stateAnchor = Path.Join(root, "state-anchor");
+        var movedAnchor = Path.Join(repository, "moved-state-anchor");
+        var stateDirectory = Path.Join(stateAnchor, "container", "state");
+        var movedStateDirectory = Path.Join(movedAnchor, "container", "state");
+        var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+        var movedLeasePath = Path.Join(
+            movedStateDirectory,
+            ".campaign.json.contractscribe-checkpoint-lease");
+        try
+        {
+            Directory.CreateDirectory(repository);
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(
+                stateDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var predecessor = CreateOpenArtifact();
+            var successor = Assert.IsType<CampaignCheckpointArtifact>(
+                CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
+            if (replace)
+            {
+                Assert.Equal(
+                    CampaignCheckpointWriteKind.Written,
+                    (await WriteInitialAsync(
+                        new FileCampaignCheckpointStore(checkpointPath, repository),
+                        predecessor)).Kind);
+            }
+            var moved = false;
+            var store = new FileCampaignCheckpointStore(
+                checkpointPath,
+                repository,
+                phase =>
+                {
+                    if (phase != "after-lease-create-before-lock" || moved)
+                    {
+                        return;
+                    }
+                    moved = true;
+                    Directory.Move(stateAnchor, movedAnchor);
+                    Directory.CreateDirectory(stateDirectory);
+                    File.SetUnixFileMode(
+                        stateDirectory,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                });
+
+            var result = replace
+                ? await store.ReplaceIfCurrentAsync(
+                    predecessor.CheckpointRevision,
+                    predecessor.Sha256,
+                    successor.ExactUtf8Json.AsMemory(),
+                    successor.CheckpointRevision,
+                    successor.Sha256,
+                    CancellationToken.None)
+                : await WriteInitialAsync(store, predecessor);
+
+            Assert.True(moved);
+            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
+            Assert.True(File.Exists(movedLeasePath));
+            Assert.Equal(0, new FileInfo(movedLeasePath).Length);
+            Assert.Equal(
+                (nint)(-1),
+                GetExtendedAttributeSize(
+                    movedLeasePath,
+                    "user.contractscribe.checkpoint-object",
+                    nint.Zero,
+                    0));
+            Assert.DoesNotContain(
+                Directory.EnumerateFileSystemEntries(movedStateDirectory),
+                path => path.EndsWith(".tmp", StringComparison.Ordinal));
+            var movedEntries = Directory.EnumerateFileSystemEntries(movedStateDirectory)
+                .Select(Path.GetFileName)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+            var retryStore = new FileCampaignCheckpointStore(checkpointPath, repository);
+            var retry = replace
+                ? await retryStore.ReplaceIfCurrentAsync(
+                    predecessor.CheckpointRevision,
+                    predecessor.Sha256,
+                    successor.ExactUtf8Json.AsMemory(),
+                    successor.CheckpointRevision,
+                    successor.Sha256,
+                    CancellationToken.None)
+                : await WriteInitialAsync(retryStore, predecessor);
+
+            Assert.Equal(
+                replace
+                    ? CampaignCheckpointWriteKind.PredecessorMissing
+                    : CampaignCheckpointWriteKind.Written,
+                retry.Kind);
+            Assert.Equal(
+                movedEntries,
+                Directory.EnumerateFileSystemEntries(movedStateDirectory)
+                    .Select(Path.GetFileName)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray());
+            Assert.Equal(0, new FileInfo(movedLeasePath).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     [SupportedOSPlatform("linux")]
     public async Task Read_rejects_a_checkpoint_from_an_ancestor_tree_moved_after_open()
@@ -856,9 +976,13 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData("after-lease-create-before-lock", 1)]
+    [InlineData("before-publish", 2)]
     [SupportedOSPlatform("linux")]
-    public async Task Publication_rejects_a_rebound_repository_path_used_for_confinement()
+    public async Task Publication_rejects_a_rebound_repository_path_used_for_confinement(
+        string hook,
+        int expectedStateEntryCount)
     {
         if (!IsLinuxX64())
         {
@@ -884,7 +1008,7 @@ public sealed class CampaignCheckpointStoreTests
                 repositoryPath,
                 phase =>
                 {
-                    if (phase != "before-publish" || swapped)
+                    if (phase != hook || swapped)
                     {
                         return;
                     }
@@ -898,7 +1022,21 @@ public sealed class CampaignCheckpointStoreTests
 
             Assert.True(swapped);
             Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
-            Assert.Equal(2, Directory.EnumerateFileSystemEntries(stateDirectory).Count());
+            Assert.Equal(expectedStateEntryCount, Directory.EnumerateFileSystemEntries(stateDirectory).Count());
+            if (hook == "after-lease-create-before-lock")
+            {
+                var leasePath = Path.Join(
+                    stateDirectory,
+                    ".campaign.json.contractscribe-checkpoint-lease");
+                Assert.Equal(0, new FileInfo(leasePath).Length);
+                Assert.Equal(
+                    (nint)(-1),
+                    GetExtendedAttributeSize(
+                        leasePath,
+                        "user.contractscribe.checkpoint-object",
+                        nint.Zero,
+                        0));
+            }
             Assert.Empty(Directory.EnumerateFileSystemEntries(repositoryPath));
         }
         finally

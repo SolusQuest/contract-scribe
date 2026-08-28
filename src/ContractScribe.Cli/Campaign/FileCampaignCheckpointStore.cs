@@ -394,6 +394,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 throw UnreadableFault();
             }
             leaseLocked = true;
+            RevalidateContext(context);
             ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
             var intendedLeaseMarker = LeaseMarker(token);
