@@ -195,6 +195,35 @@ snapshot transition is observed at the same boundary, supersession wins and the
 old transition is retained only as rejected late authority; it is not applied to
 the successor snapshot.
 
+## Provider completion authority and proposal-stage execution
+
+Provider completion is authorized only by one process-local `CampaignProviderCompletionAuthority`. The exact accepted provider invocation may issue one registrar; that registrar may register one coherent X1-owned final fact; and the resulting authority may be consumed by the reducer once. There is no executor-facing raw-M3 completion path. The registrar retains the invocation-owned request SHA, attempt, execution capability, and current request-validation authority. An X1-reparsed request is accepted only by exact artifact SHA plus complete provider-request validation; no-M3 facts use the invocation-owned request and cannot be repaired by a caller.
+
+The first underlying model `SendAsync` is the dispatch boundary. An ordinary bound M3 completion is valid from an available or dispatched lifecycle and settles exact envelope observations. An available X1 proposal-invalid or host completion retires and settles the complete reservation conservatively. A dispatched X1-only completion settles exact retained M3 observations when present and otherwise settles conservatively. Pre-send cancellation, timeout, or exhaustion without a bound M3 work result uses `StopActiveInvocation`, records the root terminal, and leaves work planned. Only abrupt loss or incoherent authority leaves an active reservation for later conservative `RetryProviderInvocation` recovery.
+
+The authority-only reducer uses this closed final mapping; X1-only rows retain a null Scribe result commitment:
+
+| Final fact | Durable work result | Root terminal / stage outcome |
+| --- | --- | --- |
+| admitted proposal | `proposal-complete` with trusted projection | none / proposal ready |
+| proposal over a settled or aggregate bound | `closed / scribe / completed-over-bound` with the existing proposal commitment | `exhausted / budget` / budget exhausted |
+| structured skip | existing insufficient-evidence or unsupported-domain code | complete when resolved / terminal stop |
+| retryable provider failure | `provider-failure / retryable` | none unless settlement exhausts / retryable stop |
+| terminal provider, tool-protocol, validation, or internal M3 failure | existing matching Scribe code | complete when resolved, subject to settlement exhaustion / terminal stop |
+| X1 proposal-invalid | `validation-failure` | complete when resolved, subject to settlement exhaustion / terminal stop |
+| X1 host failure or shutdown cancellation | `internal-failure` or `cancelled-by-shutdown` | `failed / host` / terminal stop |
+| caller cancellation | `cancelled-by-caller` | `cancelled / caller` / cancelled |
+| timeout | `timeout` | `timeout / deadline` / timed out |
+| budget terminal | `budget-exhausted` | `exhausted / budget` / budget exhausted |
+
+Explicit host, caller, timeout, and budget terminals take precedence over simultaneous settlement exhaustion. Proposal admission and replay require the trusted projection; a retained postflight-rejected M3 proposal is closed as validation failure and never becomes `proposal-complete`.
+
+The in-process proposal executor validates exact live M1/C1/C2/C3 context before request parsing or dispatch, checks runtime provider/model/protocol identities before admission, and performs one paired plan/state scan in C1 order. Planning-terminal, accepted, and nonretryable closed rows are resolved; only the first encountered `proposal-complete` row replays; active provider recovery, retryable closed work, and planned admission are actionable only when the root terminal is null. A root terminal otherwise rederives the bounded stage outcome. Active Patch or foreign/contradictory reservation state fails closed.
+
+Execution cancellation is independent from settlement/readback cancellation. A final fact becomes durable only through one exact-predecessor transition, conditional replacement, and exact readback. The outer host-active interval uses a monotonic clock and remains distinct from M3 envelope elapsed time. The returned proposal-stage outcome is rederived from the accepted artifact and exposes no raw request/result/provider/tool/source content or mutation authority.
+
+These process-local additions do not alter Campaign State v1 properties, enum vocabulary, parser/writer, schema, known-answer bytes, result-commitment matrix, or `ICampaignCheckpointStore`.
+
 ## Conditional store and readback
 
 `ICampaignCheckpointStore` exposes only typed read, create-if-absent, and

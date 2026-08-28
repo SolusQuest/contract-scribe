@@ -156,6 +156,13 @@ internal sealed class CampaignReservationLifecycleAuthority
 
     internal bool TryRetire() =>
         Interlocked.CompareExchange(ref _state, Retired, Available) == Available;
+
+    internal bool TryComplete(bool expectedDispatchStarted) =>
+        Interlocked.CompareExchange(
+            ref _state,
+            Retired,
+            expectedDispatchStarted ? DispatchStarted : Available)
+        == (expectedDispatchStarted ? DispatchStarted : Available);
 }
 
 public sealed class CampaignInitialCheckpointAuthority

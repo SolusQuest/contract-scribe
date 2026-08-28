@@ -241,6 +241,14 @@ Request failures use `scribe.request.<category>` and result failures use `scribe
 
 The validator reports deterministic structured facts only. It never includes the rejected source, provider text, exception text, or other arbitrary input in a diagnostic.
 
+## Campaign completion binding
+
+M3 binding remains an immutable execution fact, but it does not independently authorize a Campaign State completion. For campaign proposal execution, Core issues one process-local, one-shot completion registrar from the exact accepted provider invocation. X1's private campaign binder is the sole production consumer: it interprets the actual private prepared result, gates dispatch on the first underlying model `SendAsync`, and mints one opaque completion authority for coherent ordinary M3 and X1-only final facts. The campaign executor receives neither the registrar nor the prepared result or raw Run Result.
+
+A coherent ordinary M3 result may complete while the reservation lifecycle is still available when the runtime terminates before its first model send, or after dispatch has started. A pre-send cancellation, timeout, or exhaustion with no bound M3 result instead uses the campaign stop transition and leaves the work planned. X1 proposal-invalid or host facts may retire an available lifecycle conservatively; abrupt loss or incoherent output leaves the reservation active for recovery. The X1 campaign binder revalidates exact request SHA and complete current request authority across its private byte reparse, runtime provider/model/protocol identity, and exact attempt without requiring cross-parse object identity.
+
+The registrar, completion authority, prepared result, Run Result, host elapsed observation, and repository session are process-local and are never serialized. This join does not grant M2, filesystem, credential, GitHub, or publication authority and does not change the accepted one-target `ExecuteAsync`/Patch path.
+
 ## Compatibility and non-claims
 
 M1 Audit Result and M2 Documentation Patch remain current pre-release v1 drafts. Introducing this producer does not increment either family. Cross-contract tests bind reused symbol/profile/evidence-locator/component/content semantics, and the ordinary M1/M2 suites remain authoritative for those contracts.
