@@ -913,6 +913,124 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
+    [Theory]
+    [InlineData(false, "arbitrary-bytes")]
+    [InlineData(false, "canonical-record")]
+    [InlineData(false, "wrong-marker")]
+    [InlineData(true, "arbitrary-bytes")]
+    [InlineData(true, "canonical-record")]
+    [InlineData(true, "wrong-marker")]
+    [SupportedOSPlatform("linux")]
+    public async Task Fresh_lease_initialization_preserves_same_inode_hook_mutations(
+        bool replace,
+        string mutation)
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+
+        using var fixture = StoreFixture.Create();
+        var predecessor = CreateOpenArtifact();
+        var successor = Assert.IsType<CampaignCheckpointArtifact>(
+            CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
+        if (replace)
+        {
+            Assert.Equal(
+                CampaignCheckpointWriteKind.Written,
+                (await WriteInitialAsync(fixture.Store, predecessor)).Kind);
+        }
+
+        var leasePath = LeasePath(fixture);
+        var changedBytes = mutation switch
+        {
+            "arbitrary-bytes" => "changed lease bytes"u8.ToArray(),
+            "canonical-record" => CanonicalLookingUnrelatedLeaseRecord(),
+            _ => [],
+        };
+        var changedMarker = "contract-scribe-checkpoint-object-v1:lease:unrelated"u8.ToArray();
+        var mutationApplied = false;
+        Exception? mutationFailure = null;
+        var store = new FileCampaignCheckpointStore(
+            fixture.CheckpointPath,
+            RepositoryRoot(),
+            phase =>
+            {
+                if (phase != "after-lease-create-before-lock" || mutationApplied)
+                {
+                    return;
+                }
+                try
+                {
+                    if (mutation == "wrong-marker")
+                    {
+                        SetObjectMarker(leasePath, changedMarker);
+                    }
+                    else
+                    {
+                        WriteNativeBytes(leasePath, changedBytes);
+                    }
+                    mutationApplied = true;
+                }
+                catch (Exception exception)
+                {
+                    mutationFailure = exception;
+                }
+            });
+
+        var result = replace
+            ? await store.ReplaceIfCurrentAsync(
+                predecessor.CheckpointRevision,
+                predecessor.Sha256,
+                successor.ExactUtf8Json.AsMemory(),
+                successor.CheckpointRevision,
+                successor.Sha256,
+                CancellationToken.None)
+            : await WriteInitialAsync(store, predecessor);
+
+        Assert.Null(mutationFailure);
+        Assert.True(mutationApplied);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.True(File.Exists(leasePath));
+        Assert.DoesNotContain(
+            Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
+            path => path.EndsWith(".tmp", StringComparison.Ordinal));
+        if (replace)
+        {
+            Assert.Equal(predecessor.ExactUtf8Json.ToArray(), File.ReadAllBytes(fixture.CheckpointPath));
+        }
+        else
+        {
+            Assert.False(File.Exists(fixture.CheckpointPath));
+        }
+        AssertFreshLeaseMutationPreserved(leasePath, mutation, changedBytes, changedMarker);
+
+        var retryStore = new FileCampaignCheckpointStore(fixture.CheckpointPath, RepositoryRoot());
+        var retry = replace
+            ? await retryStore.ReplaceIfCurrentAsync(
+                predecessor.CheckpointRevision,
+                predecessor.Sha256,
+                successor.ExactUtf8Json.AsMemory(),
+                successor.CheckpointRevision,
+                successor.Sha256,
+                CancellationToken.None)
+            : await WriteInitialAsync(retryStore, predecessor);
+
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retry.Kind);
+        AssertFreshLeaseMutationPreserved(leasePath, mutation, changedBytes, changedMarker);
+        Assert.DoesNotContain(
+            Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
+            path => path.EndsWith(".tmp", StringComparison.Ordinal));
+        if (replace)
+        {
+            Assert.Equal(predecessor.ExactUtf8Json.ToArray(), File.ReadAllBytes(fixture.CheckpointPath));
+        }
+        else
+        {
+            Assert.False(File.Exists(fixture.CheckpointPath));
+        }
+    }
+
     [Fact]
     [SupportedOSPlatform("linux")]
     public async Task Read_rejects_a_checkpoint_from_an_ancestor_tree_moved_after_open()
@@ -1366,6 +1484,80 @@ public sealed class CampaignCheckpointStoreTests
         record.Split('\n'),
         line => line.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
 
+    private static byte[] CanonicalLookingUnrelatedLeaseRecord()
+    {
+        const string token = "11111111111111111111111111111111";
+        return System.Text.Encoding.ASCII.GetBytes(string.Join('\n',
+            "contract-scribe-checkpoint-lease-v1",
+            "operation=create",
+            "expected-revision=-",
+            "expected-sha256=-",
+            "intended-revision=7",
+            $"intended-sha256={new string('a', 64)}",
+            $"token={token}",
+            $"temp=.campaign.json.contractscribe-checkpoint-7-{token}.tmp",
+            "temp-device=1",
+            "temp-inode=1",
+            "temp-mount=1",
+            string.Empty));
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static void AssertFreshLeaseMutationPreserved(
+        string leasePath,
+        string mutation,
+        byte[] changedBytes,
+        byte[] changedMarker)
+    {
+        if (mutation == "wrong-marker")
+        {
+            Assert.Empty(File.ReadAllBytes(leasePath));
+            Assert.Equal(changedMarker, ReadObjectMarker(leasePath));
+            return;
+        }
+        Assert.Equal(changedBytes, File.ReadAllBytes(leasePath));
+        Assert.Equal(
+            (nint)(-1),
+            GetExtendedAttributeSize(
+                leasePath,
+                "user.contractscribe.checkpoint-object",
+                nint.Zero,
+                0));
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static void SetObjectMarker(string path, byte[] marker)
+    {
+        Assert.Equal(
+            0,
+            SetExtendedAttributeValue(
+                path,
+                "user.contractscribe.checkpoint-object",
+                marker,
+                checked((nuint)marker.Length),
+                1));
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static byte[] ReadObjectMarker(string path)
+    {
+        var size = GetExtendedAttributeSize(
+            path,
+            "user.contractscribe.checkpoint-object",
+            nint.Zero,
+            0);
+        Assert.True(size > 0);
+        var marker = new byte[checked((int)size)];
+        Assert.Equal(
+            size,
+            GetExtendedAttributeValue(
+                path,
+                "user.contractscribe.checkpoint-object",
+                marker,
+                checked((nuint)marker.Length)));
+        return marker;
+    }
+
     [SupportedOSPlatform("linux")]
     private static byte[] ReadNativeBytes(string path)
     {
@@ -1480,6 +1672,21 @@ public sealed class CampaignCheckpointStoreTests
 
     [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
     private static extern nint GetExtendedAttributeSize(string path, string name, nint value, nuint size);
+
+    [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+    private static extern nint GetExtendedAttributeValue(
+        string path,
+        string name,
+        [Out] byte[] value,
+        nuint size);
+
+    [DllImport("libc", EntryPoint = "setxattr", SetLastError = true)]
+    private static extern int SetExtendedAttributeValue(
+        string path,
+        string name,
+        [In] byte[] value,
+        nuint size,
+        int flags);
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int OpenFile(string path, int flags, uint mode);

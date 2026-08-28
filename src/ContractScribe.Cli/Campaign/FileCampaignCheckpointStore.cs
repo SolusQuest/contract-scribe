@@ -383,7 +383,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         byte[]? tempMarker = null;
         LeaseRecord? record = null;
         var leaseLocked = false;
-        var recordCommitted = false;
+        var leasePhase = FreshLeasePhase.FreshUnmarked;
         try
         {
             leaseIdentity = ValidatePrivateFile(leaseHandle);
@@ -396,10 +396,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             leaseLocked = true;
             RevalidateContext(context);
             ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
+            ValidateFreshUnmarkedLease(leaseHandle);
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
             var intendedLeaseMarker = LeaseMarker(token);
-            CreateObjectMarker(leaseHandle, intendedLeaseMarker);
             leaseMarker = intendedLeaseMarker;
+            leasePhase = FreshLeasePhase.MarkerExpected;
+            CreateObjectMarker(leaseHandle, intendedLeaseMarker);
             tempName = $".{checkpointName}.contractscribe-checkpoint-{intendedRevision.ToString(CultureInfo.InvariantCulture)}-{token}.tmp";
             var tempDescriptor = OpenAt(
                 FileDescriptor(context.DirectoryHandle),
@@ -415,8 +417,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             tempIdentity = ValidatePrivateFile(tempHandle);
             ValidateNamedHandle(context, tempName, tempHandle, tempIdentity.Value);
             var intendedTempMarker = TempMarker(token, intendedRevision);
-            CreateObjectMarker(tempHandle, intendedTempMarker);
             tempMarker = intendedTempMarker;
+            CreateObjectMarker(tempHandle, intendedTempMarker);
             record = new LeaseRecord(
                 operation,
                 expectedRevision,
@@ -435,7 +437,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
             ValidateObjectMarker(leaseHandle, record.LeaseMarkerBytes);
             ValidateObjectMarker(tempHandle, record.TempMarkerBytes);
-            recordCommitted = true;
+            leasePhase = FreshLeasePhase.RecordCommitted;
             testHook?.Invoke("after-lease-record");
             return new ActiveLease(leaseHandle, leaseIdentity.Value, tempHandle, record);
         }
@@ -446,7 +448,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 if (tempHandle is not null && tempIdentity is not null && tempName is not null)
                 {
-                    if (recordCommitted)
+                    if (leasePhase == FreshLeasePhase.RecordCommitted)
                     {
                         RevalidateContext(context);
                         ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity!.Value);
@@ -479,7 +481,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 if (tempClean && leaseLocked && leaseIdentity is not null)
                 {
-                    if (recordCommitted)
+                    if (leasePhase == FreshLeasePhase.RecordCommitted)
                     {
                         RevalidateContext(context);
                         ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
@@ -492,12 +494,23 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                             throw InvalidFault();
                         }
                     }
-                    TryDeleteExact(
-                        context,
-                        leaseName,
-                        leaseHandle,
-                        leaseIdentity.Value,
-                        leaseMarker);
+                    if (leasePhase == FreshLeasePhase.FreshUnmarked)
+                    {
+                        TryDeleteFreshUnmarkedExact(
+                            context,
+                            leaseName,
+                            leaseHandle,
+                            leaseIdentity.Value);
+                    }
+                    else
+                    {
+                        TryDeleteExact(
+                            context,
+                            leaseName,
+                            leaseHandle,
+                            leaseIdentity.Value,
+                            leaseMarker ?? throw InvalidFault());
+                    }
                 }
             }
             catch
@@ -1174,6 +1187,27 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
     }
 
+    private static void ValidateFreshUnmarkedLease(SafeFileHandle handle)
+    {
+        if (ReadStat(handle).Size != 0)
+        {
+            throw InvalidFault();
+        }
+        RequireObjectMarkerAbsent(handle);
+    }
+
+    private static bool TryDeleteFreshUnmarkedExact(
+        DirectoryContext context,
+        string name,
+        SafeFileHandle handle,
+        FileIdentity expected)
+    {
+        RevalidateContext(context);
+        ValidateNamedHandle(context, name, handle, expected);
+        ValidateFreshUnmarkedLease(handle);
+        return UnlinkAt(FileDescriptor(context.DirectoryHandle), name, 0) == 0;
+    }
+
     private static bool TryDeleteExact(
         DirectoryContext context,
         string name,
@@ -1362,6 +1396,18 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         ValidateObjectMarker(handle, marker);
     }
 
+    private static void RequireObjectMarkerAbsent(SafeFileHandle handle)
+    {
+        if (GetExtendedAttribute(FileDescriptor(handle), ObjectMarkerName, null, 0) >= 0)
+        {
+            throw InvalidFault();
+        }
+        if (Marshal.GetLastPInvokeError() != NoData)
+        {
+            throw UnreadableFault();
+        }
+    }
+
     private static void ValidateObjectMarker(SafeFileHandle handle, byte[] expected)
     {
         var size = GetExtendedAttribute(FileDescriptor(handle), ObjectMarkerName, null, 0);
@@ -1418,6 +1464,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         Create,
         Replace,
+    }
+
+    private enum FreshLeasePhase
+    {
+        FreshUnmarked,
+        MarkerExpected,
+        RecordCommitted,
     }
 
     private enum StoreFaultKind
