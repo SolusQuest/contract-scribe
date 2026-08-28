@@ -5,6 +5,10 @@ using System.Runtime.Versioning;
 
 namespace ContractScribe.Tests;
 
+[CollectionDefinition("campaign-checkpoint-filesystem", DisableParallelization = true)]
+public sealed class CampaignCheckpointFilesystemCollection;
+
+[Collection("campaign-checkpoint-filesystem")]
 public sealed class CampaignCheckpointStoreTests
 {
     [Fact]
@@ -1008,10 +1012,6 @@ public sealed class CampaignCheckpointStoreTests
         var artifact = CreateOpenArtifact();
 
         var failed = await WriteInitialAsync(store, artifact);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
-        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
-        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
-
         var staleLockAcquired = false;
         var retry = new FileCampaignCheckpointStore(
             fixture.CheckpointPath,
@@ -1051,6 +1051,10 @@ public sealed class CampaignCheckpointStoreTests
             });
 
         var failed = await WriteInitialAsync(store, artifact);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
+        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
+
         var staleLockAcquired = false;
         var retry = new FileCampaignCheckpointStore(
             fixture.CheckpointPath,
