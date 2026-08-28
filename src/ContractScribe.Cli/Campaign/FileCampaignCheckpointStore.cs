@@ -35,7 +35,11 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private const int NotFound = 2;
     private const int WouldBlock = 11;
     private const int MaximumLeaseBytes = 2048;
+    private const int MaximumMarkerBytes = 160;
+    private const int ExtendedAttributeCreate = 1;
     private const string LeaseVersion = "contract-scribe-checkpoint-lease-v1";
+    private const string ObjectMarkerName = "user.contractscribe.checkpoint-object";
+    private const string ObjectMarkerDomain = "contract-scribe-checkpoint-object-v1";
 
     private readonly string checkpointPath;
     private readonly string checkpointName;
@@ -64,6 +68,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             ?? throw new ArgumentException("The checkpoint must have a parent directory.", nameof(checkpointPath));
         if (checkpointName.Length is 0 or > 120
             || checkpointName is "." or ".."
+            || checkpointName.Any(character => character is < ' ' or > '~')
             || checkpointName.Contains(".contractscribe-checkpoint-", StringComparison.Ordinal))
         {
             throw new ArgumentException("The checkpoint filename is reserved or unsupported.", nameof(checkpointPath));
@@ -181,6 +186,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 {
                     return Unwritable();
                 }
+                testHook?.Invoke("after-stale-recovery-before-reacquire");
             }
             if (active is null)
             {
@@ -193,15 +199,22 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (conditional != CampaignCheckpointWriteKind.Written)
             {
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return cleanupComplete
-                    ? new CampaignCheckpointWriteResult(conditional)
-                    : Unwritable();
+                if (!cleanupComplete)
+                {
+                    return Unwritable();
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                return new CampaignCheckpointWriteResult(conditional);
             }
 
             WriteExact(active.TempHandle, intendedBytes.Span);
             RandomAccess.FlushToDisk(active.TempHandle);
             testHook?.Invoke("after-temp-write");
-            var staged = ReadEntry(context, active.Record.TempName, cancellationToken);
+            var staged = ReadEntry(
+                context,
+                active.Record.TempName,
+                cancellationToken,
+                active.Record.TempMarkerBytes);
             if (!staged.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || staged.Identity != active.Record.TempIdentity)
             {
@@ -216,7 +229,27 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             // final identity/predecessor revalidation through the rename linearization point.
             RevalidateContext(context);
             ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+            ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
+            if (!ReadExactBytes(active.LeaseHandle, MaximumLeaseBytes)
+                .AsSpan()
+                .SequenceEqual(active.Record.Encode()))
+            {
+                cleanupComplete = CleanupBeforePublication(context, active);
+                return Unwritable();
+            }
             ValidateNamedHandle(context, active.Record.TempName, active.TempHandle, active.Record.TempIdentity);
+            ValidateObjectMarker(active.TempHandle, active.Record.TempMarkerBytes);
+            var finalStaged = ReadEntry(
+                context,
+                active.Record.TempName,
+                CancellationToken.None,
+                active.Record.TempMarkerBytes);
+            if (!finalStaged.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
+                || finalStaged.Identity != active.Record.TempIdentity)
+            {
+                cleanupComplete = CleanupBeforePublication(context, active);
+                return Unwritable();
+            }
             var finalCurrent = ReadEntry(context, checkpointName, CancellationToken.None);
             if (ClassifyConditional(operation, finalCurrent, expectedRevision, expectedSha256)
                 != CampaignCheckpointWriteKind.Written)
@@ -237,13 +270,18 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             published = true;
 
             testHook?.Invoke("after-publish-before-readback");
-            var readback = ReadEntry(context, checkpointName, CancellationToken.None);
+            var readback = ReadEntry(
+                context,
+                checkpointName,
+                CancellationToken.None,
+                active.Record.TempMarkerBytes);
             if (!readback.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || readback.Identity != active.Record.TempIdentity)
             {
                 return Unwritable();
             }
 
+            testHook?.Invoke("after-readback-before-cleanup");
             cleanupComplete = CleanupAfterPublication(context, active, readback);
             if (!cleanupComplete)
             {
@@ -314,17 +352,24 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         FileIdentity? leaseIdentity = null;
         FileIdentity? tempIdentity = null;
         string? tempName = null;
+        byte[]? leaseMarker = null;
+        byte[]? tempMarker = null;
+        var leaseLocked = false;
         try
         {
+            leaseIdentity = ValidatePrivateFile(leaseHandle);
+            ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
             testHook?.Invoke("after-lease-create-before-lock");
             if (Flock(descriptor, LockExclusive | LockNonBlocking) != 0)
             {
                 throw UnreadableFault();
             }
-
-            leaseIdentity = ValidatePrivateFile(leaseHandle);
+            leaseLocked = true;
             ValidateNamedHandle(context, leaseName, leaseHandle, leaseIdentity.Value);
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+            var intendedLeaseMarker = LeaseMarker(token);
+            CreateObjectMarker(leaseHandle, intendedLeaseMarker);
+            leaseMarker = intendedLeaseMarker;
             tempName = $".{checkpointName}.contractscribe-checkpoint-{intendedRevision.ToString(CultureInfo.InvariantCulture)}-{token}.tmp";
             var tempDescriptor = OpenAt(
                 FileDescriptor(context.DirectoryHandle),
@@ -339,6 +384,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             tempHandle = new SafeFileHandle((nint)tempDescriptor, ownsHandle: true);
             tempIdentity = ValidatePrivateFile(tempHandle);
             ValidateNamedHandle(context, tempName, tempHandle, tempIdentity.Value);
+            var intendedTempMarker = TempMarker(token, intendedRevision);
+            CreateObjectMarker(tempHandle, intendedTempMarker);
+            tempMarker = intendedTempMarker;
             var record = new LeaseRecord(
                 operation,
                 expectedRevision,
@@ -355,21 +403,54 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 throw UnreadableFault();
             }
+            ValidateObjectMarker(leaseHandle, record.LeaseMarkerBytes);
+            ValidateObjectMarker(tempHandle, record.TempMarkerBytes);
             testHook?.Invoke("after-lease-record");
             return new ActiveLease(leaseHandle, leaseIdentity.Value, tempHandle, record);
         }
         catch
         {
-            if (tempHandle is not null && tempIdentity is not null && tempName is not null)
+            var tempClean = tempHandle is null;
+            try
             {
-                TryDeleteExact(context, tempName, tempHandle, tempIdentity.Value);
+                if (tempHandle is not null && tempIdentity is not null && tempName is not null)
+                {
+                    tempClean = TryDeleteExact(
+                        context,
+                        tempName,
+                        tempHandle,
+                        tempIdentity.Value,
+                        tempMarker);
+                }
             }
-            tempHandle?.Dispose();
-            if (leaseIdentity is not null)
+            catch
             {
-                TryDeleteExact(context, leaseName, leaseHandle, leaseIdentity.Value);
+                tempClean = false;
             }
-            leaseHandle.Dispose();
+            finally
+            {
+                tempHandle?.Dispose();
+            }
+
+            try
+            {
+                if (tempClean && leaseLocked && leaseIdentity is not null)
+                {
+                    TryDeleteExact(
+                        context,
+                        leaseName,
+                        leaseHandle,
+                        leaseIdentity.Value,
+                        leaseMarker);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                leaseHandle.Dispose();
+            }
             throw;
         }
     }
@@ -378,6 +459,10 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         var leaseStatus = InspectName(context, leaseName);
         if (leaseStatus is not { Kind: NameKind.Regular, Identity: { } observedLeaseIdentity })
+        {
+            return false;
+        }
+        if (!IsPrivateFileMetadata(leaseStatus))
         {
             return false;
         }
@@ -400,6 +485,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             return false;
         }
+        testHook?.Invoke("after-stale-lease-lock");
 
         var afterLockBytes = ReadExactBytes(lease, MaximumLeaseBytes);
         if (!afterLockBytes.AsSpan().SequenceEqual(beforeLockBytes)
@@ -410,17 +496,29 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
         RevalidateContext(context);
         ValidateNamedHandle(context, leaseName, lease, leaseIdentity);
+        ValidateObjectMarker(lease, record.LeaseMarkerBytes);
 
         var checkpoint = ReadEntry(context, checkpointName, CancellationToken.None);
         var tempStatus = InspectName(context, record.TempName);
         if (checkpoint.IsExact(record.IntendedRevision, record.IntendedSha256))
         {
+            var markedCheckpoint = ReadEntry(
+                context,
+                checkpointName,
+                CancellationToken.None,
+                record.TempMarkerBytes);
             if (tempStatus.Kind != NameKind.Absent
-                || checkpoint.Identity != record.TempIdentity)
+                || !markedCheckpoint.IsExact(record.IntendedRevision, record.IntendedSha256)
+                || markedCheckpoint.Identity != record.TempIdentity)
             {
                 return false;
             }
-            return TryDeleteExact(context, leaseName, lease, leaseIdentity);
+            return TryDeleteExact(
+                context,
+                leaseName,
+                lease,
+                leaseIdentity,
+                record.LeaseMarkerBytes);
         }
 
         var expectedState = record.Operation == OperationKind.Create
@@ -433,10 +531,19 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
         if (tempStatus.Kind == NameKind.Regular)
         {
+            if (!IsPrivateFileMetadata(tempStatus))
+            {
+                return false;
+            }
             using var temp = OpenObserved(context, record.TempName, tempStatus.Identity!.Value, write: true);
             var currentTempIdentity = ValidatePrivateFile(temp);
             if (currentTempIdentity != record.TempIdentity
-                || !TryDeleteExact(context, record.TempName, temp, currentTempIdentity))
+                || !TryDeleteExact(
+                    context,
+                    record.TempName,
+                    temp,
+                    currentTempIdentity,
+                    record.TempMarkerBytes))
             {
                 return false;
             }
@@ -448,7 +555,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
         RevalidateContext(context);
         ValidateNamedHandle(context, leaseName, lease, leaseIdentity);
-        return TryDeleteExact(context, leaseName, lease, leaseIdentity);
+        ValidateObjectMarker(lease, record.LeaseMarkerBytes);
+        return TryDeleteExact(
+            context,
+            leaseName,
+            lease,
+            leaseIdentity,
+            record.LeaseMarkerBytes);
     }
 
     private static CampaignCheckpointWriteKind ClassifyConditional(
@@ -482,14 +595,25 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         try
         {
             testHook?.Invoke("before-temp-cleanup");
-            if (!TryDeleteExact(context, active.Record.TempName, active.TempHandle, active.Record.TempIdentity))
+            if (!TryDeleteExact(
+                context,
+                active.Record.TempName,
+                active.TempHandle,
+                active.Record.TempIdentity,
+                active.Record.TempMarkerBytes))
             {
                 return false;
             }
             RevalidateContext(context);
             ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+            ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
             testHook?.Invoke("before-lease-cleanup");
-            return TryDeleteExact(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+            return TryDeleteExact(
+                context,
+                leaseName,
+                active.LeaseHandle,
+                active.LeaseIdentity,
+                active.Record.LeaseMarkerBytes);
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
@@ -511,8 +635,14 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
             RevalidateContext(context);
             ValidateNamedHandle(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+            ValidateObjectMarker(active.LeaseHandle, active.Record.LeaseMarkerBytes);
             testHook?.Invoke("before-lease-cleanup");
-            return TryDeleteExact(context, leaseName, active.LeaseHandle, active.LeaseIdentity);
+            return TryDeleteExact(
+                context,
+                leaseName,
+                active.LeaseHandle,
+                active.LeaseIdentity,
+                active.Record.LeaseMarkerBytes);
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
@@ -529,7 +659,11 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         try
         {
-            var readback = ReadEntry(context, checkpointName, CancellationToken.None);
+            var readback = ReadEntry(
+                context,
+                checkpointName,
+                CancellationToken.None,
+                active.Record.TempMarkerBytes);
             return readback.IsExact(intendedBytes, intendedRevision, intendedSha256)
                 && CleanupAfterPublication(context, active, readback);
         }
@@ -542,7 +676,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private ReadObservation ReadEntry(
         DirectoryContext context,
         string name,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? requiredMarker = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         RevalidateContext(context);
@@ -555,6 +690,10 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             return ReadObservation.Invalid();
         }
+        if (!IsPrivateFileMetadata(status))
+        {
+            return ReadObservation.Invalid();
+        }
 
         try
         {
@@ -563,6 +702,10 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (identity != observedIdentity)
             {
                 return ReadObservation.Unreadable();
+            }
+            if (requiredMarker is not null)
+            {
+                ValidateObjectMarker(handle, requiredMarker);
             }
             var stat = ReadStat(handle);
             if (stat.Size is < 0 or > CampaignStateContract.MaximumArtifactUtf8Bytes)
@@ -634,8 +777,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         try
         {
-            using var repository = OpenDirectoryChain(repositoryRoot);
-            var state = OpenDirectoryChain(stateDirectoryPath);
+            using var repository = OpenDirectoryChain(repositoryRoot, requirePrivateFinal: false);
+            var state = OpenDirectoryChain(stateDirectoryPath, requirePrivateFinal: true);
             try
             {
                 RevalidateDirectoryBinding(repository);
@@ -663,7 +806,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
     }
 
-    private static DirectoryContext OpenDirectoryChain(string path)
+    private static DirectoryContext OpenDirectoryChain(string path, bool requirePrivateFinal)
     {
         var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         var rootPath = Path.GetPathRoot(fullPath) ?? throw UnreadableFault();
@@ -689,12 +832,19 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 throw InvalidFault();
             }
-            foreach (var segment in segments)
+            for (var index = 0; index < segments.Length; index++)
             {
+                var segment = segments[index];
                 var observed = InspectAt(current, segment);
                 if (observed.Kind != NameKind.Directory)
                 {
                     throw observed.Kind == NameKind.Absent ? UnreadableFault() : InvalidFault();
+                }
+                if (requirePrivateFinal
+                    && index == segments.Length - 1
+                    && !IsPrivateDirectoryMetadata(observed))
+                {
+                    throw InvalidFault();
                 }
                 var descriptor = OpenAt(
                     FileDescriptor(current),
@@ -771,9 +921,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         var identity = Identity(stat, ReadMountIdentityForName(directory, name));
         return (stat.Mode & FileTypeMask) switch
         {
-            RegularFile => NameStatus.Regular(identity),
-            DirectoryFile => NameStatus.Directory(identity),
-            _ => NameStatus.Other(identity),
+            RegularFile => NameStatus.Regular(identity, stat),
+            DirectoryFile => NameStatus.Directory(identity, stat),
+            _ => NameStatus.Other(identity, stat),
         };
     }
 
@@ -835,6 +985,17 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         return Identity(stat, ReadMountIdentity(handle));
     }
 
+    private static bool IsPrivateDirectoryMetadata(NameStatus status) =>
+        status.Kind == NameKind.Directory
+        && (status.Mode & 0xFFF) == OwnerDirectoryMode
+        && status.UserId == GetEffectiveUserId();
+
+    private static bool IsPrivateFileMetadata(NameStatus status) =>
+        status.Kind == NameKind.Regular
+        && (status.Mode & 0xFFF) == OwnerFileMode
+        && status.UserId == GetEffectiveUserId()
+        && status.LinkCount == 1;
+
     private static void ValidateNamedHandle(
         DirectoryContext context,
         string name,
@@ -853,10 +1014,15 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         DirectoryContext context,
         string name,
         SafeFileHandle handle,
-        FileIdentity expected)
+        FileIdentity expected,
+        byte[]? requiredMarker = null)
     {
         RevalidateContext(context);
         ValidateNamedHandle(context, name, handle, expected);
+        if (requiredMarker is not null)
+        {
+            ValidateObjectMarker(handle, requiredMarker);
+        }
         return UnlinkAt(FileDescriptor(context.DirectoryHandle), name, 0) == 0;
     }
 
@@ -871,7 +1037,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static void RequireNoAcl(SafeFileHandle handle, string name)
     {
-        var result = GetExtendedAttribute(FileDescriptor(handle), name, IntPtr.Zero, 0);
+        var result = GetExtendedAttribute(FileDescriptor(handle), name, null, 0);
         if (result >= 0)
         {
             throw InvalidFault();
@@ -1011,6 +1177,46 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         value.Length == 32
         && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    private static byte[] LeaseMarker(string token) => Encoding.ASCII.GetBytes(
+        $"{ObjectMarkerDomain}:lease:{token}");
+
+    private static byte[] TempMarker(string token, long revision) => Encoding.ASCII.GetBytes(
+        $"{ObjectMarkerDomain}:temp:{revision.ToString(CultureInfo.InvariantCulture)}:{token}");
+
+    private static void CreateObjectMarker(SafeFileHandle handle, byte[] marker)
+    {
+        if (marker.Length is 0 or > MaximumMarkerBytes
+            || SetExtendedAttribute(
+                FileDescriptor(handle),
+                ObjectMarkerName,
+                marker,
+                checked((nuint)marker.Length),
+                ExtendedAttributeCreate) != 0)
+        {
+            throw UnreadableFault();
+        }
+        ValidateObjectMarker(handle, marker);
+    }
+
+    private static void ValidateObjectMarker(SafeFileHandle handle, byte[] expected)
+    {
+        var size = GetExtendedAttribute(FileDescriptor(handle), ObjectMarkerName, null, 0);
+        if (size != expected.Length || size is <= 0 or > MaximumMarkerBytes)
+        {
+            throw InvalidFault();
+        }
+        var actual = new byte[checked((int)size)];
+        var read = GetExtendedAttribute(
+            FileDescriptor(handle),
+            ObjectMarkerName,
+            actual,
+            checked((nuint)actual.Length));
+        if (read != actual.Length || !actual.AsSpan().SequenceEqual(expected))
+        {
+            throw InvalidFault();
+        }
+    }
+
     private static bool IsSupportedPlatform() =>
         OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64;
 
@@ -1119,12 +1325,20 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private readonly record struct FileIdentity(ulong Device, ulong Inode, ulong Mount);
 
-    private readonly record struct NameStatus(NameKind Kind, FileIdentity? Identity)
+    private readonly record struct NameStatus(
+        NameKind Kind,
+        FileIdentity? Identity,
+        uint Mode,
+        uint UserId,
+        ulong LinkCount)
     {
-        internal static NameStatus Absent() => new(NameKind.Absent, null);
-        internal static NameStatus Regular(FileIdentity identity) => new(NameKind.Regular, identity);
-        internal static NameStatus Directory(FileIdentity identity) => new(NameKind.Directory, identity);
-        internal static NameStatus Other(FileIdentity identity) => new(NameKind.Other, identity);
+        internal static NameStatus Absent() => new(NameKind.Absent, null, 0, 0, 0);
+        internal static NameStatus Regular(FileIdentity identity, LinuxStat stat) =>
+            new(NameKind.Regular, identity, stat.Mode, stat.UserId, stat.LinkCount);
+        internal static NameStatus Directory(FileIdentity identity, LinuxStat stat) =>
+            new(NameKind.Directory, identity, stat.Mode, stat.UserId, stat.LinkCount);
+        internal static NameStatus Other(FileIdentity identity, LinuxStat stat) =>
+            new(NameKind.Other, identity, stat.Mode, stat.UserId, stat.LinkCount);
     }
 
     private sealed record ReadObservation(
@@ -1167,6 +1381,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         string TempName,
         FileIdentity TempIdentity)
     {
+        internal byte[] LeaseMarkerBytes => LeaseMarker(Token);
+        internal byte[] TempMarkerBytes => TempMarker(Token, IntendedRevision);
+
         internal byte[] Encode() => Encoding.ASCII.GetBytes(string.Join('\n',
             LeaseVersion,
             Operation == OperationKind.Create ? "operation=create" : "operation=replace",
@@ -1328,6 +1545,14 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private static extern nint GetExtendedAttribute(
         int fileDescriptor,
         string name,
-        IntPtr value,
+        [Out] byte[]? value,
         nuint size);
+
+    [DllImport("libc", EntryPoint = "fsetxattr", SetLastError = true)]
+    private static extern int SetExtendedAttribute(
+        int fileDescriptor,
+        string name,
+        [In] byte[] value,
+        nuint size,
+        int flags);
 }
