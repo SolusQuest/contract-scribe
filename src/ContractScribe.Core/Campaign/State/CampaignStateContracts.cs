@@ -10,6 +10,8 @@ public static class CampaignStateContract
     public const int MaximumWorkItems = 4_096;
     public const int MaximumActivePatchBlocks = 512;
     public const int MaximumChangedFiles = 512;
+    public const int MaximumKnownCompletedOperations = 513;
+    public const int MaximumKnownPatchCompletedOperations = 512;
     public const int MaximumEvidenceReferences = 4_096;
     public const int MaximumEvidenceReferencesPerBlock = 64;
     public const int MaximumDiagnostics = 128;
@@ -66,6 +68,7 @@ public enum CampaignWorkOutcomeStage
 {
     Planning,
     Scribe,
+    Patch,
 }
 
 public enum CampaignWorkOutcomeCode
@@ -81,6 +84,8 @@ public enum CampaignWorkOutcomeCode
     CancelledByShutdown,
     Timeout,
     BudgetExhausted,
+    CompletedOverBound,
+    PatchRejected,
 }
 
 public enum CampaignProviderFinalDisposition
@@ -92,6 +97,7 @@ public enum CampaignProviderFinalDisposition
 public enum CampaignCumulativeOutcomeKind
 {
     Accepted,
+    OverBound,
     Rejected,
     Stale,
     HostFailure,
@@ -172,6 +178,7 @@ public sealed record CampaignStateScribeLimits(
 public sealed record CampaignStateConfiguredCeilings(
     CampaignStateCampaignBudget CampaignBudget,
     CampaignStateScribeLimits ScribeRunLimits,
+    CampaignScribeExecutionAuthority ScribeExecutionAuthority,
     CampaignStyleConfigurationAuthority StyleConfigurationAuthority,
     string CampaignConfigurationCommitmentSha256);
 
@@ -217,18 +224,88 @@ public sealed record CampaignTrustedProposal(
     string ToolPolicyId,
     string ProposalCommitmentSha256);
 
-public sealed record CampaignWorkClosedOutcome(
-    CampaignWorkOutcomeStage Stage,
-    CampaignWorkOutcomeCode Code,
-    CampaignProviderFinalDisposition? ProviderDisposition,
-    string? ScribeRequestSha256,
-    DocumentationScribeAttemptId? AttemptId);
+public sealed record CampaignWorkClosedOutcome
+{
+    internal CampaignWorkClosedOutcome(
+        CampaignWorkOutcomeStage stage,
+        CampaignWorkOutcomeCode code,
+        CampaignProviderFinalDisposition? providerDisposition,
+        string? scribeRequestSha256,
+        DocumentationScribeAttemptId? attemptId,
+        string? patchRequestSha256,
+        string? patchResultCommitmentSha256,
+        string? scribeResultCommitmentSha256,
+        string boundWorkItemKey)
+    {
+        Stage = stage;
+        Code = code;
+        ProviderDisposition = providerDisposition;
+        ScribeRequestSha256 = scribeRequestSha256;
+        AttemptId = attemptId;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        ScribeResultCommitmentSha256 = scribeResultCommitmentSha256;
+        BoundWorkItemKey = boundWorkItemKey;
+    }
 
-public sealed record CampaignScribeExecutionAuthority(
-    string ProviderConfigurationId,
-    string ModelConfigurationId,
-    string ScribeProtocolId,
-    string ToolPolicyId);
+    public CampaignWorkOutcomeStage Stage { get; }
+    public CampaignWorkOutcomeCode Code { get; }
+    public CampaignProviderFinalDisposition? ProviderDisposition { get; }
+    public string? ScribeRequestSha256 { get; }
+    public DocumentationScribeAttemptId? AttemptId { get; }
+    public string? PatchRequestSha256 { get; }
+    public string? PatchResultCommitmentSha256 { get; }
+    public string? ScribeResultCommitmentSha256 { get; }
+    internal string BoundWorkItemKey { get; }
+}
+
+public sealed record CampaignScribeExecutionAuthority
+{
+    internal CampaignScribeExecutionAuthority(
+        string providerConfigurationId,
+        string modelConfigurationId,
+        string scribeProtocolId,
+        string toolPolicyId,
+        CampaignStateProductRevision agentProtocolAuthority,
+        CampaignStateProductRevision toolPolicyAndRegistryAuthority,
+        CampaignStateProductRevision providerModelRequestProfileAuthority,
+        string bindingCommitmentSha256)
+    {
+        ProviderConfigurationId = providerConfigurationId;
+        ModelConfigurationId = modelConfigurationId;
+        ScribeProtocolId = scribeProtocolId;
+        ToolPolicyId = toolPolicyId;
+        AgentProtocolAuthority = agentProtocolAuthority;
+        ToolPolicyAndRegistryAuthority = toolPolicyAndRegistryAuthority;
+        ProviderModelRequestProfileAuthority = providerModelRequestProfileAuthority;
+        BindingCommitmentSha256 = bindingCommitmentSha256;
+    }
+
+    public string ProviderConfigurationId { get; }
+    public string ModelConfigurationId { get; }
+    public string ScribeProtocolId { get; }
+    public string ToolPolicyId { get; }
+    public CampaignStateProductRevision AgentProtocolAuthority { get; }
+    public CampaignStateProductRevision ToolPolicyAndRegistryAuthority { get; }
+    public CampaignStateProductRevision ProviderModelRequestProfileAuthority { get; }
+    public string BindingCommitmentSha256 { get; }
+}
+
+/// <summary>
+/// Nonserialized proof that the current process rederived the persisted Scribe
+/// execution projection from the current canonical execution inputs.
+/// </summary>
+public sealed class CampaignScribeExecutionCapability
+{
+    internal CampaignScribeExecutionCapability(CampaignScribeExecutionAuthority projection) =>
+        Projection = projection;
+
+    public CampaignScribeExecutionAuthority PersistedProjection => Projection;
+
+    internal CampaignScribeExecutionAuthority Projection { get; }
+
+    public override string ToString() => nameof(CampaignScribeExecutionCapability);
+}
 
 public sealed record CampaignWorkItemState(
     string WorkItemKey,
@@ -319,18 +396,44 @@ public sealed record CampaignCumulativeOutcome
         CampaignCumulativeOutcomeKind kind,
         string patchRequestSha256,
         string? patchResultCommitmentSha256,
+        string? projectionCommitmentSha256,
         long completedFromCheckpointRevision)
     {
         Kind = kind;
         PatchRequestSha256 = patchRequestSha256;
         PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        ProjectionCommitmentSha256 = projectionCommitmentSha256;
         CompletedFromCheckpointRevision = completedFromCheckpointRevision;
     }
 
     public CampaignCumulativeOutcomeKind Kind { get; internal init; }
     public string PatchRequestSha256 { get; internal init; }
     public string? PatchResultCommitmentSha256 { get; internal init; }
+    public string? ProjectionCommitmentSha256 { get; internal init; }
     public long CompletedFromCheckpointRevision { get; internal init; }
+}
+
+public sealed record CampaignKnownCompletedOperation
+{
+    internal CampaignKnownCompletedOperation(
+        string kind,
+        string requestCommitmentSha256,
+        string projectionCommitmentSha256,
+        string resultCommitmentSha256,
+        string bindingCommitmentSha256)
+    {
+        Kind = kind;
+        RequestCommitmentSha256 = requestCommitmentSha256;
+        ProjectionCommitmentSha256 = projectionCommitmentSha256;
+        ResultCommitmentSha256 = resultCommitmentSha256;
+        BindingCommitmentSha256 = bindingCommitmentSha256;
+    }
+
+    public string Kind { get; }
+    public string RequestCommitmentSha256 { get; }
+    public string ProjectionCommitmentSha256 { get; }
+    public string ResultCommitmentSha256 { get; }
+    public string BindingCommitmentSha256 { get; }
 }
 
 public sealed record CampaignPatchCompletion
@@ -345,6 +448,51 @@ public sealed record CampaignPatchCompletion
 
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome CumulativeOutcome { get; }
+}
+
+public enum CampaignPatchRejectionDecisionKind
+{
+    Removable,
+    NonRemovable,
+}
+
+public sealed class CampaignPatchRejectionDecision
+{
+    internal CampaignPatchRejectionDecision(
+        CampaignPatchRejectionDecisionKind kind,
+        CampaignPatchRejectionReduction? reduction)
+    {
+        Kind = kind;
+        Reduction = reduction;
+    }
+
+    public CampaignPatchRejectionDecisionKind Kind { get; }
+    public CampaignPatchRejectionReduction? Reduction { get; }
+}
+
+public sealed class CampaignPatchRejectionReduction
+{
+    internal CampaignPatchRejectionReduction(
+        CampaignCheckpointArtifact predecessor,
+        string workItemKey,
+        string patchRequestSha256,
+        string patchResultCommitmentSha256,
+        CampaignWorkClosedOutcome closedOutcome)
+    {
+        Predecessor = predecessor;
+        WorkItemKey = workItemKey;
+        PatchRequestSha256 = patchRequestSha256;
+        PatchResultCommitmentSha256 = patchResultCommitmentSha256;
+        ClosedOutcome = closedOutcome;
+    }
+
+    internal CampaignCheckpointArtifact Predecessor { get; }
+    internal string WorkItemKey { get; }
+    internal string PatchRequestSha256 { get; }
+    internal string PatchResultCommitmentSha256 { get; }
+    internal CampaignWorkClosedOutcome ClosedOutcome { get; }
+
+    public override string ToString() => nameof(CampaignPatchRejectionReduction);
 }
 
 public sealed record CampaignTerminalOutcome(
@@ -366,6 +514,11 @@ public sealed record CampaignPredecessorCandidateSummary(
     string? PatchRequestSha256,
     string? PatchResultCommitmentSha256);
 
+public sealed record CampaignPredecessorCompletedOperationSummary(
+    string Kind,
+    string ProjectionCommitmentSha256,
+    string ResultCommitmentSha256);
+
 public sealed record CampaignPredecessorSummary(
     CampaignStateProductRevision ProductRevision,
     CampaignStateSnapshotAuthority Snapshot,
@@ -374,7 +527,8 @@ public sealed record CampaignPredecessorSummary(
     string FinalCheckpointSha256,
     CampaignTerminalKind TerminalKind,
     CampaignPredecessorReservationSummary? Reservation,
-    CampaignPredecessorCandidateSummary Candidate);
+    CampaignPredecessorCandidateSummary Candidate,
+    ImmutableArray<CampaignPredecessorCompletedOperationSummary> CompletedOperations);
 
 public sealed record CampaignCheckpointState
 {
@@ -389,6 +543,7 @@ public sealed record CampaignCheckpointState
         CampaignActiveReservation? activeReservation,
         CampaignCandidateObservation? candidateObservation,
         CampaignCumulativeOutcome? cumulativeOutcome,
+        ImmutableArray<CampaignKnownCompletedOperation> knownCompletedOperations,
         CampaignTerminalOutcome? terminalOutcome,
         CampaignPredecessorSummary? predecessor)
     {
@@ -402,6 +557,7 @@ public sealed record CampaignCheckpointState
         ActiveReservation = activeReservation;
         CandidateObservation = candidateObservation;
         CumulativeOutcome = cumulativeOutcome;
+        KnownCompletedOperations = knownCompletedOperations;
         TerminalOutcome = terminalOutcome;
         Predecessor = predecessor;
     }
@@ -417,6 +573,7 @@ public sealed record CampaignCheckpointState
     public CampaignActiveReservation? ActiveReservation { get; }
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome? CumulativeOutcome { get; }
+    public ImmutableArray<CampaignKnownCompletedOperation> KnownCompletedOperations { get; }
     public CampaignTerminalOutcome? TerminalOutcome { get; }
     public CampaignPredecessorSummary? Predecessor { get; }
 }

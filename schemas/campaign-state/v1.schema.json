@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -17,6 +17,7 @@
     "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
     "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
     "cumulativeOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }] },
+    "knownCompletedOperations": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/knownCompletedOperation" } },
     "terminalOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminal" }] },
     "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
   },
@@ -85,8 +86,22 @@
       }
     },
     "ceilings": {
-      "type": "object", "additionalProperties": false, "required": ["campaignBudget", "scribeRunLimits", "styleConfigurationAuthority", "campaignConfigurationCommitmentSha256"],
-      "properties": { "campaignBudget": { "$ref": "#/$defs/campaignBudget" }, "scribeRunLimits": { "$ref": "#/$defs/scribeLimits" }, "styleConfigurationAuthority": { "$ref": "#/$defs/revision" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+      "type": "object", "additionalProperties": false, "required": ["campaignBudget", "scribeRunLimits", "scribeExecutionAuthority", "styleConfigurationAuthority", "campaignConfigurationCommitmentSha256"],
+      "properties": { "campaignBudget": { "$ref": "#/$defs/campaignBudget" }, "scribeRunLimits": { "$ref": "#/$defs/scribeLimits" }, "scribeExecutionAuthority": { "$ref": "#/$defs/scribeExecutionAuthority" }, "styleConfigurationAuthority": { "$ref": "#/$defs/revision" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "scribeExecutionAuthority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["providerConfigurationId", "modelConfigurationId", "scribeProtocolId", "toolPolicyId", "agentProtocolAuthority", "toolPolicyAndRegistryAuthority", "providerModelRequestProfileAuthority", "bindingCommitmentSha256"],
+      "properties": {
+        "providerConfigurationId": { "$ref": "#/$defs/scribeId" },
+        "modelConfigurationId": { "$ref": "#/$defs/scribeId" },
+        "scribeProtocolId": { "$ref": "#/$defs/scribeId" },
+        "toolPolicyId": { "$ref": "#/$defs/scribeId" },
+        "agentProtocolAuthority": { "$ref": "#/$defs/revision" },
+        "toolPolicyAndRegistryAuthority": { "$ref": "#/$defs/revision" },
+        "providerModelRequestProfileAuthority": { "$ref": "#/$defs/revision" },
+        "bindingCommitmentSha256": { "$ref": "#/$defs/sha256" }
+      }
     },
     "charge": {
       "type": "object", "additionalProperties": false, "required": ["observed", "conservativeUnobserved", "totalCharged"],
@@ -191,9 +206,15 @@
       ]
     },
     "closed": {
-      "type": "object", "additionalProperties": false, "required": ["stage", "code", "providerDisposition", "scribeRequestSha256", "attemptId"],
-      "properties": { "stage": { "enum": ["planning", "scribe"] }, "code": { "enum": ["planning-terminal", "insufficient-evidence", "unsupported-domain", "provider-failure", "tool-protocol-failure", "validation-failure", "internal-failure", "cancelled-by-caller", "cancelled-by-shutdown", "timeout", "budget-exhausted"] }, "providerDisposition": { "oneOf": [{ "type": "null" }, { "enum": ["retryable", "terminal"] }] }, "scribeRequestSha256": { "$ref": "#/$defs/nullableSha" }, "attemptId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/scribeAttemptId" }] } },
-      "allOf": [{ "if": { "properties": { "code": { "const": "provider-failure" } }, "required": ["code"] }, "then": { "properties": { "providerDisposition": { "enum": ["retryable", "terminal"] } } }, "else": { "properties": { "providerDisposition": { "type": "null" } } } }]
+      "type": "object", "additionalProperties": false, "required": ["stage", "code", "providerDisposition", "scribeRequestSha256", "scribeResultCommitmentSha256", "attemptId", "patchRequestSha256", "patchResultCommitmentSha256"],
+      "properties": { "stage": { "enum": ["planning", "scribe", "patch"] }, "code": { "enum": ["planning-terminal", "insufficient-evidence", "unsupported-domain", "provider-failure", "tool-protocol-failure", "validation-failure", "internal-failure", "cancelled-by-caller", "cancelled-by-shutdown", "timeout", "budget-exhausted", "completed-over-bound", "patch-rejected"] }, "providerDisposition": { "oneOf": [{ "type": "null" }, { "enum": ["retryable", "terminal"] }] }, "scribeRequestSha256": { "$ref": "#/$defs/nullableSha" }, "scribeResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "attemptId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/scribeAttemptId" }] }, "patchRequestSha256": { "$ref": "#/$defs/nullableSha" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" } },
+      "allOf": [
+        { "if": { "properties": { "stage": { "const": "planning" } }, "required": ["stage"] }, "then": { "properties": { "code": { "const": "planning-terminal" }, "providerDisposition": { "type": "null" }, "scribeRequestSha256": { "type": "null" }, "scribeResultCommitmentSha256": { "type": "null" }, "attemptId": { "type": "null" }, "patchRequestSha256": { "type": "null" }, "patchResultCommitmentSha256": { "type": "null" } } } },
+        { "if": { "properties": { "stage": { "const": "scribe" } }, "required": ["stage"] }, "then": { "properties": { "code": { "enum": ["insufficient-evidence", "unsupported-domain", "provider-failure", "tool-protocol-failure", "validation-failure", "internal-failure", "cancelled-by-caller", "cancelled-by-shutdown", "timeout", "budget-exhausted", "completed-over-bound"] }, "scribeRequestSha256": { "$ref": "#/$defs/sha256" }, "attemptId": { "$ref": "#/$defs/scribeAttemptId" }, "patchRequestSha256": { "type": "null" }, "patchResultCommitmentSha256": { "type": "null" } } } },
+        { "if": { "properties": { "code": { "const": "completed-over-bound" } }, "required": ["code"] }, "then": { "properties": { "scribeResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } }, "else": { "properties": { "scribeResultCommitmentSha256": { "type": "null" } } } },
+        { "if": { "properties": { "stage": { "const": "patch" } }, "required": ["stage"] }, "then": { "properties": { "code": { "const": "patch-rejected" }, "providerDisposition": { "type": "null" }, "scribeRequestSha256": { "type": "null" }, "scribeResultCommitmentSha256": { "type": "null" }, "attemptId": { "type": "null" }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } } },
+        { "if": { "properties": { "code": { "const": "provider-failure" } }, "required": ["code"] }, "then": { "properties": { "providerDisposition": { "enum": ["retryable", "terminal"] } } }, "else": { "properties": { "providerDisposition": { "type": "null" } } } }
+      ]
     },
     "providerReservation": {
       "type": "object", "additionalProperties": false, "required": ["kind", "workItemKey", "scribeRequestSha256", "attemptId", "exposure"],
@@ -212,20 +233,25 @@
       "properties": { "acceptedWorkItemKeys": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" } }, "acceptedProjectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "changedFiles": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/changedFile" } }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } }
     },
     "cumulative": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "patchResultCommitmentSha256", "completedFromCheckpointRevision"],
-      "properties": { "kind": { "enum": ["accepted", "rejected", "stale", "host-failure", "cancelled", "timeout"] }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "completedFromCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" } },
+      "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "patchResultCommitmentSha256", "projectionCommitmentSha256", "completedFromCheckpointRevision"],
+      "properties": { "kind": { "enum": ["accepted", "over-bound", "rejected", "stale", "host-failure", "cancelled", "timeout"] }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/nullableSha" }, "projectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "completedFromCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" } },
       "allOf": [
-        { "if": { "properties": { "kind": { "enum": ["accepted", "rejected", "stale"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } } },
+        { "if": { "properties": { "kind": { "enum": ["accepted", "over-bound", "rejected", "stale"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } } },
         { "if": { "properties": { "kind": { "enum": ["host-failure", "cancelled", "timeout"] } } }, "then": { "properties": { "patchResultCommitmentSha256": { "type": "null" } } } }
       ]
+    },
+    "knownCompletedOperation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "requestCommitmentSha256", "projectionCommitmentSha256", "resultCommitmentSha256", "bindingCommitmentSha256"],
+      "properties": { "kind": { "const": "patch-over-bound" }, "requestCommitmentSha256": { "$ref": "#/$defs/sha256" }, "projectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "resultCommitmentSha256": { "$ref": "#/$defs/sha256" }, "bindingCommitmentSha256": { "$ref": "#/$defs/sha256" } }
     },
     "terminal": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
       "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "budget", "caller", "deadline", "host", "new-snapshot"] } }
     },
     "predecessor": {
-      "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate"],
-      "properties": { "productRevision": { "$ref": "#/$defs/revision" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" }, "finalCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "finalCheckpointSha256": { "$ref": "#/$defs/sha256" }, "terminalKind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorReservation" }] }, "candidate": { "$ref": "#/$defs/predecessorCandidate" } }
+      "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate", "completedOperations"],
+      "properties": { "productRevision": { "$ref": "#/$defs/revision" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" }, "finalCheckpointRevision": { "$ref": "#/$defs/nonNegativeInt64" }, "finalCheckpointSha256": { "$ref": "#/$defs/sha256" }, "terminalKind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessorReservation" }] }, "candidate": { "$ref": "#/$defs/predecessorCandidate" }, "completedOperations": { "type": "array", "maxItems": 513, "items": { "$ref": "#/$defs/predecessorCompletedOperation" } } }
     },
     "predecessorReservation": {
       "type": "object", "additionalProperties": false, "required": ["kind", "correlationSha256", "conservativeCharge"],
@@ -237,6 +263,11 @@
       "allOf": [
         { "if": { "properties": { "acceptedCount": { "const": 0 } }, "required": ["acceptedCount"] }, "then": { "properties": { "distinctFileCount": { "const": 0 }, "originalDocumentationByteCount": { "const": 0 }, "candidateDocumentationByteCount": { "const": 0 }, "originalDocumentationLineCount": { "const": 0 }, "candidateDocumentationLineCount": { "const": 0 }, "patchRequestSha256": { "type": "null" }, "patchResultCommitmentSha256": { "type": "null" } } }, "else": { "properties": { "distinctFileCount": { "type": "integer", "minimum": 1, "maximum": 512 }, "candidateDocumentationByteCount": { "type": "integer", "minimum": 1, "maximum": 1000000000000000 }, "candidateDocumentationLineCount": { "type": "integer", "minimum": 1, "maximum": 1000000000000000 }, "patchRequestSha256": { "$ref": "#/$defs/sha256" }, "patchResultCommitmentSha256": { "$ref": "#/$defs/sha256" } } } }
       ]
+    },
+    "predecessorCompletedOperation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "projectionCommitmentSha256", "resultCommitmentSha256"],
+      "properties": { "kind": { "enum": ["scribe-over-bound", "patch-over-bound"] }, "projectionCommitmentSha256": { "$ref": "#/$defs/sha256" }, "resultCommitmentSha256": { "$ref": "#/$defs/sha256" } }
     }
   }
 }

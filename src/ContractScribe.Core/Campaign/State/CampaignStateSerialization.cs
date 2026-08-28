@@ -178,6 +178,13 @@ public static class CampaignStateJson
         WriteCandidate(writer, state.CandidateObservation);
         writer.WritePropertyName("cumulativeOutcome");
         WriteCumulativeOutcome(writer, state.CumulativeOutcome);
+        writer.WritePropertyName("knownCompletedOperations");
+        writer.WriteStartArray();
+        foreach (var operation in state.KnownCompletedOperations)
+        {
+            WriteKnownCompletedOperation(writer, operation);
+        }
+        writer.WriteEndArray();
         writer.WritePropertyName("terminalOutcome");
         WriteTerminal(writer, state.TerminalOutcome);
         writer.WritePropertyName("predecessor");
@@ -255,6 +262,18 @@ public static class CampaignStateJson
         writer.WriteNumber("maximumOutputTokens", limits.MaximumOutputTokens);
         writer.WriteNumber("maximumCostMicrounits", limits.MaximumCostMicrounits);
         writer.WriteNumber("maximumElapsedMilliseconds", limits.MaximumElapsedMilliseconds);
+        writer.WriteEndObject();
+        var execution = ceilings.ScribeExecutionAuthority;
+        writer.WritePropertyName("scribeExecutionAuthority");
+        writer.WriteStartObject();
+        writer.WriteString("providerConfigurationId", execution.ProviderConfigurationId);
+        writer.WriteString("modelConfigurationId", execution.ModelConfigurationId);
+        writer.WriteString("scribeProtocolId", execution.ScribeProtocolId);
+        writer.WriteString("toolPolicyId", execution.ToolPolicyId);
+        WriteProduct(writer, "agentProtocolAuthority", execution.AgentProtocolAuthority);
+        WriteProduct(writer, "toolPolicyAndRegistryAuthority", execution.ToolPolicyAndRegistryAuthority);
+        WriteProduct(writer, "providerModelRequestProfileAuthority", execution.ProviderModelRequestProfileAuthority);
+        writer.WriteString("bindingCommitmentSha256", execution.BindingCommitmentSha256);
         writer.WriteEndObject();
         writer.WritePropertyName("styleConfigurationAuthority");
         writer.WriteStartObject();
@@ -610,7 +629,13 @@ public static class CampaignStateJson
         }
 
         writer.WriteStartObject();
-        writer.WriteString("stage", outcome.Stage == CampaignWorkOutcomeStage.Planning ? "planning" : "scribe");
+        writer.WriteString("stage", outcome.Stage switch
+        {
+            CampaignWorkOutcomeStage.Planning => "planning",
+            CampaignWorkOutcomeStage.Scribe => "scribe",
+            CampaignWorkOutcomeStage.Patch => "patch",
+            _ => throw Vocabulary(),
+        });
         writer.WriteString("code", WorkOutcomeCodeId(outcome.Code));
         WriteNullableString(
             writer,
@@ -623,10 +648,13 @@ public static class CampaignStateJson
                 _ => throw Vocabulary(),
             });
         WriteNullableString(writer, "scribeRequestSha256", outcome.ScribeRequestSha256);
+        WriteNullableString(writer, "scribeResultCommitmentSha256", outcome.ScribeResultCommitmentSha256);
         WriteNullableString(
             writer,
             "attemptId",
             outcome.AttemptId is { } attempt ? attempt.Value : null);
+        WriteNullableString(writer, "patchRequestSha256", outcome.PatchRequestSha256);
+        WriteNullableString(writer, "patchResultCommitmentSha256", outcome.PatchResultCommitmentSha256);
         writer.WriteEndObject();
     }
 
@@ -722,7 +750,21 @@ public static class CampaignStateJson
         writer.WriteString("kind", CumulativeOutcomeId(outcome.Kind));
         writer.WriteString("patchRequestSha256", outcome.PatchRequestSha256);
         WriteNullableString(writer, "patchResultCommitmentSha256", outcome.PatchResultCommitmentSha256);
+        WriteNullableString(writer, "projectionCommitmentSha256", outcome.ProjectionCommitmentSha256);
         writer.WriteNumber("completedFromCheckpointRevision", outcome.CompletedFromCheckpointRevision);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteKnownCompletedOperation(
+        Utf8JsonWriter writer,
+        CampaignKnownCompletedOperation operation)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("kind", operation.Kind);
+        writer.WriteString("requestCommitmentSha256", operation.RequestCommitmentSha256);
+        writer.WriteString("projectionCommitmentSha256", operation.ProjectionCommitmentSha256);
+        writer.WriteString("resultCommitmentSha256", operation.ResultCommitmentSha256);
+        writer.WriteString("bindingCommitmentSha256", operation.BindingCommitmentSha256);
         writer.WriteEndObject();
     }
 
@@ -797,6 +839,21 @@ public static class CampaignStateJson
             "patchResultCommitmentSha256",
             predecessor.Candidate.PatchResultCommitmentSha256);
         writer.WriteEndObject();
+        writer.WritePropertyName("completedOperations");
+        writer.WriteStartArray();
+        foreach (var operation in predecessor.CompletedOperations)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("kind", operation.Kind);
+            writer.WriteString(
+                "projectionCommitmentSha256",
+                operation.ProjectionCommitmentSha256);
+            writer.WriteString(
+                "resultCommitmentSha256",
+                operation.ResultCommitmentSha256);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
         writer.WriteEndObject();
     }
 
@@ -815,6 +872,7 @@ public static class CampaignStateJson
             "activeReservation",
             "candidateObservation",
             "cumulativeOutcome",
+            "knownCompletedOperations",
             "terminalOutcome",
             "predecessor");
         if (ReadInt32(root, "campaignStateVersion") != CampaignStateContract.Version)
@@ -835,6 +893,10 @@ public static class CampaignStateJson
             ParseReservation(root.GetProperty("activeReservation")),
             ParseCandidate(root.GetProperty("candidateObservation")),
             ParseCumulativeOutcome(root.GetProperty("cumulativeOutcome")),
+            ParseArray(
+                root.GetProperty("knownCompletedOperations"),
+                ParseKnownCompletedOperation,
+                CampaignStateContract.MaximumKnownPatchCompletedOperations),
             ParseTerminal(root.GetProperty("terminalOutcome")),
             ParsePredecessor(root.GetProperty("predecessor")));
     }
@@ -874,6 +936,7 @@ public static class CampaignStateJson
             element,
             "campaignBudget",
             "scribeRunLimits",
+            "scribeExecutionAuthority",
             "styleConfigurationAuthority",
             "campaignConfigurationCommitmentSha256");
         var budget = element.GetProperty("campaignBudget");
@@ -912,6 +975,17 @@ public static class CampaignStateJson
             "maximumElapsedMilliseconds");
         var style = element.GetProperty("styleConfigurationAuthority");
         ExpectObject(style, "id", "contentSha256");
+        var execution = element.GetProperty("scribeExecutionAuthority");
+        ExpectObject(
+            execution,
+            "providerConfigurationId",
+            "modelConfigurationId",
+            "scribeProtocolId",
+            "toolPolicyId",
+            "agentProtocolAuthority",
+            "toolPolicyAndRegistryAuthority",
+            "providerModelRequestProfileAuthority",
+            "bindingCommitmentSha256");
         return new CampaignStateConfiguredCeilings(
             new CampaignStateCampaignBudget(
                 ReadInt32(budget, "maximumBlocks"),
@@ -943,6 +1017,15 @@ public static class CampaignStateJson
                 ReadInt32(limits, "maximumOutputTokens"),
                 ReadInt64(limits, "maximumCostMicrounits"),
                 ReadInt32(limits, "maximumElapsedMilliseconds")),
+            new CampaignScribeExecutionAuthority(
+                ReadString(execution, "providerConfigurationId"),
+                ReadString(execution, "modelConfigurationId"),
+                ReadString(execution, "scribeProtocolId"),
+                ReadString(execution, "toolPolicyId"),
+                ParseProduct(execution.GetProperty("agentProtocolAuthority")),
+                ParseProduct(execution.GetProperty("toolPolicyAndRegistryAuthority")),
+                ParseProduct(execution.GetProperty("providerModelRequestProfileAuthority")),
+                ReadString(execution, "bindingCommitmentSha256")),
             new CampaignStyleConfigurationAuthority(
                 ReadString(style, "id"),
                 ReadString(style, "contentSha256")),
@@ -995,13 +1078,14 @@ public static class CampaignStateJson
             "status",
             "trustedProposal",
             "closedOutcome");
+        var workItemKey = ReadString(element, "workItemKey");
         return new CampaignWorkItemState(
-            ReadString(element, "workItemKey"),
+            workItemKey,
             ReadInt32(element, "outerAttemptCount"),
             ReadInt32(element, "candidateAttemptCount"),
             ParseWorkStatus(ReadString(element, "status")),
             ParseProposal(element.GetProperty("trustedProposal")),
-            ParseClosedOutcome(element.GetProperty("closedOutcome")));
+            ParseClosedOutcome(element.GetProperty("closedOutcome"), workItemKey));
     }
 
     private static CampaignTrustedProposal? ParseProposal(JsonElement element)
@@ -1291,14 +1375,25 @@ public static class CampaignStateJson
         return new SyntheticEvidenceLocator(ReadString(element, "fixtureId"));
     }
 
-    private static CampaignWorkClosedOutcome? ParseClosedOutcome(JsonElement element)
+    private static CampaignWorkClosedOutcome? ParseClosedOutcome(
+        JsonElement element,
+        string workItemKey)
     {
         if (element.ValueKind == JsonValueKind.Null)
         {
             return null;
         }
 
-        ExpectObject(element, "stage", "code", "providerDisposition", "scribeRequestSha256", "attemptId");
+        ExpectObject(
+            element,
+            "stage",
+            "code",
+            "providerDisposition",
+            "scribeRequestSha256",
+            "scribeResultCommitmentSha256",
+            "attemptId",
+            "patchRequestSha256",
+            "patchResultCommitmentSha256");
         var attemptText = ReadNullableString(element, "attemptId");
         DocumentationScribeAttemptId? attempt = null;
         if (attemptText is not null)
@@ -1316,6 +1411,7 @@ public static class CampaignStateJson
             {
                 "planning" => CampaignWorkOutcomeStage.Planning,
                 "scribe" => CampaignWorkOutcomeStage.Scribe,
+                "patch" => CampaignWorkOutcomeStage.Patch,
                 _ => throw Vocabulary(),
             },
             ParseWorkOutcomeCode(ReadString(element, "code")),
@@ -1327,7 +1423,11 @@ public static class CampaignStateJson
                 _ => throw Vocabulary(),
             },
             ReadNullableString(element, "scribeRequestSha256"),
-            attempt);
+            attempt,
+            ReadNullableString(element, "patchRequestSha256"),
+            ReadNullableString(element, "patchResultCommitmentSha256"),
+            ReadNullableString(element, "scribeResultCommitmentSha256"),
+            workItemKey);
     }
 
     private static CampaignActiveReservation? ParseReservation(JsonElement element)
@@ -1451,12 +1551,31 @@ public static class CampaignStateJson
             "kind",
             "patchRequestSha256",
             "patchResultCommitmentSha256",
+            "projectionCommitmentSha256",
             "completedFromCheckpointRevision");
         return new CampaignCumulativeOutcome(
             ParseCumulativeOutcomeKind(ReadString(element, "kind")),
             ReadString(element, "patchRequestSha256"),
             ReadNullableString(element, "patchResultCommitmentSha256"),
+            ReadNullableString(element, "projectionCommitmentSha256"),
             ReadInt64(element, "completedFromCheckpointRevision"));
+    }
+
+    private static CampaignKnownCompletedOperation ParseKnownCompletedOperation(JsonElement element)
+    {
+        ExpectObject(
+            element,
+            "kind",
+            "requestCommitmentSha256",
+            "projectionCommitmentSha256",
+            "resultCommitmentSha256",
+            "bindingCommitmentSha256");
+        return new CampaignKnownCompletedOperation(
+            ReadString(element, "kind"),
+            ReadString(element, "requestCommitmentSha256"),
+            ReadString(element, "projectionCommitmentSha256"),
+            ReadString(element, "resultCommitmentSha256"),
+            ReadString(element, "bindingCommitmentSha256"));
     }
 
     private static CampaignTerminalOutcome? ParseTerminal(JsonElement element)
@@ -1488,7 +1607,8 @@ public static class CampaignStateJson
             "finalCheckpointSha256",
             "terminalKind",
             "reservation",
-            "candidate");
+            "candidate",
+            "completedOperations");
         var reservationElement = element.GetProperty("reservation");
         CampaignPredecessorReservationSummary? reservation = null;
         if (reservationElement.ValueKind != JsonValueKind.Null)
@@ -1511,6 +1631,20 @@ public static class CampaignStateJson
             "candidateDocumentationLineCount",
             "patchRequestSha256",
             "patchResultCommitmentSha256");
+        var completedOperations = ParseArray(
+            element.GetProperty("completedOperations"),
+            item =>
+        {
+            ExpectObject(
+                item,
+                "kind",
+                "projectionCommitmentSha256",
+                "resultCommitmentSha256");
+            return new CampaignPredecessorCompletedOperationSummary(
+                ReadString(item, "kind"),
+                ReadString(item, "projectionCommitmentSha256"),
+                ReadString(item, "resultCommitmentSha256"));
+        }, CampaignStateContract.MaximumKnownCompletedOperations);
         return new CampaignPredecessorSummary(
             ParseProduct(element.GetProperty("productRevision")),
             ParseSnapshot(element.GetProperty("snapshot")),
@@ -1527,7 +1661,8 @@ public static class CampaignStateJson
                 ReadInt64(candidate, "originalDocumentationLineCount"),
                 ReadInt64(candidate, "candidateDocumentationLineCount"),
                 ReadNullableString(candidate, "patchRequestSha256"),
-                ReadNullableString(candidate, "patchResultCommitmentSha256")));
+                ReadNullableString(candidate, "patchResultCommitmentSha256")),
+            completedOperations);
     }
 
     private static bool HasDuplicateProperty(ReadOnlySpan<byte> json)
@@ -1875,6 +2010,8 @@ public static class CampaignStateJson
         CampaignWorkOutcomeCode.CancelledByShutdown => "cancelled-by-shutdown",
         CampaignWorkOutcomeCode.Timeout => "timeout",
         CampaignWorkOutcomeCode.BudgetExhausted => "budget-exhausted",
+        CampaignWorkOutcomeCode.CompletedOverBound => "completed-over-bound",
+        CampaignWorkOutcomeCode.PatchRejected => "patch-rejected",
         _ => throw Vocabulary(),
     };
 
@@ -1891,12 +2028,15 @@ public static class CampaignStateJson
         "cancelled-by-shutdown" => CampaignWorkOutcomeCode.CancelledByShutdown,
         "timeout" => CampaignWorkOutcomeCode.Timeout,
         "budget-exhausted" => CampaignWorkOutcomeCode.BudgetExhausted,
+        "completed-over-bound" => CampaignWorkOutcomeCode.CompletedOverBound,
+        "patch-rejected" => CampaignWorkOutcomeCode.PatchRejected,
         _ => throw Vocabulary(),
     };
 
     private static string CumulativeOutcomeId(CampaignCumulativeOutcomeKind value) => value switch
     {
         CampaignCumulativeOutcomeKind.Accepted => "accepted",
+        CampaignCumulativeOutcomeKind.OverBound => "over-bound",
         CampaignCumulativeOutcomeKind.Rejected => "rejected",
         CampaignCumulativeOutcomeKind.Stale => "stale",
         CampaignCumulativeOutcomeKind.HostFailure => "host-failure",
@@ -1908,6 +2048,7 @@ public static class CampaignStateJson
     private static CampaignCumulativeOutcomeKind ParseCumulativeOutcomeKind(string value) => value switch
     {
         "accepted" => CampaignCumulativeOutcomeKind.Accepted,
+        "over-bound" => CampaignCumulativeOutcomeKind.OverBound,
         "rejected" => CampaignCumulativeOutcomeKind.Rejected,
         "stale" => CampaignCumulativeOutcomeKind.Stale,
         "host-failure" => CampaignCumulativeOutcomeKind.HostFailure,
