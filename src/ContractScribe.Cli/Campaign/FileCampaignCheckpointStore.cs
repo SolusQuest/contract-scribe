@@ -859,8 +859,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             state = OpenDirectoryChain(stateDirectoryPath, requirePrivateFinal: true);
             RevalidateDirectoryBinding(repository);
             RevalidateDirectoryBinding(state);
-            if (state.AncestorIdentities.Contains(repository.DirectoryIdentity)
-                || repository.AncestorIdentities.Contains(state.DirectoryIdentity))
+            if (BackingLocationsOverlap(state.BackingLocation, repository.BackingLocation))
             {
                 throw InvalidFault();
             }
@@ -902,7 +901,6 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         var handles = new List<SafeFileHandle> { rootHandle };
         var identities = new List<FileIdentity> { rootIdentity };
         var segmentNames = new List<string>();
-        var ancestors = new HashSet<FileIdentity> { rootIdentity };
         try
         {
             var relative = fullPath[rootPath.Length..];
@@ -944,16 +942,16 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                     next.Dispose();
                     throw UnreadableFault();
                 }
-                ancestors.Add(nextIdentity);
                 handles.Add(next);
                 identities.Add(nextIdentity);
                 segmentNames.Add(segment);
             }
             return new DirectoryContext(
+                fullPath,
                 handles,
                 identities,
                 segmentNames,
-                ancestors);
+                ReadBackingLocation(fullPath, identities[^1]));
         }
         catch
         {
@@ -970,8 +968,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         var repository = context.RepositoryBinding ?? throw UnreadableFault();
         RevalidateDirectoryBinding(repository);
         RevalidateDirectoryBinding(context);
-        if (context.AncestorIdentities.Contains(repository.DirectoryIdentity)
-            || repository.AncestorIdentities.Contains(context.DirectoryIdentity))
+        if (BackingLocationsOverlap(context.BackingLocation, repository.BackingLocation))
         {
             throw InvalidFault();
         }
@@ -994,7 +991,80 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 throw UnreadableFault();
             }
         }
+        if (ReadBackingLocation(context.SelectedPath, context.DirectoryIdentity) != context.BackingLocation)
+        {
+            throw UnreadableFault();
+        }
     }
+
+    private static BackingLocation ReadBackingLocation(string selectedPath, FileIdentity identity)
+    {
+        foreach (var line in File.ReadLines("/proc/self/mountinfo"))
+        {
+            var separator = line.IndexOf(" - ", StringComparison.Ordinal);
+            if (separator < 0)
+            {
+                continue;
+            }
+            var fields = line[..separator].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length < 6
+                || !ulong.TryParse(
+                    fields[0],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var mountIdentity)
+                || mountIdentity != identity.Mount)
+            {
+                continue;
+            }
+
+            var mountRoot = Path.TrimEndingDirectorySeparator(DecodeMountInfoPath(fields[3]));
+            var mountPoint = Path.TrimEndingDirectorySeparator(DecodeMountInfoPath(fields[4]));
+            if (!Path.IsPathFullyQualified(mountRoot)
+                || !Path.IsPathFullyQualified(mountPoint)
+                || !IsSameOrDescendant(mountPoint, selectedPath))
+            {
+                throw UnreadableFault();
+            }
+            var relative = Path.GetRelativePath(mountPoint, selectedPath);
+            var backingPath = relative == "."
+                ? mountRoot
+                : Path.GetFullPath(Path.Join(mountRoot, relative));
+            return new BackingLocation(
+                identity.Device,
+                Path.TrimEndingDirectorySeparator(backingPath));
+        }
+        throw UnreadableFault();
+    }
+
+    private static string DecodeMountInfoPath(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '\\')
+            {
+                result.Append(value[index]);
+                continue;
+            }
+            if (index + 3 >= value.Length
+                || value[index + 1] is < '0' or > '7'
+                || value[index + 2] is < '0' or > '7'
+                || value[index + 3] is < '0' or > '7')
+            {
+                throw UnreadableFault();
+            }
+            var decoded = ((value[index + 1] - '0') << 6)
+                | ((value[index + 2] - '0') << 3)
+                | (value[index + 3] - '0');
+            result.Append((char)decoded);
+            index += 3;
+        }
+        return result.ToString();
+    }
+
+    private static bool BackingLocationsOverlap(BackingLocation first, BackingLocation second) =>
+        first.Device == second.Device && Overlaps(first.Path, second.Path);
 
     private static NameStatus InspectName(DirectoryContext context, string name) =>
         InspectAt(context.DirectoryHandle, name);
@@ -1397,17 +1467,19 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     }
 
     private sealed class DirectoryContext(
+        string selectedPath,
         List<SafeFileHandle> chainHandles,
         List<FileIdentity> chainIdentities,
         List<string> segmentNames,
-        HashSet<FileIdentity> ancestorIdentities) : IDisposable
+        BackingLocation backingLocation) : IDisposable
     {
+        internal string SelectedPath { get; } = selectedPath;
         internal IReadOnlyList<SafeFileHandle> ChainHandles { get; } = chainHandles;
         internal IReadOnlyList<FileIdentity> ChainIdentities { get; } = chainIdentities;
         internal IReadOnlyList<string> SegmentNames { get; } = segmentNames;
         internal SafeFileHandle DirectoryHandle => ChainHandles[^1];
         internal FileIdentity DirectoryIdentity => ChainIdentities[^1];
-        internal HashSet<FileIdentity> AncestorIdentities { get; } = ancestorIdentities;
+        internal BackingLocation BackingLocation { get; } = backingLocation;
         internal DirectoryContext? RepositoryBinding { get; private set; }
 
         internal void AttachRepository(DirectoryContext repository)
@@ -1430,6 +1502,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     }
 
     private readonly record struct FileIdentity(ulong Device, ulong Inode, ulong Mount);
+
+    private readonly record struct BackingLocation(ulong Device, string Path);
 
     private readonly record struct NameStatus(
         NameKind Kind,

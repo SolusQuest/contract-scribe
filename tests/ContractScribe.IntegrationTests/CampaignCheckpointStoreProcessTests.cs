@@ -11,6 +11,31 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed class CampaignCheckpointStoreProcessTests
 {
     private const string WorkerVariable = "CONTRACTSCRIBE_CHECKPOINT_WORKER";
+    private const string BindMountWorkerVariable = "CONTRACTSCRIBE_CHECKPOINT_BIND_MOUNT_WORKER";
+    private const ulong MountBind = 4096;
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task Bind_mounted_repository_aliases_are_rejected_without_rejecting_unrelated_backing_storage()
+    {
+        if (!IsLinuxX64())
+        {
+            return;
+        }
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable(BindMountWorkerVariable),
+                "1",
+                StringComparison.Ordinal))
+        {
+            await RunBindMountWorkerAsync();
+            return;
+        }
+
+        await AssertBindMountScenarioAsync("repository-root");
+        await AssertBindMountScenarioAsync("repository-root-descendant");
+        await AssertBindMountScenarioAsync("repository-child");
+        await AssertBindMountScenarioAsync("outside-repository");
+    }
 
     [Fact]
     [SupportedOSPlatform("linux")]
@@ -680,9 +705,118 @@ public sealed class CampaignCheckpointStoreProcessTests
             environment: environment);
     }
 
+    private static async Task RunBindMountWorkerAsync()
+    {
+        var dotnetHost = Environment.ProcessPath
+            ?? throw new InvalidOperationException("The dotnet host path is unavailable.");
+        var testArguments = new[]
+        {
+            dotnetHost,
+            "test",
+            "tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj",
+            "--configuration", "Release",
+            "--no-build",
+            "--no-restore",
+            "--filter",
+            $"FullyQualifiedName={typeof(CampaignCheckpointStoreProcessTests).FullName}.Bind_mounted_repository_aliases_are_rejected_without_rejecting_unrelated_backing_storage",
+        };
+        if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            await OwnedProcessRunner.RunAsync(
+                "sudo",
+                RepositoryRoot(),
+                ["-n", "env", $"{BindMountWorkerVariable}=1", "unshare", "--mount", .. testArguments],
+                TimeSpan.FromSeconds(90));
+            return;
+        }
+
+        await OwnedProcessRunner.RunAsync(
+            "unshare",
+            RepositoryRoot(),
+            ["--user", "--map-root-user", "--mount", .. testArguments],
+            TimeSpan.FromSeconds(90),
+            environment: new Dictionary<string, string?> { [BindMountWorkerVariable] = "1" });
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static async Task AssertBindMountScenarioAsync(string scenario)
+    {
+        var root = Path.Join(Path.GetTempPath(), $"contractscribe-bind-mount-{Guid.NewGuid():N}");
+        var repository = Path.Join(root, "repository");
+        var externalSource = Path.Join(root, "external-source");
+        var alias = Path.Join(root, "alias");
+        var repositoryChild = Path.Join(repository, "private-state");
+        Directory.CreateDirectory(repositoryChild);
+        Directory.CreateDirectory(externalSource);
+        Directory.CreateDirectory(alias);
+        foreach (var path in new[] { repository, repositoryChild, externalSource, alias })
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        var source = scenario switch
+        {
+            "repository-root" or "repository-root-descendant" => repository,
+            "repository-child" => repositoryChild,
+            "outside-repository" => externalSource,
+            _ => throw new InvalidOperationException("unknown bind mount scenario"),
+        };
+        var sourceEntriesBefore = Directory.EnumerateFileSystemEntries(source)
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var mountResult = Mount(source, alias, nint.Zero, MountBind, nint.Zero);
+        if (mountResult != 0)
+        {
+            Directory.Delete(root, recursive: true);
+            Assert.Equal(0, mountResult);
+        }
+        try
+        {
+            var stateDirectory = scenario == "repository-root-descendant"
+                ? Path.Join(alias, "private-state")
+                : alias;
+            var checkpointPath = Path.Join(stateDirectory, "campaign.json");
+            var store = CreateStore(checkpointPath, repositoryRoot: repository);
+            var artifact = CreateArtifact();
+            var read = await store.ReadAsync(CancellationToken.None);
+            var write = await store.CreateIfAbsentAsync(
+                artifact.ExactUtf8Json.AsMemory(),
+                artifact.CheckpointRevision,
+                artifact.Sha256,
+                CancellationToken.None);
+
+            if (scenario == "outside-repository")
+            {
+                Assert.Equal(CampaignCheckpointReadKind.NotFound, read.Kind);
+                Assert.Equal(CampaignCheckpointWriteKind.Written, write.Kind);
+                Assert.True(File.Exists(Path.Join(source, "campaign.json")));
+            }
+            else
+            {
+                Assert.Equal(CampaignCheckpointReadKind.Invalid, read.Kind);
+                Assert.Equal(CampaignCheckpointWriteKind.Unwritable, write.Kind);
+                Assert.Equal(
+                    sourceEntriesBefore,
+                    Directory.EnumerateFileSystemEntries(source)
+                        .Select(Path.GetFileName)
+                        .Order(StringComparer.Ordinal)
+                        .ToArray());
+            }
+        }
+        finally
+        {
+            var unmountResult = Unmount(alias, 0);
+            Assert.Equal(0, unmountResult);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ICampaignCheckpointStore CreateStore(
         string checkpointPath,
-        Action<string>? hook = null)
+        Action<string>? hook = null,
+        string? repositoryRoot = null)
     {
         var assemblyPath = Path.Join(
             RepositoryRoot(),
@@ -697,7 +831,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             type,
             BindingFlags.Instance | BindingFlags.NonPublic,
             binder: null,
-            args: [checkpointPath, RepositoryRoot(), hook],
+            args: [checkpointPath, repositoryRoot ?? RepositoryRoot(), hook],
             culture: null));
     }
 
@@ -834,4 +968,15 @@ public sealed class CampaignCheckpointStoreProcessTests
 
     [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
     private static extern int RemoveExtendedAttribute(string path, string name);
+
+    [DllImport("libc", EntryPoint = "mount", SetLastError = true)]
+    private static extern int Mount(
+        string source,
+        string target,
+        nint fileSystemType,
+        ulong flags,
+        nint data);
+
+    [DllImport("libc", EntryPoint = "umount2", SetLastError = true)]
+    private static extern int Unmount(string target, int flags);
 }
