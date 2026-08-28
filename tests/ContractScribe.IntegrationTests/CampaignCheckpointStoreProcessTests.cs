@@ -97,7 +97,8 @@ public sealed class CampaignCheckpointStoreProcessTests
         var tempPath = Assert.Single(
             Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
             path => path.EndsWith(".tmp", StringComparison.Ordinal));
-        File.Delete(tempPath);
+        var retainedOriginal = Path.Join(fixture.ControlDirectory, "retained-original-temp");
+        File.Move(tempPath, retainedOriginal);
         await File.WriteAllTextAsync(tempPath, "collision");
         File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         var artifact = CreateArtifact();
