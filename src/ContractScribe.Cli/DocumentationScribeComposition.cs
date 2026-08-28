@@ -154,7 +154,7 @@ internal sealed class DocumentationScribeAuditAuthority
         }
 
         var providedInputs = acceptedInputs.ToImmutableArray();
-        if (providedInputs.IsDefaultOrEmpty || providedInputs.Any(input => input is null))
+        if (providedInputs.IsDefault || providedInputs.Any(input => input is null))
         {
             throw new ArgumentException("scribe.audit.inputs-invalid", nameof(acceptedInputs));
         }

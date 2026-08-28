@@ -325,6 +325,63 @@ public sealed class DocumentationScribeCompositionTests
     }
 
     [Fact]
+    public async Task Proposal_executor_rederives_no_work_from_a_valid_empty_current_authority()
+    {
+        await using var proposalFixture = await CompositionFixture.CreateProposalStageAsync();
+        await using var emptyFixture = await EmptyAuditFixture.CreateAsync();
+        var template = proposalFixture.CreateCampaign();
+        var planningInput = new CampaignPlanningInput(
+            template.PlanningInput.Snapshot,
+            template.PlanningInput.ExecutionPolicy,
+            emptyFixture.Classified.Classification.ClassificationSet!,
+            emptyFixture.Observed.ObservationSet!,
+            [],
+            emptyFixture.AuditDocument,
+            new CampaignPlanningOwnerAuthoritySet([]));
+        var plan = CampaignPlanner.Plan(planningInput);
+        Assert.Empty(plan.WorkItems);
+        var initialState = CampaignStateFactory.CreateInitial(
+            "style.public-api.v1",
+            template.StyleProjection,
+            template.ExecutionCapability,
+            emptyFixture.Session.InputIdentity,
+            planningInput,
+            plan);
+        Assert.Equal(CampaignTerminalReason.NoWork, initialState.TerminalOutcome!.Reason);
+        var initial = CampaignStateJson.CreateArtifact(initialState);
+        var store = new MemoryCampaignStore(initial);
+        var exchange = new CountingExchange();
+        var input = new DocumentationCampaignProposalInput(
+            emptyFixture.Classified,
+            emptyFixture.Observed,
+            emptyFixture.Policy,
+            emptyFixture.AuditInputs,
+            emptyFixture.AuditDocument,
+            planningInput,
+            plan,
+            template.ExecutionCapability,
+            "style.public-api.v1",
+            template.StyleProjection,
+            proposalFixture.RequestBytes,
+            store,
+            RuntimeOptions(),
+            exchange,
+            null,
+            CancellationToken.None,
+            CancellationToken.None);
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.NoWork, outcome.Kind);
+        Assert.Equal("campaign.no-work", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Equal(0, store.SuccessfulReplaceCount);
+        Assert.Equal(initial.Sha256, outcome.Artifact!.Sha256);
+        Assert.True(initial.ExactUtf8Json.AsSpan().SequenceEqual(outcome.Artifact.ExactUtf8Json.AsSpan()));
+        Assert.Equal(initial.Sha256, store.Current!.Sha256);
+    }
+
+    [Fact]
     public async Task Proposal_executor_owns_request_bytes_before_reservation_and_provider_execution()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
@@ -937,6 +994,132 @@ public sealed class DocumentationScribeCompositionTests
         var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
         root["limits"]![name] = value;
         return JsonSerializer.SerializeToUtf8Bytes(root);
+    }
+
+    private sealed class EmptyAuditFixture : IAsyncDisposable
+    {
+        private EmptyAuditFixture(
+            string root,
+            LoadedRepositorySession session,
+            ClassifiedRepositorySession classified,
+            ObservedRepositorySession observed,
+            PolicyDocumentV1 policy,
+            ImmutableArray<AuditRecordInput> auditInputs,
+            AuditDocument auditDocument)
+        {
+            Root = root;
+            Session = session;
+            Classified = classified;
+            Observed = observed;
+            Policy = policy;
+            AuditInputs = auditInputs;
+            AuditDocument = auditDocument;
+        }
+
+        private string Root { get; }
+        internal LoadedRepositorySession Session { get; }
+        internal ClassifiedRepositorySession Classified { get; }
+        internal ObservedRepositorySession Observed { get; }
+        internal PolicyDocumentV1 Policy { get; }
+        internal ImmutableArray<AuditRecordInput> AuditInputs { get; }
+        internal AuditDocument AuditDocument { get; }
+
+        internal static async Task<EmptyAuditFixture> CreateAsync()
+        {
+            var tempRoot = Path.GetFullPath(Path.GetTempPath());
+            var root = Descendant(tempRoot, "contract-scribe-issue-142-empty-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            LoadedRepositorySession? session = null;
+            try
+            {
+                const string repositoryPath = "Empty.cs";
+                var sourcePath = Descendant(root, repositoryPath);
+                await File.WriteAllTextAsync(
+                    sourcePath,
+                    "namespace Empty; internal sealed class Hidden { }\n",
+                    new UTF8Encoding(false));
+                var sourceText = await File.ReadAllTextAsync(sourcePath);
+                var syntaxTree = CSharpSyntaxTree.ParseText(
+                    sourceText,
+                    CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest),
+                    repositoryPath,
+                    Encoding.UTF8);
+                var compilation = CSharpCompilation.Create(
+                    "Empty",
+                    [syntaxTree],
+                    PlatformReferences,
+                    new CSharpCompilationOptions(
+                        OutputKind.DynamicallyLinkedLibrary,
+                        deterministic: true));
+                var workspace = new AdhocWorkspace();
+                var project = workspace.AddProject("Empty", LanguageNames.CSharp);
+                var loadedProject = new LoadedProject(
+                    "Empty.csproj",
+                    "net10.0",
+                    "empty.net10.0",
+                    LoadedProjectRole.AuditRoot,
+                    [],
+                    project,
+                    compilation,
+                    new Dictionary<SyntaxTree, LoadedSourceTree>(ReferenceEqualityComparer.Instance)
+                    {
+                        [syntaxTree] = new(
+                            LoadedSourceKind.Repository,
+                            repositoryPath,
+                            new RepositoryPathResolver().PhysicalIdentity(root, sourcePath),
+                            null),
+                    });
+                Assert.True(RepositoryContextRef.TryParse(
+                    "repoctx-fedcba9876543210fedcba9876543210",
+                    out var repositoryContextRef));
+                session = new LoadedRepositorySession(
+                    repositoryContextRef,
+                    root,
+                    "Empty.csproj",
+                    new ToolchainIdentity("test", "test", "test", "test"),
+                    [loadedProject],
+                    [],
+                    workspace,
+                    DocumentationScribeContextStableFileReader.ReadDirectoryIdentity(root));
+                session.SealDocumentationPatchRepositoryPolicyForTests();
+                var classified = new SymbolClassifier().ClassifySession(session, TargetProfile.ExternalApi);
+                Assert.Equal(ClassificationRunStatus.Success, classified.Classification.Status);
+                Assert.Empty(classified.Classification.ClassificationSet!.Targets);
+                var observed = new DocumentationObserver().Observe(classified);
+                Assert.Equal(DocumentationObservationRunStatus.Success, observed.Status);
+                var policy = PolicyConfigurationEvaluator.Parse(
+                    "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"required\"}"u8.ToArray())
+                    .Document ?? throw new InvalidOperationException("policy");
+                var extracted = new PolicyEvidenceExtractor().Extract(classified, observed, policy);
+                Assert.Equal(PolicyEvidenceExtractionStatus.Success, extracted.Status);
+                var inputs = AuditInputAssembler.Assemble(
+                    classified.Classification.ClassificationSet,
+                    policy,
+                    extracted).ToImmutableArray();
+                Assert.Empty(inputs);
+                var audit = AuditAggregator.Aggregate(
+                    TargetProfile.ExternalApi,
+                    classified.Classification.ClassificationSet,
+                    policy,
+                    inputs);
+                return new EmptyAuditFixture(root, session, classified, observed, policy, inputs, audit);
+            }
+            catch
+            {
+                if (session is not null)
+                {
+                    await session.DisposeAsync();
+                }
+                Directory.Delete(root, recursive: true);
+                throw;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Session.DisposeAsync();
+            Directory.Delete(Root, recursive: true);
+        }
     }
 
     private sealed class CompositionFixture : IAsyncDisposable
