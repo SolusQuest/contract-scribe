@@ -289,6 +289,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 return Unwritable();
             }
 
+            // Publication no longer needs write authority over the checkpoint inode.
+            // Relinquish it before admitting any cleanup callback or final proof.
+            active.ReleaseTempHandle();
             testHook?.Invoke("after-readback-before-cleanup");
             cleanupAttempted = true;
             cleanupComplete = CleanupAfterPublication(
@@ -1383,6 +1386,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         internal FileIdentity LeaseIdentity { get; } = leaseIdentity;
         internal SafeFileHandle TempHandle { get; } = tempHandle;
         internal LeaseRecord Record { get; } = record;
+
+        internal void ReleaseTempHandle() => TempHandle.Dispose();
 
         public void Dispose()
         {

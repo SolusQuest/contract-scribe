@@ -544,7 +544,7 @@ public sealed class CampaignCheckpointStoreTests
         Assert.True(mutated);
         Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
-        AssertCleanupMutationPreserved(fixture, alternate, mutation);
+        AssertCleanupMutationPreserved(fixture, intended, alternate, mutation);
     }
 
     [Theory]
@@ -606,7 +606,7 @@ public sealed class CampaignCheckpointStoreTests
         Assert.True(mutated);
         Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
-        AssertCleanupMutationPreserved(fixture, alternate, "truncate");
+        AssertCleanupMutationPreserved(fixture, intended, alternate, "truncate");
     }
 
     public static IEnumerable<object[]> UnsafeConflictCleanupMutations()
@@ -687,7 +687,11 @@ public sealed class CampaignCheckpointStoreTests
         {
             AssertExact(authoritative, predecessor);
         }
-        AssertCleanupMutationPreserved(fixture, predecessor, mutation);
+        AssertCleanupMutationPreserved(
+            fixture,
+            scenario == "create-existing" ? predecessor : successor,
+            predecessor,
+            mutation);
     }
 
     [Theory]
@@ -1004,6 +1008,10 @@ public sealed class CampaignCheckpointStoreTests
         var artifact = CreateOpenArtifact();
 
         var failed = await WriteInitialAsync(store, artifact);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
+        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
+
         var staleLockAcquired = false;
         var retry = new FileCampaignCheckpointStore(
             fixture.CheckpointPath,
@@ -1050,11 +1058,10 @@ public sealed class CampaignCheckpointStoreTests
             phase => staleLockAcquired |= phase == "after-stale-lease-lock");
         var retried = await WriteInitialAsync(retry, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, retried.Kind);
         Assert.True(staleLockAcquired);
-        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
-        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
+        Assert.False(File.Exists(LeasePath(fixture)));
+        Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
     [SupportedOSPlatform("linux")]
@@ -1156,6 +1163,7 @@ public sealed class CampaignCheckpointStoreTests
     [SupportedOSPlatform("linux")]
     private static void AssertCleanupMutationPreserved(
         StoreFixture fixture,
+        CampaignCheckpointArtifact intended,
         CampaignCheckpointArtifact alternate,
         string mutation)
     {
@@ -1168,8 +1176,18 @@ public sealed class CampaignCheckpointStoreTests
                 Assert.Equal(0x20, File.ReadAllBytes(fixture.CheckpointPath)[^1]);
                 break;
             case "same-size":
+                var expected = intended.ExactUtf8Json.ToArray();
+                expected[expected.Length / 2] ^= 1;
+                Assert.Equal(expected, File.ReadAllBytes(fixture.CheckpointPath));
+                break;
             case "marker":
-                Assert.True(File.Exists(fixture.CheckpointPath));
+                Assert.Equal(
+                    -1,
+                    GetExtendedAttributeSize(
+                        fixture.CheckpointPath,
+                        "user.contractscribe.checkpoint-object",
+                        nint.Zero,
+                        0));
                 break;
             case "other-c2":
                 Assert.Equal(alternate.ExactUtf8Json.ToArray(), File.ReadAllBytes(fixture.CheckpointPath));
@@ -1190,7 +1208,10 @@ public sealed class CampaignCheckpointStoreTests
                 Assert.Equal("collision", File.ReadAllText(tempPath));
                 break;
             case "lease-record":
-                Assert.Contains("operation=", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+                Assert.Contains(
+                    intended.CheckpointRevision == 0 ? "operation=replace" : "operation=create",
+                    File.ReadAllText(LeasePath(fixture)),
+                    StringComparison.Ordinal);
                 break;
         }
     }
@@ -1253,6 +1274,9 @@ public sealed class CampaignCheckpointStoreTests
 
     [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
     private static extern int RemoveExtendedAttribute(string path, string name);
+
+    [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+    private static extern nint GetExtendedAttributeSize(string path, string name, nint value, nuint size);
 
     private sealed class StoreFixture : IDisposable
     {
