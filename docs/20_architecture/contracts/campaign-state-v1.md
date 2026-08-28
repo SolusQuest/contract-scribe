@@ -148,7 +148,12 @@ bounded rejection. Each applied transition carries its exact predecessor and
 intended successor, so `ApplyTransition` accepts only the predecessor, returns
 the byte-identical successor as unchanged replay, and rejects every third state.
 Every applied mutation advances `checked(revision + 1)` once;
-the Campaign State observation ceiling is also the revision ceiling. A
+the Campaign State observation ceiling is also the revision ceiling. Provider
+admission requires revision headroom for both the durable reservation and its
+authoritative completion. At the penultimate revision, fresh work becomes
+durable exhaustion without creating a reservation; an already active retry
+uses the final revision to settle its exposure conservatively and terminalize
+without redispatch. A
 correlated authoritative M3/M2 completion settles and clears its reservation.
 An authoritative completion supplied with a simultaneous cancellation or
 timeout wins. A generic stop cannot settle an active invocation; the active-stop
@@ -194,6 +199,35 @@ commitments, so supersession does not erase or prefer one completion fact. When 
 snapshot transition is observed at the same boundary, supersession wins and the
 old transition is retained only as rejected late authority; it is not applied to
 the successor snapshot.
+
+## Provider completion authority and proposal-stage execution
+
+Provider completion is authorized only by one process-local `CampaignProviderCompletionAuthority`. The exact accepted provider invocation may issue one registrar; that registrar may register one coherent X1-owned final fact; and the resulting authority may be consumed by the reducer once. The registrar type, creation entry point, completion-kind vocabulary, preparation authorization, and registration entry point are Core-internal and visible to exactly the X1-owning CLI production assembly through an explicit friend boundary; another Core consumer cannot mint a registrar or choose an X1-only final fact. Checked-in architecture coverage additionally confines the friend-side calls to the X1 binder. There is no executor-facing raw-M3 completion path. The registrar retains the invocation-owned request SHA, attempt, execution capability, and current request-validation authority. An X1-reparsed request is accepted only by exact artifact SHA plus complete provider-request validation; no-M3 facts use the invocation-owned request and cannot be repaired by a caller.
+
+The first underlying model `SendAsync` is the dispatch boundary. Before dispatch, an ordinary completion is coherent only for a zero-provider-request cancellation or validation, internal, timeout, or budget failure; an X1-only completion is coherent only for proposal-invalid or host failure with no M3 outcome. Provider/tool failures, proposals, and skips require a dispatched lifecycle. After dispatch, an ordinary completion requires the exact bound outcome; an X1-only completion may carry no outcome or the exact retained proposal outcome. Outcome and host elapsed are either both present or both absent. An available X1 proposal-invalid or host completion retires and settles the complete reservation conservatively. A dispatched X1-only completion settles exact retained M3 observations when present and otherwise settles conservatively. Pre-send cancellation, timeout, or exhaustion without a bound M3 work result uses `StopActiveInvocation`, records the root terminal, and leaves work planned. Only abrupt loss or incoherent authority leaves an active reservation for later conservative `RetryProviderInvocation` recovery.
+
+The authority-only reducer uses this closed final mapping; X1-only rows retain a null Scribe result commitment:
+
+| Final fact | Durable work result | Root terminal / stage outcome |
+| --- | --- | --- |
+| admitted proposal | `proposal-complete` with trusted projection | none / proposal ready |
+| proposal over a settled or aggregate bound | `closed / scribe / completed-over-bound` with the existing proposal commitment | `exhausted / budget` / budget exhausted |
+| structured skip | existing insufficient-evidence or unsupported-domain code | complete when resolved / terminal stop |
+| retryable provider failure | `provider-failure / retryable` | none unless settlement exhausts / retryable stop |
+| terminal provider, tool-protocol, validation, or internal M3 failure | existing matching Scribe code | complete when resolved, subject to settlement exhaustion / terminal stop |
+| X1 proposal-invalid | `validation-failure` | complete when resolved, subject to settlement exhaustion / terminal stop |
+| X1 host failure or shutdown cancellation | `internal-failure` or `cancelled-by-shutdown` | `failed / host` / terminal stop |
+| caller cancellation | `cancelled-by-caller` | `cancelled / caller` / cancelled |
+| timeout | `timeout` | `timeout / deadline` / timed out |
+| budget terminal | `budget-exhausted` | `exhausted / budget` / budget exhausted |
+
+The registered authoritative completion fact wins over a simultaneous generic stop; its explicit host, caller, timeout, or budget terminal also takes precedence over simultaneous settlement exhaustion. Proposal admission and replay require the trusted projection; a retained postflight-rejected M3 proposal is closed as validation failure and never becomes `proposal-complete`.
+
+The in-process proposal executor validates exact live M1/C1/C2/C3 context and reconstructs the canonical current M1 audit authority before the ordered scan, including provider-free replay, request parsing, or dispatch. It copies caller-owned request bytes once into a bounded executor-owned snapshot, and parsing, reservation correlation, X1 reparse, and provider preparation all consume only that snapshot. It checks runtime provider/model/protocol identities before admission and performs one paired plan/state scan in C1 order. Planning-terminal, accepted, and nonretryable closed rows are resolved; only the first encountered `proposal-complete` row replays; active provider recovery, retryable closed work, and planned admission are actionable only when the root terminal is null. A root terminal otherwise rederives the bounded stage outcome. Active Patch or foreign/contradictory reservation state fails closed.
+
+Execution cancellation is independent from settlement/readback cancellation. The reducer constructs and validates the complete successor artifact before consuming completion or lifecycle authority. A final fact becomes durable only through one exact-predecessor transition, conditional replacement, and exact readback. Deterministic authority or successor-construction rejection is a host contract error; store/current-state conflict is a state conflict; only uncertain dispatch, acknowledgement, or readback remains ambiguous. The outer host-active interval uses a monotonic clock and remains distinct from M3 envelope elapsed time. The returned proposal-stage outcome is rederived from the accepted artifact and exposes no raw request/result/provider/tool/source content or mutation authority.
+
+These process-local additions do not alter Campaign State v1 properties, enum vocabulary, parser/writer, schema, known-answer bytes, result-commitment matrix, or `ICampaignCheckpointStore`.
 
 ## Conditional store and readback
 

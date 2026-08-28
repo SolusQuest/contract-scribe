@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
+using ContractScribe.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -12,6 +13,54 @@ namespace ContractScribe.Tests;
 
 public sealed class DocumentationScribeArchitectureTests
 {
+    [Fact]
+    public void Campaign_completion_registrar_is_internal_to_the_explicit_X1_friend_boundary()
+    {
+        var core = typeof(CampaignProviderCompletionRegistrar).Assembly;
+        var friends = core.GetCustomAttributes<InternalsVisibleToAttribute>()
+            .Select(attribute => attribute.AssemblyName)
+            .ToArray();
+        Assert.Contains("ContractScribe.Cli", friends);
+        Assert.Equal(
+            ["ContractScribe.Cli"],
+            friends.Where(name => name.StartsWith("ContractScribe.", StringComparison.Ordinal)
+                    && !name.Contains("Tests", StringComparison.Ordinal))
+                .ToArray());
+        Assert.False(typeof(CampaignProviderCompletionRegistrar).IsPublic);
+        Assert.False(typeof(CampaignProviderCompletionKind).IsPublic);
+        Assert.True(typeof(CampaignProviderInvocationAuthority)
+            .GetMethod("TryCreateCompletionRegistrar", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
+        Assert.True(typeof(CampaignProviderCompletionRegistrar)
+            .GetMethod("TryAuthorizePreparation", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
+        Assert.True(typeof(CampaignProviderCompletionRegistrar)
+            .GetMethod("TryRegister", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .IsAssembly);
+
+        var root = FindRepositoryRoot();
+        var productionUses = Directory.EnumerateFiles(Path.Join(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Select(path => (Path: path, Source: File.ReadAllText(path)))
+            .Where(item => item.Source.Contains("TryCreateCompletionRegistrar", StringComparison.Ordinal)
+                || item.Source.Contains("TryAuthorizePreparation", StringComparison.Ordinal)
+                || item.Source.Contains("TryRegister(", StringComparison.Ordinal))
+            .ToArray();
+        Assert.All(productionUses, item => Assert.True(
+            item.Path.EndsWith("DocumentationScribeComposition.cs", StringComparison.OrdinalIgnoreCase)
+                || item.Path.EndsWith("CampaignProviderCompletion.cs", StringComparison.OrdinalIgnoreCase)
+                || item.Path.EndsWith("CampaignStateReducer.cs", StringComparison.OrdinalIgnoreCase),
+            item.Path));
+        Assert.Single(productionUses, item =>
+            item.Path.EndsWith("DocumentationScribeComposition.cs", StringComparison.OrdinalIgnoreCase));
+
+        var completion = Assert.Single(typeof(CampaignStateReducer).GetMethods(),
+            method => method.Name == nameof(CampaignStateReducer.CompleteProviderInvocation));
+        Assert.Contains(completion.GetParameters(), parameter =>
+            parameter.ParameterType == typeof(CampaignProviderCompletionAuthority));
+        Assert.DoesNotContain(completion.GetParameters(), parameter =>
+            parameter.ParameterType == typeof(DocumentationScribeValidatedRunOutcome));
+    }
+
     [Fact]
     public void Agent_project_keeps_the_core_only_project_edge_and_confines_provider_packages()
     {

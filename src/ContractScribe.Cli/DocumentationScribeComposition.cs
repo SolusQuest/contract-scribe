@@ -82,6 +82,40 @@ internal interface IDocumentationScribePreparedOutcome
     bool IsProposalReady { get; }
 }
 
+internal enum DocumentationCampaignPreparationKind
+{
+    Completion,
+    StopCancelled,
+    StopTimedOut,
+    StopBudgetExhausted,
+    Invalid,
+}
+
+internal sealed class DocumentationCampaignPreparation
+{
+    private DocumentationCampaignPreparation(
+        DocumentationCampaignPreparationKind kind,
+        CampaignProviderCompletionAuthority? completionAuthority)
+    {
+        Kind = kind;
+        CompletionAuthority = completionAuthority;
+    }
+
+    internal DocumentationCampaignPreparationKind Kind { get; }
+    internal CampaignProviderCompletionAuthority? CompletionAuthority { get; }
+
+    internal static DocumentationCampaignPreparation Completion(CampaignProviderCompletionAuthority authority) =>
+        new(DocumentationCampaignPreparationKind.Completion, authority);
+
+    internal static DocumentationCampaignPreparation Stop(DocumentationCampaignPreparationKind kind) =>
+        new(kind, null);
+
+    internal static DocumentationCampaignPreparation Invalid() =>
+        new(DocumentationCampaignPreparationKind.Invalid, null);
+
+    public override string ToString() => nameof(DocumentationCampaignPreparation);
+}
+
 internal sealed class DocumentationScribeAuditAuthority
 {
     private readonly ClassifiedRepositorySession session;
@@ -120,7 +154,7 @@ internal sealed class DocumentationScribeAuditAuthority
         }
 
         var providedInputs = acceptedInputs.ToImmutableArray();
-        if (providedInputs.IsDefaultOrEmpty || providedInputs.Any(input => input is null))
+        if (providedInputs.IsDefault || providedInputs.Any(input => input is null))
         {
             throw new ArgumentException("scribe.audit.inputs-invalid", nameof(acceptedInputs));
         }
@@ -311,6 +345,7 @@ internal static class DocumentationScribeComposition
     {
         private readonly PatchAuthorization? patchAuthorization;
         private int consumptionState;
+        private int campaignConsumptionState;
 
         public PreparedOutcome(
             DocumentationScribeCompositionStatus status,
@@ -349,6 +384,9 @@ internal static class DocumentationScribeComposition
             return authorization is not null;
         }
 
+        public bool TryTakeCampaignOutcome()
+            => Interlocked.CompareExchange(ref campaignConsumptionState, 1, 0) == 0;
+
         public override string ToString() => nameof(PreparedOutcome);
     }
 
@@ -356,6 +394,34 @@ internal static class DocumentationScribeComposition
         DocumentationScribeSelectedAudit Selection,
         DocumentationPatchResolvedDeclaration Declaration,
         DocumentationPatchEditKind EditKind);
+
+    private sealed class CampaignDispatchExchange(
+        CampaignProviderInvocationAuthority invocation,
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        private int state;
+
+        internal bool DispatchStarted => Volatile.Read(ref state) == 2;
+
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var observed = Volatile.Read(ref state);
+            if (observed != 2)
+            {
+                if (Interlocked.CompareExchange(ref state, 1, 0) != 0
+                    || !invocation.TryBeginDispatch(out _))
+                {
+                    throw new InvalidOperationException("scribe.campaign.dispatch-conflict");
+                }
+
+                Volatile.Write(ref state, 2);
+            }
+
+            return await inner.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     private static PreparedOutcome CreatePrepared(
         DocumentationScribeCompositionStatus status,
@@ -492,6 +558,124 @@ internal static class DocumentationScribeComposition
                 DocumentationScribeCompositionStatus.RuntimeFailure,
                 "scribe.failure.internal");
         }
+    }
+
+    internal static async Task<DocumentationCampaignPreparation> PrepareCampaignAsync(
+        DocumentationScribeSelectedAudit selection,
+        ReadOnlyMemory<byte> requestUtf8Json,
+        CampaignProviderInvocationAuthority invocation,
+        string? configuredAgentEntrypoint,
+        DocumentationScribeRuntimeOptions runtimeOptions,
+        IDocumentationScribeModelExchange exchange,
+        TimeProvider? timeProvider = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(invocation);
+        ArgumentNullException.ThrowIfNull(runtimeOptions);
+        ArgumentNullException.ThrowIfNull(exchange);
+        var parsed = DocumentationScribeValidation.ParseRequest(requestUtf8Json);
+        if (!parsed.IsValid || parsed.Request is not { } request)
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+
+        var registrar = invocation.TryCreateCompletionRegistrar();
+        if (registrar is null
+            || !registrar.TryAuthorizePreparation(
+                request,
+                runtimeOptions.ProviderConfigurationId,
+                runtimeOptions.ModelConfigurationId,
+                runtimeOptions.ScribeProtocolId,
+                out var attemptId))
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+
+        var clock = timeProvider ?? TimeProvider.System;
+        var gated = new CampaignDispatchExchange(invocation, exchange);
+        long started;
+        try
+        {
+            started = clock.GetTimestamp();
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+        var prepared = await PrepareAsync(
+            selection,
+            requestUtf8Json,
+            attemptId,
+            configuredAgentEntrypoint,
+            runtimeOptions,
+            gated,
+            cancellationToken).ConfigureAwait(false);
+        double elapsed;
+        try
+        {
+            elapsed = clock.GetElapsedTime(started, clock.GetTimestamp()).TotalMilliseconds;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+        if (double.IsNaN(elapsed)
+            || elapsed < 0
+            || elapsed > CampaignStateContract.MaximumObservation)
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+
+        if (prepared is not PreparedOutcome owned || !owned.TryTakeCampaignOutcome())
+        {
+            return DocumentationCampaignPreparation.Invalid();
+        }
+
+        var m3 = owned.M3Outcome;
+        if (m3 is null && !gated.DispatchStarted)
+        {
+            var stop = owned.Status switch
+            {
+                DocumentationScribeCompositionStatus.Cancelled => DocumentationCampaignPreparationKind.StopCancelled,
+                DocumentationScribeCompositionStatus.Timeout => DocumentationCampaignPreparationKind.StopTimedOut,
+                DocumentationScribeCompositionStatus.BudgetExhausted => DocumentationCampaignPreparationKind.StopBudgetExhausted,
+                _ => DocumentationCampaignPreparationKind.Invalid,
+            };
+            if (stop != DocumentationCampaignPreparationKind.Invalid)
+            {
+                return DocumentationCampaignPreparation.Stop(stop);
+            }
+        }
+
+        var kind = m3?.RunResult.Terminal is not DocumentationScribeProposalTerminal
+            ? CampaignProviderCompletionKind.Ordinary
+            : owned.Status switch
+            {
+                DocumentationScribeCompositionStatus.ProposalReady => CampaignProviderCompletionKind.Ordinary,
+                DocumentationScribeCompositionStatus.Cancelled => CampaignProviderCompletionKind.CallerCancelled,
+                DocumentationScribeCompositionStatus.Timeout => CampaignProviderCompletionKind.Timeout,
+                DocumentationScribeCompositionStatus.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
+                DocumentationScribeCompositionStatus.RuntimeFailure => CampaignProviderCompletionKind.HostFailure,
+                _ => CampaignProviderCompletionKind.ProposalInvalid,
+            };
+        if (m3 is null)
+        {
+            kind = owned.Status switch
+            {
+                DocumentationScribeCompositionStatus.RuntimeFailure => CampaignProviderCompletionKind.HostFailure,
+                DocumentationScribeCompositionStatus.Cancelled => CampaignProviderCompletionKind.CallerCancelled,
+                DocumentationScribeCompositionStatus.Timeout => CampaignProviderCompletionKind.Timeout,
+                DocumentationScribeCompositionStatus.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
+                _ => CampaignProviderCompletionKind.ProposalInvalid,
+            };
+        }
+
+        long? hostElapsed = m3 is null ? null : checked((long)Math.Ceiling(elapsed));
+        return registrar.TryRegister(kind, m3, hostElapsed, out var authority)
+            && authority is not null
+            ? DocumentationCampaignPreparation.Completion(authority)
+            : DocumentationCampaignPreparation.Invalid();
     }
 
     private static async Task<PreparedOutcome> AuthorizeProposalAsync(

@@ -241,7 +241,7 @@ public sealed class ProductionRoslynArchitectureTests
     }
 
     [Fact]
-    public void CoreInternalsHaveNoProductionAssemblyFriends()
+    public void CoreInternalsHaveOnlyCliAsTheProductionAssemblyFriend()
     {
         var friends = typeof(ClassificationSet).Assembly
             .GetCustomAttributes<InternalsVisibleToAttribute>()
@@ -250,7 +250,12 @@ public sealed class ProductionRoslynArchitectureTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["ContractScribe.IntegrationTests"], friends);
+        Assert.Equal(
+            ["ContractScribe.Cli", "ContractScribe.IntegrationTests", "ContractScribe.Tests"],
+            friends);
+        Assert.Equal(
+            ["ContractScribe.Cli"],
+            friends.Where(name => !name.Contains("Tests", StringComparison.Ordinal)).ToArray());
     }
 
     [Fact]
