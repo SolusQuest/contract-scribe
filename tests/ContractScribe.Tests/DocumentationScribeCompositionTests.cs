@@ -171,7 +171,7 @@ public sealed class DocumentationScribeCompositionTests
         var selectionSubstitution = await PrepareAsync(fixture, new ProposalExchange(fixture.Request));
         var selectionBound = Assert.IsType<DocumentationScribeValidatedRunOutcome>(selectionSubstitution.M3Outcome);
         var selectionRejected = DocumentationScribeComposition.ConsumePreparedOutcome(
-            fixture.NonMethodSelectedAudit,
+            fixture.NonMethodSelectedAudit!,
             selectionSubstitution);
         Assert.Equal(DocumentationScribeCompositionStatus.PatchStale, selectionRejected.Status);
         Assert.Same(selectionBound, selectionRejected.M3Outcome);
@@ -190,6 +190,319 @@ public sealed class DocumentationScribeCompositionTests
         Assert.Same(cancelledBound, cancelled.M3Outcome);
         Assert.Null(cancelled.PatchRequest);
         Assert.Null(cancelled.PatchOutcome);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_persists_reservation_before_send_and_returns_only_exact_readback()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var store = new MemoryCampaignStore(initial);
+        var observing = new ReservationObservingExchange(store, new ProposalExchange(fixture.Request));
+        var original = await File.ReadAllBytesAsync(fixture.SourcePath);
+        var planned = Assert.Single(campaign.InitialState.WorkItems,
+            item => item.Status == CampaignWorkStatus.Planned);
+        var planWork = Assert.Single(campaign.Plan.WorkItems,
+            item => item.WorkItemKey == planned.WorkItemKey);
+        var planTarget = Assert.Single(planWork.Targets);
+        var planSource = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(planTarget.Source);
+        var requestSource = Assert.IsType<RepositoryEvidenceLocator>(fixture.Request.Target.SourceLocator);
+        Assert.Equal(planTarget.SymbolRef, fixture.Request.Target.SymbolRef);
+        Assert.Equal(planTarget.AuditOutcome, fixture.Request.Context.AuditOutcome);
+        Assert.Equal(planSource.Path, requestSource.Path);
+        Assert.Equal(planSource.RequestedDeclarationSpan, requestSource.Span);
+        Assert.Equal(planSource.ContentSha256, fixture.Request.Target.SourceSha256);
+        Assert.Equal(campaign.PlanningInput.ExecutionPolicy.ScribeRunLimits, fixture.Request.Limits);
+        Assert.Equal(planTarget.ApplicableComponents.Length, fixture.Request.Target.ApplicableComponents.Length);
+        CampaignStateFactory.ValidateCurrentContext(
+            campaign.InitialState,
+            campaign.ExecutionCapability,
+            "style.public-api.v1",
+            campaign.StyleProjection,
+            fixture.Request.Context.InputIdentity,
+            campaign.PlanningInput,
+            campaign.Plan);
+        var directAdmission = CampaignStateReducer.AdmitProviderInvocation(
+            initial,
+            campaign.ExecutionCapability,
+            "style.public-api.v1",
+            campaign.StyleProjection,
+            campaign.PlanningInput,
+            campaign.Plan,
+            planned.WorkItemKey,
+            fixture.Request);
+        Assert.True(directAdmission.Kind == CampaignTransitionKind.Applied,
+            directAdmission.Failure.ToString());
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, observing, RuntimeOptions()));
+
+        Assert.True(outcome.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady,
+            outcome.Code + " writes=" + store.SuccessfulReplaceCount + " sends=" + observing.RequestCount);
+        Assert.Equal("campaign.proposal.ready", outcome.Code);
+        Assert.NotNull(outcome.TrustedProposal);
+        Assert.Equal(1, observing.RequestCount);
+        Assert.True(observing.SawPersistedReservation);
+        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Equal(outcome.Artifact!.Sha256, store.Current!.Sha256);
+        Assert.True(outcome.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
+            store.Current.ExactUtf8Json.AsSpan()));
+        Assert.Equal(original, await File.ReadAllBytesAsync(fixture.SourcePath));
+
+        var replayExchange = new CountingExchange();
+        var replay = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, replayExchange, RuntimeOptions()));
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
+        Assert.Equal("campaign.proposal.replay", replay.Code);
+        Assert.Equal(0, replayExchange.RequestCount);
+        Assert.Equal(2, store.SuccessfulReplaceCount);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_rejects_runtime_substitution_before_write_or_send()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var store = new MemoryCampaignStore(initial);
+        var exchange = new CountingExchange();
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(
+                fixture,
+                store,
+                exchange,
+                new DocumentationScribeRuntimeOptions(
+                    "provider.substituted.v1",
+                    "model.synthetic.v1",
+                    "scribe-protocol.v1")));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, outcome.Kind);
+        Assert.Equal("campaign.runtime.mismatch", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Equal(0, store.SuccessfulReplaceCount);
+        Assert.Equal(initial.ExactUtf8Json, store.Current!.ExactUtf8Json);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_separates_pre_send_cancellation_from_authoritative_settlement()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var exchange = new CountingExchange();
+        using var execution = new CancellationTokenSource();
+        execution.Cancel();
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(
+                fixture,
+                store,
+                exchange,
+                RuntimeOptions(),
+                execution.Token,
+                CancellationToken.None));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.Cancelled, outcome.Kind);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Null(store.Current!.State.ActiveReservation);
+        Assert.Equal(CampaignTerminalKind.Cancelled, store.Current.State.TerminalOutcome!.Kind);
+        Assert.Contains(store.Current.State.WorkItems, item => item.Status == CampaignWorkStatus.Planned);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_never_promotes_a_postflight_stale_retained_proposal()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var original = await File.ReadAllTextAsync(fixture.SourcePath);
+        try
+        {
+            var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+                campaign.Input(
+                    fixture,
+                    store,
+                    new MutatingProposalExchange(fixture.Request, fixture.SourcePath),
+                    RuntimeOptions()));
+
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
+            Assert.Equal(2, store.SuccessfulReplaceCount);
+            Assert.Null(store.Current!.State.ActiveReservation);
+            var closed = Assert.Single(store.Current.State.WorkItems,
+                item => item.Status == CampaignWorkStatus.Closed
+                    && item.ClosedOutcome?.Stage == CampaignWorkOutcomeStage.Scribe);
+            Assert.Equal(CampaignWorkOutcomeCode.ValidationFailure, closed.ClosedOutcome!.Code);
+            Assert.Null(closed.TrustedProposal);
+            Assert.Null(closed.ClosedOutcome.ScribeResultCommitmentSha256);
+            Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(fixture.SourcePath, original, new UTF8Encoding(false));
+        }
+    }
+
+    [Fact]
+    public async Task Proposal_executor_distinguishes_store_conflict_from_lost_reservation_acknowledgement()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+
+        var conflictStore = new MemoryCampaignStore(initial)
+        {
+            NextReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
+        };
+        var conflictExchange = new CountingExchange();
+        var conflict = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, conflictStore, conflictExchange, RuntimeOptions()));
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
+        Assert.Equal("campaign.reservation.conflict", conflict.Code);
+        Assert.Equal(0, conflictExchange.RequestCount);
+        Assert.Equal(0, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(initial.Sha256, conflictStore.Current!.Sha256);
+
+        var lostAckStore = new MemoryCampaignStore(initial)
+        {
+            NextReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
+            ApplyNextReplaceBeforeReporting = true,
+        };
+        var lostAckExchange = new CountingExchange();
+        var lostAck = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, lostAckStore, lostAckExchange, RuntimeOptions()));
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, lostAck.Kind);
+        Assert.Equal("campaign.reservation.observer", lostAck.Code);
+        Assert.Equal(0, lostAckExchange.RequestCount);
+        Assert.Equal(1, lostAckStore.SuccessfulReplaceCount);
+        Assert.IsType<CampaignProviderReservation>(lostAckStore.Current!.State.ActiveReservation);
+    }
+
+    [Fact]
+    public async Task Campaign_binder_uses_bounded_monotonic_host_elapsed_and_fails_closed_on_overflow()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var observedStore = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+
+        var observed = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(
+                fixture,
+                observedStore,
+                new ProposalExchange(fixture.Request),
+                RuntimeOptions(),
+                timeProvider: new SequencedTimeProvider(50_000)));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, observed.Kind);
+        Assert.Equal(50_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+
+        var overflowStore = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var overflowExchange = new CountingProposalExchange(fixture.Request);
+        var overflow = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(
+                fixture,
+                overflowStore,
+                overflowExchange,
+                RuntimeOptions(),
+                timeProvider: new ThrowingTimeProvider()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, overflow.Kind);
+        Assert.Equal("campaign.preparation.invalid", overflow.Code);
+        Assert.Equal(1, overflowExchange.RequestCount);
+        Assert.Equal(1, overflowStore.SuccessfulReplaceCount);
+        Assert.IsType<CampaignProviderReservation>(overflowStore.Current!.State.ActiveReservation);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_allows_agent_internal_sends_under_one_outer_dispatch()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var exchange = new SemanticThenProposalExchange(fixture.Request);
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, exchange, RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
+        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(2, store.Current!.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(1, Assert.Single(store.Current.State.WorkItems,
+            item => item.Status == CampaignWorkStatus.ProposalComplete).OuterAttemptCount);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_recovers_active_lineage_with_a_fresh_outer_attempt()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var store = new MemoryCampaignStore(initial);
+        var admitted = Admit(campaign, fixture, initial);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admitted);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+        Assert.IsType<CampaignProviderReservation>(store.Current!.State.ActiveReservation);
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, new ProposalExchange(fixture.Request), RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
+        var completed = Assert.Single(store.Current!.State.WorkItems,
+            item => item.Status == CampaignWorkStatus.ProposalComplete);
+        Assert.Equal(2, completed.OuterAttemptCount);
+        Assert.True(store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved > 0);
+        Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
+        Assert.Equal(3, store.SuccessfulReplaceCount);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_never_reopens_provider_work_under_a_persisted_root_terminal()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        var store = new MemoryCampaignStore(initial);
+        var admitted = Admit(campaign, fixture, initial);
+        var acceptedAdmission = await CampaignCheckpointAcceptance.AcceptAsync(store, admitted);
+        var accepted = Assert.IsType<CampaignAcceptedCheckpoint>(acceptedAdmission.AcceptedCheckpoint);
+        var stopped = CampaignStateReducer.StopActiveInvocation(
+            admitted.Artifact,
+            accepted,
+            CampaignTerminalKind.Cancelled);
+        var acceptedStop = await CampaignCheckpointAcceptance.AcceptAsync(store, stopped);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, acceptedStop.Kind);
+        var writesBefore = store.SuccessfulReplaceCount;
+        var exchange = new CountingExchange();
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, exchange, RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.Cancelled, outcome.Kind);
+        Assert.Equal(0, exchange.RequestCount);
+        Assert.Equal(writesBefore, store.SuccessfulReplaceCount);
+        Assert.Equal(CampaignTerminalKind.Cancelled, store.Current!.State.TerminalOutcome!.Kind);
+    }
+
+    private static CampaignTransitionResult Admit(
+        CampaignExecutionFixture campaign,
+        CompositionFixture fixture,
+        CampaignCheckpointArtifact initial)
+    {
+        var work = Assert.Single(campaign.InitialState.WorkItems,
+            item => item.Status == CampaignWorkStatus.Planned);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(
+            initial,
+            campaign.ExecutionCapability,
+            "style.public-api.v1",
+            campaign.StyleProjection,
+            campaign.PlanningInput,
+            campaign.Plan,
+            work.WorkItemKey,
+            fixture.Request);
+        Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+        return admitted;
     }
 
     private static Task<IDocumentationScribePreparedOutcome> PrepareAsync(
@@ -310,6 +623,88 @@ public sealed class DocumentationScribeCompositionTests
         }
     }
 
+    private sealed class ReservationObservingExchange(
+        MemoryCampaignStore store,
+        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+    {
+        internal int RequestCount { get; private set; }
+        internal bool SawPersistedReservation { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            SawPersistedReservation = store.Current?.State.ActiveReservation is CampaignProviderReservation;
+            return inner.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class CountingProposalExchange(DocumentationScribeRequest request)
+        : IDocumentationScribeModelExchange
+    {
+        internal int RequestCount { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return new ProposalExchange(request).SendAsync(modelRequest, cancellationToken);
+        }
+    }
+
+    private sealed class SemanticThenProposalExchange(DocumentationScribeRequest request)
+        : IDocumentationScribeModelExchange
+    {
+        internal int RequestCount { get; private set; }
+
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            if (RequestCount == 1)
+            {
+                var semantic = Assert.Single(modelRequest.Tools,
+                    tool => tool.OperationId == new DocumentationScribeSemanticToolDescriptor().OperationId);
+                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                    [new DocumentationScribeModelToolCall(
+                        0,
+                        "call.semantic",
+                        semantic.OperationId,
+                        "{}"u8.ToArray())],
+                    []));
+            }
+
+            Assert.Equal(2, RequestCount);
+            Assert.Single(modelRequest.CompletedToolExchanges);
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
+        }
+    }
+
+    private sealed class SequencedTimeProvider(long elapsedMilliseconds) : TimeProvider
+    {
+        private int reads;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() =>
+            Interlocked.Increment(ref reads) == 1 ? 0 : elapsedMilliseconds;
+    }
+
+    private sealed class ThrowingTimeProvider : TimeProvider
+    {
+        private int reads;
+
+        public override long GetTimestamp() => Interlocked.Increment(ref reads) == 1
+            ? 0
+            : throw new OverflowException("synthetic timestamp overflow");
+    }
+
     private sealed class MutatingProposalExchange(
         DocumentationScribeRequest request,
         string sourcePath) : IDocumentationScribeModelExchange
@@ -332,6 +727,39 @@ public sealed class DocumentationScribeCompositionTests
     private static ReadOnlyMemory<byte> ProposalTerminal(DocumentationScribeRequest request)
     {
         var locator = Assert.IsType<RepositoryEvidenceLocator>(request.Target.SourceLocator);
+        var contentUnits = new JsonArray
+        {
+            new JsonObject
+            {
+                ["kind"] = "content.summary",
+                ["lines"] = new JsonArray("Runs the selected operation."),
+                ["claimCategoryId"] = "claim.purpose",
+                ["evidenceReferenceIds"] = new JsonArray("evidence.source"),
+            },
+        };
+        foreach (var component in request.Target.ApplicableComponents)
+        {
+            var evidenceReferenceId = Assert.Single(request.EvidenceReferences,
+                reference => reference.Subject is ComponentEvidenceSubject subject
+                    && subject.ComponentKind == CampaignComponentKind(component.Kind)
+                    && subject.Identity == component.Identity).EvidenceReferenceId;
+            var contentUnit = new JsonObject
+            {
+                ["kind"] = "content." + ComponentKindId(component.Kind),
+                ["componentIdentity"] = component.Identity,
+                ["lines"] = new JsonArray(component.Kind == DocumentationPatchComponentKind.Return
+                    ? "The operation result."
+                    : "The value supplied to the operation."),
+                ["claimCategoryId"] = "claim.behavior",
+                ["evidenceReferenceIds"] = new JsonArray(evidenceReferenceId),
+            };
+            if (component.Name is not null)
+            {
+                contentUnit["name"] = component.Name;
+            }
+            contentUnits.Add(contentUnit);
+        }
+
         return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
         {
             ["kind"] = "proposal",
@@ -345,16 +773,7 @@ public sealed class DocumentationScribeCompositionTests
                     ["contentSha256"] = request.Target.SourceSha256,
                 },
             },
-            ["contentUnits"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["kind"] = "content.summary",
-                    ["lines"] = new JsonArray("Runs the selected operation."),
-                    ["claimCategoryId"] = "claim.purpose",
-                    ["evidenceReferenceIds"] = new JsonArray("evidence.source"),
-                },
-            },
+            ["contentUnits"] = contentUnits,
         });
     }
 
@@ -377,8 +796,15 @@ public sealed class DocumentationScribeCompositionTests
             string root,
             string sourcePath,
             LoadedRepositorySession session,
+            ClassifiedRepositorySession classified,
+            ObservedRepositorySession observed,
+            PolicyDocumentV1 policy,
+            ImmutableArray<AuditRecordInput> auditInputs,
+            AuditDocument auditDocument,
+            PolicyEvidenceExtractionOutcome extraction,
+            TargetClassification target,
             DocumentationScribeSelectedAudit selectedAudit,
-            DocumentationScribeSelectedAudit nonMethodSelectedAudit,
+            DocumentationScribeSelectedAudit? nonMethodSelectedAudit,
             ReadOnlyMemory<byte> requestBytes,
             DocumentationScribeRequest request,
             DocumentationScribeAttemptId attemptId)
@@ -386,6 +812,13 @@ public sealed class DocumentationScribeCompositionTests
             Root = root;
             SourcePath = sourcePath;
             Session = session;
+            Classified = classified;
+            Observed = observed;
+            Policy = policy;
+            AuditInputs = auditInputs;
+            AuditDocument = auditDocument;
+            Extraction = extraction;
+            Target = target;
             SelectedAudit = selectedAudit;
             NonMethodSelectedAudit = nonMethodSelectedAudit;
             RequestBytes = requestBytes;
@@ -396,8 +829,15 @@ public sealed class DocumentationScribeCompositionTests
         internal string Root { get; }
         internal string SourcePath { get; }
         internal LoadedRepositorySession Session { get; }
+        internal ClassifiedRepositorySession Classified { get; }
+        internal ObservedRepositorySession Observed { get; }
+        internal PolicyDocumentV1 Policy { get; }
+        internal ImmutableArray<AuditRecordInput> AuditInputs { get; }
+        internal AuditDocument AuditDocument { get; }
+        internal PolicyEvidenceExtractionOutcome Extraction { get; }
+        internal TargetClassification Target { get; }
         internal DocumentationScribeSelectedAudit SelectedAudit { get; }
-        internal DocumentationScribeSelectedAudit NonMethodSelectedAudit { get; }
+        internal DocumentationScribeSelectedAudit? NonMethodSelectedAudit { get; }
         internal ReadOnlyMemory<byte> RequestBytes { get; }
         internal DocumentationScribeRequest Request { get; }
         internal DocumentationScribeAttemptId AttemptId { get; }
@@ -408,14 +848,164 @@ public sealed class DocumentationScribeCompositionTests
             Directory.Delete(Root, recursive: true);
         }
 
-        internal static async Task<CompositionFixture> CreateAsync()
+        internal static Task<CompositionFixture> CreateAsync() =>
+            CreateAsync(
+                ["documentation-scribe", "end-to-end"],
+                "M:EndToEnd.Fixture.Run",
+                "T:EndToEnd.BaseFixture");
+
+        internal static Task<CompositionFixture> CreateProposalStageAsync() =>
+            CreateAsync(
+                ["campaign", "execution", "proposal-stage"],
+                "M:ProposalStage.ProposalFixture.Execute",
+                nonMethodDocumentationId: null);
+
+        internal CampaignExecutionFixture CreateCampaign()
+        {
+            var classifications = Classified.Classification.ClassificationSet!;
+            var observations = Observed.Observation.ObservationSet!;
+            var evidenceAuthority = Extraction.Bindings.Select(binding =>
+                new CampaignPlanningEvidenceAuthority(
+                    observations.Observations.Single(observation => observation.Subject == binding.Subject),
+                    binding.Evidence)).ToImmutableArray();
+            var targetAuthorities = classifications.Targets
+                .Where(target => target.SupportStatus == SupportStatus.Supported)
+                .Select(target =>
+                {
+                    var observation = observations.Observations.Single(item =>
+                        item.Subject.ParentSymbolRef == target.SymbolRef
+                        && item.Subject.ComponentKind is null);
+                    var declaration = Assert.Single(observation.Declarations);
+                    var repository = Assert.IsType<RepositoryDocumentationSourceIdentity>(declaration.Source);
+                    var sourcePath = Descendant(Root, repository.Path);
+                    var requestedSpan = target.SymbolRef == Target.SymbolRef
+                        ? Assert.IsType<Utf16Span>(
+                            Assert.IsType<RepositoryEvidenceLocator>(Request.Target.SourceLocator).Span)
+                        : declaration.DeclarationSpan;
+                    var source = new CampaignPlanningRepositorySourceAuthority(
+                        repository.Path,
+                        Sha256(Encoding.UTF8.GetBytes(
+                            new RepositoryPathResolver().PhysicalIdentity(Root, sourcePath))),
+                        repository.SourceSha256,
+                        declaration.DeclarationId,
+                        repository.SourceSha256,
+                        DocumentationPatchRepositoryEncoding.Utf8,
+                        declaration.DeclarationSpan,
+                        requestedSpan,
+                        requestedSpan,
+                        declaration.DeclarationSpan,
+                        declaration.DocumentationSpan,
+                        declaration.BlockState);
+                    var components = target.SymbolRef == Target.SymbolRef
+                        ? Request.Target.ApplicableComponents.Select(component =>
+                            new CampaignPlanningApplicableComponent(
+                                CampaignComponentKind(component.Kind),
+                                component.Identity,
+                                component.Name)).ToImmutableArray()
+                        : [];
+                    return new CampaignPlanningTargetAuthority(
+                        target,
+                        source,
+                        components,
+                        [target.SymbolRef],
+                        multiDeclarator: false,
+                        primaryConstructor: false,
+                        primaryConstructorAlias: false,
+                        target.SymbolRef == Target.SymbolRef ? Request.StyleProfile : null);
+                }).ToImmutableArray();
+            var agentProjection = JsonSerializer.SerializeToElement(new
+            {
+                scribeProtocolId = "scribe-protocol.v1",
+            });
+            var toolProjection = JsonSerializer.SerializeToElement(new
+            {
+                toolPolicyId = Request.ToolPolicyId,
+            });
+            var providerProjection = JsonSerializer.SerializeToElement(new
+            {
+                providerConfigurationId = "provider.synthetic.v1",
+                modelConfigurationId = "model.synthetic.v1",
+            });
+            var executionPolicy = new CampaignPlanningExecutionPolicy(
+                Request.Limits,
+                new CampaignPlanningBudgetPolicy(
+                    32,
+                    8,
+                    1_000_000,
+                    64,
+                    3,
+                    1_000_000,
+                    500_000,
+                    100_000,
+                    5_000_000,
+                    300_000,
+                    8,
+                    costEnforced: false,
+                    costCurrency: null,
+                    costRatePolicy: null),
+                Content(CampaignPlanningContentFamily.ProposalContract, "proposal", "proposal-v1"),
+                Content(CampaignPlanningContentFamily.AgentProtocol, "agent", agentProjection),
+                Content(CampaignPlanningContentFamily.ContextSelectionPolicy, "context", "context-v1"),
+                Content(CampaignPlanningContentFamily.ToolPolicyAndRegistry, "tools", toolProjection),
+                Content(CampaignPlanningContentFamily.ProviderModelRequestProfile, "provider", providerProjection),
+                Content(CampaignPlanningContentFamily.RetryPolicy, "retry", "retry-v1"),
+                Content(CampaignPlanningContentFamily.M2ProjectionPolicy, "m2", "m2-v1"),
+                Content(CampaignPlanningContentFamily.ProductContractRevision, "product", "product-v1"));
+            var planningInput = new CampaignPlanningInput(
+                new CampaignPlanningSnapshot(
+                    "campaign.proposal-stage.fixture",
+                    "snapshot.proposal-stage.fixture",
+                    Sha256(Encoding.UTF8.GetBytes("repository")),
+                    Sha256(Encoding.UTF8.GetBytes("input")),
+                    Sha256(Encoding.UTF8.GetBytes("policy")),
+                    TargetProfile.ExternalApi),
+                executionPolicy,
+                classifications,
+                observations,
+                evidenceAuthority,
+                AuditDocument,
+                new CampaignPlanningOwnerAuthoritySet(targetAuthorities
+                    .Where(target => target.Target.SymbolRef == Target.SymbolRef)
+                    .Select(target =>
+                    new CampaignPlanningOwnerAuthority([target])).ToImmutableArray()));
+            var plan = CampaignPlanner.Plan(planningInput);
+            var styleProjection = JsonSerializer.SerializeToElement(new { style = "public-api-v1" });
+            var executionCapability = CampaignStateFactory.CreateScribeExecutionCapability(
+                executionPolicy,
+                agentProjection,
+                toolProjection,
+                providerProjection);
+            var initial = CampaignStateFactory.CreateInitial(
+                "style.public-api.v1",
+                styleProjection,
+                executionCapability,
+                Session.InputIdentity,
+                planningInput,
+                plan);
+            var selectedWork = Assert.Single(plan.WorkItems.Where(item =>
+                item.Targets.Any(target => target.SymbolRef == Target.SymbolRef)));
+            var selectedTarget = Assert.Single(selectedWork.Targets);
+            Assert.True(selectedTarget.M3Eligible,
+                selectedWork.Disposition.Kind + " " + selectedWork.Disposition.PrimaryTerminalReason);
+            return new CampaignExecutionFixture(
+                planningInput,
+                plan,
+                executionCapability,
+                styleProjection,
+                initial);
+        }
+
+        private static async Task<CompositionFixture> CreateAsync(
+            string[] fixtureSegments,
+            string targetDocumentationId,
+            string? nonMethodDocumentationId)
         {
             var tempRoot = Path.GetFullPath(Path.GetTempPath());
             var root = Descendant(tempRoot, "contract-scribe-issue-138-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             var fixtureRoot = Descendant(
                 FindRepositoryRoot(),
-                "tests", "fixtures", "documentation-scribe", "end-to-end");
+                ["tests", "fixtures", .. fixtureSegments]);
             foreach (var file in Directory.EnumerateFiles(fixtureRoot))
             {
                 File.Copy(file, Descendant(root, Path.GetFileName(file)));
@@ -476,18 +1066,20 @@ public sealed class DocumentationScribeCompositionTests
                 var target = Assert.Single(
                     classifications.Targets,
                     candidate => candidate.SymbolRef.DocumentationCommentId.StartsWith(
-                            "M:EndToEnd.Fixture.Run", StringComparison.Ordinal)
+                            targetDocumentationId, StringComparison.Ordinal)
                         && candidate.SupportStatus == SupportStatus.Supported);
-                var nonMethod = Assert.Single(
-                    classifications.Targets,
-                    candidate => candidate.SymbolRef.DocumentationCommentId == "T:EndToEnd.BaseFixture");
+                var nonMethod = nonMethodDocumentationId is null
+                    ? null
+                    : Assert.Single(
+                        classifications.Targets,
+                        candidate => candidate.SymbolRef.DocumentationCommentId == nonMethodDocumentationId);
                 var observed = new DocumentationObserver().Observe(classified);
                 Assert.Equal(DocumentationObservationRunStatus.Success, observed.Status);
                 var policy = PolicyConfigurationEvaluator.Parse(
                     "{\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\",\"defaultDecision\":\"required\"}"u8.ToArray())
                     .Document ?? throw new InvalidOperationException("policy");
                 var extracted = new PolicyEvidenceExtractor().Extract(classified, observed, policy);
-                var inputs = AuditInputAssembler.Assemble(classifications, policy, extracted);
+                var inputs = AuditInputAssembler.Assemble(classifications, policy, extracted).ToImmutableArray();
                 var audit = AuditAggregator.Aggregate(TargetProfile.ExternalApi, classifications, policy, inputs);
                 using var auditJson = JsonDocument.Parse(AuditJson.Write(audit));
                 var auditOutcome = Assert.Single(
@@ -500,7 +1092,7 @@ public sealed class DocumentationScribeCompositionTests
                 var authority = DocumentationScribeAuditAuthority.Create(
                     classified, observed, policy, inputs, audit);
                 var selected = authority.Select(target);
-                var nonMethodSelected = authority.Select(nonMethod);
+                var nonMethodSelected = nonMethod is null ? null : authority.Select(nonMethod);
 
                 var symbol = Assert.Single(Microsoft.CodeAnalysis.DocumentationCommentId
                     .GetSymbolsForDeclarationId(target.SymbolRef.DocumentationCommentId, compilation));
@@ -522,13 +1114,38 @@ public sealed class DocumentationScribeCompositionTests
                 var evidence = Assert.Single(context.Facts.Evidence, item => item.KindId == "source.target-declaration");
                 var span = Assert.IsType<Utf16Span>(evidence.Range);
                 var requestBytes = CreateRequest(
-                    session, target, repositoryPath, span, sourceSha256, context, evidence, auditOutcome);
-                var request = Assert.IsType<DocumentationScribeRequest>(
-                    DocumentationScribeValidation.ParseRequest(requestBytes).Request);
+                    session,
+                    classifications,
+                    target,
+                    repositoryPath,
+                    span,
+                    sourceSha256,
+                    context,
+                    evidence,
+                    extracted,
+                    auditOutcome);
+                var requestParse = DocumentationScribeValidation.ParseRequest(requestBytes);
+                Assert.True(requestParse.IsValid,
+                    requestParse.Failure?.Code + " " + requestParse.Failure?.Pointer);
+                var request = Assert.IsType<DocumentationScribeRequest>(requestParse.Request);
                 Assert.True(DocumentationScribeAttemptId.TryParse(
                     "scribe-attempt." + Guid.NewGuid().ToString("N"), out var attempt));
                 return new CompositionFixture(
-                    root, sourcePath, session, selected, nonMethodSelected, requestBytes, request, attempt);
+                    root,
+                    sourcePath,
+                    session,
+                    classified,
+                    observed,
+                    policy,
+                    inputs,
+                    audit,
+                    extracted,
+                    target,
+                    selected,
+                    nonMethodSelected,
+                    requestBytes,
+                    request,
+                    attempt);
             }
             catch
             {
@@ -544,14 +1161,45 @@ public sealed class DocumentationScribeCompositionTests
 
         private static ReadOnlyMemory<byte> CreateRequest(
             LoadedRepositorySession session,
+            ClassificationSet classifications,
             TargetClassification target,
             string sourcePath,
             Utf16Span targetSpan,
             string sourceSha256,
             DocumentationScribeLoadedContext context,
             DocumentationScribeEvidenceContextFact evidence,
+            PolicyEvidenceExtractionOutcome extraction,
             string auditOutcome)
         {
+            var components = classifications.Components
+                .Where(component => component.ParentSymbolRef == target.SymbolRef
+                    && component.SupportStatus == SupportStatus.Supported)
+                .OrderBy(component => component.ComponentKind)
+                .ThenBy(component => component.Identity, StringComparer.Ordinal)
+                .ToArray();
+            var applicableComponents = new JsonArray();
+            var componentPolicies = new JsonArray();
+            foreach (var component in components)
+            {
+                var kind = ComponentKindId(component.ComponentKind);
+                var applicable = new JsonObject
+                {
+                    ["kind"] = kind,
+                    ["identity"] = component.Identity,
+                };
+                if (component.ComponentKind == ComponentKind.Parameter)
+                {
+                    applicable["name"] = "value";
+                }
+                applicableComponents.Add(applicable);
+                componentPolicies.Add(new JsonObject
+                {
+                    ["componentIdentity"] = component.Identity,
+                    ["disposition"] = "required",
+                    ["maximumScalars"] = 300,
+                });
+            }
+
             var contextReferences = new JsonArray();
             foreach (var instruction in context.Facts.Instructions)
             {
@@ -567,6 +1215,52 @@ public sealed class DocumentationScribeCompositionTests
                     ["isTruncated"] = instruction.Commitment.IsTruncated,
                 });
             }
+
+            var evidenceReferenceItems = new List<JsonObject>
+            {
+                EvidenceReference(
+                    "evidence.source",
+                    session,
+                    Symbol(target.SymbolRef),
+                    sourcePath,
+                    targetSpan,
+                    evidence,
+                    "claim.purpose"),
+            };
+            foreach (var component in components)
+            {
+                var binding = extraction.Bindings.Single(candidate =>
+                    candidate.Subject.ParentSymbolRef == target.SymbolRef
+                    && candidate.Subject.ComponentKind == component.ComponentKind
+                    && candidate.Subject.ComponentIdentity == component.Identity);
+                var item = Assert.Single(binding.Evidence.Bundle.Items,
+                    candidate => binding.Evidence.EvidenceIds.Contains(candidate.EvidenceId, StringComparer.Ordinal));
+                var locator = Assert.IsType<RepositoryEvidenceLocator>(item.Locator);
+                evidenceReferenceItems.Add(new JsonObject
+                {
+                    ["evidenceReferenceId"] = item.EvidenceId,
+                    ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                    ["subject"] = new JsonObject
+                    {
+                        ["parentSymbolRef"] = Symbol(target.SymbolRef),
+                        ["componentKind"] = ClassificationVocabulary.GetId(component.ComponentKind),
+                        ["identity"] = component.Identity,
+                    },
+                    ["kind"] = EvidenceVocabulary.GetId(item.Kind),
+                    ["relation"] = EvidenceVocabulary.GetId(item.Relation),
+                    ["authority"] = "authority.source-declaration",
+                    ["locator"] = RepositoryLocator(locator.Path, Assert.IsType<Utf16Span>(locator.Span)),
+                    ["contentSha256"] = item.Sha256,
+                    ["originalUtf8ByteCount"] = item.OriginalUtf8ByteCount,
+                    ["includedUtf8ByteCount"] = item.IncludedUtf8ByteCount,
+                    ["isTruncated"] = item.IsTruncated,
+                    ["claimCategoryIds"] = new JsonArray("claim.behavior"),
+                });
+            }
+            var evidenceReferences = new JsonArray(evidenceReferenceItems
+                .OrderBy(item => item["evidenceReferenceId"]!.GetValue<string>(), StringComparer.Ordinal)
+                .Select(item => (JsonNode)item)
+                .ToArray());
 
             var root = new JsonObject
             {
@@ -586,7 +1280,7 @@ public sealed class DocumentationScribeCompositionTests
                         ["locator"] = RepositoryLocator(sourcePath, targetSpan),
                         ["contentSha256"] = sourceSha256,
                     },
-                    ["applicableComponents"] = new JsonArray(),
+                    ["applicableComponents"] = applicableComponents,
                 },
                 ["styleProfile"] = new JsonObject
                 {
@@ -595,12 +1289,18 @@ public sealed class DocumentationScribeCompositionTests
                     ["summary"] = Policy("required", 400),
                     ["remarks"] = Policy("forbidden", 400),
                     ["exceptions"] = Policy("forbidden", 400),
-                    ["componentPolicies"] = new JsonArray(),
+                    ["componentPolicies"] = componentPolicies,
                     ["inheritDocDisposition"] = "forbidden",
                     ["allowedLiterals"] = new JsonArray(),
                     ["forbiddenLiterals"] = new JsonArray(),
                     ["claimPolicies"] = new JsonArray
                     {
+                        new JsonObject
+                        {
+                            ["claimCategoryId"] = "claim.behavior",
+                            ["completeEvidenceRequired"] = false,
+                            ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                        },
                         new JsonObject
                         {
                             ["claimCategoryId"] = "claim.purpose",
@@ -612,24 +1312,7 @@ public sealed class DocumentationScribeCompositionTests
                     ["maximumEvidenceRefsPerUnit"] = 4,
                 },
                 ["contextReferences"] = contextReferences,
-                ["evidenceReferences"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["evidenceReferenceId"] = "evidence.source",
-                        ["repositoryContextRef"] = session.RepositoryContextRef.Value,
-                        ["subject"] = new JsonObject { ["symbolRef"] = Symbol(target.SymbolRef) },
-                        ["kind"] = "evidence.source.declaration",
-                        ["relation"] = "evidence.declares",
-                        ["authority"] = "authority.source-declaration",
-                        ["locator"] = RepositoryLocator(sourcePath, targetSpan),
-                        ["contentSha256"] = evidence.Commitment.ContentSha256,
-                        ["originalUtf8ByteCount"] = evidence.Commitment.OriginalUtf8ByteCount,
-                        ["includedUtf8ByteCount"] = evidence.Commitment.IncludedUtf8ByteCount,
-                        ["isTruncated"] = evidence.Commitment.IsTruncated,
-                        ["claimCategoryIds"] = new JsonArray("claim.purpose"),
-                    },
-                },
+                ["evidenceReferences"] = evidenceReferences,
                 ["evidenceConflicts"] = new JsonArray(),
                 ["toolPolicyId"] = "tool-policy.read-only.v1",
                 ["limits"] = new JsonObject
@@ -651,7 +1334,177 @@ public sealed class DocumentationScribeCompositionTests
             };
             return JsonSerializer.SerializeToUtf8Bytes(root);
         }
+
+        private static JsonObject EvidenceReference(
+            string evidenceReferenceId,
+            LoadedRepositorySession session,
+            JsonObject subject,
+            string sourcePath,
+            Utf16Span targetSpan,
+            DocumentationScribeEvidenceContextFact evidence,
+            string claimCategoryId) => new()
+            {
+                ["evidenceReferenceId"] = evidenceReferenceId,
+                ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                ["subject"] = subject.ContainsKey("symbolRef") || subject.ContainsKey("parentSymbolRef")
+                ? subject
+                : new JsonObject { ["symbolRef"] = subject },
+                ["kind"] = "evidence.source.declaration",
+                ["relation"] = "evidence.declares",
+                ["authority"] = "authority.source-declaration",
+                ["locator"] = RepositoryLocator(sourcePath, targetSpan),
+                ["contentSha256"] = evidence.Commitment.ContentSha256,
+                ["originalUtf8ByteCount"] = evidence.Commitment.OriginalUtf8ByteCount,
+                ["includedUtf8ByteCount"] = evidence.Commitment.IncludedUtf8ByteCount,
+                ["isTruncated"] = evidence.Commitment.IsTruncated,
+                ["claimCategoryIds"] = new JsonArray(claimCategoryId),
+            };
     }
+
+    private sealed record CampaignExecutionFixture(
+        CampaignPlanningInput PlanningInput,
+        CampaignWorkPlan Plan,
+        CampaignScribeExecutionCapability ExecutionCapability,
+        JsonElement StyleProjection,
+        CampaignCheckpointState InitialState)
+    {
+        internal DocumentationCampaignProposalInput Input(
+            CompositionFixture fixture,
+            ICampaignCheckpointStore store,
+            IDocumentationScribeModelExchange exchange,
+            DocumentationScribeRuntimeOptions runtimeOptions,
+            CancellationToken executionToken = default,
+            CancellationToken settlementToken = default,
+            TimeProvider? timeProvider = null) => new(
+                fixture.Classified,
+                fixture.Observed,
+                fixture.Policy,
+                fixture.AuditInputs,
+                fixture.AuditDocument,
+                PlanningInput,
+                Plan,
+                ExecutionCapability,
+                "style.public-api.v1",
+                StyleProjection,
+                fixture.RequestBytes,
+                store,
+                runtimeOptions,
+                exchange,
+                null,
+                executionToken,
+                settlementToken,
+                timeProvider);
+    }
+
+    private sealed class MemoryCampaignStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
+    {
+        private readonly object gate = new();
+        private CampaignCheckpointArtifact? current = initial;
+
+        internal CampaignCheckpointArtifact? Current
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return current;
+                }
+            }
+        }
+
+        internal int SuccessfulReplaceCount { get; private set; }
+        internal CampaignCheckpointWriteKind? NextReportedReplaceKind { get; init; }
+        internal bool ApplyNextReplaceBeforeReporting { get; init; }
+
+        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (gate)
+            {
+                return ValueTask.FromResult(current is null
+                    ? CampaignCheckpointReadResult.NotFound()
+                    : CampaignCheckpointReadResult.Found(
+                        current.ExactUtf8Json.AsSpan(),
+                        current.CheckpointRevision,
+                        current.Sha256));
+            }
+        }
+
+        public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(
+            ReadOnlyMemory<byte> exactUtf8Json,
+            long checkpointRevision,
+            string sha256,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (gate)
+            {
+                if (current is not null)
+                {
+                    return ValueTask.FromResult(new CampaignCheckpointWriteResult(
+                        CampaignCheckpointWriteKind.AlreadyPresent));
+                }
+
+                current = Parse(exactUtf8Json);
+                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            }
+        }
+
+        public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(
+            long expectedCheckpointRevision,
+            string expectedSha256,
+            ReadOnlyMemory<byte> exactUtf8Json,
+            long checkpointRevision,
+            string sha256,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (gate)
+            {
+                if (current is null)
+                {
+                    return ValueTask.FromResult(new CampaignCheckpointWriteResult(
+                        CampaignCheckpointWriteKind.PredecessorMissing));
+                }
+                if (current.CheckpointRevision != expectedCheckpointRevision
+                    || !string.Equals(current.Sha256, expectedSha256, StringComparison.Ordinal))
+                {
+                    return ValueTask.FromResult(new CampaignCheckpointWriteResult(
+                        CampaignCheckpointWriteKind.CurrentMismatch));
+                }
+
+                if (NextReportedReplaceKind is { } reported)
+                {
+                    if (ApplyNextReplaceBeforeReporting)
+                    {
+                        current = Parse(exactUtf8Json);
+                        SuccessfulReplaceCount++;
+                    }
+                    return ValueTask.FromResult(new CampaignCheckpointWriteResult(reported));
+                }
+
+                current = Parse(exactUtf8Json);
+                SuccessfulReplaceCount++;
+                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            }
+        }
+
+        private static CampaignCheckpointArtifact Parse(ReadOnlyMemory<byte> bytes) =>
+            Assert.IsType<CampaignCheckpointArtifact>(CampaignStateJson.Parse(bytes).Artifact);
+    }
+
+    private static CampaignPlanningContentAuthority Content(
+        CampaignPlanningContentFamily family,
+        string id,
+        string value) => Content(family, id, JsonSerializer.SerializeToElement(new { value }));
+
+    private static CampaignPlanningContentAuthority Content(
+        CampaignPlanningContentFamily family,
+        string id,
+        JsonElement projection) => CampaignPlanningContentAuthority.CreateValidatedJsonProjection(
+            family,
+            id,
+            projection);
 
     private static ImmutableArray<MetadataReference> PlatformReferences { get; } =
         ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
@@ -702,6 +1555,33 @@ public sealed class DocumentationScribeCompositionTests
     {
         ["compilationContextRef"] = symbol.CompilationContextRef,
         ["documentationCommentId"] = symbol.DocumentationCommentId,
+    };
+
+    private static string ComponentKindId(ComponentKind kind) => kind switch
+    {
+        ComponentKind.Parameter => "parameter",
+        ComponentKind.TypeParameter => "type-parameter",
+        ComponentKind.Return => "return",
+        ComponentKind.Value => "value",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    private static string ComponentKindId(DocumentationPatchComponentKind kind) => kind switch
+    {
+        DocumentationPatchComponentKind.Parameter => "parameter",
+        DocumentationPatchComponentKind.TypeParameter => "type-parameter",
+        DocumentationPatchComponentKind.Return => "return",
+        DocumentationPatchComponentKind.Value => "value",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    private static ComponentKind CampaignComponentKind(DocumentationPatchComponentKind kind) => kind switch
+    {
+        DocumentationPatchComponentKind.Parameter => ComponentKind.Parameter,
+        DocumentationPatchComponentKind.TypeParameter => ComponentKind.TypeParameter,
+        DocumentationPatchComponentKind.Return => ComponentKind.Return,
+        DocumentationPatchComponentKind.Value => ComponentKind.Value,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
     private static JsonObject RepositoryLocator(string path, Utf16Span span) => new()
