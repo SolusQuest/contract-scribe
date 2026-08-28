@@ -960,7 +960,7 @@ public sealed class CampaignCheckpointStoreTests
                 {
                     return;
                 }
-                try
+                mutationFailure = Record.Exception(() =>
                 {
                     if (mutation == "wrong-marker")
                     {
@@ -970,12 +970,8 @@ public sealed class CampaignCheckpointStoreTests
                     {
                         WriteNativeBytes(leasePath, changedBytes);
                     }
-                    mutationApplied = true;
-                }
-                catch (Exception exception)
-                {
-                    mutationFailure = exception;
-                }
+                });
+                mutationApplied = mutationFailure is null;
             });
 
         var result = replace
