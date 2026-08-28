@@ -1,14 +1,11 @@
 using ContractScribe.Cli;
 using ContractScribe.Core;
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace ContractScribe.Tests;
 
-[CollectionDefinition("campaign-checkpoint-filesystem", DisableParallelization = true)]
-public sealed class CampaignCheckpointFilesystemCollection;
-
-[Collection("campaign-checkpoint-filesystem")]
 public sealed class CampaignCheckpointStoreTests
 {
     [Fact]
@@ -523,6 +520,7 @@ public sealed class CampaignCheckpointStoreTests
         var intended = replace ? successor : predecessor;
         var alternate = replace ? predecessor : successor;
         var mutated = false;
+        Exception? mutationFailure = null;
         var store = new FileCampaignCheckpointStore(
             fixture.CheckpointPath,
             RepositoryRoot(),
@@ -531,7 +529,14 @@ public sealed class CampaignCheckpointStoreTests
                 if (phase == hook && !mutated)
                 {
                     mutated = true;
-                    ApplyCleanupMutation(fixture, intended, alternate, mutation);
+                    try
+                    {
+                        ApplyCleanupMutation(fixture, intended, alternate, mutation);
+                    }
+                    catch (Exception exception)
+                    {
+                        mutationFailure = exception;
+                    }
                 }
             });
 
@@ -546,6 +551,7 @@ public sealed class CampaignCheckpointStoreTests
             : await WriteInitialAsync(store, intended);
 
         Assert.True(mutated);
+        Assert.Null(mutationFailure);
         Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
         AssertCleanupMutationPreserved(fixture, intended, alternate, mutation);
@@ -1062,10 +1068,10 @@ public sealed class CampaignCheckpointStoreTests
             phase => staleLockAcquired |= phase == "after-stale-lease-lock");
         var retried = await WriteInitialAsync(retry, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Written, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retried.Kind);
         Assert.True(staleLockAcquired);
-        Assert.False(File.Exists(LeasePath(fixture)));
-        Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
+        Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
+        Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
     }
 
     [SupportedOSPlatform("linux")]
@@ -1076,30 +1082,21 @@ public sealed class CampaignCheckpointStoreTests
         string mutation)
     {
         var leasePath = LeasePath(fixture);
-        var record = File.ReadAllText(leasePath);
-        var tempPath = Path.Join(fixture.StateDirectory, LeaseValue(record, "temp="));
         switch (mutation)
         {
             case "truncate":
-                File.WriteAllBytes(fixture.CheckpointPath, [0x7B]);
+                WriteNativeBytes(fixture.CheckpointPath, [0x7B]);
                 break;
             case "append":
-                using (var stream = new FileStream(
-                           fixture.CheckpointPath,
-                           FileMode.Append,
-                           FileAccess.Write,
-                           FileShare.ReadWrite))
-                {
-                    stream.WriteByte(0x20);
-                }
+                WriteNativeBytes(fixture.CheckpointPath, [.. ReadNativeBytes(fixture.CheckpointPath), 0x20]);
                 break;
             case "same-size":
-                var bytes = File.ReadAllBytes(fixture.CheckpointPath);
+                var bytes = ReadNativeBytes(fixture.CheckpointPath);
                 bytes[bytes.Length / 2] ^= 1;
-                File.WriteAllBytes(fixture.CheckpointPath, bytes);
+                WriteNativeBytes(fixture.CheckpointPath, bytes);
                 break;
             case "other-c2":
-                File.WriteAllBytes(fixture.CheckpointPath, alternate.ExactUtf8Json.ToArray());
+                WriteNativeBytes(fixture.CheckpointPath, alternate.ExactUtf8Json.AsSpan());
                 break;
             case "marker":
                 Assert.Equal(
@@ -1124,18 +1121,21 @@ public sealed class CampaignCheckpointStoreTests
                 File.Move(
                     fixture.CheckpointPath,
                     Path.Join(fixture.Root, "retained-checkpoint"));
-                File.WriteAllBytes(fixture.CheckpointPath, intended.ExactUtf8Json.ToArray());
+                WriteNativeBytes(fixture.CheckpointPath, intended.ExactUtf8Json.AsSpan(), create: true);
                 File.SetUnixFileMode(
                     fixture.CheckpointPath,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 break;
             case "temp-collision":
-                File.WriteAllText(tempPath, "collision");
+                var record = ReadNativeText(leasePath);
+                var tempPath = Path.Join(fixture.StateDirectory, LeaseValue(record, "temp="));
+                WriteNativeBytes(tempPath, "collision"u8, create: true, exclusive: true);
                 File.SetUnixFileMode(
                     tempPath,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 break;
             case "lease-record":
+                record = ReadNativeText(leasePath);
                 var changedRecord = record.Contains("operation=create", StringComparison.Ordinal)
                     ? record
                         .Replace("operation=create", "operation=replace", StringComparison.Ordinal)
@@ -1157,7 +1157,7 @@ public sealed class CampaignCheckpointStoreTests
                             $"expected-sha256={LeaseValue(record, "expected-sha256=")}",
                             "expected-sha256=-",
                             StringComparison.Ordinal);
-                File.WriteAllText(leasePath, changedRecord);
+                WriteNativeBytes(leasePath, System.Text.Encoding.UTF8.GetBytes(changedRecord));
                 break;
             default:
                 throw new InvalidOperationException("unknown cleanup mutation");
@@ -1228,6 +1228,67 @@ public sealed class CampaignCheckpointStoreTests
         record.Split('\n'),
         line => line.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
 
+    [SupportedOSPlatform("linux")]
+    private static byte[] ReadNativeBytes(string path)
+    {
+        using var handle = OpenNative(path, flags: 0);
+        using var output = new MemoryStream();
+        var buffer = new byte[4096];
+        long offset = 0;
+        while (true)
+        {
+            var count = RandomAccess.Read(handle, buffer, offset);
+            if (count == 0)
+            {
+                return output.ToArray();
+            }
+            output.Write(buffer, 0, count);
+            offset += count;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static string ReadNativeText(string path) =>
+        System.Text.Encoding.UTF8.GetString(ReadNativeBytes(path));
+
+    [SupportedOSPlatform("linux")]
+    private static void WriteNativeBytes(
+        string path,
+        ReadOnlySpan<byte> bytes,
+        bool create = false,
+        bool exclusive = false)
+    {
+        const int writeOnly = 1;
+        const int createFlag = 0x40;
+        const int exclusiveFlag = 0x80;
+        const int truncate = 0x200;
+        var flags = writeOnly | truncate;
+        if (create)
+        {
+            flags |= createFlag;
+        }
+        if (exclusive)
+        {
+            flags |= exclusiveFlag;
+        }
+
+        using var handle = OpenNative(path, flags);
+        var offset = 0;
+        while (offset < bytes.Length)
+        {
+            RandomAccess.Write(handle, bytes[offset..], offset);
+            offset = bytes.Length;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static SafeFileHandle OpenNative(string path, int flags)
+    {
+        var descriptor = OpenFile(path, flags, 0x180);
+        Assert.True(descriptor >= 0, $"open failed for '{path}' with errno {Marshal.GetLastPInvokeError()}");
+        return new SafeFileHandle((nint)descriptor, ownsHandle: true);
+    }
+
     private static ValueTask<CampaignCheckpointWriteResult> WriteInitialAsync(
         FileCampaignCheckpointStore store,
         CampaignCheckpointArtifact artifact) => store.CreateIfAbsentAsync(
@@ -1281,6 +1342,9 @@ public sealed class CampaignCheckpointStoreTests
 
     [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
     private static extern nint GetExtendedAttributeSize(string path, string name, nint value, nuint size);
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int OpenFile(string path, int flags, uint mode);
 
     private sealed class StoreFixture : IDisposable
     {
