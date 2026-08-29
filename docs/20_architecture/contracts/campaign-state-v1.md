@@ -229,6 +229,65 @@ Execution cancellation is independent from settlement/readback cancellation. The
 
 These process-local additions do not alter Campaign State v1 properties, enum vocabulary, parser/writer, schema, known-answer bytes, result-commitment matrix, or `ICampaignCheckpointStore`.
 
+## In-process cumulative Patch execution
+
+The campaign Patch executor consumes the exact live classified and observed
+repository sessions, accepted C1 planning input and plan, current execution and
+Style authorities, and a current closed M2 projection. The projection contains
+exactly `m2ProjectionVersion: 1` and a positive
+`maximumPatchElapsedMilliseconds`. Its canonical
+`configuration.m2-projection` authority must match C1 by ID and SHA. The same
+maximum is used unchanged as both the conservative write-ahead Patch elapsed
+reservation and the one-shot M2 deadline; it cannot exceed the accepted
+campaign elapsed ceiling or the Campaign State observation bound.
+
+Before reconstruction, the executor independently re-establishes every active
+proposal evidence row from the current M1/C1 catalog or current repository,
+Roslyn, generated-output, metadata, and supported context facts. It recomputes
+the stable evidence projection and rejects missing, stale, duplicated,
+ambiguous, unsupported, or non-reconstructible rows before reservation. Merely
+copying persisted evidence metadata and substituting a fresh
+`RepositoryContextRef` is not current evidence. The C2 factory receives exactly
+the rederived set, and its result must contain every selected accepted or
+proposal-complete block in C1 order. Accepted-only reconstruction is a separate
+action and cannot satisfy a mixed active projection.
+
+Every real M2 call, including accepted-candidate reconstruction, follows a
+conditional Patch reservation and exact readback. An observer cannot dispatch.
+Caller cancellation and the projection deadline register distinct causes in an
+atomic first-cause coordinator; their linked token is execution-only, while
+settlement/readback uses the independent settlement token. An authoritative
+typed M2 result retains C3 precedence over a simultaneous stop. Without a typed
+result, the first cause selects cancellation or timeout, and a bounded engine
+failure remains host failure. Monotonic observed elapsed replaces conservative
+exposure only through the exact C3 settlement transition.
+
+Fresh reservation and active-reservation retry require a predecessor revision
+at most `MaximumObservation - 2`. At the penultimate revision, a nonterminal
+state uses `Stop(Exhausted)` and an active Patch reservation uses
+`StopActiveInvocation(Exhausted)` with zero M2; durable terminals replay
+unchanged. Accepted-only reconstruction without a settlement revision fails
+closed, and a maximum-revision state requiring mutation is a state conflict.
+
+The exact read-back state selects continuation. A locally retained candidate
+may be returned only after its request, result, accepted projection, changed
+files, hashes, and observations match the accepted checkpoint. Accepted state
+without that process-local capability performs reservation-driven accepted-only
+reconstruction. A sole-item reduction is never repeated; remaining active work
+is recomposed as one full projection. Durable rejection, stale, host failure,
+cancellation, timeout, and closed stops replay with zero M2. An accepted M2
+result that C3 persists as `over-bound` returns exhaustion, discards the
+transient candidate, preserves the prior candidate observation, and is not
+rerun because its known-completed Patch projection is authoritative.
+
+Candidate source bytes remain confined to the nonserialized internal accepted
+capability after exact settlement readback. Checkpoint JSON, cumulative state,
+diagnostics, exceptions, logs, printable outcomes, and every nonaccepted or
+uncertain path contain no source/evidence/provider text, candidate bytes, diff,
+credential, or absolute path. These rules add no Campaign State property,
+schema branch, compatibility reader, migration, second Patch engine, physical
+store, public command, or provider operation.
+
 ## Conditional store and readback
 
 `ICampaignCheckpointStore` exposes only typed read, create-if-absent, and
