@@ -458,18 +458,12 @@ public sealed partial class DocumentationScribeCompositionTests
         await using var timeoutFixture = await CompositionFixture.CreateProposalStageAsync();
         var timeoutCampaign = timeoutFixture.CreateCampaign(maximumPatchElapsedMilliseconds: 1);
         var timeoutStore = await ProposalReadyStore(timeoutFixture, timeoutCampaign);
-        var timeoutEngine = new DocumentationPatchEngine(
-            stagingParentFactory: null,
-            (stage, _) =>
-            {
-                if (stage == DocumentationPatchApplicationStage.BaselineCaptured)
-                {
-                    Thread.Sleep(20);
-                }
-            },
-            observer: null);
         var timedOut = await DocumentationCampaignPatchExecutor.ExecuteAsync(
-            PatchInput(timeoutFixture, timeoutCampaign, timeoutStore, patchEngine: timeoutEngine));
+            PatchInput(
+                timeoutFixture,
+                timeoutCampaign,
+                timeoutStore,
+                timeProvider: new ImmediateDeadlineTimeProvider()));
         Assert.Equal(DocumentationCampaignOutcomeKind.TimedOut, timedOut.Kind);
         Assert.Null(timeoutStore.Current!.State.ActiveReservation);
         Assert.Null(timedOut.AcceptedCandidate);
@@ -523,4 +517,34 @@ public sealed partial class DocumentationScribeCompositionTests
             timeProvider);
 
     private sealed class SimulatedPatchProcessExitException : Exception;
+
+    private sealed class ImmediateDeadlineTimeProvider : TimeProvider
+    {
+        private int timestampReads;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() => Interlocked.Increment(ref timestampReads) == 1 ? 0 : 1;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            callback(state);
+            return new NoopTimer();
+        }
+    }
+
+    private sealed class NoopTimer : ITimer
+    {
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }

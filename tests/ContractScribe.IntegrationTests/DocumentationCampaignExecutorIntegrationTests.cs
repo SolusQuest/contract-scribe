@@ -132,18 +132,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             var campaign = CreatePatchCampaign(timeoutFixture, maximumPatchElapsedMilliseconds: 1);
             var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
             await PopulatePatchProposalsAsync(timeoutFixture, campaign, store);
-            var engine = new DocumentationPatchEngine(
-                stagingParentFactory: null,
-                (stage, _) =>
-                {
-                    if (stage == DocumentationPatchApplicationStage.BaselineCaptured)
-                    {
-                        Thread.Sleep(20);
-                    }
-                },
-                observer: null);
             var timedOut = await DocumentationCampaignPatchExecutor.ExecuteAsync(
-                PatchInput(timeoutFixture, campaign, store, patchEngine: engine));
+                PatchInput(
+                    timeoutFixture,
+                    campaign,
+                    store,
+                    timeProvider: new ImmediateDeadlineTimeProvider()));
             Assert.Equal(DocumentationCampaignOutcomeKind.TimedOut, timedOut.Kind);
             Assert.Null(store.Current.State.ActiveReservation);
             Assert.Null(timedOut.AcceptedCandidate);
@@ -170,12 +164,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                          additionalSources: AdditionalPatchSources()))
         {
             var campaign = CreatePatchCampaign(conflictFixture);
-            var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState))
-            {
-                ReportedReplaceAttempt = 7,
-                ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
-            };
+            var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
             await PopulatePatchProposalsAsync(conflictFixture, campaign, store);
+            store.ReportedReplaceAttempt = store.SuccessfulReplaceCount + 1;
+            store.ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch;
             var dispatches = 0;
             var engine = new DocumentationPatchEngine(
                 stagingParentFactory: null,
@@ -233,6 +225,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 /// <summary>Provides the base fixture used by the patch-stage campaign.</summary>
                 public class BaseFixture
                 {
+                    /// <summary>Runs the documented base operation.</summary>
                     public virtual void Run()
                     {
                     }
@@ -253,6 +246,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 public sealed class OtherFixture
                 {
                     public void Run()
+                    {
+                    }
+
+                    public void Stop()
                     {
                     }
                 }
@@ -287,9 +284,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var selectedTargets = classifications.Targets.Where(target =>
                 target.SupportStatus == SupportStatus.Supported
                 && target.SymbolRef.DocumentationCommentId is
-                    "M:EndToEnd.BaseFixture.Run"
-                    or "M:EndToEnd.Fixture.Run"
-                    or "M:EndToEnd.OtherFixture.Run")
+                    "M:EndToEnd.Fixture.Run"
+                    or "M:EndToEnd.OtherFixture.Run"
+                    or "M:EndToEnd.OtherFixture.Stop")
             .OrderBy(target => target.SymbolRef.DocumentationCommentId, StringComparer.Ordinal)
             .ToImmutableArray();
         Assert.Equal(3, selectedTargets.Length);
@@ -418,7 +415,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         ICampaignCheckpointStore store,
         CancellationToken executionToken = default,
         CancellationToken settlementToken = default,
-        DocumentationPatchEngine? patchEngine = null) => new(
+        DocumentationPatchEngine? patchEngine = null,
+        TimeProvider? timeProvider = null) => new(
             fixture.Classified,
             fixture.Observations,
             campaign.Policy,
@@ -433,7 +431,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             store,
             executionToken,
             settlementToken,
-            patchEngine);
+            patchEngine,
+            timeProvider);
 
     private static PatchCampaignRequest CreatePatchCampaignRequest(
         EndToEndFixture fixture,
@@ -530,6 +529,36 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     private sealed class PatchProcessExitException : Exception;
 
+    private sealed class ImmediateDeadlineTimeProvider : TimeProvider
+    {
+        private int timestampReads;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() => Interlocked.Increment(ref timestampReads) == 1 ? 0 : 1;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            callback(state);
+            return new NoopTimer();
+        }
+    }
+
+    private sealed class NoopTimer : ITimer
+    {
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class PatchMemoryStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
     {
         private readonly object gate = new();
@@ -540,9 +569,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
         internal CampaignCheckpointArtifact Current => current;
 
-        internal int? ReportedReplaceAttempt { get; init; }
+        internal int? ReportedReplaceAttempt { get; set; }
 
-        internal CampaignCheckpointWriteKind? ReportedReplaceKind { get; init; }
+        internal CampaignCheckpointWriteKind? ReportedReplaceKind { get; set; }
 
         internal bool ApplyReportedReplaceBeforeReturning { get; init; }
 
