@@ -597,6 +597,55 @@ public sealed partial class DocumentationScribeCompositionTests
             dynamicReference!,
             claimCategoryIds: ["claim.substituted"])));
 
+        var proposal = stateWork.TrustedProposal!;
+        var projection = proposal.Evidence.First(item => item.ClaimCategoryIds.Length > 0);
+        var truncatedProjection = projection with { IsTruncated = true };
+        CumulativeDocumentationPatchComposer.ValidateClaimAuthority(
+            campaign.Plan,
+            [proposal],
+            truncatedProjection);
+
+        var completeEvidencePolicies = target.StyleProfile!.ClaimPolicies
+            .Select(policy => projection.ClaimCategoryIds.Contains(
+                    policy.ClaimCategoryId,
+                    StringComparer.Ordinal)
+                ? new DocumentationScribeClaimPolicy(
+                    policy.ClaimCategoryId,
+                    completeEvidenceRequired: true,
+                    policy.AllowedAuthorities)
+                : policy)
+            .ToImmutableArray();
+        var completeEvidenceWork = new CampaignPlanningWorkItem(
+            planWork.WorkItemKey,
+            planWork.OwnerEquivalenceRef,
+            [Target(target, styleProfile: Style(
+                target.StyleProfile,
+                target.StyleProfile.StyleProfileId,
+                completeEvidencePolicies))],
+            planWork.ViolationCauses,
+            planWork.Disposition);
+        var completeEvidencePlan = new CampaignWorkPlan(
+            campaign.Plan.CampaignLineage,
+            campaign.Plan.OpaqueSnapshotBinding,
+            campaign.Plan.AuditDocumentSha256,
+            campaign.Plan.ExecutionCommitment,
+            campaign.Plan.TargetProfile,
+            campaign.Plan.WorkItems
+                .Select(work => string.Equals(
+                    work.WorkItemKey,
+                    completeEvidenceWork.WorkItemKey,
+                    StringComparison.Ordinal)
+                    ? completeEvidenceWork
+                    : work)
+                .ToImmutableArray(),
+            campaign.Plan.Summary);
+
+        Assert.Throws<ArgumentException>(() =>
+            CumulativeDocumentationPatchComposer.ValidateClaimAuthority(
+                completeEvidencePlan,
+                [proposal],
+                truncatedProjection));
+
         void AssertRejected(CampaignPlanningTargetFact changedTarget) =>
             Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(
                 state,
@@ -780,7 +829,8 @@ public sealed partial class DocumentationScribeCompositionTests
 
     private static DocumentationScribeStyleProfile Style(
         DocumentationScribeStyleProfile basis,
-        string id) => new(
+        string id,
+        ImmutableArray<DocumentationScribeClaimPolicy>? claimPolicies = null) => new(
             id,
             basis.OutputLanguageId,
             basis.Summary,
@@ -790,7 +840,7 @@ public sealed partial class DocumentationScribeCompositionTests
             basis.InheritDocDisposition,
             basis.AllowedLiterals,
             basis.ForbiddenLiterals,
-            basis.ClaimPolicies,
+            claimPolicies ?? basis.ClaimPolicies,
             basis.MaximumContentUnits,
             basis.MaximumEvidenceRefsPerUnit);
 

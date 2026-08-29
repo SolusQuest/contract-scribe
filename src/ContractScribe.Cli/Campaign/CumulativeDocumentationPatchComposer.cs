@@ -310,7 +310,7 @@ internal static class CumulativeDocumentationPatchComposer
         return StrictUtf8.GetByteCount(text[span.Value.Start..span.Value.End]);
     }
 
-    private static void ValidateClaimAuthority(
+    internal static void ValidateClaimAuthority(
         CampaignWorkPlan acceptedPlan,
         ImmutableArray<CampaignTrustedProposal> proposals,
         CampaignEvidenceProjection projection)
@@ -332,7 +332,8 @@ internal static class CumulativeDocumentationPatchComposer
             || profiles.Any(profile => projection.ClaimCategoryIds.Any(category =>
                 !profile!.ClaimPolicies.Any(policy =>
                     string.Equals(policy.ClaimCategoryId, category, StringComparison.Ordinal)
-                    && policy.AllowedAuthorities.Contains(projection.Authority)))))
+                    && policy.AllowedAuthorities.Contains(projection.Authority)
+                    && !(projection.IsTruncated && policy.CompleteEvidenceRequired)))))
         {
             throw new ArgumentException("campaign.patch.evidence-policy-mismatch");
         }
