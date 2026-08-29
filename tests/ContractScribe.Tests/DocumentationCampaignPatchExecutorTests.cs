@@ -688,10 +688,12 @@ public sealed partial class DocumentationScribeCompositionTests
     internal static async Task RunCampaignPatchElapsedAuthorityAsync()
     {
         var exactClock = new FixedElapsedTimeProvider(10_001, 10_000);
+        _ = exactClock.GetTimestamp();
         Assert.Equal(1_001, DocumentationCampaignPatchExecutor.ObserveElapsedMilliseconds(
             exactClock,
             exactClock.GetTimestamp()));
         var unrepresentableClock = new FixedElapsedTimeProvider(1, 0);
+        _ = unrepresentableClock.GetTimestamp();
         Assert.Null(DocumentationCampaignPatchExecutor.ObserveElapsedMilliseconds(
             unrepresentableClock,
             unrepresentableClock.GetTimestamp()));
@@ -873,7 +875,7 @@ public sealed partial class DocumentationScribeCompositionTests
         public override long TimestampFrequency => frequency;
 
         public override long GetTimestamp() =>
-            Interlocked.Increment(ref timestampReads) == 1 ? 0 : elapsedTicks;
+            Interlocked.Increment(ref timestampReads) <= 2 ? 0 : elapsedTicks;
 
         public override ITimer CreateTimer(
             TimerCallback callback,
