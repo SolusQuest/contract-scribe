@@ -526,10 +526,11 @@ public static class CampaignStateFactory
         byte[] bytes;
         try
         {
+            var ordered = OrderPatchProposals(completeProjectionSet);
             bytes = CampaignStateJson.WritePatchRequest(
                 context,
                 catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
-                completeProjectionSet.Select(item => item.PatchBlock).ToImmutableArray());
+                ordered.Select(item => item.PatchBlock).ToImmutableArray());
         }
         catch (CampaignStateValidationException exception)
             when (exception.Code == CampaignStateValidationCode.InvalidBound)
@@ -568,10 +569,11 @@ public static class CampaignStateFactory
         try
         {
             var catalog = ValidateProjectionEvidenceConsistency(activeProposals);
+            var ordered = OrderPatchProposals(activeProposals);
             var bytes = CampaignStateJson.WritePatchRequest(
                 context,
                 catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
-                activeProposals.Select(item => item.PatchBlock).ToImmutableArray());
+                ordered.Select(item => item.PatchBlock).ToImmutableArray());
             return bytes.Length >= DocumentationPatchValidator.MaximumArtifactUtf8Bytes
                 ? CampaignTrustedProposalAdmissionKind.OverBound
                 : CampaignTrustedProposalAdmissionKind.Admitted;
@@ -802,7 +804,7 @@ public static class CampaignStateFactory
         if (result.Outcome == DocumentationPatchOutcome.Accepted)
         {
             candidate = new CampaignCandidateObservation(
-                request.Blocks.Select(block => block.BlockId).ToImmutableArray(),
+                proposals.Select(proposal => proposal.PatchBlock.BlockId).ToImmutableArray(),
                 CreateAcceptedProjectionCommitment(proposals),
                 result.ChangedFiles.Select(file => new CampaignChangedFileObservation(
                     file.Path,
@@ -1789,7 +1791,8 @@ public static class CampaignStateFactory
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToImmutableArray();
-        var blocks = proposals.Select(proposal => proposal.PatchBlock).ToImmutableArray();
+        var ordered = OrderPatchProposals(proposals);
+        var blocks = ordered.Select(proposal => proposal.PatchBlock).ToImmutableArray();
         var bytes = CampaignStateJson.WritePatchRequest(context, catalog, blocks);
         var parsed = DocumentationPatchValidator.ParseRequest(bytes);
         if (!parsed.IsValid)
@@ -1801,6 +1804,13 @@ public static class CampaignStateFactory
 
         return parsed.Request!;
     }
+
+    private static ImmutableArray<CampaignTrustedProposal> OrderPatchProposals(
+        ImmutableArray<CampaignTrustedProposal> proposals) => proposals
+        .OrderBy(
+            proposal => proposal.PatchBlock,
+            Comparer<DocumentationPatchBlockRequest>.Create(DocumentationPatchValidator.CompareBlocks))
+        .ToImmutableArray();
 
     private static ImmutableArray<CampaignTrustedProposal> ResolvePatchRequestProjection(
         CampaignCheckpointState state,

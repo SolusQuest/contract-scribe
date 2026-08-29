@@ -66,8 +66,13 @@ internal static class CumulativeDocumentationPatchComposer
         var request = acceptedOnly
             ? CampaignStateFactory.ReconstructAcceptedPatchRequest(state, context, currentEvidence)
             : CampaignStateFactory.ReconstructPatchRequest(state, context, currentEvidence);
-        var expectedIds = selected.Select(pair => pair.First.WorkItemKey).ToArray();
-        if (!request.Blocks.Select(block => block.BlockId).SequenceEqual(expectedIds, StringComparer.Ordinal))
+        var expectedIds = selected.Select(pair => pair.First.WorkItemKey)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actualIds = request.Blocks.Select(block => block.BlockId)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (!actualIds.SequenceEqual(expectedIds, StringComparer.Ordinal))
         {
             throw new ArgumentException("campaign.patch.active-projection-mismatch", nameof(state));
         }

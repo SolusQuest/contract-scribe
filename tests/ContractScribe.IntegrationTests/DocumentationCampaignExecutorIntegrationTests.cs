@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Cli;
 using ContractScribe.Core;
@@ -46,7 +47,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.True(accepted.Kind == DocumentationCampaignOutcomeKind.Accepted, accepted.Code);
         Assert.NotNull(accepted.AcceptedCandidate);
         Assert.Equal(3, accepted.AcceptedCandidate!.Result.Targets.Length);
-        Assert.Equal(2, accepted.AcceptedCandidate.Files.Length);
+        Assert.Equal(2, accepted.AcceptedCandidate.Result.ChangedFiles.Length);
         Assert.Equal(3, accepted.Artifact!.State.WorkItems.Count(item =>
             item.Status == CampaignWorkStatus.Accepted));
         Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, accepted.Artifact.State.CumulativeOutcome!.Kind);
@@ -131,7 +132,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             var campaign = CreatePatchCampaign(timeoutFixture, maximumPatchElapsedMilliseconds: 1);
             var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
-            await PopulatePatchProposalsAsync(timeoutFixture, campaign, store);
+            await PopulatePatchProposalsAsync(timeoutFixture, campaign, store, proposalCount: 1);
             var timedOut = await DocumentationCampaignPatchExecutor.ExecuteAsync(
                 PatchInput(
                     timeoutFixture,
@@ -184,11 +185,16 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     private static async Task PopulatePatchProposalsAsync(
         EndToEndFixture fixture,
         PatchCampaign campaign,
-        ICampaignCheckpointStore store)
+        ICampaignCheckpointStore store,
+        int proposalCount = int.MaxValue)
     {
-        foreach (var work in campaign.Plan.WorkItems.Where(item =>
-                     item.Disposition.Kind == CampaignPlanningDispositionKind.Executable))
+        var executable = campaign.Plan.WorkItems.Where(item =>
+                item.Disposition.Kind == CampaignPlanningDispositionKind.Executable)
+            .Take(proposalCount)
+            .ToImmutableArray();
+        for (var index = 0; index < executable.Length; index++)
         {
+            var work = executable[index];
             var target = Assert.Single(work.Targets);
             var request = campaign.Requests[target.SymbolRef];
             var proposal = await DocumentationCampaignProposalExecutor.ExecuteAsync(new(
@@ -208,11 +214,20 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     "provider.synthetic.v1",
                     "model.synthetic.v1",
                     "scribe-protocol.v1"),
-                new ProposalExchange(request.Request),
+                new CampaignProposalExchange(request.Request),
                 ConfiguredAgentEntrypoint: null,
                 CancellationToken.None,
                 CancellationToken.None));
-            Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, proposal.Kind);
+            Assert.True(
+                proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady,
+                $"proposal[{index}]={proposal.Kind}:{proposal.Code}");
+            if (index < executable.Length - 1)
+            {
+                var accepted = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                    PatchInput(fixture, campaign, store));
+                Assert.True(accepted.Kind == DocumentationCampaignOutcomeKind.Accepted, accepted.Code);
+                Assert.Equal(index + 1, accepted.AcceptedCandidate!.Result.Targets.Length);
+            }
         }
     }
 
@@ -294,9 +309,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var targetAuthorities = ImmutableArray.CreateBuilder<CampaignPlanningTargetAuthority>();
         foreach (var target in selectedTargets)
         {
-            var request = target.SymbolRef == fixture.Target.SymbolRef
-                ? new PatchCampaignRequest(fixture.RequestBytes, fixture.Request)
-                : CreatePatchCampaignRequest(fixture, classifications, target, AuditOutcome(target, auditJson));
+            var request = CreatePatchCampaignRequest(
+                fixture,
+                classifications,
+                target,
+                AuditOutcome(target, auditJson));
             requests.Add(target.SymbolRef, request);
             var targetObservation = observations.Observations.Single(item =>
                 item.Subject.ParentSymbolRef == target.SymbolRef
@@ -474,6 +491,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             sourceSha256,
             context,
             auditOutcome);
+        var requestJson = JsonNode.Parse(bytes.ToArray())!.AsObject();
+        var evidenceId = "evidence.source." + CampaignSha(
+            Encoding.UTF8.GetBytes(target.SymbolRef.DocumentationCommentId))[..16];
+        Assert.Single(requestJson["evidenceReferences"]!.AsArray())!
+            .AsObject()["evidenceReferenceId"] = evidenceId;
+        bytes = JsonSerializer.SerializeToUtf8Bytes(requestJson);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         Assert.True(parsed.IsValid, parsed.Failure?.Code + ":" + parsed.Failure?.Pointer);
         return new PatchCampaignRequest(
@@ -526,6 +549,65 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     private sealed record PatchCampaignRequest(
         ReadOnlyMemory<byte> Bytes,
         DocumentationScribeRequest Request);
+
+    private sealed class CampaignProposalExchange(DocumentationScribeRequest request)
+        : IDocumentationScribeModelExchange
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(
+            DocumentationScribeModelRequest modelRequest,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                [],
+                [new DocumentationScribeModelTerminalSubmission(CampaignProposalTerminal(request))]));
+        }
+    }
+
+    private static ReadOnlyMemory<byte> CampaignProposalTerminal(DocumentationScribeRequest request)
+    {
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.Target.SourceLocator);
+        var evidenceId = Assert.Single(request.EvidenceReferences).EvidenceReferenceId;
+        return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
+        {
+            ["kind"] = "proposal",
+            ["target"] = new JsonObject
+            {
+                ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
+                ["symbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                },
+                ["sourceCommitment"] = new JsonObject
+                {
+                    ["locator"] = new JsonObject
+                    {
+                        ["repository"] = new JsonObject
+                        {
+                            ["path"] = locator.Path,
+                            ["span"] = new JsonObject
+                            {
+                                ["start"] = locator.Span!.Value.Start,
+                                ["end"] = locator.Span.Value.End,
+                            },
+                        },
+                    },
+                    ["contentSha256"] = request.Target.SourceSha256,
+                },
+            },
+            ["contentUnits"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["kind"] = "content.summary",
+                    ["lines"] = new JsonArray("Runs the selected operation."),
+                    ["claimCategoryId"] = "claim.purpose",
+                    ["evidenceReferenceIds"] = new JsonArray(evidenceId),
+                },
+            },
+        });
+    }
 
     private sealed class PatchProcessExitException : Exception;
 

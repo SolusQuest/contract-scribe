@@ -2408,7 +2408,7 @@ public static class DocumentationPatchValidator
         _ => throw Fail("invalid-vocabulary", "/outcome"),
     };
 
-    private static int CompareBlocks(
+    internal static int CompareBlocks(
         DocumentationPatchBlockRequest left,
         DocumentationPatchBlockRequest right)
     {

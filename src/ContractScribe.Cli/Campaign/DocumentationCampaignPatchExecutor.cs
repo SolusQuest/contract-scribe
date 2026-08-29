@@ -424,8 +424,8 @@ internal static class DocumentationCampaignPatchExecutor
                 cumulative.PatchResultCommitmentSha256,
                 observation.PatchResultCommitmentSha256,
                 StringComparison.Ordinal)
-            || !observation.AcceptedWorkItemKeys.SequenceEqual(
-                request.Blocks.Select(block => block.BlockId),
+            || !observation.AcceptedWorkItemKeys.Order(StringComparer.Ordinal).SequenceEqual(
+                request.Blocks.Select(block => block.BlockId).Order(StringComparer.Ordinal),
                 StringComparer.Ordinal))
         {
             return false;
