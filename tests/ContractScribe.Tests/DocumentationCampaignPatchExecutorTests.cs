@@ -708,6 +708,7 @@ public sealed partial class DocumentationScribeCompositionTests
             maximumPatchElapsedMilliseconds: 1_000,
             maximumCampaignElapsedMilliseconds: 120_000);
         var overrunStore = await ProposalReadyStore(overrunFixture, overrunCampaign);
+        var beforeOverrun = overrunStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds;
         var dispatches = 0;
         var overrunEngine = new DocumentationPatchEngine(
             stagingParentFactory: null,
@@ -722,9 +723,10 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignOutcomeKind.BudgetExhausted, overrun.Kind);
         Assert.Equal(CampaignCumulativeOutcomeKind.OverBound, overrun.Artifact!.State.CumulativeOutcome!.Kind);
-        Assert.Equal(120_001, overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
-        Assert.Equal(0, overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
-        Assert.True(overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >= 120_001);
+        var afterOverrun = overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds;
+        Assert.Equal(checked((beforeOverrun.Observed ?? 0) + 120_001), afterOverrun.Observed);
+        Assert.Equal(beforeOverrun.ConservativeUnobserved, afterOverrun.ConservativeUnobserved);
+        Assert.Equal(checked(beforeOverrun.TotalCharged + 120_001), afterOverrun.TotalCharged);
         Assert.Null(overrun.AcceptedCandidate);
         var firstDispatches = dispatches;
 
@@ -741,6 +743,7 @@ public sealed partial class DocumentationScribeCompositionTests
             maximumPatchElapsedMilliseconds: 1_000,
             maximumCampaignElapsedMilliseconds: 120_000);
         var unknownStore = await ProposalReadyStore(unknownFixture, unknownCampaign);
+        var beforeUnknown = unknownStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds;
         var unknown = await DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
             unknownFixture,
             unknownCampaign,
@@ -748,9 +751,12 @@ public sealed partial class DocumentationScribeCompositionTests
             timeProvider: new FixedElapsedTimeProvider(1, 0)));
 
         Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, unknown.Kind);
-        Assert.Null(unknown.Artifact!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
-        Assert.Equal(1_000, unknown.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
-        Assert.True(unknown.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >= 1_000);
+        var afterUnknown = unknown.Artifact!.State.LineageCharges.ActiveElapsedMilliseconds;
+        Assert.Equal(beforeUnknown.Observed, afterUnknown.Observed);
+        Assert.Equal(
+            checked(beforeUnknown.ConservativeUnobserved + 1_000),
+            afterUnknown.ConservativeUnobserved);
+        Assert.Equal(checked(beforeUnknown.TotalCharged + 1_000), afterUnknown.TotalCharged);
     }
 
     private static CampaignPlanningTargetFact Target(
