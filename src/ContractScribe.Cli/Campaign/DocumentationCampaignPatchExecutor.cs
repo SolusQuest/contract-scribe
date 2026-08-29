@@ -335,6 +335,7 @@ internal static class DocumentationCampaignPatchExecutor
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
+            // The independent registrations below retain the authoritative caller/deadline stop cause.
         }
 
         long? observed = null;
