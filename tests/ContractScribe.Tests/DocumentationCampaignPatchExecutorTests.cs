@@ -473,6 +473,17 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignOutcomeKind.TimedOut, timedOut.Kind);
         Assert.Null(timeoutStore.Current!.State.ActiveReservation);
         Assert.Null(timedOut.AcceptedCandidate);
+
+        await using var longDeadlineFixture = await CompositionFixture.CreateProposalStageAsync();
+        const long longDeadline = (long)int.MaxValue + 1_000;
+        var longDeadlineCampaign = longDeadlineFixture.CreateCampaign(
+            longDeadline,
+            maximumCampaignElapsedMilliseconds: longDeadline);
+        var longDeadlineStore = await ProposalReadyStore(longDeadlineFixture, longDeadlineCampaign);
+        var longDeadlineOutcome = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(longDeadlineFixture, longDeadlineCampaign, longDeadlineStore));
+        Assert.NotEqual(DocumentationCampaignOutcomeKind.AmbiguousDispatch, longDeadlineOutcome.Kind);
+        Assert.Null(longDeadlineStore.Current!.State.ActiveReservation);
     }
 
     private static async Task<MemoryCampaignStore> ProposalReadyStore(

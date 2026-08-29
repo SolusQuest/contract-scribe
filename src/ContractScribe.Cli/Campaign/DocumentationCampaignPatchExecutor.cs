@@ -315,9 +315,7 @@ internal static class DocumentationCampaignPatchExecutor
         TimeProvider clock,
         CancellationToken callerToken)
     {
-        using var deadline = new CancellationTokenSource(
-            TimeSpan.FromMilliseconds(maximumElapsedMilliseconds),
-            clock);
+        using var deadline = new CampaignPatchDeadline(clock, maximumElapsedMilliseconds);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(callerToken, deadline.Token);
         var causeState = new StopCause(0);
         using var currentCallerRegistration = callerToken.Register(
@@ -575,6 +573,90 @@ internal static class DocumentationCampaignPatchExecutor
     {
         internal StopCause(int value) => Value = value;
         internal int Value;
+    }
+
+    private sealed class CampaignPatchDeadline : IDisposable
+    {
+        private const long MaximumTimerSliceMilliseconds = int.MaxValue - 1L;
+        private readonly object gate = new();
+        private readonly TimeProvider clock;
+        private readonly long maximumElapsedMilliseconds;
+        private readonly long started;
+        private readonly CancellationTokenSource cancellation = new();
+        private readonly ITimer timer;
+        private bool disposed;
+
+        internal CampaignPatchDeadline(TimeProvider clock, long maximumElapsedMilliseconds)
+        {
+            this.clock = clock;
+            this.maximumElapsedMilliseconds = maximumElapsedMilliseconds;
+            started = clock.GetTimestamp();
+            timer = clock.CreateTimer(
+                static state => ((CampaignPatchDeadline)state!).OnTimer(),
+                this,
+                Slice(maximumElapsedMilliseconds),
+                Timeout.InfiniteTimeSpan);
+        }
+
+        internal CancellationToken Token => cancellation.Token;
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+            }
+
+            timer.Dispose();
+            cancellation.Dispose();
+        }
+
+        private void OnTimer()
+        {
+            lock (gate)
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                long remaining;
+                try
+                {
+                    var elapsed = clock.GetElapsedTime(started, clock.GetTimestamp()).TotalMilliseconds;
+                    if (!double.IsFinite(elapsed) || elapsed < 0)
+                    {
+                        cancellation.Cancel();
+                        return;
+                    }
+
+                    remaining = elapsed >= maximumElapsedMilliseconds
+                        ? 0
+                        : checked((long)Math.Ceiling(maximumElapsedMilliseconds - elapsed));
+                }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                {
+                    cancellation.Cancel();
+                    return;
+                }
+
+                if (remaining <= 0)
+                {
+                    cancellation.Cancel();
+                    return;
+                }
+
+                _ = timer.Change(Slice(remaining), Timeout.InfiniteTimeSpan);
+            }
+        }
+
+        private static TimeSpan Slice(long milliseconds) =>
+            TimeSpan.FromMilliseconds(Math.Min(milliseconds, MaximumTimerSliceMilliseconds));
     }
 
     private sealed record PatchExecution(

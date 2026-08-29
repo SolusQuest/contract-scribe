@@ -1192,7 +1192,9 @@ public sealed partial class DocumentationScribeCompositionTests
                 "M:ProposalStage.ProposalFixture.Execute",
                 nonMethodDocumentationId: null);
 
-        internal CampaignExecutionFixture CreateCampaign(long maximumPatchElapsedMilliseconds = 120_000)
+        internal CampaignExecutionFixture CreateCampaign(
+            long maximumPatchElapsedMilliseconds = 120_000,
+            long maximumCampaignElapsedMilliseconds = 300_000)
         {
             var classifications = Classified.Classification.ClassificationSet!;
             var observations = Observed.Observation.ObservationSet!;
@@ -1275,7 +1277,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     500_000,
                     100_000,
                     5_000_000,
-                    300_000,
+                    maximumCampaignElapsedMilliseconds,
                     8,
                     costEnforced: false,
                     costCurrency: null,
