@@ -21,6 +21,18 @@ public sealed class DocumentationCampaignExecutorIntegrationTests
     [Fact]
     public Task Real_M2_closes_stop_causes_and_preserves_ambiguous_reservations_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchFailureIntegrationAsync();
+
+    [Fact]
+    public Task Real_M2_reduces_only_a_single_independent_rejection_on_Linux() =>
+        DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchReductionIntegrationAsync();
+
+    [Fact]
+    public Task Real_M2_closes_non_removable_rejection_and_host_failure_on_Linux() =>
+        DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchClosedFailureIntegrationAsync();
+
+    [Fact]
+    public Task Real_M2_recovers_settlement_crash_and_readback_vectors_on_Linux() =>
+        DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchSettlementRecoveryIntegrationAsync();
 }
 
 public sealed partial class DocumentationScribeEndToEndIntegrationTests
@@ -182,6 +194,235 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         }
     }
 
+    internal static async Task RunCampaignPatchReductionIntegrationAsync()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await EndToEndFixture.CreateAsync(
+            additionalSources: RejectionPatchSources());
+        var campaign = CreatePatchCampaign(fixture);
+        var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        await PopulatePatchProposalsAsync(fixture, campaign, store, proposalCount: 1);
+
+        var reduced = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store));
+
+        Assert.Equal(DocumentationCampaignOutcomeKind.Rejected, reduced.Kind);
+        Assert.Null(reduced.AcceptedCandidate);
+        var closed = Assert.Single(reduced.Artifact!.State.WorkItems, item =>
+            item.Status == CampaignWorkStatus.Closed);
+        Assert.Equal(CampaignWorkOutcomeCode.PatchRejected, closed.ClosedOutcome!.Code);
+        Assert.Null(reduced.Artifact.State.ActiveReservation);
+
+        var writesAfterReduction = store.SuccessfulReplaceCount;
+        var replayed = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store));
+        Assert.Equal(DocumentationCampaignOutcomeKind.NoWork, replayed.Kind);
+        Assert.Equal(writesAfterReduction, store.SuccessfulReplaceCount);
+    }
+
+    internal static async Task RunCampaignPatchClosedFailureIntegrationAsync()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using (var rejectionFixture = await EndToEndFixture.CreateAsync(
+                         additionalSources: AdditionalPatchSources()))
+        {
+            var campaign = CreatePatchCampaign(rejectionFixture);
+            var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+            await PopulatePatchProposalsAsync(rejectionFixture, campaign, store, proposalCount: 1);
+            string? stagingRoot = null;
+            var engine = new DocumentationPatchEngine(
+                stagingParentFactory: null,
+                (stage, root) =>
+                {
+                    if (stage == DocumentationPatchApplicationStage.AfterSealBeforeReturn)
+                    {
+                        stagingRoot = root;
+                    }
+                },
+                stage =>
+                {
+                    if (stage == DocumentationPatchEngineStage.BeforeCandidateTerminalPass)
+                    {
+                        File.AppendAllText(
+                            Path.Join(Assert.IsType<string>(stagingRoot), "Fixture.cs"),
+                            " ",
+                            new UTF8Encoding(false));
+                    }
+                });
+
+            var rejected = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                PatchInput(rejectionFixture, campaign, store, patchEngine: engine));
+
+            Assert.Equal(DocumentationCampaignOutcomeKind.Rejected, rejected.Kind);
+            Assert.Null(rejected.AcceptedCandidate);
+            Assert.DoesNotContain(rejected.Artifact!.State.WorkItems, item =>
+                item.ClosedOutcome?.Code == CampaignWorkOutcomeCode.PatchRejected);
+            Assert.Contains(rejected.Artifact.State.WorkItems, item =>
+                item.Status == CampaignWorkStatus.ProposalComplete);
+            Assert.Null(rejected.Artifact.State.ActiveReservation);
+        }
+
+        await using (var hostFixture = await EndToEndFixture.CreateAsync(
+                         additionalSources: AdditionalPatchSources()))
+        {
+            var campaign = CreatePatchCampaign(hostFixture);
+            var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+            await PopulatePatchProposalsAsync(hostFixture, campaign, store, proposalCount: 1);
+            var engine = new DocumentationPatchEngine(
+                () => hostFixture.SourcePath,
+                applicationObserver: null,
+                observer: null);
+
+            var failed = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                PatchInput(hostFixture, campaign, store, patchEngine: engine));
+
+            Assert.Equal(DocumentationCampaignOutcomeKind.HostFailure, failed.Kind);
+            Assert.Null(failed.AcceptedCandidate);
+            Assert.Null(failed.Artifact!.State.ActiveReservation);
+        }
+    }
+
+    internal static async Task RunCampaignPatchSettlementRecoveryIntegrationAsync()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.BeforeReplacement);
+        await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.AfterReplacement);
+        await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.BeforeExactReadback);
+        await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.BeforeReplacement);
+        await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.AfterReplacement);
+        await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.BeforeExactReadback);
+    }
+
+    private static async Task VerifyAcceptedSettlementRecoveryAsync(SettlementFault fault)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync(
+            additionalSources: AdditionalPatchSources());
+        var campaign = CreatePatchCampaign(fixture);
+        var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        await PopulatePatchProposalsAsync(fixture, campaign, store, proposalCount: 1);
+        store.FaultReplaceAttempt = store.SuccessfulReplaceCount + 2;
+        store.SettlementFault = fault;
+        var dispatches = 0;
+        var engine = new DocumentationPatchEngine(
+            stagingParentFactory: null,
+            applicationObserver: null,
+            stage =>
+            {
+                if (stage == DocumentationPatchEngineStage.BeforeFinalOriginalRebind)
+                {
+                    dispatches++;
+                }
+            });
+
+        if (fault is SettlementFault.BeforeReplacement or SettlementFault.AfterReplacement)
+        {
+            await Assert.ThrowsAsync<PatchStoreCrashException>(async () =>
+                await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                    PatchInput(fixture, campaign, store, patchEngine: engine)));
+        }
+        else
+        {
+            var unconfirmed = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                PatchInput(fixture, campaign, store, patchEngine: engine));
+            Assert.Equal(DocumentationCampaignOutcomeKind.StateConflict, unconfirmed.Kind);
+            Assert.Null(unconfirmed.AcceptedCandidate);
+        }
+
+        if (fault == SettlementFault.BeforeReplacement)
+        {
+            Assert.IsType<CampaignPatchReservation>(store.Current.State.ActiveReservation);
+        }
+
+        store.SettlementFault = SettlementFault.None;
+        var recovered = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store, patchEngine: engine));
+
+        if (fault == SettlementFault.BeforeReplacement)
+        {
+            Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, recovered.Kind);
+            Assert.Equal(2, dispatches);
+        }
+        else
+        {
+            Assert.Equal(DocumentationCampaignOutcomeKind.Reconstructed, recovered.Kind);
+            Assert.Equal(2, dispatches);
+        }
+        Assert.NotNull(recovered.AcceptedCandidate);
+
+        var writesAfterReadback = store.SuccessfulReplaceCount;
+        var afterReadbackRestart = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store, patchEngine: engine));
+        Assert.Equal(DocumentationCampaignOutcomeKind.Reconstructed, afterReadbackRestart.Kind);
+        Assert.Equal(3, dispatches);
+        Assert.Equal(writesAfterReadback + 2, store.SuccessfulReplaceCount);
+    }
+
+    private static async Task VerifyHostFailureSettlementRecoveryAsync(SettlementFault fault)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync(
+            additionalSources: AdditionalPatchSources());
+        var campaign = CreatePatchCampaign(fixture);
+        var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        await PopulatePatchProposalsAsync(fixture, campaign, store, proposalCount: 1);
+        store.FaultReplaceAttempt = store.SuccessfulReplaceCount + 2;
+        store.SettlementFault = fault;
+        var dispatches = 0;
+        var engine = new DocumentationPatchEngine(
+            () =>
+            {
+                dispatches++;
+                return fixture.SourcePath;
+            },
+            applicationObserver: null,
+            observer: null);
+
+        if (fault is SettlementFault.BeforeReplacement or SettlementFault.AfterReplacement)
+        {
+            await Assert.ThrowsAsync<PatchStoreCrashException>(async () =>
+                await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                    PatchInput(fixture, campaign, store, patchEngine: engine)));
+        }
+        else
+        {
+            var unconfirmed = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+                PatchInput(fixture, campaign, store, patchEngine: engine));
+            Assert.Equal(DocumentationCampaignOutcomeKind.StateConflict, unconfirmed.Kind);
+            Assert.Null(unconfirmed.AcceptedCandidate);
+        }
+
+        if (fault == SettlementFault.BeforeReplacement)
+        {
+            Assert.IsType<CampaignPatchReservation>(store.Current.State.ActiveReservation);
+        }
+
+        store.SettlementFault = SettlementFault.None;
+        var replayed = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store, patchEngine: engine));
+        Assert.Equal(DocumentationCampaignOutcomeKind.HostFailure, replayed.Kind);
+        Assert.Null(replayed.AcceptedCandidate);
+        Assert.Null(replayed.Artifact!.State.ActiveReservation);
+        Assert.Equal(fault == SettlementFault.BeforeReplacement ? 2 : 1, dispatches);
+
+        var writesAfterReadback = store.SuccessfulReplaceCount;
+        var afterReadbackRestart = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store, patchEngine: engine));
+        Assert.Equal(DocumentationCampaignOutcomeKind.HostFailure, afterReadbackRestart.Kind);
+        Assert.Equal(writesAfterReadback, store.SuccessfulReplaceCount);
+        Assert.Equal(fault == SettlementFault.BeforeReplacement ? 2 : 1, dispatches);
+    }
+
     private static async Task PopulatePatchProposalsAsync(
         EndToEndFixture fixture,
         PatchCampaign campaign,
@@ -270,6 +511,21 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 }
                 """,
         };
+
+    private static Dictionary<string, string> RejectionPatchSources()
+    {
+        var sources = AdditionalPatchSources();
+        sources["Fixture.cs"] = MixedLineEndings(sources["Fixture.cs"]);
+        return sources;
+    }
+
+    private static string MixedLineEndings(string source)
+    {
+        var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var firstBreak = normalized.IndexOf('\n');
+        Assert.True(firstBreak >= 0);
+        return normalized[..firstBreak] + "\r\n" + normalized[(firstBreak + 1)..];
+    }
 
     private static PatchCampaign CreatePatchCampaign(
         EndToEndFixture fixture,
@@ -641,6 +897,16 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private enum SettlementFault
+    {
+        None,
+        BeforeReplacement,
+        AfterReplacement,
+        BeforeExactReadback,
+    }
+
+    private sealed class PatchStoreCrashException : Exception;
+
     private sealed class PatchMemoryStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
     {
         private readonly object gate = new();
@@ -657,11 +923,23 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
         internal bool ApplyReportedReplaceBeforeReturning { get; init; }
 
+        internal int? FaultReplaceAttempt { get; set; }
+
+        internal SettlementFault SettlementFault { get; set; }
+
+        private bool failNextRead;
+
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             lock (gate)
             {
+                if (failNextRead)
+                {
+                    failNextRead = false;
+                    return ValueTask.FromResult(CampaignCheckpointReadResult.Unreadable());
+                }
+
                 return ValueTask.FromResult(CampaignCheckpointReadResult.Found(
                     current.ExactUtf8Json.AsSpan(),
                     current.CheckpointRevision,
@@ -696,6 +974,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         CampaignCheckpointWriteKind.CurrentMismatch));
                 }
 
+                if (FaultReplaceAttempt == replaceAttempt
+                    && SettlementFault == SettlementFault.BeforeReplacement)
+                {
+                    throw new PatchStoreCrashException();
+                }
+
                 var parsed = CampaignStateJson.Parse(exactUtf8Json);
                 var successor = Assert.IsType<CampaignCheckpointArtifact>(parsed.Artifact);
                 if (ReportedReplaceAttempt == replaceAttempt
@@ -712,6 +996,18 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
                 current = successor;
                 SuccessfulReplaceCount++;
+                if (FaultReplaceAttempt == replaceAttempt)
+                {
+                    if (SettlementFault == SettlementFault.AfterReplacement)
+                    {
+                        throw new PatchStoreCrashException();
+                    }
+
+                    if (SettlementFault == SettlementFault.BeforeExactReadback)
+                    {
+                        failNextRead = true;
+                    }
+                }
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(
                     CampaignCheckpointWriteKind.Written));
             }
