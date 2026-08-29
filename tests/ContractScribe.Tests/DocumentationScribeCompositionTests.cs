@@ -13,7 +13,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
-public sealed class DocumentationScribeCompositionTests
+public sealed partial class DocumentationScribeCompositionTests
 {
     [Fact]
     public async Task Production_prepare_and_consume_preserve_the_exact_bound_outcome()
@@ -1192,7 +1192,9 @@ public sealed class DocumentationScribeCompositionTests
                 "M:ProposalStage.ProposalFixture.Execute",
                 nonMethodDocumentationId: null);
 
-        internal CampaignExecutionFixture CreateCampaign()
+        internal CampaignExecutionFixture CreateCampaign(
+            long maximumPatchElapsedMilliseconds = 120_000,
+            long maximumCampaignElapsedMilliseconds = 300_000)
         {
             var classifications = Classified.Classification.ClassificationSet!;
             var observations = Observed.Observation.ObservationSet!;
@@ -1258,6 +1260,11 @@ public sealed class DocumentationScribeCompositionTests
                 providerConfigurationId = "provider.synthetic.v1",
                 modelConfigurationId = "model.synthetic.v1",
             });
+            var m2Projection = JsonSerializer.SerializeToElement(new
+            {
+                m2ProjectionVersion = 1,
+                maximumPatchElapsedMilliseconds,
+            });
             var executionPolicy = new CampaignPlanningExecutionPolicy(
                 Request.Limits,
                 new CampaignPlanningBudgetPolicy(
@@ -1270,7 +1277,7 @@ public sealed class DocumentationScribeCompositionTests
                     500_000,
                     100_000,
                     5_000_000,
-                    300_000,
+                    maximumCampaignElapsedMilliseconds,
                     8,
                     costEnforced: false,
                     costCurrency: null,
@@ -1281,7 +1288,7 @@ public sealed class DocumentationScribeCompositionTests
                 Content(CampaignPlanningContentFamily.ToolPolicyAndRegistry, "tools", toolProjection),
                 Content(CampaignPlanningContentFamily.ProviderModelRequestProfile, "provider", providerProjection),
                 Content(CampaignPlanningContentFamily.RetryPolicy, "retry", "retry-v1"),
-                Content(CampaignPlanningContentFamily.M2ProjectionPolicy, "m2", "m2-v1"),
+                Content(CampaignPlanningContentFamily.M2ProjectionPolicy, "m2", m2Projection),
                 Content(CampaignPlanningContentFamily.ProductContractRevision, "product", "product-v1"));
             var planningInput = new CampaignPlanningInput(
                 new CampaignPlanningSnapshot(
@@ -1323,6 +1330,7 @@ public sealed class DocumentationScribeCompositionTests
                 planningInput,
                 plan,
                 executionCapability,
+                m2Projection,
                 styleProjection,
                 initial);
         }
@@ -1697,6 +1705,7 @@ public sealed class DocumentationScribeCompositionTests
         CampaignPlanningInput PlanningInput,
         CampaignWorkPlan Plan,
         CampaignScribeExecutionCapability ExecutionCapability,
+        JsonElement M2Projection,
         JsonElement StyleProjection,
         CampaignCheckpointState InitialState)
     {

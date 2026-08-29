@@ -526,10 +526,11 @@ public static class CampaignStateFactory
         byte[] bytes;
         try
         {
+            var ordered = OrderPatchProposals(completeProjectionSet);
             bytes = CampaignStateJson.WritePatchRequest(
                 context,
                 catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
-                completeProjectionSet.Select(item => item.PatchBlock).ToImmutableArray());
+                ordered.Select(item => item.PatchBlock).ToImmutableArray());
         }
         catch (CampaignStateValidationException exception)
             when (exception.Code == CampaignStateValidationCode.InvalidBound)
@@ -544,6 +545,89 @@ public static class CampaignStateFactory
         return DocumentationPatchValidator.ParseRequest(bytes).IsValid
             ? CampaignTrustedProposalAdmissionKind.Admitted
             : CampaignTrustedProposalAdmissionKind.Invalid;
+    }
+
+    internal static void ValidateCurrentTrustedProposalAuthority(
+        CampaignCheckpointState state,
+        CampaignWorkItemState stateWork,
+        CampaignPlanningWorkItem planWork)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(stateWork);
+        ArgumentNullException.ThrowIfNull(planWork);
+        var proposal = stateWork.TrustedProposal;
+        var target = planWork.Targets.Length == 1 ? planWork.Targets[0] : null;
+        var expectedEditKind = planWork.Disposition.EditCapability switch
+        {
+            CampaignPlanningEditCapability.Insert => DocumentationPatchEditKind.Insert,
+            CampaignPlanningEditCapability.Replace => DocumentationPatchEditKind.Replace,
+            _ => (DocumentationPatchEditKind?)null,
+        };
+        var expectedComponents = target?.ApplicableComponents.Select(component =>
+            new DocumentationPatchApplicableComponent(
+                MapComponentKind(component.Kind),
+                component.Identity,
+                component.Name));
+        var expectedAttempt = stateWork.OuterAttemptCount > 0
+            ? CreateScribeAttemptId(
+                state.Snapshot.ExecutionCommitmentSha256,
+                state.ConfiguredCeilings.ScribeExecutionAuthority,
+                stateWork.WorkItemKey,
+                stateWork.OuterAttemptCount)
+            : (DocumentationScribeAttemptId?)null;
+        if (!string.Equals(stateWork.WorkItemKey, planWork.WorkItemKey, StringComparison.Ordinal)
+            || stateWork.Status is not (CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            || proposal is null
+            || planWork.Disposition.Kind != CampaignPlanningDispositionKind.Executable
+            || target is null
+            || !target.M3Eligible
+            || target.StyleProfile is null
+            || expectedEditKind is null
+            || expectedAttempt is null
+            || proposal.HistoricalAttemptId != expectedAttempt.Value
+            || !string.Equals(proposal.PatchBlock.BlockId, stateWork.WorkItemKey, StringComparison.Ordinal)
+            || proposal.PatchBlock.SymbolRef != target.SymbolRef
+            || proposal.PatchBlock.Locator != CreatePatchLocator(target.Source)
+            || proposal.PatchBlock.EditKind != expectedEditKind.Value
+            || expectedComponents is null
+            || !proposal.PatchBlock.ApplicableComponents.SequenceEqual(expectedComponents)
+            || !string.Equals(
+                proposal.StyleProfileCommitmentSha256,
+                CreateStyleProfileCommitment(target.StyleProfile),
+                StringComparison.Ordinal)
+            || proposal.Evidence.Any(evidence => !EvidenceSubjectBelongsToBlock(
+                evidence.Subject,
+                proposal.PatchBlock)))
+        {
+            throw Fail(
+                CampaignStateValidationCode.InvalidCorrelation,
+                "Trusted proposal does not match the exact current work authority.");
+        }
+    }
+
+    internal static DocumentationScribeAttemptId CreateScribeAttemptId(
+        string executionCommitment,
+        CampaignScribeExecutionAuthority authority,
+        string workItemKey,
+        int ordinal)
+    {
+        var material = string.Join('\n',
+            "contract-scribe/campaign/scribe-attempt/v1",
+            executionCommitment,
+            authority.ProviderConfigurationId,
+            authority.ModelConfigurationId,
+            authority.ScribeProtocolId,
+            authority.ToolPolicyId,
+            workItemKey,
+            ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
+            .ToLowerInvariant()[..32];
+        if (!DocumentationScribeAttemptId.TryParse("scribe-attempt." + suffix, out var result))
+        {
+            throw new InvalidOperationException();
+        }
+
+        return result;
     }
 
     internal static CampaignTrustedProposalAdmissionKind EvaluateProviderProjectionAvailability(
@@ -568,10 +652,11 @@ public static class CampaignStateFactory
         try
         {
             var catalog = ValidateProjectionEvidenceConsistency(activeProposals);
+            var ordered = OrderPatchProposals(activeProposals);
             var bytes = CampaignStateJson.WritePatchRequest(
                 context,
                 catalog.Select(evidence => evidence.EvidenceReferenceId).ToImmutableArray(),
-                activeProposals.Select(item => item.PatchBlock).ToImmutableArray());
+                ordered.Select(item => item.PatchBlock).ToImmutableArray());
             return bytes.Length >= DocumentationPatchValidator.MaximumArtifactUtf8Bytes
                 ? CampaignTrustedProposalAdmissionKind.OverBound
                 : CampaignTrustedProposalAdmissionKind.Admitted;
@@ -802,7 +887,7 @@ public static class CampaignStateFactory
         if (result.Outcome == DocumentationPatchOutcome.Accepted)
         {
             candidate = new CampaignCandidateObservation(
-                request.Blocks.Select(block => block.BlockId).ToImmutableArray(),
+                proposals.Select(proposal => proposal.PatchBlock.BlockId).ToImmutableArray(),
                 CreateAcceptedProjectionCommitment(proposals),
                 result.ChangedFiles.Select(file => new CampaignChangedFileObservation(
                     file.Path,
@@ -1789,7 +1874,8 @@ public static class CampaignStateFactory
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToImmutableArray();
-        var blocks = proposals.Select(proposal => proposal.PatchBlock).ToImmutableArray();
+        var ordered = OrderPatchProposals(proposals);
+        var blocks = ordered.Select(proposal => proposal.PatchBlock).ToImmutableArray();
         var bytes = CampaignStateJson.WritePatchRequest(context, catalog, blocks);
         var parsed = DocumentationPatchValidator.ParseRequest(bytes);
         if (!parsed.IsValid)
@@ -1801,6 +1887,13 @@ public static class CampaignStateFactory
 
         return parsed.Request!;
     }
+
+    private static ImmutableArray<CampaignTrustedProposal> OrderPatchProposals(
+        ImmutableArray<CampaignTrustedProposal> proposals) => proposals
+        .OrderBy(
+            proposal => proposal.PatchBlock,
+            Comparer<DocumentationPatchBlockRequest>.Create(DocumentationPatchValidator.CompareBlocks))
+        .ToImmutableArray();
 
     private static ImmutableArray<CampaignTrustedProposal> ResolvePatchRequestProjection(
         CampaignCheckpointState state,

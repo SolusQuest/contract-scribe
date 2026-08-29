@@ -68,7 +68,7 @@ Candidate observation records accepted work keys, one domain-separated commitmen
 
 Persisted evidence is validated by the same Core-internal stable projection validator used by M3. It shares M3's lowercase identifier and compilation-context grammar, supported XML documentation IDs, authority-to-kind mapping, repository/metadata/generated/synthetic locator identities, zero-length-or-positive evidence span rule, 4 MiB per-reference observation ceiling, and nonempty ordered 64-item claim-category bound. A target subject has null component kind and identity. A component subject is exactly `component.type-parameter` with `type-parameter/<canonical ordinal>`, `component.parameter` with `parameter/<canonical ordinal>`, `component.return` with `return`, or `component.value` with `value`, and must belong to the proposal's exact patch block. The runtime validator, canonical codec, and published schema accept this same stable M3 subset.
 
-For every patch attempt, `ReconstructPatchRequest` selects exactly work in `proposal-complete` or `accepted` status, preserves C1 order, requires the fresh context's input-identity commitment to equal the checkpoint snapshot authority, and requires the fresh process to supply every and only the current typed evidence row for the persisted projection set. Each row must use the new `RepositoryContextRef` and exactly match the persisted subject, kind, relation, authority, stable locator, content commitment, byte/truncation observations, and claim categories. It then constructs the sorted distinct provenance catalog, writes the complete M2 request, and sends those exact bytes through `DocumentationPatchValidator.ParseRequest`. `ReconstructAcceptedPatchRequest` independently enforces the same input binding, selects only `accepted` work, and requires its exact stable proposal/block commitment to match the candidate. It does not require the fresh request SHA to equal the historical accepted request SHA because `RepositoryContextRef` changes after every successful production load. A later rejected, stale, host-failed, cancelled, or timed-out mixed request cannot invalidate the earlier accepted candidate. This distinction permits a known accepted candidate to coexist with newly proposal-complete work without pretending the unresolved next request already completed. Both projections prove the whole request against M2's 1 MiB, 512-block, 4,096-provenance, 64-reference-per-block, component, content, ordering, uniqueness, path, span, and vocabulary rules.
+For every patch attempt, `ReconstructPatchRequest` selects exactly work in `proposal-complete` or `accepted` status while preserving exact C1 membership authority: `CampaignCheckpointState.WorkItems`, `CampaignCandidateObservation.AcceptedWorkItemKeys`, and the accepted-projection commitment remain in exact C1 order. The selected proposal blocks are then serialized in Documentation Patch v1 canonical block order, which may differ from C1 order, and every M2 result target traces that serialized request order. Cross-layer validation requires exact membership and key-to-block mapping across both order domains. Reconstruction also requires the fresh context's input-identity commitment to equal the checkpoint snapshot authority and the fresh process to supply every and only the current typed evidence row for the persisted projection set. Each row must use the new `RepositoryContextRef` and exactly match the persisted subject, kind, relation, authority, stable locator, content commitment, byte/truncation observations, and claim categories. It constructs the sorted distinct provenance catalog, writes the complete M2 request, and sends those exact bytes through `DocumentationPatchValidator.ParseRequest`. `ReconstructAcceptedPatchRequest` independently enforces the same input binding, selects only `accepted` work, and requires its exact stable proposal/block commitment to match the candidate. It does not require the fresh request SHA to equal the historical accepted request SHA because `RepositoryContextRef` changes after every successful production load. A later rejected, stale, host-failed, cancelled, or timed-out mixed request cannot invalidate the earlier accepted candidate. This distinction permits a known accepted candidate to coexist with newly proposal-complete work without pretending the unresolved next request already completed. Both projections prove the whole request against M2's 1 MiB, 512-block, 4,096-provenance, 64-reference-per-block, component, content, ordering, uniqueness, path, span, and vocabulary rules.
 
 `CreatePatchReservation` first applies the same target-profile and input-identity gate as reconstruction, then derives the reservation request digest and expected revision from either the exact active projection or the exact accepted-only reconstruction and checkpoint; callers cannot supply those correlation facts. Typed and host completion factories apply that shared state/request-context gate again while consuming the exact validated checkpoint containing the active patch reservation. They reject an input identity, request, expected revision, or proposal projection not owned by the reservation/state. `CreatePatchCompletion` then accepts only a result that passes `DocumentationPatchValidator.ValidateResult` for the exact request and, for an accepted result, derives accepted membership, the stable proposal/block commitment, every changed-file observation, and the cumulative result together. Host completion derives the same historical request/revision authority from the reserved state. The direct constructors for reservation, candidate, and cumulative-result DTOs are not public producer APIs. The domain-separated result commitment covers request identity, outcome, ordered target traces, changed-file facts, changed-block count, invariants, and bounded diagnostics.
 
@@ -228,6 +228,71 @@ The in-process proposal executor validates exact live M1/C1/C2/C3 context and re
 Execution cancellation is independent from settlement/readback cancellation. The reducer constructs and validates the complete successor artifact before consuming completion or lifecycle authority. A final fact becomes durable only through one exact-predecessor transition, conditional replacement, and exact readback. Deterministic authority or successor-construction rejection is a host contract error; store/current-state conflict is a state conflict; only uncertain dispatch, acknowledgement, or readback remains ambiguous. The outer host-active interval uses a monotonic clock and remains distinct from M3 envelope elapsed time. The returned proposal-stage outcome is rederived from the accepted artifact and exposes no raw request/result/provider/tool/source content or mutation authority.
 
 These process-local additions do not alter Campaign State v1 properties, enum vocabulary, parser/writer, schema, known-answer bytes, result-commitment matrix, or `ICampaignCheckpointStore`.
+
+## In-process cumulative Patch execution
+
+The campaign Patch executor consumes the exact live classified and observed
+repository sessions, accepted C1 planning input and plan, current execution and
+Style authorities, and a current closed M2 projection. The projection contains
+exactly `m2ProjectionVersion: 1` and a positive
+`maximumPatchElapsedMilliseconds`. Its canonical
+`configuration.m2-projection` authority must match C1 by ID and SHA. The same
+maximum is used unchanged as both the conservative write-ahead Patch elapsed
+reservation and the one-shot M2 deadline; it cannot exceed the accepted
+campaign elapsed ceiling or the Campaign State observation bound.
+
+Before reconstruction, the executor independently re-establishes every active
+proposal evidence row from the current M1/C1 catalog or current repository,
+Roslyn, generated-output, metadata, and supported context facts. It recomputes
+the stable evidence projection and rejects missing, stale, duplicated,
+ambiguous, unsupported, or non-reconstructible rows before reservation. Merely
+copying persisted evidence metadata and substituting a fresh
+`RepositoryContextRef` is not current evidence. The C2 factory receives exactly
+the rederived set. C1 work rows, accepted work keys, and accepted-projection
+commitments preserve exact C1 order; the M2 request serializes the same exact
+membership and key-to-block mapping in Documentation Patch v1 canonical block
+order, and result targets trace that serialized order. Accepted-only
+reconstruction is a separate action and cannot satisfy a mixed active
+projection.
+
+Every real M2 call, including accepted-candidate reconstruction, follows a
+conditional Patch reservation and exact readback. An observer cannot dispatch.
+Caller cancellation and the projection deadline register distinct causes in an
+atomic first-cause coordinator; their linked token is execution-only, while
+settlement/readback uses the independent settlement token. An authoritative
+typed M2 result retains C3 precedence over a simultaneous stop. Without a typed
+result, the first cause selects cancellation or timeout, and a bounded engine
+failure remains host failure. Finite nonnegative monotonic elapsed is rounded up
+and, when it fits the Campaign State observation bound, its exact value replaces
+conservative exposure through the exact C3 settlement transition even when it
+exceeds the reservation maximum. Invalid, negative, or unrepresentable elapsed
+retains the complete conservative reservation.
+
+Fresh reservation and active-reservation retry require a predecessor revision
+at most `MaximumObservation - 2`. At the penultimate revision, a nonterminal
+state uses `Stop(Exhausted)` and an active Patch reservation uses
+`StopActiveInvocation(Exhausted)` with zero M2; durable terminals replay
+unchanged. Accepted-only reconstruction without a settlement revision fails
+closed, and a maximum-revision state requiring mutation is a state conflict.
+
+The exact read-back state selects continuation. A locally retained candidate
+may be returned only after its request, result, accepted projection, changed
+files, hashes, and observations match the accepted checkpoint. Accepted state
+without that process-local capability performs reservation-driven accepted-only
+reconstruction. A sole-item reduction is never repeated; remaining active work
+is recomposed as one full projection. Durable rejection, stale, host failure,
+cancellation, timeout, and closed stops replay with zero M2. An accepted M2
+result that C3 persists as `over-bound` returns exhaustion, discards the
+transient candidate, preserves the prior candidate observation, and is not
+rerun because its known-completed Patch projection is authoritative.
+
+Candidate source bytes remain confined to the nonserialized internal accepted
+capability after exact settlement readback. Checkpoint JSON, cumulative state,
+diagnostics, exceptions, logs, printable outcomes, and every nonaccepted or
+uncertain path contain no source/evidence/provider text, candidate bytes, diff,
+credential, or absolute path. These rules add no Campaign State property,
+schema branch, compatibility reader, migration, second Patch engine, physical
+store, public command, or provider operation.
 
 ## Conditional store and readback
 

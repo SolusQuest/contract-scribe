@@ -14,7 +14,7 @@ using ContractScribe.Roslyn;
 namespace ContractScribe.IntegrationTests;
 
 [Collection("Integration process lane 2")]
-public sealed class DocumentationScribeEndToEndIntegrationTests
+public sealed partial class DocumentationScribeEndToEndIntegrationTests
 {
     private const string FreshProcessOutputVariable = "CONTRACTSCRIBE_ISSUE_108_PROBE_OUTPUT";
     private const string FreshProcessReuseVariable = "CONTRACTSCRIBE_ISSUE_108_REUSE_INPUT";
@@ -1707,7 +1707,8 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
 
         internal static async Task<EndToEndFixture> CreateAsync(
             string? sourceOverride = null,
-            string? instructionOverride = null)
+            string? instructionOverride = null,
+            IReadOnlyDictionary<string, string>? additionalSources = null)
         {
             var deterministicProbe = !string.IsNullOrWhiteSpace(
                 Environment.GetEnvironmentVariable(FreshProcessOutputVariable));
@@ -1747,6 +1748,17 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
                     Path.Join(root, "AGENTS.md"),
                     instructionOverride,
                     new UTF8Encoding(false));
+            }
+
+            if (additionalSources is not null)
+            {
+                foreach (var source in additionalSources)
+                {
+                    await File.WriteAllTextAsync(
+                        Path.Join(root, source.Key),
+                        source.Value,
+                        new UTF8Encoding(false));
+                }
             }
 
             await RestoreAsync(root);
@@ -1887,7 +1899,7 @@ public sealed class DocumentationScribeEndToEndIntegrationTests
             }
         }
 
-        private static ReadOnlyMemory<byte> CreateRequest(
+        internal static ReadOnlyMemory<byte> CreateRequest(
             LoadedRepositorySession session,
             ClassificationSet classifications,
             TargetClassification target,
