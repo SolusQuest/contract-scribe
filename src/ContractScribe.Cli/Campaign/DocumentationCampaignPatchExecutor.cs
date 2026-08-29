@@ -430,10 +430,14 @@ internal static class DocumentationCampaignPatchExecutor
             return false;
         }
 
-        var files = candidate.Files.OrderBy(file => file.RepositoryPath, StringComparer.Ordinal).ToArray();
         var observed = observation.ChangedFiles.OrderBy(file => file.Path, StringComparer.Ordinal).ToArray();
-        return files.Length == observed.Length
-            && files.Zip(observed).All(pair =>
+        var changedCandidates = candidate.Files
+            .Where(file => observed.Any(changed =>
+                string.Equals(file.RepositoryPath, changed.Path, StringComparison.Ordinal)))
+            .OrderBy(file => file.RepositoryPath, StringComparer.Ordinal)
+            .ToArray();
+        return changedCandidates.Length == observed.Length
+            && changedCandidates.Zip(observed).All(pair =>
                 string.Equals(pair.First.RepositoryPath, pair.Second.Path, StringComparison.Ordinal)
                 && string.Equals(pair.First.Sha256, pair.Second.CandidateFileSha256, StringComparison.Ordinal));
     }

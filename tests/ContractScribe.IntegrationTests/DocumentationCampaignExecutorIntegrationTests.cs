@@ -227,9 +227,29 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     private static Dictionary<string, string> AdditionalPatchSources() =>
         new(StringComparer.Ordinal)
         {
+            ["Fixture.cs"] = """
+                namespace EndToEnd;
+
+                /// <summary>Provides the base fixture used by the patch-stage campaign.</summary>
+                public class BaseFixture
+                {
+                    public virtual void Run()
+                    {
+                    }
+                }
+
+                /// <summary>Provides the derived fixture used by the patch-stage campaign.</summary>
+                public sealed class Fixture : BaseFixture
+                {
+                    public override void Run()
+                    {
+                    }
+                }
+                """,
             ["Other.cs"] = """
                 namespace EndToEnd;
 
+                /// <summary>Provides the second source file used by the patch-stage campaign.</summary>
                 public sealed class OtherFixture
                 {
                     public void Run()
