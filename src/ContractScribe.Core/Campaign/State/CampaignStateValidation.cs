@@ -547,6 +547,89 @@ public static class CampaignStateFactory
             : CampaignTrustedProposalAdmissionKind.Invalid;
     }
 
+    internal static void ValidateCurrentTrustedProposalAuthority(
+        CampaignCheckpointState state,
+        CampaignWorkItemState stateWork,
+        CampaignPlanningWorkItem planWork)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(stateWork);
+        ArgumentNullException.ThrowIfNull(planWork);
+        var proposal = stateWork.TrustedProposal;
+        var target = planWork.Targets.Length == 1 ? planWork.Targets[0] : null;
+        var expectedEditKind = planWork.Disposition.EditCapability switch
+        {
+            CampaignPlanningEditCapability.Insert => DocumentationPatchEditKind.Insert,
+            CampaignPlanningEditCapability.Replace => DocumentationPatchEditKind.Replace,
+            _ => (DocumentationPatchEditKind?)null,
+        };
+        var expectedComponents = target?.ApplicableComponents.Select(component =>
+            new DocumentationPatchApplicableComponent(
+                MapComponentKind(component.Kind),
+                component.Identity,
+                component.Name));
+        var expectedAttempt = stateWork.OuterAttemptCount > 0
+            ? CreateScribeAttemptId(
+                state.Snapshot.ExecutionCommitmentSha256,
+                state.ConfiguredCeilings.ScribeExecutionAuthority,
+                stateWork.WorkItemKey,
+                stateWork.OuterAttemptCount)
+            : (DocumentationScribeAttemptId?)null;
+        if (!string.Equals(stateWork.WorkItemKey, planWork.WorkItemKey, StringComparison.Ordinal)
+            || stateWork.Status is not (CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            || proposal is null
+            || planWork.Disposition.Kind != CampaignPlanningDispositionKind.Executable
+            || target is null
+            || !target.M3Eligible
+            || target.StyleProfile is null
+            || expectedEditKind is null
+            || expectedAttempt is null
+            || proposal.HistoricalAttemptId != expectedAttempt.Value
+            || !string.Equals(proposal.PatchBlock.BlockId, stateWork.WorkItemKey, StringComparison.Ordinal)
+            || proposal.PatchBlock.SymbolRef != target.SymbolRef
+            || proposal.PatchBlock.Locator != CreatePatchLocator(target.Source)
+            || proposal.PatchBlock.EditKind != expectedEditKind.Value
+            || expectedComponents is null
+            || !proposal.PatchBlock.ApplicableComponents.SequenceEqual(expectedComponents)
+            || !string.Equals(
+                proposal.StyleProfileCommitmentSha256,
+                CreateStyleProfileCommitment(target.StyleProfile),
+                StringComparison.Ordinal)
+            || proposal.Evidence.Any(evidence => !EvidenceSubjectBelongsToBlock(
+                evidence.Subject,
+                proposal.PatchBlock)))
+        {
+            throw Fail(
+                CampaignStateValidationCode.InvalidCorrelation,
+                "Trusted proposal does not match the exact current work authority.");
+        }
+    }
+
+    internal static DocumentationScribeAttemptId CreateScribeAttemptId(
+        string executionCommitment,
+        CampaignScribeExecutionAuthority authority,
+        string workItemKey,
+        int ordinal)
+    {
+        var material = string.Join('\n',
+            "contract-scribe/campaign/scribe-attempt/v1",
+            executionCommitment,
+            authority.ProviderConfigurationId,
+            authority.ModelConfigurationId,
+            authority.ScribeProtocolId,
+            authority.ToolPolicyId,
+            workItemKey,
+            ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
+            .ToLowerInvariant()[..32];
+        if (!DocumentationScribeAttemptId.TryParse("scribe-attempt." + suffix, out var result))
+        {
+            throw new InvalidOperationException();
+        }
+
+        return result;
+    }
+
     internal static CampaignTrustedProposalAdmissionKind EvaluateProviderProjectionAvailability(
         CampaignCheckpointState state,
         DocumentationPatchContext context)

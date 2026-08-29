@@ -22,7 +22,8 @@ internal sealed record DocumentationCampaignPatchInput(
     CancellationToken ExecutionToken,
     CancellationToken SettlementToken,
     DocumentationPatchEngine? PatchEngine = null,
-    TimeProvider? TimeProvider = null);
+    TimeProvider? TimeProvider = null,
+    Action? AfterPatchExecutionObserver = null);
 
 internal static class DocumentationCampaignPatchExecutor
 {
@@ -230,6 +231,7 @@ internal static class DocumentationCampaignPatchExecutor
             {
                 return Outcome(DocumentationCampaignOutcomeKind.AmbiguousDispatch, "campaign.patch.dispatch-unavailable");
             }
+            input.AfterPatchExecutionObserver?.Invoke();
 
             CampaignTransitionResult completion;
             var appliedReduction = false;
@@ -338,19 +340,7 @@ internal static class DocumentationCampaignPatchExecutor
             // The independent registrations below retain the authoritative caller/deadline stop cause.
         }
 
-        long? observed = null;
-        try
-        {
-            var elapsed = clock.GetElapsedTime(started, clock.GetTimestamp()).TotalMilliseconds;
-            if (double.IsFinite(elapsed) && elapsed >= 0)
-            {
-                observed = Math.Min(maximumElapsedMilliseconds, checked((long)Math.Ceiling(elapsed)));
-            }
-        }
-        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-        {
-            // Preserve the full conservative reservation when monotonic observation is unavailable.
-        }
+        var observed = ObserveElapsedMilliseconds(clock, started);
         var simultaneousStop = Volatile.Read(ref causeState.Value) switch
         {
             1 => CampaignTerminalKind.Cancelled,
@@ -375,6 +365,28 @@ internal static class DocumentationCampaignPatchExecutor
             _ => CampaignCumulativeOutcomeKind.HostFailure,
         };
         return new PatchExecution(true, outcome, observed, null, hostKind);
+    }
+
+    internal static long? ObserveElapsedMilliseconds(TimeProvider clock, long started)
+    {
+        try
+        {
+            var elapsed = clock.GetElapsedTime(started, clock.GetTimestamp()).TotalMilliseconds;
+            if (double.IsFinite(elapsed) && elapsed >= 0)
+            {
+                var ceiling = checked((long)Math.Ceiling(elapsed));
+                if (ceiling <= CampaignStateContract.MaximumObservation)
+                {
+                    return ceiling;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Preserve the full conservative reservation when monotonic observation is unavailable.
+        }
+
+        return null;
     }
 
     private static CampaignPatchRejectionReduction? FindReduction(

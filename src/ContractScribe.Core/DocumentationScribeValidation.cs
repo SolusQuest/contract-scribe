@@ -218,6 +218,48 @@ public static class DocumentationScribeValidation
         && claimCategoryIds.All(category => IsIdentifier(category, allowSlash: false))
         && IsStrictlyIncreasing(claimCategoryIds);
 
+    internal static bool HasStableDynamicEvidenceIdentity(
+        string evidenceReferenceId,
+        EvidenceSubject subject,
+        EvidenceKind kind,
+        EvidenceRelation relation,
+        DocumentationScribeEvidenceAuthority authority,
+        EvidenceLocator locator,
+        string contentSha256,
+        int originalUtf8ByteCount,
+        int includedUtf8ByteCount,
+        bool isTruncated,
+        ImmutableArray<string> claimCategoryIds)
+    {
+        var input = new DocumentationScribeDynamicEvidenceInput(
+            subject,
+            kind,
+            relation,
+            authority,
+            locator,
+            contentSha256,
+            originalUtf8ByteCount,
+            includedUtf8ByteCount,
+            isTruncated,
+            claimCategoryIds);
+        return IsStableEvidenceProjection(
+                evidenceReferenceId,
+                subject,
+                kind,
+                relation,
+                authority,
+                locator,
+                contentSha256,
+                originalUtf8ByteCount,
+                includedUtf8ByteCount,
+                isTruncated,
+                claimCategoryIds)
+            && string.Equals(
+                evidenceReferenceId,
+                ComputeDynamicEvidenceReferenceId(input),
+                StringComparison.Ordinal);
+    }
+
     internal static bool IsStableRepositoryRelativePath(string? value) =>
         value is not null && IsRepositoryRelativePathValue(value);
 

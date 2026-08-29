@@ -244,7 +244,7 @@ public static class CampaignStateReducer
             request);
         var work = artifact.State.WorkItems.Single(item =>
             string.Equals(item.WorkItemKey, reservation.WorkItemKey, StringComparison.Ordinal));
-        if (CreateAttemptId(
+        if (CampaignStateFactory.CreateScribeAttemptId(
                 artifact.State.Snapshot.ExecutionCommitmentSha256,
                 executionCapability.Projection,
                 reservation.WorkItemKey,
@@ -379,7 +379,7 @@ public static class CampaignStateReducer
 
             var nextRevision = NextRevision(state.CheckpointRevision);
             var nextOrdinal = checked(work.OuterAttemptCount + 1);
-            var attemptId = CreateAttemptId(
+            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
                 state.Snapshot.ExecutionCommitmentSha256,
                 executionCapability.Projection,
                 workItemKey,
@@ -488,7 +488,7 @@ public static class CampaignStateReducer
                 || !string.Equals(envelope.ModelConfigurationId, executionAuthority.ModelConfigurationId, StringComparison.Ordinal)
                 || !string.Equals(envelope.ScribeProtocolId, executionAuthority.ScribeProtocolId, StringComparison.Ordinal)
                 || !string.Equals(envelope.ToolPolicyId, executionAuthority.ToolPolicyId, StringComparison.Ordinal)
-                || CreateAttemptId(
+                || CampaignStateFactory.CreateScribeAttemptId(
                     state.Snapshot.ExecutionCommitmentSha256,
                     executionAuthority,
                     reservation.WorkItemKey,
@@ -812,7 +812,7 @@ public static class CampaignStateReducer
                 request);
 
             var historicalAttempt = activeRetry?.AttemptId ?? work.ClosedOutcome!.AttemptId!.Value;
-            if (CreateAttemptId(
+            if (CampaignStateFactory.CreateScribeAttemptId(
                     state.Snapshot.ExecutionCommitmentSha256,
                     executionCapability.Projection,
                     workItemKey,
@@ -931,7 +931,7 @@ public static class CampaignStateReducer
 
             var ordinal = checked(work.OuterAttemptCount + 1);
             var nextRevision = NextRevision(state.CheckpointRevision);
-            var attemptId = CreateAttemptId(
+            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
                 state.Snapshot.ExecutionCommitmentSha256,
                 executionCapability.Projection,
                 workItemKey,
@@ -1972,31 +1972,6 @@ public static class CampaignStateReducer
                 { Kind: CampaignTerminalKind.Exhausted, Reason: CampaignTerminalReason.Budget } => true,
                 _ => false,
             };
-    }
-
-    private static DocumentationScribeAttemptId CreateAttemptId(
-        string executionCommitment,
-        CampaignScribeExecutionAuthority authority,
-        string workItemKey,
-        int ordinal)
-    {
-        var material = string.Join('\n',
-            "contract-scribe/campaign/scribe-attempt/v1",
-            executionCommitment,
-            authority.ProviderConfigurationId,
-            authority.ModelConfigurationId,
-            authority.ScribeProtocolId,
-            authority.ToolPolicyId,
-            workItemKey,
-            ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
-            .ToLowerInvariant()[..32];
-        if (!DocumentationScribeAttemptId.TryParse("scribe-attempt." + suffix, out var result))
-        {
-            throw new InvalidOperationException();
-        }
-
-        return result;
     }
 
     private static bool ValidExecutionCapability(CampaignScribeExecutionCapability capability)

@@ -64,6 +64,30 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             item.Status == CampaignWorkStatus.Accepted));
         Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, accepted.Artifact.State.CumulativeOutcome!.Kind);
         Assert.Null(accepted.Artifact.State.ActiveReservation);
+        var acceptedComposition = CumulativeDocumentationPatchComposer.Compose(
+            fixture.Classified,
+            campaign.PlanningInput,
+            campaign.Plan,
+            DocumentationScribeAuditAuthority.Create(
+                fixture.Classified,
+                fixture.Observations,
+                campaign.Policy,
+                campaign.AuditInputs,
+                campaign.Audit),
+            accepted.Artifact.State,
+            acceptedOnly: true,
+            CancellationToken.None);
+        var c1Keys = accepted.Artifact.State.WorkItems
+            .Where(item => item.Status == CampaignWorkStatus.Accepted)
+            .Select(item => item.WorkItemKey)
+            .ToArray();
+        var m2Keys = acceptedComposition.Request.Blocks.Select(block => block.BlockId).ToArray();
+        Assert.False(c1Keys.SequenceEqual(m2Keys, StringComparer.Ordinal));
+        Assert.Equal(c1Keys, accepted.Artifact.State.CandidateObservation!.AcceptedWorkItemKeys);
+        Assert.Equal(m2Keys, accepted.AcceptedCandidate.Result.Targets.Select(target => target.BlockId));
+        Assert.Equal(
+            c1Keys.Order(StringComparer.Ordinal),
+            m2Keys.Order(StringComparer.Ordinal));
         Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(fixture.SourcePath));
         Assert.Equal(otherBefore, await File.ReadAllBytesAsync(otherPath));
 
@@ -303,6 +327,52 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.BeforeReplacement);
         await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.AfterReplacement);
         await VerifyHostFailureSettlementRecoveryAsync(SettlementFault.BeforeExactReadback);
+        await VerifyPostExecutionCrashAsync(staleResult: false);
+        await VerifyPostExecutionCrashAsync(staleResult: true);
+    }
+
+    private static async Task VerifyPostExecutionCrashAsync(bool staleResult)
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync(
+            additionalSources: AdditionalPatchSources());
+        var campaign = CreatePatchCampaign(fixture);
+        var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        await PopulatePatchProposalsAsync(fixture, campaign, store, proposalCount: 1);
+        var originalBytes = await File.ReadAllBytesAsync(fixture.SourcePath);
+        var engine = staleResult
+            ? new DocumentationPatchEngine(
+                stagingParentFactory: null,
+                (stage, _) =>
+                {
+                    if (stage == DocumentationPatchApplicationStage.BaselineCaptured)
+                    {
+                        File.AppendAllText(fixture.SourcePath, "// stale after M2 dispatch\n");
+                    }
+                },
+                observer: null)
+            : new DocumentationPatchEngine();
+
+        await Assert.ThrowsAsync<PatchProcessExitException>(() =>
+            DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
+                fixture,
+                campaign,
+                store,
+                patchEngine: engine,
+                afterPatchExecutionObserver: () => throw new PatchProcessExitException())));
+
+        Assert.IsType<CampaignPatchReservation>(store.Current.State.ActiveReservation);
+        Assert.Null(store.Current.State.CumulativeOutcome);
+        Assert.Null(store.Current.State.CandidateObservation);
+        if (staleResult)
+        {
+            await File.WriteAllBytesAsync(fixture.SourcePath, originalBytes);
+        }
+
+        var recovered = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(fixture, campaign, store));
+        Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, recovered.Kind);
+        Assert.NotNull(recovered.AcceptedCandidate);
+        Assert.Null(recovered.Artifact!.State.ActiveReservation);
     }
 
     private static async Task VerifyAcceptedSettlementRecoveryAsync(SettlementFault fault)
@@ -689,7 +759,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         CancellationToken executionToken = default,
         CancellationToken settlementToken = default,
         DocumentationPatchEngine? patchEngine = null,
-        TimeProvider? timeProvider = null) => new(
+        TimeProvider? timeProvider = null,
+        Action? afterPatchExecutionObserver = null) => new(
             fixture.Classified,
             fixture.Observations,
             campaign.Policy,
@@ -705,7 +776,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             executionToken,
             settlementToken,
             patchEngine,
-            timeProvider);
+            timeProvider,
+            afterPatchExecutionObserver);
 
     private static PatchCampaignRequest CreatePatchCampaignRequest(
         EndToEndFixture fixture,

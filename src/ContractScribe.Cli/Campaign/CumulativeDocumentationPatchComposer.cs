@@ -46,11 +46,12 @@ internal static class CumulativeDocumentationPatchComposer
             throw new ArgumentException("campaign.patch.active-projection-invalid", nameof(state));
         }
 
-        ValidateCurrentWorkAuthorities(
+        var currentContextEvidence = ValidateCurrentWorkAuthorities(
             session,
             planningInput,
             auditAuthority,
-            selected.Select(pair => pair.Second).ToImmutableArray(),
+            state,
+            selected,
             cancellationToken);
 
         var currentEvidence = RebuildEvidence(
@@ -58,6 +59,7 @@ internal static class CumulativeDocumentationPatchComposer
             planningInput,
             acceptedPlan,
             selected.Select(pair => pair.First.TrustedProposal!).ToImmutableArray(),
+            currentContextEvidence,
             cancellationToken);
         var context = new DocumentationPatchContext(
             session.RepositorySession.RepositoryContextRef,
@@ -80,16 +82,19 @@ internal static class CumulativeDocumentationPatchComposer
         return new CumulativeDocumentationPatchComposition(request, acceptedOnly);
     }
 
-    private static void ValidateCurrentWorkAuthorities(
+    private static ImmutableArray<DocumentationScribeEvidenceContextFact> ValidateCurrentWorkAuthorities(
         ClassifiedRepositorySession session,
         CampaignPlanningInput planningInput,
         DocumentationScribeAuditAuthority auditAuthority,
-        ImmutableArray<CampaignPlanningWorkItem> selected,
+        CampaignCheckpointState state,
+        ImmutableArray<(CampaignWorkItemState First, CampaignPlanningWorkItem Second)> selected,
         CancellationToken cancellationToken)
     {
-        foreach (var work in selected)
+        var currentEvidence = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceContextFact>();
+        foreach (var (stateWork, work) in selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(state, stateWork, work);
             if (work.Targets.Length != 1
                 || work.Targets[0].Source is not CampaignPlanningRepositorySourceAuthority source)
             {
@@ -134,7 +139,11 @@ internal static class CumulativeDocumentationPatchComposer
             {
                 throw new ArgumentException("campaign.patch.target-context-stale");
             }
+
+            currentEvidence.AddRange(context.Facts.Evidence);
         }
+
+        return currentEvidence.ToImmutable();
     }
 
     private static ImmutableArray<DocumentationScribeEvidenceReference> RebuildEvidence(
@@ -142,6 +151,7 @@ internal static class CumulativeDocumentationPatchComposer
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan,
         ImmutableArray<CampaignTrustedProposal> proposals,
+        ImmutableArray<DocumentationScribeEvidenceContextFact> currentContextEvidence,
         CancellationToken cancellationToken)
     {
         var expected = proposals
@@ -178,6 +188,29 @@ internal static class CumulativeDocumentationPatchComposer
             {
                 baseline ??= CaptureBaseline(session, cancellationToken);
                 ValidateCurrentSource(session, baseline, projection, cancellationToken);
+                if (projection.EvidenceReferenceId.StartsWith("evidence.dynamic.", StringComparison.Ordinal))
+                {
+                    if (!DocumentationScribeValidation.HasStableDynamicEvidenceIdentity(
+                        projection.EvidenceReferenceId,
+                        projection.Subject,
+                        projection.Kind,
+                        projection.Relation,
+                        projection.Authority,
+                        projection.Locator,
+                        projection.ContentSha256,
+                        projection.OriginalUtf8ByteCount,
+                        projection.IncludedUtf8ByteCount,
+                        projection.IsTruncated,
+                        projection.ClaimCategoryIds))
+                    {
+                        throw new ArgumentException("campaign.patch.evidence-dynamic-authority-mismatch");
+                    }
+                }
+                else if (currentContextEvidence.Count(item =>
+                    ContextEvidenceMatches(item, projection)) != 1)
+                {
+                    throw new ArgumentException("campaign.patch.evidence-current-context-mismatch");
+                }
             }
 
             ValidateClaimAuthority(acceptedPlan, proposals, projection);
@@ -314,6 +347,32 @@ internal static class CumulativeDocumentationPatchComposer
         && item.OriginalUtf8ByteCount == projection.OriginalUtf8ByteCount
         && item.IncludedUtf8ByteCount == projection.IncludedUtf8ByteCount
         && item.IsTruncated == projection.IsTruncated;
+
+    private static bool ContextEvidenceMatches(
+        DocumentationScribeEvidenceContextFact fact,
+        CampaignEvidenceProjection projection)
+    {
+        var expectedSubjectId = projection.Subject is TargetEvidenceSubject target
+            ? "symbol." + DocumentationScribeContextValidation.ComputeSymbolRefSha256(
+                target.ParentSymbolRef)
+            : null;
+        return expectedSubjectId is not null
+            && string.Equals(fact.SubjectId, expectedSubjectId, StringComparison.Ordinal)
+            && fact.Authority == DocumentationScribeContextAuthority.Source
+            && fact.Role == DocumentationScribeContextRole.SourceDeclaration
+            && string.Equals(fact.KindId, "source.target-declaration", StringComparison.Ordinal)
+            && projection.Kind == EvidenceKind.SourceDeclaration
+            && projection.Relation == EvidenceRelation.Declares
+            && projection.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration
+            && fact.Commitment.Locator == projection.Locator
+            && string.Equals(
+                fact.Commitment.ContentSha256,
+                projection.ContentSha256,
+                StringComparison.Ordinal)
+            && fact.Commitment.OriginalUtf8ByteCount == projection.OriginalUtf8ByteCount
+            && fact.Commitment.IncludedUtf8ByteCount == projection.IncludedUtf8ByteCount
+            && fact.Commitment.IsTruncated == projection.IsTruncated;
+    }
 
     private static bool ProjectionEquals(CampaignEvidenceProjection left, CampaignEvidenceProjection right) =>
         left == right

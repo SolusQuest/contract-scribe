@@ -121,6 +121,18 @@ public sealed class DocumentationCampaignPatchExecutorTests
     public Task Executor_settles_stale_cancellation_and_timeout_as_distinct_closed_outcomes() =>
         DocumentationScribeCompositionTests.RunCampaignPatchStopOutcomesAsync();
 
+    [Fact]
+    public Task Composer_rebinds_every_trusted_proposal_field_to_exact_current_C1_work() =>
+        DocumentationScribeCompositionTests.RunCampaignPatchCurrentAuthoritySubstitutionsAsync();
+
+    [Fact]
+    public Task Executor_preserves_post_M2_pre_transition_crashes_for_conservative_retry() =>
+        DocumentationScribeCompositionTests.RunCampaignPatchPostExecutionCrashAsync();
+
+    [Fact]
+    public Task Executor_settles_exact_elapsed_above_reservation_and_retains_unknown_exposure() =>
+        DocumentationScribeCompositionTests.RunCampaignPatchElapsedAuthorityAsync();
+
     private static CampaignPlanningExecutionPolicy ExecutionPolicy(
         JsonElement m2Projection,
         long maximumCampaignElapsedMilliseconds)
@@ -480,6 +492,321 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Null(longDeadlineStore.Current!.State.ActiveReservation);
     }
 
+    internal static async Task RunCampaignPatchCurrentAuthoritySubstitutionsAsync()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = await ProposalReadyStore(fixture, campaign);
+        var state = store.Current!.State;
+        var stateWork = Assert.Single(state.WorkItems.Where(item =>
+            item.Status == CampaignWorkStatus.ProposalComplete));
+        var planWork = Assert.Single(campaign.Plan.WorkItems.Where(item =>
+            string.Equals(item.WorkItemKey, stateWork.WorkItemKey, StringComparison.Ordinal)));
+        var target = Assert.Single(planWork.Targets);
+
+        CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(state, stateWork, planWork);
+
+        var alternateSymbol = new SymbolRef(
+            target.SymbolRef.CompilationContextRef,
+            "M:Substituted.Authority.Target");
+        AssertRejected(Target(target, symbolRef: alternateSymbol));
+
+        var repository = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
+        var shiftedSpan = new Utf16Span(
+            repository.RequestedDeclarationSpan.Start,
+            repository.RequestedDeclarationSpan.End - 1);
+        AssertRejected(Target(target, source: new CampaignPlanningRepositorySourceAuthority(
+            repository.Path,
+            repository.PhysicalSourceCommitmentSha256,
+            repository.ObservedSourceTextSha256,
+            repository.AuthoritativeDeclarationId,
+            repository.ContentSha256,
+            repository.Encoding,
+            repository.ObservationDeclarationSpan,
+            shiftedSpan,
+            repository.CanonicalDeclarationSpan,
+            repository.OwnerSpan,
+            repository.DocumentationSpan,
+            repository.BlockState)));
+        AssertRejected(Target(target, components: []));
+        AssertRejected(Target(target, styleProfile: Style(target.StyleProfile!, "style.substituted.v1")));
+
+        var oppositeCapability = planWork.Disposition.EditCapability == CampaignPlanningEditCapability.Insert
+            ? CampaignPlanningEditCapability.Replace
+            : CampaignPlanningEditCapability.Insert;
+        var changedDisposition = new CampaignPlanningDisposition(
+            CampaignPlanningDispositionKind.Executable,
+            oppositeCapability,
+            null,
+            []);
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(
+            state,
+            stateWork,
+            new CampaignPlanningWorkItem(
+                planWork.WorkItemKey,
+                planWork.OwnerEquivalenceRef,
+                planWork.Targets,
+                planWork.ViolationCauses,
+                changedDisposition)));
+
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(
+            state,
+            stateWork with { OuterAttemptCount = checked(stateWork.OuterAttemptCount + 1) },
+            planWork));
+
+        var evidence = fixture.Request.EvidenceReferences.First(item =>
+            item.Subject is TargetEvidenceSubject);
+        var dynamicInput = new DocumentationScribeDynamicEvidenceInput(
+            evidence.Subject,
+            evidence.Kind,
+            evidence.Relation,
+            evidence.Authority,
+            evidence.Locator,
+            evidence.ContentSha256,
+            evidence.OriginalUtf8ByteCount,
+            evidence.IncludedUtf8ByteCount,
+            evidence.IsTruncated,
+            evidence.ClaimCategoryIds);
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(
+            fixture.Request,
+            dynamicInput,
+            out var dynamicReference));
+        Assert.NotNull(dynamicReference);
+        Assert.True(StableDynamic(dynamicReference!));
+        Assert.False(StableDynamic(Evidence(
+            dynamicReference!,
+            subject: new TargetEvidenceSubject(alternateSymbol))));
+        Assert.False(StableDynamic(Evidence(
+            dynamicReference!,
+            relation: dynamicReference.Relation == EvidenceRelation.Declares
+                ? EvidenceRelation.References
+                : EvidenceRelation.Declares)));
+        Assert.False(StableDynamic(Evidence(
+            dynamicReference!,
+            kind: EvidenceKind.Test,
+            authority: DocumentationScribeEvidenceAuthority.Test)));
+        Assert.False(StableDynamic(Evidence(
+            dynamicReference!,
+            locator: new GeneratedOutputEvidenceLocator(
+                GeneratedOutputKind.SourceGenerator,
+                "sgp." + new string('a', 64),
+                "sgo." + new string('b', 64),
+                dynamicReference.ContentSha256,
+                null))));
+        Assert.False(StableDynamic(Evidence(
+            dynamicReference!,
+            claimCategoryIds: ["claim.substituted"])));
+
+        void AssertRejected(CampaignPlanningTargetFact changedTarget) =>
+            Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(
+                state,
+                stateWork,
+                new CampaignPlanningWorkItem(
+                    planWork.WorkItemKey,
+                    planWork.OwnerEquivalenceRef,
+                    [changedTarget],
+                    planWork.ViolationCauses,
+                    planWork.Disposition)));
+
+        static bool StableDynamic(DocumentationScribeEvidenceReference item) =>
+            DocumentationScribeValidation.HasStableDynamicEvidenceIdentity(
+                item.EvidenceReferenceId,
+                item.Subject,
+                item.Kind,
+                item.Relation,
+                item.Authority,
+                item.Locator,
+                item.ContentSha256,
+                item.OriginalUtf8ByteCount,
+                item.IncludedUtf8ByteCount,
+                item.IsTruncated,
+                item.ClaimCategoryIds);
+    }
+
+    internal static async Task RunCampaignPatchPostExecutionCrashAsync()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var acceptedFixture = await CompositionFixture.CreateProposalStageAsync();
+        var acceptedCampaign = acceptedFixture.CreateCampaign();
+        var acceptedStore = await ProposalReadyStore(acceptedFixture, acceptedCampaign);
+        var acceptedCrash = PatchInput(
+            acceptedFixture,
+            acceptedCampaign,
+            acceptedStore,
+            afterPatchExecutionObserver: () => throw new SimulatedPatchProcessExitException());
+
+        await Assert.ThrowsAsync<SimulatedPatchProcessExitException>(() =>
+            DocumentationCampaignPatchExecutor.ExecuteAsync(acceptedCrash));
+        var acceptedReservation = Assert.IsType<CampaignPatchReservation>(
+            acceptedStore.Current!.State.ActiveReservation);
+        Assert.Null(acceptedStore.Current.State.CumulativeOutcome);
+
+        var acceptedRetry = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(acceptedFixture, acceptedCampaign, acceptedStore));
+        Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, acceptedRetry.Kind);
+        Assert.NotNull(acceptedRetry.AcceptedCandidate);
+        Assert.Null(acceptedRetry.Artifact!.State.ActiveReservation);
+        Assert.NotEqual(
+            acceptedReservation.ExpectedCheckpointRevision,
+            acceptedRetry.Artifact.State.CumulativeOutcome!.CompletedFromCheckpointRevision);
+
+        await using var staleFixture = await CompositionFixture.CreateProposalStageAsync();
+        var staleCampaign = staleFixture.CreateCampaign();
+        var staleStore = await ProposalReadyStore(staleFixture, staleCampaign);
+        var originalBytes = await File.ReadAllBytesAsync(staleFixture.SourcePath);
+        var staleEngine = new DocumentationPatchEngine(
+            stagingParentFactory: null,
+            (stage, _) =>
+            {
+                if (stage == DocumentationPatchApplicationStage.BaselineCaptured)
+                {
+                    File.AppendAllText(staleFixture.SourcePath, "// stale after dispatch\n");
+                }
+            },
+            observer: null);
+        await Assert.ThrowsAsync<SimulatedPatchProcessExitException>(() =>
+            DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
+                staleFixture,
+                staleCampaign,
+                staleStore,
+                patchEngine: staleEngine,
+                afterPatchExecutionObserver: () => throw new SimulatedPatchProcessExitException())));
+        Assert.IsType<CampaignPatchReservation>(staleStore.Current!.State.ActiveReservation);
+        Assert.Null(staleStore.Current.State.CumulativeOutcome);
+        await File.WriteAllBytesAsync(staleFixture.SourcePath, originalBytes);
+
+        var staleRetry = await DocumentationCampaignPatchExecutor.ExecuteAsync(
+            PatchInput(staleFixture, staleCampaign, staleStore));
+        Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, staleRetry.Kind);
+        Assert.Null(staleRetry.Artifact!.State.ActiveReservation);
+    }
+
+    internal static async Task RunCampaignPatchElapsedAuthorityAsync()
+    {
+        var exactClock = new FixedElapsedTimeProvider(10_001, 10_000);
+        Assert.Equal(1_001, DocumentationCampaignPatchExecutor.ObserveElapsedMilliseconds(
+            exactClock,
+            exactClock.GetTimestamp()));
+        var unrepresentableClock = new FixedElapsedTimeProvider(1, 0);
+        Assert.Null(DocumentationCampaignPatchExecutor.ObserveElapsedMilliseconds(
+            unrepresentableClock,
+            unrepresentableClock.GetTimestamp()));
+
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var overrunFixture = await CompositionFixture.CreateProposalStageAsync();
+        var overrunCampaign = overrunFixture.CreateCampaign(
+            maximumPatchElapsedMilliseconds: 1_000,
+            maximumCampaignElapsedMilliseconds: 120_000);
+        var overrunStore = await ProposalReadyStore(overrunFixture, overrunCampaign);
+        var dispatches = 0;
+        var overrunEngine = new DocumentationPatchEngine(
+            stagingParentFactory: null,
+            (_, _) => dispatches++,
+            observer: null);
+        var overrun = await DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
+            overrunFixture,
+            overrunCampaign,
+            overrunStore,
+            patchEngine: overrunEngine,
+            timeProvider: new FixedElapsedTimeProvider(1_200_001, 10_000)));
+
+        Assert.Equal(DocumentationCampaignOutcomeKind.BudgetExhausted, overrun.Kind);
+        Assert.Equal(CampaignCumulativeOutcomeKind.OverBound, overrun.Artifact!.State.CumulativeOutcome!.Kind);
+        Assert.Equal(120_001, overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Equal(0, overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+        Assert.True(overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >= 120_001);
+        Assert.Null(overrun.AcceptedCandidate);
+        var firstDispatches = dispatches;
+
+        var replay = await DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
+            overrunFixture,
+            overrunCampaign,
+            overrunStore,
+            patchEngine: overrunEngine));
+        Assert.Equal(DocumentationCampaignOutcomeKind.BudgetExhausted, replay.Kind);
+        Assert.Equal(firstDispatches, dispatches);
+
+        await using var unknownFixture = await CompositionFixture.CreateProposalStageAsync();
+        var unknownCampaign = unknownFixture.CreateCampaign(
+            maximumPatchElapsedMilliseconds: 1_000,
+            maximumCampaignElapsedMilliseconds: 120_000);
+        var unknownStore = await ProposalReadyStore(unknownFixture, unknownCampaign);
+        var unknown = await DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(
+            unknownFixture,
+            unknownCampaign,
+            unknownStore,
+            timeProvider: new FixedElapsedTimeProvider(1, 0)));
+
+        Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, unknown.Kind);
+        Assert.Null(unknown.Artifact!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Equal(1_000, unknown.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+        Assert.True(unknown.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >= 1_000);
+    }
+
+    private static CampaignPlanningTargetFact Target(
+        CampaignPlanningTargetFact basis,
+        SymbolRef? symbolRef = null,
+        CampaignPlanningSourceAuthority? source = null,
+        ImmutableArray<CampaignPlanningApplicableComponent>? components = null,
+        DocumentationScribeStyleProfile? styleProfile = null) => new(
+            symbolRef ?? basis.SymbolRef,
+            basis.PrimaryKind,
+            basis.Origin,
+            source ?? basis.Source,
+            (source ?? basis.Source).AuthoritativeDeclarationId,
+            components ?? basis.ApplicableComponents,
+            basis.OwnerSymbolRefs,
+            basis.AuditOutcome,
+            basis.AuditReason,
+            basis.AuditRowSha256,
+            basis.M3Eligible,
+            styleProfile ?? basis.StyleProfile);
+
+    private static DocumentationScribeStyleProfile Style(
+        DocumentationScribeStyleProfile basis,
+        string id) => new(
+            id,
+            basis.OutputLanguageId,
+            basis.Summary,
+            basis.Remarks,
+            basis.Exceptions,
+            basis.ComponentPolicies,
+            basis.InheritDocDisposition,
+            basis.AllowedLiterals,
+            basis.ForbiddenLiterals,
+            basis.ClaimPolicies,
+            basis.MaximumContentUnits,
+            basis.MaximumEvidenceRefsPerUnit);
+
+    private static DocumentationScribeEvidenceReference Evidence(
+        DocumentationScribeEvidenceReference basis,
+        EvidenceSubject? subject = null,
+        EvidenceKind? kind = null,
+        EvidenceRelation? relation = null,
+        DocumentationScribeEvidenceAuthority? authority = null,
+        EvidenceLocator? locator = null,
+        ImmutableArray<string>? claimCategoryIds = null) => new(
+            basis.EvidenceReferenceId,
+            basis.RepositoryContextRef,
+            subject ?? basis.Subject,
+            kind ?? basis.Kind,
+            relation ?? basis.Relation,
+            authority ?? basis.Authority,
+            locator ?? basis.Locator,
+            basis.ContentSha256,
+            basis.OriginalUtf8ByteCount,
+            basis.IncludedUtf8ByteCount,
+            basis.IsTruncated,
+            claimCategoryIds ?? basis.ClaimCategoryIds);
+
     private static async Task<MemoryCampaignStore> ProposalReadyStore(
         CompositionFixture fixture,
         CampaignExecutionFixture campaign)
@@ -498,7 +825,8 @@ public sealed partial class DocumentationScribeCompositionTests
         CancellationToken executionToken = default,
         CancellationToken settlementToken = default,
         DocumentationPatchEngine? patchEngine = null,
-        TimeProvider? timeProvider = null) => new(
+        TimeProvider? timeProvider = null,
+        Action? afterPatchExecutionObserver = null) => new(
             fixture.Classified,
             fixture.Observed,
             fixture.Policy,
@@ -514,7 +842,8 @@ public sealed partial class DocumentationScribeCompositionTests
             executionToken,
             settlementToken,
             patchEngine,
-            timeProvider);
+            timeProvider,
+            afterPatchExecutionObserver);
 
     private sealed class SimulatedPatchProcessExitException : Exception;
 
@@ -535,6 +864,22 @@ public sealed partial class DocumentationScribeCompositionTests
             callback(state);
             return new NoopTimer();
         }
+    }
+
+    private sealed class FixedElapsedTimeProvider(long elapsedTicks, long frequency) : TimeProvider
+    {
+        private int timestampReads;
+
+        public override long TimestampFrequency => frequency;
+
+        public override long GetTimestamp() =>
+            Interlocked.Increment(ref timestampReads) == 1 ? 0 : elapsedTicks;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period) => new NoopTimer();
     }
 
     private sealed class NoopTimer : ITimer
