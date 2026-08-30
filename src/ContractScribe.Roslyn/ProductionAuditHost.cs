@@ -113,9 +113,7 @@ internal sealed class ProductionRepositorySessionHost
             using var meter = new TemporaryDiskMeter(
                 request.AuditTemporaryRoot,
                 request.OutputStagingRoot
-                ?? publisher?.StagingPath
-                ?? request.AuditTemporaryRoot
-                ?? request.RepositoryRoot);
+                ?? publisher?.StagingPath);
             using var processMeter = controls.ProcessMeterFactory?.Invoke()
                 ?? new ToolchainProcessMeter();
             using var totalDeadline = new CancellationTokenSource();
@@ -638,10 +636,16 @@ internal sealed class ProductionRepositorySessionHost
                     hostDiagnostics).ConfigureAwait(false);
             }
 
+            var shutdownLifetimeToken = totalToken;
             if (controls.SessionConsumer is not null)
             {
                 try
                 {
+                    totalDeadline.CancelAfter(Timeout.InfiniteTimeSpan);
+                    totalCauseRegistration.Dispose();
+                    totalToken.ThrowIfCancellationRequested();
+                    shutdownLifetimeToken = cancellationToken;
+                    Record(controls, transitions, "audit-deadline-retired-before-session-consumer");
                     await controls.SessionConsumer(
                         new ProductionRepositorySessionBundle(
                             resolvedPaths,
@@ -656,7 +660,7 @@ internal sealed class ProductionRepositorySessionHost
                             canonical,
                             toolchain,
                             loaderFact),
-                        totalToken).ConfigureAwait(false);
+                        shutdownLifetimeToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -694,7 +698,7 @@ internal sealed class ProductionRepositorySessionHost
                 using var shutdownCauseRegistration = shutdownDeadline.Token.Register(
                     () => RegisterInterruption(HostExecutionOutcome.Timeout));
                 using var shutdownTimeout = CancellationTokenSource.CreateLinkedTokenSource(
-                    totalToken,
+                    shutdownLifetimeToken,
                     shutdownDeadline.Token);
                 await controls.ReachStageAsync(HostStage.Shutdown, shutdownTimeout.Token)
                     .ConfigureAwait(false);

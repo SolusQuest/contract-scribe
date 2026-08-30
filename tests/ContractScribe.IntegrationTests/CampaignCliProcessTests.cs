@@ -47,6 +47,8 @@ public sealed class CampaignCliProcessTests
         var configuration = CampaignConfiguration.Parse(configurationBytes);
         Exception? captured = null;
         CampaignCheckpointState? state = null;
+        CancellationToken? consumerToken = null;
+        using var callerLifetime = new CancellationTokenSource();
         var host = new ProductionRepositorySessionHost(
             new ContractScribe.Core.Hosting.HostBuildProvenance(new string('a', 40)));
 
@@ -59,6 +61,7 @@ public sealed class CampaignCliProcessTests
                 PublishResult: false),
             new ProductionAuditHostControls(SessionConsumer: (bundle, token) =>
             {
+                consumerToken = token;
                 try
                 {
                     var policy = configuration.CreateExecutionPolicy();
@@ -94,9 +97,14 @@ public sealed class CampaignCliProcessTests
                 }
                 return Task.CompletedTask;
             }),
-            CancellationToken.None);
+            callerLifetime.Token);
 
         Assert.Null(captured);
+        Assert.True(consumerToken.HasValue);
+        Assert.Equal(callerLifetime.Token, consumerToken.Value);
+        Assert.Contains(
+            "audit-deadline-retired-before-session-consumer",
+            outcome.TransitionEvents);
         Assert.Equal(ContractScribe.Core.Hosting.HostExecutionOutcome.Succeeded,
             outcome.Terminal.ExecutionOutcome);
         Assert.NotNull(state);
@@ -115,6 +123,44 @@ public sealed class CampaignCliProcessTests
         {
             Assert.Equal(CampaignTerminalReason.NoWork, state.TerminalOutcome!.Reason);
         }
+    }
+
+    [Fact]
+    public async Task SharedProductionSession_WithoutTemporaryRoots_DoesNotInspectRepositoryLinks()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var target = Path.Join(fixture.Root, "unrelated-source.txt");
+        await File.WriteAllTextAsync(target, "source repository content");
+        File.CreateSymbolicLink(
+            Path.Join(fixture.Root, "unrelated-source-link.txt"),
+            Path.GetFileName(target));
+        var consumed = false;
+        var host = new ProductionRepositorySessionHost(
+            new ContractScribe.Core.Hosting.HostBuildProvenance(new string('a', 40)));
+
+        var outcome = await host.RunAsync(
+            new ProductionAuditRequest(
+                fixture.Root,
+                "App/App.csproj",
+                Encoding.UTF8.GetBytes(OptionalPolicy),
+                PublicationTarget: null,
+                PublishResult: false),
+            new ProductionAuditHostControls(SessionConsumer: (_, _) =>
+            {
+                consumed = true;
+                return Task.CompletedTask;
+            }),
+            CancellationToken.None);
+
+        Assert.True(consumed);
+        Assert.Equal(
+            ContractScribe.Core.Hosting.HostExecutionOutcome.Succeeded,
+            outcome.Terminal.ExecutionOutcome);
     }
 
     [Fact]

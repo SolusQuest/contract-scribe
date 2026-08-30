@@ -17,6 +17,8 @@ The exact help bytes are stored in `tests/fixtures/campaign/cli/help-campaign.tx
 
 Audit and campaign use `ProductionRepositorySessionHost` for one production M1 lifecycle. Campaign receives the accepted policy, loaded and observed session, evidence, classifications, canonical Audit Result, and host facts while that session is live; it does not reload or reaggregate them. `DocumentationDeclarationAuthorityProjector` derives planning source and owner authority through the same Roslyn declaration-resolution primitive as M2 without constructing a synthetic Patch Request.
 
+The shared host's `total-audit-timeout` governs M1 only. After M1 result validation succeeds, the host retires that deadline before entering the campaign consumer. Campaign execution receives only caller cancellation and enforces its configured persisted campaign, Scribe, and Patch elapsed ceilings; session shutdown remains independently bounded by the host's graceful-shutdown rule. A campaign may therefore validly exceed the M1 audit ceiling without being reclassified as caller cancellation or host timeout.
+
 The runner then composes the existing boundaries in this order:
 
 1. Parse argv and validate repository, input, policy, configuration, snapshot, and state location.
@@ -40,6 +42,8 @@ An abrupt process stop emits no application envelope. The last complete validate
 ## Terminal contract
 
 Every recognized non-help campaign return writes one compact LF-terminated JSON object to stdout with fields in this order: `campaignEnvelopeVersion`, `terminalLayer`, `cliContractBaseline`, `toolVersion`, `operation`, `outcome`, `diagnosticCodes`, and `checkpointRevision`. Success writes no stderr. Usage writes the selected existing `cli.usage.*` diagnostic. Every other controlled failure writes exactly one diagnostic whose code is the outcome and whose message is `campaign stopped: <outcome>`.
+
+Campaign terminal selection owns the public precedence through host teardown. In particular, a durable C3 transition accepted by exact X2A readback remains authoritative over later host shutdown failure, cancellation, timeout, presentation failure, or process status; teardown is still attempted and bounded, but it cannot rewrite that durable campaign result.
 
 The closed exit groups are: success `0`, usage `2`, bounded resumable stop `3`, configuration/state/compatibility `4`, terminal execution/publication `5`, cancellation `6`, and timeout `7`. Tests freeze the complete outcome vocabulary and mapping. No raw argument, path, credential, proposal, provider value, exception, or downstream diagnostic crosses this surface.
 

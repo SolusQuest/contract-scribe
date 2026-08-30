@@ -101,6 +101,8 @@ internal static class CampaignCommandRunner
 
         if (campaignTerminal is not null)
         {
+            // Issue #139 gives campaign terminal selection public precedence. In particular,
+            // an exact-readback C3 terminal cannot be replaced by later host shutdown or process status.
             return CampaignCliPresentation.Present(identity, campaignTerminal);
         }
 
