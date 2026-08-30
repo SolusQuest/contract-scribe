@@ -37,6 +37,8 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../ContractScribe.BuildHostProbe/ContractScribe.BuildHostProbe.csproj"
                       ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ContractScribe.CampaignStartupHook/ContractScribe.CampaignStartupHook.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
