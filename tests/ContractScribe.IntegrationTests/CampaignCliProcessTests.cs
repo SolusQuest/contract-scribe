@@ -300,7 +300,9 @@ public sealed class CampaignCliProcessTests
                 timeout: TimeSpan.FromMinutes(3));
             var completed = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath));
             Assert.True(completed.IsValid);
-            AssertCampaign(recovered, 0, "campaign.complete", completed.Artifact!.CheckpointRevision);
+            Assert.Equal(CampaignTerminalKind.Exhausted, completed.Artifact!.State.TerminalOutcome!.Kind);
+            Assert.Null(completed.Artifact.State.CandidateObservation);
+            AssertCampaign(recovered, 3, "campaign.budget-exhausted", completed.Artifact.CheckpointRevision);
             Assert.Equal(1, server.RequestCount);
         }
         finally

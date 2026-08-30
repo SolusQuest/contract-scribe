@@ -1,4 +1,5 @@
 [
+  {"hook":"checkpoint.initial.before-create","scenario":"accepted"},
   {"hook":"checkpoint.before-replacement","scenario":"accepted"},
   {"hook":"checkpoint.after-replacement-before-readback","scenario":"accepted"},
   {"hook":"checkpoint.initial.in-replacement","scenario":"accepted"},
