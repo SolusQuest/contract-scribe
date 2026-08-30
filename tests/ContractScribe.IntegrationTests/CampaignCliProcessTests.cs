@@ -453,7 +453,9 @@ public sealed class CampaignCliProcessTests
         Assert.NotEqual(-1, result.ExitCode);
         using var document = JsonDocument.Parse(result.Stdout);
         var outcome = document.RootElement.GetProperty("outcome").GetString();
-        Assert.NotEqual("campaign.host-contract-error", outcome);
+        Assert.False(
+            string.Equals("campaign.host-contract-error", outcome, StringComparison.Ordinal),
+            $"{hook}: exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
         Assert.Contains(document.RootElement.GetProperty("terminalLayer").GetString(),
             new[] { "preflight", "state", "execution", "campaign" });
         Assert.True(result.Stderr.Length <= 512, hook + ": " + result.Stderr);
