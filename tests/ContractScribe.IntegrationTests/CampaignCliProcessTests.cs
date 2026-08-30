@@ -199,7 +199,12 @@ public sealed class CampaignCliProcessTests
             });
         try
         {
-            await WaitForFileAsync(acknowledgement, running, TimeSpan.FromMinutes(3));
+            await WaitForFileAsync(
+                acknowledgement,
+                running,
+                CampaignProcessBoundaryHooks.InitialReplacementScope + "."
+                + CampaignProcessBoundaryHooks.AfterReplacementBeforeReadback,
+                TimeSpan.FromMinutes(3));
             Assert.Equal(
                 CampaignProcessBoundaryHooks.InitialReplacementScope + "."
                 + CampaignProcessBoundaryHooks.AfterReplacementBeforeReadback + "\n",
@@ -400,7 +405,7 @@ public sealed class CampaignCliProcessTests
             });
         try
         {
-            await WaitForFileAsync(acknowledgement, running, TimeSpan.FromMinutes(3));
+            await WaitForFileAsync(acknowledgement, running, vector.Hook, TimeSpan.FromMinutes(3));
             Assert.Equal(vector.Hook + "\n", await File.ReadAllTextAsync(acknowledgement));
             running.Process.Kill(entireProcessTree: true);
             await running.Process.WaitForExitAsync();
@@ -542,7 +547,11 @@ public sealed class CampaignCliProcessTests
             ?? throw new InvalidOperationException("Campaign CLI process failed to start."));
     }
 
-    private static async Task WaitForFileAsync(string path, RunningProcess running, TimeSpan timeout)
+    private static async Task WaitForFileAsync(
+        string path,
+        RunningProcess running,
+        string expectedHook,
+        TimeSpan timeout)
     {
         var elapsed = Stopwatch.StartNew();
         while (!File.Exists(path))
@@ -551,7 +560,7 @@ public sealed class CampaignCliProcessTests
             {
                 var result = await running.CompleteAsync();
                 throw new Xunit.Sdk.XunitException(
-                    $"Campaign CLI exited before hook acknowledgement: exit={result.ExitCode} "
+                    $"Campaign CLI exited before hook '{expectedHook}' acknowledgement: exit={result.ExitCode} "
                     + $"stdout={result.Stdout} stderr={result.Stderr}");
             }
             if (elapsed.Elapsed > timeout)

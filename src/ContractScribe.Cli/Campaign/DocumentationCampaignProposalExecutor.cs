@@ -209,7 +209,8 @@ internal static class DocumentationCampaignProposalExecutor
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
-        var proposalResult = prepared.Kind == DocumentationCampaignPreparationKind.Completion;
+        var proposalResult = prepared.CompletionAuthority?.Outcome?.RunResult.Terminal
+            is DocumentationScribeProposalTerminal;
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);

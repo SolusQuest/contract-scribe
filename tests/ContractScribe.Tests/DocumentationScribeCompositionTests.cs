@@ -286,6 +286,26 @@ public sealed partial class DocumentationScribeCompositionTests
     }
 
     [Fact]
+    public async Task Proposal_executor_routes_skip_completion_through_closed_result_hooks()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var observed = new List<string>();
+        using var registration = CampaignProcessBoundaryHooks.Register(observed.Add);
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, new SkipExchange(), RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition, observed);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition, observed);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterClosedReadback, observed);
+        Assert.DoesNotContain(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition, observed);
+        Assert.DoesNotContain(CampaignProcessBoundaryHooks.ProposalAfterProposalReadback, observed);
+    }
+
+    [Fact]
     public async Task Proposal_executor_binds_deferred_exchange_once_after_preview_and_before_reservation_commit()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
