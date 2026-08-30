@@ -734,7 +734,28 @@ public static class CampaignStateFactory
     public static DocumentationPatchRequest ReconstructPatchRequest(
         CampaignCheckpointState state,
         DocumentationPatchContext context,
-        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence)
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence) =>
+        ReconstructPatchRequestCore(
+            state,
+            context,
+            currentEvidence,
+            requireActiveReservationMatch: true);
+
+    internal static DocumentationPatchRequest ReconstructRetriedPatchRequest(
+        CampaignCheckpointState state,
+        DocumentationPatchContext context,
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence) =>
+        ReconstructPatchRequestCore(
+            state,
+            context,
+            currentEvidence,
+            requireActiveReservationMatch: false);
+
+    private static DocumentationPatchRequest ReconstructPatchRequestCore(
+        CampaignCheckpointState state,
+        DocumentationPatchContext context,
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence,
+        bool requireActiveReservationMatch)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(context);
@@ -782,7 +803,8 @@ public static class CampaignStateFactory
         }
         var request = ParsePatchRequest(context, proposals);
 
-        if (state.ActiveReservation is CampaignPatchReservation reservation)
+        if (requireActiveReservationMatch
+            && state.ActiveReservation is CampaignPatchReservation reservation)
         {
             Require(
                 string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal),

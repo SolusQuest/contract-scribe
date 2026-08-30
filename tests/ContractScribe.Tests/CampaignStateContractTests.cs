@@ -3020,11 +3020,16 @@ public sealed class CampaignStateContractTests
             proposalComplete,
             PatchContext(freshExchange.Request),
             CurrentEvidence(freshExchange));
+        var freshRetryRequest = CampaignStateFactory.ReconstructRetriedPatchRequest(
+            first.Artifact.State,
+            PatchContext(freshExchange.Request),
+            CurrentEvidence(freshExchange));
         Assert.NotEqual(request.ArtifactSha256, freshRequest.ArtifactSha256);
+        Assert.Equal(freshRequest.ArtifactSha256, freshRetryRequest.ArtifactSha256);
         var retry = CampaignStateReducer.RetryPatchInvocation(
             first.Artifact,
             AcceptCurrentForTest(first.Artifact),
-            freshRequest,
+            freshRetryRequest,
             elapsedMilliseconds: 1_000);
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         var retryReservation = Assert.IsType<CampaignPatchReservation>(retry.Artifact.State.ActiveReservation);
