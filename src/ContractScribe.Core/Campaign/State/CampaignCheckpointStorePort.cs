@@ -319,7 +319,12 @@ public static class CampaignCheckpointAcceptance
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(authority);
-        return await AcceptCoreAsync(store, null, authority.Artifact, cancellationToken).ConfigureAwait(false);
+        return await AcceptCoreAsync(
+            store,
+            null,
+            authority.Artifact,
+            acceptExactConcurrentWinner: false,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptAsync(
@@ -340,6 +345,7 @@ public static class CampaignCheckpointAcceptance
             store,
             transition.Predecessor,
             transition.Artifact,
+            acceptExactConcurrentWinner: true,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -347,6 +353,7 @@ public static class CampaignCheckpointAcceptance
         ICampaignCheckpointStore store,
         CampaignCheckpointArtifact? expectedPredecessor,
         CampaignCheckpointArtifact intended,
+        bool acceptExactConcurrentWinner,
         CancellationToken cancellationToken)
     {
         try
@@ -360,6 +367,12 @@ public static class CampaignCheckpointAcceptance
 
             if (currentMatch == MatchKind.Exact)
             {
+                if (!acceptExactConcurrentWinner)
+                {
+                    return new CampaignCheckpointAcceptanceResult(
+                        CampaignCheckpointAcceptanceKind.Conflict,
+                        null);
+                }
                 return await VerifyReadbackAsync(
                     store,
                     intended,
@@ -404,7 +417,8 @@ public static class CampaignCheckpointAcceptance
                     or CampaignCheckpointWriteKind.CurrentMismatch)
                 {
                     var concurrent = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
-                    if (Match(concurrent, intended) == MatchKind.Exact)
+                    if (acceptExactConcurrentWinner
+                        && Match(concurrent, intended) == MatchKind.Exact)
                     {
                         return new CampaignCheckpointAcceptanceResult(
                             CampaignCheckpointAcceptanceKind.Accepted,

@@ -23,7 +23,8 @@ internal sealed record DocumentationCampaignPatchInput(
     CancellationToken SettlementToken,
     DocumentationPatchEngine? PatchEngine = null,
     TimeProvider? TimeProvider = null,
-    Action? AfterPatchExecutionObserver = null);
+    Action? AfterPatchExecutionObserver = null,
+    Func<bool>? DispatchGuard = null);
 
 internal static class DocumentationCampaignPatchExecutor
 {
@@ -223,6 +224,13 @@ internal static class DocumentationCampaignPatchExecutor
             try
             {
                 CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchBeforeDispatch);
+                if (!DispatchAllowed(input.DispatchGuard))
+                {
+                    return new DocumentationCampaignOutcome(
+                        DocumentationCampaignOutcomeKind.StateConflict,
+                        "campaign.patch.configuration-changed",
+                        reserved.Artifact);
+                }
                 execution = ExecutePatch(
                     engine,
                     invocation,
@@ -614,6 +622,18 @@ internal static class DocumentationCampaignPatchExecutor
     private static DocumentationCampaignOutcome Outcome(
         DocumentationCampaignOutcomeKind kind,
         string code) => new(kind, code);
+
+    private static bool DispatchAllowed(Func<bool>? guard)
+    {
+        try
+        {
+            return guard?.Invoke() ?? true;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return false;
+        }
+    }
 
     private enum PatchStateAction
     {

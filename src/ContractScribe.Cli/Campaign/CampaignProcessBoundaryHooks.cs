@@ -8,6 +8,7 @@ namespace ContractScribe.Cli;
 /// </summary>
 internal static class CampaignProcessBoundaryHooks
 {
+    internal const string InitialBeforeCreate = "checkpoint.initial.before-create";
     internal const string ProposalBeforeReservationCommit = "proposal.before-reservation-commit";
     internal const string ProposalAfterReservationReadback = "proposal.after-reservation-readback";
     internal const string ProposalBeforeProviderDispatch = "proposal.before-provider-dispatch";
@@ -46,6 +47,7 @@ internal static class CampaignProcessBoundaryHooks
 
     private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal)
     {
+        InitialBeforeCreate,
         ProposalBeforeReservationCommit,
         ProposalAfterReservationReadback,
         ProposalBeforeProviderDispatch,

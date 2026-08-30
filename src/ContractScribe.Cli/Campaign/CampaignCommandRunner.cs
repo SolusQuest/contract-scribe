@@ -161,6 +161,7 @@ internal static class CampaignCommandRunner
                 plan);
             var artifact = CampaignStateJson.CreateArtifact(state);
             CampaignCheckpointAcceptanceResult accepted;
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.InitialBeforeCreate);
             using (CampaignProcessBoundaryHooks.EnterReplacementScope(
                        CampaignProcessBoundaryHooks.InitialReplacementScope))
             {
@@ -172,7 +173,13 @@ internal static class CampaignCommandRunner
             if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted
                 || accepted.AcceptedCheckpoint is not { } acceptedCheckpoint)
             {
-                return Terminal(preflight.Operation, "state", AcceptanceOutcome(accepted.Kind), null);
+                return Terminal(
+                    preflight.Operation,
+                    "state",
+                    accepted.Kind == CampaignCheckpointAcceptanceKind.Conflict
+                        ? "campaign.state-present"
+                        : AcceptanceOutcome(accepted.Kind),
+                    null);
             }
             current = acceptedCheckpoint;
         }
@@ -253,7 +260,8 @@ internal static class CampaignCommandRunner
                     m2Projection,
                     store,
                     cancellationToken,
-                    cancellationToken)).ConfigureAwait(false);
+                    cancellationToken,
+                    DispatchGuard: preflight.Configuration.Revalidate)).ConfigureAwait(false);
                 if (patched.Kind == DocumentationCampaignOutcomeKind.Reconstructed
                     && reconstructAcceptedTerminal)
                 {
@@ -324,7 +332,8 @@ internal static class CampaignCommandRunner
                 ConfiguredAgentEntrypoint: null,
                 ExecutionToken: cancellationToken,
                 SettlementToken: cancellationToken,
-                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor))).ConfigureAwait(false);
+                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor),
+                DispatchGuard: preflight.Configuration.Revalidate)).ConfigureAwait(false);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {
                 continue;

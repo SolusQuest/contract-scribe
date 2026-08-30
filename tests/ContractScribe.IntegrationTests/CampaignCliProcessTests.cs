@@ -167,6 +167,149 @@ public sealed class CampaignCliProcessTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentStarts_OnlyTheCreatingProcessOwnsTheCampaign(bool executable)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await LoaderFixture.CreateAsync();
+        if (executable)
+        {
+            await SetSingleWorkItemSourceAsync(fixture.Root);
+        }
+        await File.WriteAllTextAsync(
+            Path.Join(fixture.Root, "policy.json"),
+            executable ? RequiredPolicy : OptionalPolicy);
+        await using var server = new ProposalLoopbackServer();
+        var outside = CreatePrivateDirectory("contract-scribe-campaign-concurrent-start");
+        var configurationPath = Path.Join(outside, "campaign.json");
+        var stateDirectory = Path.Join(outside, "state");
+        Directory.CreateDirectory(stateDirectory);
+        File.SetUnixFileMode(stateDirectory,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var statePath = Path.Join(stateDirectory, "checkpoint.json");
+        var firstAcknowledgement = Path.Join(outside, "first.ack");
+        var firstRelease = Path.Join(outside, "first.release");
+        var secondAcknowledgement = Path.Join(outside, "second.ack");
+        var secondRelease = Path.Join(outside, "second.release");
+        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+
+        using var first = Start(
+            Args("start", fixture.Root, statePath, configurationPath, "snapshot.concurrent"),
+            HookEnvironment(
+                CampaignProcessBoundaryHooks.InitialBeforeCreate,
+                firstAcknowledgement,
+                firstRelease));
+        using var second = Start(
+            Args("start", fixture.Root, statePath, configurationPath, "snapshot.concurrent"),
+            HookEnvironment(
+                CampaignProcessBoundaryHooks.InitialBeforeCreate,
+                secondAcknowledgement,
+                secondRelease));
+        try
+        {
+            await Task.WhenAll(
+                WaitForFileAsync(firstAcknowledgement, first,
+                    CampaignProcessBoundaryHooks.InitialBeforeCreate, TimeSpan.FromMinutes(3)),
+                WaitForFileAsync(secondAcknowledgement, second,
+                    CampaignProcessBoundaryHooks.InitialBeforeCreate, TimeSpan.FromMinutes(3)));
+
+            await File.WriteAllTextAsync(firstRelease, "release\n");
+            await first.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+            var winner = await first.CompleteAsync();
+            AssertCampaign(
+                winner,
+                0,
+                executable ? "campaign.complete" : "campaign.no-work",
+                CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!.CheckpointRevision);
+            var winnerBytes = await File.ReadAllBytesAsync(statePath);
+
+            await File.WriteAllTextAsync(secondRelease, "release\n");
+            await second.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+            var loser = await second.CompleteAsync();
+            AssertCampaign(loser, 4, "campaign.state-present", null);
+            Assert.Equal(winnerBytes, await File.ReadAllBytesAsync(statePath));
+            Assert.Equal(executable ? 1 : 0, server.RequestCount);
+        }
+        finally
+        {
+            await StopAsync(first);
+            await StopAsync(second);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConfigurationReplacementAfterPatchReservation_PreventsDispatchAndRecovers()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await SetSingleWorkItemSourceAsync(fixture.Root);
+        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
+        var originalSource = await File.ReadAllBytesAsync(Path.Join(fixture.Root, "App", "App.cs"));
+        await using var server = new ProposalLoopbackServer();
+        var outside = CreatePrivateDirectory("contract-scribe-campaign-configuration-guard");
+        var configurationPath = Path.Join(outside, "campaign.json");
+        var stateDirectory = Path.Join(outside, "state");
+        Directory.CreateDirectory(stateDirectory);
+        File.SetUnixFileMode(stateDirectory,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var statePath = Path.Join(stateDirectory, "checkpoint.json");
+        var acknowledgement = Path.Join(outside, "hook.ack");
+        var release = Path.Join(outside, "hook.release");
+        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+        var configurationBytes = await File.ReadAllBytesAsync(configurationPath);
+
+        using var running = Start(
+            Args("start", fixture.Root, statePath, configurationPath, "snapshot.configuration-guard"),
+            HookEnvironment(
+                CampaignProcessBoundaryHooks.PatchBeforeDispatch,
+                acknowledgement,
+                release));
+        try
+        {
+            await WaitForFileAsync(
+                acknowledgement,
+                running,
+                CampaignProcessBoundaryHooks.PatchBeforeDispatch,
+                TimeSpan.FromMinutes(3));
+            Assert.Equal(1, server.RequestCount);
+            await File.WriteAllBytesAsync(configurationPath, [.. configurationBytes, (byte)'\n']);
+            await File.WriteAllTextAsync(release, "release\n");
+            await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+            var guarded = await running.CompleteAsync();
+            var reserved = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath));
+            Assert.True(reserved.IsValid);
+            Assert.IsType<CampaignPatchReservation>(reserved.Artifact!.State.ActiveReservation);
+            Assert.Null(reserved.Artifact.State.CandidateObservation);
+            AssertCampaign(guarded, 4, "campaign.state-conflict", reserved.Artifact.CheckpointRevision);
+            Assert.Equal(originalSource, await File.ReadAllBytesAsync(Path.Join(fixture.Root, "App", "App.cs")));
+
+            await File.WriteAllBytesAsync(configurationPath, configurationBytes);
+            var recovered = await RunAsync(
+                Args("resume", fixture.Root, statePath, configurationPath, "snapshot.configuration-guard"),
+                timeout: TimeSpan.FromMinutes(3));
+            var completed = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath));
+            Assert.True(completed.IsValid);
+            AssertCampaign(recovered, 0, "campaign.complete", completed.Artifact!.CheckpointRevision);
+            Assert.Equal(1, server.RequestCount);
+        }
+        finally
+        {
+            await StopAsync(running);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task ReplacementReadbackCrash_LeavesOnlyTheCommittedCheckpointAsAuthority()
     {
@@ -522,6 +665,26 @@ public sealed class CampaignCliProcessTests
                 await process.Process.WaitForExitAsync();
             }
             throw;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string?> HookEnvironment(
+        string hook,
+        string acknowledgement,
+        string release) => new Dictionary<string, string?>
+        {
+            ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
+            ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME"] = hook,
+            ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_ACK"] = acknowledgement,
+            ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_RELEASE"] = release,
+        };
+
+    private static async Task StopAsync(RunningProcess running)
+    {
+        if (!running.Process.HasExited)
+        {
+            running.Process.Kill(entireProcessTree: true);
+            await running.Process.WaitForExitAsync();
         }
     }
 

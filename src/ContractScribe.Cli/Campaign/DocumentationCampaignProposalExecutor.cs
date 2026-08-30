@@ -25,7 +25,8 @@ internal sealed record DocumentationCampaignProposalInput(
     CancellationToken ExecutionToken,
     CancellationToken SettlementToken,
     TimeProvider? TimeProvider = null,
-    Func<IDocumentationScribeModelExchange?>? DeferredExchange = null);
+    Func<IDocumentationScribeModelExchange?>? DeferredExchange = null,
+    Func<bool>? DispatchGuard = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -204,9 +205,33 @@ internal static class DocumentationCampaignProposalExecutor
         }
 
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeProviderDispatch);
+        var dispatchGuardRejected = false;
+        bool GuardDispatch()
+        {
+            var allowed = DispatchAllowed(input.DispatchGuard);
+            dispatchGuardRejected |= !allowed;
+            return allowed;
+        }
+        if (!GuardDispatch())
+        {
+            return new DocumentationCampaignProposalOutcome(
+                DocumentationCampaignProposalOutcomeKind.StateConflict,
+                "campaign.reservation.conflict",
+                selectedState.WorkItemKey,
+                reserved.Artifact);
+        }
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
             selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
-            input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
+            input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,
+            GuardDispatch).ConfigureAwait(false);
+        if (dispatchGuardRejected)
+        {
+            return new DocumentationCampaignProposalOutcome(
+                DocumentationCampaignProposalOutcomeKind.StateConflict,
+                "campaign.reservation.conflict",
+                selectedState.WorkItemKey,
+                reserved.Artifact);
+        }
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
         var proposalResult = prepared.CompletionAuthority?.Outcome?.RunResult.Terminal
@@ -322,5 +347,17 @@ internal static class DocumentationCampaignProposalExecutor
 
     private static DocumentationCampaignProposalOutcome Outcome(
         DocumentationCampaignProposalOutcomeKind kind, string code) => new(kind, code);
+
+    private static bool DispatchAllowed(Func<bool>? guard)
+    {
+        try
+        {
+            return guard?.Invoke() ?? true;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return false;
+        }
+    }
 
 }

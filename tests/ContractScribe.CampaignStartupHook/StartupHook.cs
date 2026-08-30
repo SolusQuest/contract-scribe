@@ -4,6 +4,7 @@ internal static class StartupHook
 {
     private const string HookNameVariable = "CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME";
     private const string AcknowledgementVariable = "CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_ACK";
+    private const string ReleaseVariable = "CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_RELEASE";
     private const string CliAssemblyName = "ContractScribe.Cli";
     private static readonly object Gate = new();
     private static IDisposable? registration;
@@ -12,6 +13,7 @@ internal static class StartupHook
     {
         var hookName = Environment.GetEnvironmentVariable(HookNameVariable);
         var acknowledgementPath = Environment.GetEnvironmentVariable(AcknowledgementVariable);
+        var releasePath = Environment.GetEnvironmentVariable(ReleaseVariable);
         if (string.IsNullOrEmpty(hookName) || string.IsNullOrEmpty(acknowledgementPath))
         {
             return;
@@ -22,7 +24,7 @@ internal static class StartupHook
             string.Equals(assembly.GetName().Name, CliAssemblyName, StringComparison.Ordinal));
         if (loaded is not null)
         {
-            Register(loaded, hookName, acknowledgementPath);
+            Register(loaded, hookName, acknowledgementPath, releasePath);
         }
     }
 
@@ -34,13 +36,18 @@ internal static class StartupHook
         }
         var hookName = Environment.GetEnvironmentVariable(HookNameVariable);
         var acknowledgementPath = Environment.GetEnvironmentVariable(AcknowledgementVariable);
+        var releasePath = Environment.GetEnvironmentVariable(ReleaseVariable);
         if (!string.IsNullOrEmpty(hookName) && !string.IsNullOrEmpty(acknowledgementPath))
         {
-            Register(args.LoadedAssembly, hookName, acknowledgementPath);
+            Register(args.LoadedAssembly, hookName, acknowledgementPath, releasePath);
         }
     }
 
-    private static void Register(Assembly assembly, string selectedName, string acknowledgementPath)
+    private static void Register(
+        Assembly assembly,
+        string selectedName,
+        string acknowledgementPath,
+        string? releasePath)
     {
         lock (Gate)
         {
@@ -73,7 +80,14 @@ internal static class StartupHook
                     stream.Write(System.Text.Encoding.UTF8.GetBytes(reached + "\n"));
                     stream.Flush(flushToDisk: true);
                 }
-                Thread.Sleep(Timeout.Infinite);
+                if (string.IsNullOrEmpty(releasePath))
+                {
+                    Thread.Sleep(Timeout.Infinite);
+                }
+                while (!File.Exists(releasePath))
+                {
+                    Thread.Sleep(10);
+                }
             };
             registration = (IDisposable)register.Invoke(null, [observer])!;
         }

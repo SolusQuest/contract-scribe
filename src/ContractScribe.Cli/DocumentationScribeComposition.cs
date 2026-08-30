@@ -397,7 +397,8 @@ internal static class DocumentationScribeComposition
 
     private sealed class CampaignDispatchExchange(
         CampaignProviderInvocationAuthority invocation,
-        IDocumentationScribeModelExchange inner) : IDocumentationScribeModelExchange
+        IDocumentationScribeModelExchange inner,
+        Func<bool>? dispatchGuard) : IDocumentationScribeModelExchange
     {
         private int state;
 
@@ -407,6 +408,10 @@ internal static class DocumentationScribeComposition
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            if (dispatchGuard is not null && !dispatchGuard())
+            {
+                throw new InvalidOperationException("scribe.campaign.dispatch-conflict");
+            }
             var observed = Volatile.Read(ref state);
             if (observed != 2)
             {
@@ -568,7 +573,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeRuntimeOptions runtimeOptions,
         IDocumentationScribeModelExchange exchange,
         TimeProvider? timeProvider = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<bool>? dispatchGuard = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(invocation);
@@ -593,7 +599,7 @@ internal static class DocumentationScribeComposition
         }
 
         var clock = timeProvider ?? TimeProvider.System;
-        var gated = new CampaignDispatchExchange(invocation, exchange);
+        var gated = new CampaignDispatchExchange(invocation, exchange, dispatchGuard);
         long started;
         try
         {
