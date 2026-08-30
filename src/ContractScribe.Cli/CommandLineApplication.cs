@@ -15,9 +15,12 @@ public static class CommandLineApplication
         "Usage:\n" +
         "  contract-scribe [--help | --version | doctor]\n" +
         "  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>\n" +
+        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
+        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
         "\n" +
         "Commands:\n" +
         "  audit       Run the deterministic XML documentation audit.\n" +
+        "  campaign    Start or resume a durable documentation campaign.\n" +
         "  doctor      Print an allowlisted local runtime diagnostic without network or credential access.\n" +
         "\n" +
         "Options:\n" +
@@ -46,6 +49,34 @@ public static class CommandLineApplication
         "  3  No audit judgments (no results, or every result skipped).\n" +
         "  4  Invalid input or unavailable environment.\n" +
         "  5  Load, audit, or publication failure.\n" +
+        "  6  Cancelled.\n" +
+        "  7  Timeout.\n";
+
+    internal const string CampaignHelp =
+        "ContractScribe campaign\n" +
+        "\n" +
+        "Usage:\n" +
+        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
+        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
+        "\n" +
+        "Options:\n" +
+        "  --repository-root <path>  Existing repository root.\n" +
+        "  --input <path>            Existing .sln, .slnx, or .csproj inside the repository.\n" +
+        "  --policy <path>           Existing M1 policy file inside the repository.\n" +
+        "  --snapshot <binding>      Caller-attested immutable snapshot binding.\n" +
+        "  --state <path>            Campaign checkpoint outside the repository.\n" +
+        "  --configuration <path>    Strict non-secret campaign configuration JSON.\n" +
+        "  -h, --help                Print this help.\n" +
+        "\n" +
+        "Environment:\n" +
+        "  CONTRACTSCRIBE_PROVIDER_API_KEY  Selected transport credential; never persisted or emitted.\n" +
+        "\n" +
+        "Exit codes:\n" +
+        "  0  Campaign complete or no work.\n" +
+        "  2  Invalid command-line usage.\n" +
+        "  3  Bounded resumable stop.\n" +
+        "  4  Invalid configuration, state, lease, revision, or snapshot.\n" +
+        "  5  Terminal execution or checkpoint-publication failure.\n" +
         "  6  Cancelled.\n" +
         "  7  Timeout.\n";
 
@@ -117,6 +148,79 @@ public static class CommandLineApplication
                 case "doctor":
                     WriteDoctor(output);
                     return 0;
+            }
+        }
+
+        if (string.Equals(args[0], "campaign", StringComparison.Ordinal))
+        {
+            var parsedCampaign = CampaignCommandParser.Parse(args.AsSpan(1));
+            if (parsedCampaign.HelpRequested)
+            {
+                output.Write(CampaignHelp);
+                return 0;
+            }
+            var campaignIdentity = CliBuildIdentity.Current;
+            if (parsedCampaign.Failure is { } campaignFailure)
+            {
+                var result = CampaignCliPresentation.Usage(campaignIdentity, campaignFailure);
+                Write(result, output, error);
+                return result.ExitCode;
+            }
+
+            CampaignPreflightResult campaignPreflight;
+            try
+            {
+                campaignPreflight = CampaignPreflight.Run(
+                    parsedCampaign.Arguments!,
+                    currentDirectory ?? Environment.CurrentDirectory);
+            }
+            catch (CampaignPreflightException exception)
+            {
+                var result = CampaignCliPresentation.Present(campaignIdentity,
+                    new CampaignTerminal("preflight", parsedCampaign.Arguments!.Operation,
+                        exception.Outcome, null));
+                Write(result, output, error);
+                return result.ExitCode;
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            {
+                var result = CampaignCliPresentation.Present(campaignIdentity,
+                    new CampaignTerminal("preflight", parsedCampaign.Arguments!.Operation,
+                        "campaign.host-contract-error", null));
+                Write(result, output, error);
+                return result.ExitCode;
+            }
+
+            using var campaignCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var campaignSignals = installSignalHandlers
+                ? AuditSignalRegistration.Install(campaignCancellation)
+                : null;
+            try
+            {
+                CliExecutionResult result;
+                try
+                {
+                    result = await CampaignCommandRunner.RunAsync(
+                        campaignIdentity, campaignPreflight, campaignCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (campaignCancellation.IsCancellationRequested)
+                {
+                    result = CampaignCliPresentation.Present(campaignIdentity,
+                        new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
+                            "campaign.cancelled", null));
+                }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                {
+                    result = CampaignCliPresentation.Present(campaignIdentity,
+                        new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
+                            "campaign.host-contract-error", null));
+                }
+                Write(result, output, error);
+                return result.ExitCode;
+            }
+            finally
+            {
+                campaignSignals?.Dispose();
             }
         }
 

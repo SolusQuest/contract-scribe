@@ -3,9 +3,12 @@ ContractScribe CLI
 Usage:
   contract-scribe [--help | --version | doctor]
   contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>
+  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
+  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
 
 Commands:
   audit       Run the deterministic XML documentation audit.
+  campaign    Start or resume a durable documentation campaign.
   doctor      Print an allowlisted local runtime diagnostic without network or credential access.
 
 Options:

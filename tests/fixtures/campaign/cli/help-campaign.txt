@@ -1,0 +1,26 @@
+ContractScribe campaign
+
+Usage:
+  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
+  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
+
+Options:
+  --repository-root <path>  Existing repository root.
+  --input <path>            Existing .sln, .slnx, or .csproj inside the repository.
+  --policy <path>           Existing M1 policy file inside the repository.
+  --snapshot <binding>      Caller-attested immutable snapshot binding.
+  --state <path>            Campaign checkpoint outside the repository.
+  --configuration <path>    Strict non-secret campaign configuration JSON.
+  -h, --help                Print this help.
+
+Environment:
+  CONTRACTSCRIBE_PROVIDER_API_KEY  Selected transport credential; never persisted or emitted.
+
+Exit codes:
+  0  Campaign complete or no work.
+  2  Invalid command-line usage.
+  3  Bounded resumable stop.
+  4  Invalid configuration, state, lease, revision, or snapshot.
+  5  Terminal execution or checkpoint-publication failure.
+  6  Cancelled.
+  7  Timeout.
