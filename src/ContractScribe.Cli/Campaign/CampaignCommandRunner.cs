@@ -260,6 +260,13 @@ internal static class CampaignCommandRunner
                     return Terminal(preflight.Operation, "campaign", "campaign.complete",
                         patched.Artifact is null ? current : AcceptedObservation(patched.Artifact));
                 }
+                if (patched.Kind == DocumentationCampaignOutcomeKind.Accepted
+                    && patched.Artifact?.State.TerminalOutcome is
+                    { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed })
+                {
+                    return Terminal(preflight.Operation, "campaign", "campaign.complete",
+                        AcceptedObservation(patched.Artifact));
+                }
                 if (patched.Kind is DocumentationCampaignOutcomeKind.Accepted
                     or DocumentationCampaignOutcomeKind.Reconstructed
                     or DocumentationCampaignOutcomeKind.Reduced)

@@ -199,7 +199,7 @@ public sealed class CampaignCliProcessTests
             });
         try
         {
-            await WaitForFileAsync(acknowledgement, running.Process, TimeSpan.FromMinutes(3));
+            await WaitForFileAsync(acknowledgement, running, TimeSpan.FromMinutes(3));
             Assert.Equal(
                 CampaignProcessBoundaryHooks.InitialReplacementScope + "."
                 + CampaignProcessBoundaryHooks.AfterReplacementBeforeReadback + "\n",
@@ -256,6 +256,8 @@ public sealed class CampaignCliProcessTests
             var started = await RunAsync(
                 Args("start", fixture.Root, statePath, configurationPath, "snapshot.accepted"),
                 timeout: TimeSpan.FromMinutes(5));
+            Assert.True(File.Exists(statePath),
+                $"exit={started.ExitCode} stdout={started.Stdout} stderr={started.Stderr}");
             var checkpoint = await File.ReadAllBytesAsync(statePath);
             var parsed = CampaignStateJson.Parse(checkpoint);
             Assert.True(parsed.IsValid);
@@ -265,6 +267,9 @@ public sealed class CampaignCliProcessTests
                 .Where(item => item.Status == CampaignWorkStatus.Accepted)
                 .Select(item => item.WorkItemKey)
                 .ToArray();
+            Assert.All(parsed.Artifact.State.WorkItems.Where(item =>
+                item.Status == CampaignWorkStatus.Accepted),
+                item => Assert.Equal(1, item.CandidateAttemptCount));
             var requestCount = server.RequestCount;
             Assert.True(requestCount > 0);
 
@@ -278,6 +283,9 @@ public sealed class CampaignCliProcessTests
             Assert.Equal(acceptedKeys, resumedState.Artifact.State.WorkItems
                 .Where(item => item.Status == CampaignWorkStatus.Accepted)
                 .Select(item => item.WorkItemKey));
+            Assert.All(resumedState.Artifact.State.WorkItems.Where(item =>
+                item.Status == CampaignWorkStatus.Accepted),
+                item => Assert.Equal(2, item.CandidateAttemptCount));
         }
         finally
         {
@@ -320,6 +328,12 @@ public sealed class CampaignCliProcessTests
     ];
 
     private static async Task WriteConfigurationAsync(string destination, Uri? endpoint = null)
+        => await WriteConfigurationAsync(destination, endpoint, maximumPatchElapsedMilliseconds: null);
+
+    private static async Task WriteConfigurationAsync(
+        string destination,
+        Uri? endpoint,
+        int? maximumPatchElapsedMilliseconds)
     {
         var fixture = await File.ReadAllBytesAsync(Path.Join(
             RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"));
@@ -331,6 +345,10 @@ public sealed class CampaignCliProcessTests
             "contract-scribe/campaign-product-revision/v1\0" + revision));
         root["planning"]!["productContractRevisionSha256"] =
             Convert.ToHexString(product).ToLowerInvariant();
+        if (maximumPatchElapsedMilliseconds is { } maximumPatchElapsed)
+        {
+            root["planning"]!["maximumPatchElapsedMilliseconds"] = maximumPatchElapsed;
+        }
         if (endpoint is not null)
         {
             root["provider"]!["endpoint"] = endpoint.AbsoluteUri;
@@ -345,9 +363,20 @@ public sealed class CampaignCliProcessTests
         await SetSingleWorkItemSourceAsync(fixture.Root);
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
         var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
+        if (vector.Scenario == "reduction")
+        {
+            var source = (await File.ReadAllTextAsync(sourcePath))
+                .Replace("\r\n", "\n", StringComparison.Ordinal);
+            var firstBreak = source.IndexOf('\n');
+            Assert.True(firstBreak >= 0);
+            await File.WriteAllTextAsync(
+                sourcePath,
+                source[..firstBreak] + "\r\n" + source[(firstBreak + 1)..],
+                new UTF8Encoding(false, true));
+        }
         var originalSource = await File.ReadAllBytesAsync(sourcePath);
         var originalMode = File.GetUnixFileMode(sourcePath);
-        await using var server = new ProposalLoopbackServer(vector.Scenario, sourcePath);
+        await using var server = new ProposalLoopbackServer(vector.Scenario);
         var outside = CreatePrivateDirectory("contract-scribe-campaign-boundary");
         var configurationPath = Path.Join(outside, "campaign.json");
         var stateDirectory = Path.Join(outside, "state");
@@ -356,7 +385,10 @@ public sealed class CampaignCliProcessTests
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
         var acknowledgement = Path.Join(outside, "hook.ack");
-        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+        await WriteConfigurationAsync(
+            configurationPath,
+            server.Endpoint,
+            vector.Scenario == "closed-patch" ? 1 : null);
 
         using var running = Start(
             Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
@@ -368,7 +400,7 @@ public sealed class CampaignCliProcessTests
             });
         try
         {
-            await WaitForFileAsync(acknowledgement, running.Process, TimeSpan.FromMinutes(3));
+            await WaitForFileAsync(acknowledgement, running, TimeSpan.FromMinutes(3));
             Assert.Equal(vector.Hook + "\n", await File.ReadAllTextAsync(acknowledgement));
             running.Process.Kill(entireProcessTree: true);
             await running.Process.WaitForExitAsync();
@@ -510,14 +542,17 @@ public sealed class CampaignCliProcessTests
             ?? throw new InvalidOperationException("Campaign CLI process failed to start."));
     }
 
-    private static async Task WaitForFileAsync(string path, Process process, TimeSpan timeout)
+    private static async Task WaitForFileAsync(string path, RunningProcess running, TimeSpan timeout)
     {
         var elapsed = Stopwatch.StartNew();
         while (!File.Exists(path))
         {
-            if (process.HasExited)
+            if (running.Process.HasExited)
             {
-                throw new Xunit.Sdk.XunitException($"Campaign CLI exited before hook acknowledgement: {process.ExitCode}");
+                var result = await running.CompleteAsync();
+                throw new Xunit.Sdk.XunitException(
+                    $"Campaign CLI exited before hook acknowledgement: exit={result.ExitCode} "
+                    + $"stdout={result.Stdout} stderr={result.Stderr}");
             }
             if (elapsed.Elapsed > timeout)
             {
@@ -560,13 +595,9 @@ public sealed class CampaignCliProcessTests
         private int requestCount;
 
         private readonly string scenario;
-        private readonly string? sourcePath;
-        private int mutated;
-
-        internal ProposalLoopbackServer(string scenario = "accepted", string? sourcePath = null)
+        internal ProposalLoopbackServer(string scenario = "accepted")
         {
             this.scenario = scenario;
-            this.sourcePath = sourcePath;
             listener.Start();
             var endpoint = (IPEndPoint)listener.LocalEndpoint;
             Endpoint = new Uri($"http://127.0.0.1:{endpoint.Port}/v1/chat/completions");
@@ -605,7 +636,6 @@ public sealed class CampaignCliProcessTests
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()
                         : CreateProposalResponse(body);
-                    MutatePatchInputIfRequested();
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);
@@ -615,24 +645,6 @@ public sealed class CampaignCliProcessTests
                 {
                     // An abruptly terminated client may reset its active loopback connection.
                 }
-            }
-        }
-
-        private void MutatePatchInputIfRequested()
-        {
-            if (!OperatingSystem.IsLinux()
-                || sourcePath is null
-                || Interlocked.Exchange(ref mutated, 1) != 0)
-            {
-                return;
-            }
-            if (scenario == "reduction")
-            {
-                File.AppendAllText(sourcePath, "// stale after M1\n");
-            }
-            else if (scenario == "closed-patch")
-            {
-                File.SetUnixFileMode(sourcePath, UnixFileMode.None);
             }
         }
 
