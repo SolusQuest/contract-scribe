@@ -336,23 +336,17 @@ internal static class CampaignCommandRunner
 
     private static CampaignPlanningWorkItem? SelectNextWork(
         CampaignCheckpointState state,
-        CampaignWorkPlan plan)
-    {
-        foreach (var pair in state.WorkItems.Zip(plan.WorkItems))
-        {
-            if (pair.First.Status == CampaignWorkStatus.Planned
+        CampaignWorkPlan plan) =>
+        state.WorkItems.Zip(plan.WorkItems)
+            .Where(pair => pair.First.Status == CampaignWorkStatus.Planned
                 || pair.First.Status == CampaignWorkStatus.Closed
                 && pair.First.ClosedOutcome is
                 {
                     Code: CampaignWorkOutcomeCode.ProviderFailure,
                     ProviderDisposition: CampaignProviderFinalDisposition.Retryable,
                 })
-            {
-                return pair.Second;
-            }
-        }
-        return null;
-    }
+            .Select(pair => pair.Second)
+            .FirstOrDefault();
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
@@ -439,7 +433,7 @@ internal static class CampaignCommandRunner
         _ => "campaign.host-contract-error",
     };
 
-    private static CampaignPlanningInput CreatePlanningInput(
+    internal static CampaignPlanningInput CreatePlanningInput(
         CampaignPreflightResult preflight,
         CampaignConfigurationDocument configuration,
         CampaignPlanningExecutionPolicy policy,
@@ -476,6 +470,7 @@ internal static class CampaignCommandRunner
             });
         }
 
+        var violationParents = CampaignPlanner.ReadViolationParentSymbols(bundle.Audit);
         var owners = authorities
             .GroupBy(authority => authority.Source switch
             {
@@ -484,6 +479,8 @@ internal static class CampaignCommandRunner
                     + repository.OwnerSpan.Start + "\0" + repository.OwnerSpan.End,
                 _ => authority.Target.SymbolRef.ToString(),
             }, StringComparer.Ordinal)
+            .Where(group => group.Any(authority =>
+                violationParents.Contains(authority.Target.SymbolRef)))
             .Select(group => new CampaignPlanningOwnerAuthority(group.ToImmutableArray()))
             .ToImmutableArray();
         var evidence = bundle.Evidence.Bindings.Select(binding =>

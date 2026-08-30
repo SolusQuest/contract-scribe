@@ -180,7 +180,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             || operation == OperationKind.Replace
                 && (!IsRevision(expectedRevision) || !IsSha256(expectedSha256)))
         {
-            return Unwritable();
+            return PublicationFailure();
         }
 
         ActiveLease? active = null;
@@ -236,7 +236,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
             if (active is null)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -248,7 +248,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 cleanupComplete = CleanupBeforePublication(context, active);
                 if (!cleanupComplete)
                 {
-                    return Unwritable();
+                    return PublicationFailure();
                 }
                 cancellationToken.ThrowIfCancellationRequested();
                 return new CampaignCheckpointWriteResult(conditional);
@@ -267,7 +267,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -286,7 +286,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             ValidateNamedHandle(context, active.Record.TempName, active.TempHandle, active.Record.TempIdentity);
             ValidateObjectMarker(active.TempHandle, active.Record.TempMarkerBytes);
@@ -300,7 +300,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             var finalCurrent = ReadEntry(context, checkpointName, CancellationToken.None);
             if (ClassifyConditional(operation, finalCurrent, expectedRevision, expectedSha256)
@@ -308,7 +308,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             if (RenameAt2(
                     FileDescriptor(context.DirectoryHandle),
@@ -319,7 +319,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             published = true;
 
@@ -335,7 +335,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (!readback.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || readback.Identity != active.Record.TempIdentity)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
 
             // Publication no longer needs write authority over the checkpoint inode.
@@ -351,7 +351,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 intendedSha256);
             if (!cleanupComplete)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
             active.Dispose();
             active = null;
@@ -380,7 +380,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 throw;
             }
-            return Unwritable();
+            return PublicationFailure();
         }
         catch (StoreFault fault)
         {
@@ -391,7 +391,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             }
             return fault.Kind == StoreFaultKind.Invalid
                 ? new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Unsafe)
-                : Unwritable();
+                : PublicationFailure();
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
@@ -400,7 +400,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
             }
-            return Unwritable();
+            return PublicationFailure();
         }
         finally
         {
@@ -1561,7 +1561,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static CampaignCheckpointWriteResult Unwritable() =>
+    private static CampaignCheckpointWriteResult PublicationFailure() =>
         new(CampaignCheckpointWriteKind.PublicationFailure);
 
     private static bool IsBoundedFailure(Exception exception) => exception is

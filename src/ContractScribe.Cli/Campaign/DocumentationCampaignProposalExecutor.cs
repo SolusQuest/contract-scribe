@@ -161,6 +161,9 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError,
                 "campaign.credential.invalid");
         }
+        using var deferredExchange = input.Exchange is null
+            ? exchange as IDisposable
+            : null;
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
         CampaignCheckpointAcceptanceResult reserved;
         using (CampaignProcessBoundaryHooks.EnterReplacementScope(
@@ -171,7 +174,6 @@ internal static class DocumentationCampaignProposalExecutor
         }
         if (reserved.Kind != CampaignCheckpointAcceptanceKind.Accepted || reserved.AcceptedCheckpoint is null)
         {
-            DisposeDeferredExchange(input, exchange);
             var failure = reserved.Kind is CampaignCheckpointAcceptanceKind.Conflict
                 or CampaignCheckpointAcceptanceKind.InvalidRead
                 or CampaignCheckpointAcceptanceKind.Unreadable
@@ -182,7 +184,6 @@ internal static class DocumentationCampaignProposalExecutor
         }
         if (reserved.Artifact?.State.ActiveReservation is not CampaignProviderReservation)
         {
-            DisposeDeferredExchange(input, exchange);
             return reserved.Artifact is null
                 ? Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.unconfirmed")
                 : FromArtifact(reserved.Artifact, selectedState.WorkItemKey);
@@ -199,25 +200,13 @@ internal static class DocumentationCampaignProposalExecutor
         }
         catch (ArgumentException)
         {
-            DisposeDeferredExchange(input, exchange);
             return Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.observer");
         }
 
-        DocumentationCampaignPreparation prepared;
-        try
-        {
-            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeProviderDispatch);
-            prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
-                selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
-                input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (input.Exchange is null && exchange is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
-        }
+        CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeProviderDispatch);
+        var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
+            selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
+            input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
         var proposalResult = prepared.Kind == DocumentationCampaignPreparationKind.Completion;
@@ -333,13 +322,4 @@ internal static class DocumentationCampaignProposalExecutor
     private static DocumentationCampaignProposalOutcome Outcome(
         DocumentationCampaignProposalOutcomeKind kind, string code) => new(kind, code);
 
-    private static void DisposeDeferredExchange(
-        DocumentationCampaignProposalInput input,
-        IDocumentationScribeModelExchange exchange)
-    {
-        if (input.Exchange is null && exchange is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
-    }
 }

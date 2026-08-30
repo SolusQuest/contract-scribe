@@ -192,36 +192,29 @@ public static class CommandLineApplication
             }
 
             using var campaignCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var campaignSignals = installSignalHandlers
+            using var campaignSignals = installSignalHandlers
                 ? AuditSignalRegistration.Install(campaignCancellation)
                 : null;
+            CliExecutionResult campaignResult;
             try
             {
-                CliExecutionResult result;
-                try
-                {
-                    result = await CampaignCommandRunner.RunAsync(
-                        campaignIdentity, campaignPreflight, campaignCancellation.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (campaignCancellation.IsCancellationRequested)
-                {
-                    result = CampaignCliPresentation.Present(campaignIdentity,
-                        new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
-                            "campaign.cancelled", null));
-                }
-                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-                {
-                    result = CampaignCliPresentation.Present(campaignIdentity,
-                        new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
-                            "campaign.host-contract-error", null));
-                }
-                Write(result, output, error);
-                return result.ExitCode;
+                campaignResult = await CampaignCommandRunner.RunAsync(
+                    campaignIdentity, campaignPreflight, campaignCancellation.Token).ConfigureAwait(false);
             }
-            finally
+            catch (OperationCanceledException) when (campaignCancellation.IsCancellationRequested)
             {
-                campaignSignals?.Dispose();
+                campaignResult = CampaignCliPresentation.Present(campaignIdentity,
+                    new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
+                        "campaign.cancelled", null));
             }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            {
+                campaignResult = CampaignCliPresentation.Present(campaignIdentity,
+                    new CampaignTerminal("execution", parsedCampaign.Arguments!.Operation,
+                        "campaign.host-contract-error", null));
+            }
+            Write(campaignResult, output, error);
+            return campaignResult.ExitCode;
         }
 
         if (!string.Equals(args[0], "audit", StringComparison.Ordinal))

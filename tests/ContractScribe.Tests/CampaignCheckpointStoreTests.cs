@@ -986,7 +986,7 @@ public sealed class CampaignCheckpointStoreTests
 
         Assert.Null(mutationFailure);
         Assert.True(mutationApplied);
-        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unsafe, result.Kind);
         Assert.True(File.Exists(leasePath));
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
@@ -1012,7 +1012,7 @@ public sealed class CampaignCheckpointStoreTests
                 CancellationToken.None)
             : await WriteInitialAsync(retryStore, predecessor);
 
-        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, retry.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retry.Kind);
         AssertFreshLeaseMutationPreserved(leasePath, mutation, changedBytes, changedMarker);
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
@@ -1278,7 +1278,7 @@ public sealed class CampaignCheckpointStoreTests
         var retried = await WriteInitialAsync(retry, artifact);
 
         Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, failed.Kind);
-        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retried.Kind);
         Assert.True(staleLockAcquired);
         Assert.Equal("collision", File.ReadAllText(collisionPath));
     }
@@ -1320,7 +1320,7 @@ public sealed class CampaignCheckpointStoreTests
             phase => staleLockAcquired |= phase == "after-stale-lease-lock");
         var retried = await WriteInitialAsync(retry, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retried.Kind);
         Assert.True(staleLockAcquired);
         Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());

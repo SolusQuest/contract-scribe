@@ -199,13 +199,13 @@ public sealed class CampaignCommandParserTests
     private static void Parse(JsonObject value) =>
         CampaignConfiguration.Parse(Encoding.UTF8.GetBytes(value.ToJsonString()));
 
-    private static string Fixture(string name) => Path.Combine(
+    private static string Fixture(string name) => Path.Join(
         RepositoryRoot(), "tests", "fixtures", "campaign", "cli", name);
 
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+        while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
         {
             directory = directory.Parent;
         }

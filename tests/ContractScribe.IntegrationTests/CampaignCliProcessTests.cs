@@ -29,6 +29,72 @@ public sealed class CampaignCliProcessTests
         "{\"defaultDecision\":\"required\",\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\"}\n";
 
     [Fact]
+    public async Task SharedProductionSession_ComposesTheNoWorkCampaignAuthority()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var policyBytes = Encoding.UTF8.GetBytes(OptionalPolicy);
+        var configurationBytes = await File.ReadAllBytesAsync(Path.Join(
+            RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"));
+        var configuration = CampaignConfiguration.Parse(configurationBytes);
+        Exception? captured = null;
+        CampaignCheckpointState? state = null;
+        var host = new ProductionRepositorySessionHost(
+            new ContractScribe.Core.Hosting.HostBuildProvenance(new string('a', 40)));
+
+        var outcome = await host.RunAsync(
+            new ProductionAuditRequest(
+                fixture.Root,
+                "App/App.csproj",
+                policyBytes,
+                PublicationTarget: null,
+                PublishResult: false),
+            new ProductionAuditHostControls(SessionConsumer: (bundle, token) =>
+            {
+                try
+                {
+                    var policy = configuration.CreateExecutionPolicy();
+                    var execution = configuration.CreateExecutionCapability(policy);
+                    var preflight = new CampaignPreflightResult(
+                        CampaignOperation.Start,
+                        fixture.Root,
+                        Path.Join(fixture.Root, "App", "App.csproj"),
+                        "App/App.csproj",
+                        policyBytes,
+                        "snapshot.integration",
+                        Path.Join(Path.GetTempPath(), "unused-checkpoint.json"),
+                        new CampaignConfigurationSnapshot(
+                            Path.Join(RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"),
+                            configurationBytes.Length,
+                            DateTime.UnixEpoch,
+                            new string('0', 64),
+                            configuration));
+                    var planning = CampaignCommandRunner.CreatePlanningInput(
+                        preflight, configuration, policy, bundle, token);
+                    var plan = CampaignPlanner.Plan(planning);
+                    state = CampaignStateFactory.CreateInitial(
+                        configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+                        configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                        execution,
+                        bundle.Session.InputIdentity,
+                        planning,
+                        plan);
+                }
+                catch (Exception exception)
+                {
+                    captured = exception;
+                }
+                return Task.CompletedTask;
+            }),
+            CancellationToken.None);
+
+        Assert.Null(captured);
+        Assert.Equal(ContractScribe.Core.Hosting.HostExecutionOutcome.Succeeded,
+            outcome.Terminal.ExecutionOutcome);
+        Assert.NotNull(state);
+        Assert.Equal(CampaignTerminalReason.NoWork, state.TerminalOutcome!.Reason);
+    }
+
+    [Fact]
     public async Task StartAndResume_AreFreshProcessExpectedPresenceOperations()
     {
         if (!OperatingSystem.IsLinux())

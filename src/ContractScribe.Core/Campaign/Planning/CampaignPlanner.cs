@@ -133,6 +133,16 @@ public static class CampaignPlanner
             summary);
     }
 
+    internal static ImmutableHashSet<SymbolRef> ReadViolationParentSymbols(
+        AuditDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return ReadAuditRows(document).Values
+            .Where(row => row.Outcome == AuditOutcome.Violation)
+            .Select(row => row.ParentSymbolRef)
+            .ToImmutableHashSet();
+    }
+
     private static void ValidateRoot(CampaignPlanningInput input)
     {
         Require(input.Snapshot is not null, CampaignPlanningValidationCode.InvalidRoot,
