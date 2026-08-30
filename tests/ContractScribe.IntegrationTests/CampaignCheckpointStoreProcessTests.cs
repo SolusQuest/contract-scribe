@@ -139,7 +139,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             artifact.Sha256,
             CancellationToken.None);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
         Assert.Equal("collision", await File.ReadAllTextAsync(tempPath));
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
     }
@@ -293,7 +293,7 @@ public sealed class CampaignCheckpointStoreProcessTests
                 CancellationToken.None);
 
             Assert.True(swapped);
-            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
             Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
             Assert.Equal(2, Directory.EnumerateFileSystemEntries(movedStateDirectory).Count());
         }
@@ -363,7 +363,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             artifact.CheckpointRevision,
             artifact.Sha256,
             CancellationToken.None);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, copiedResult.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, copiedResult.Kind);
         Assert.True(File.Exists(lease));
 
         using var malformedToken = ProcessFixture.Create();
@@ -386,7 +386,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             artifact.CheckpointRevision,
             artifact.Sha256,
             CancellationToken.None);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, malformedResult.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, malformedResult.Kind);
         Assert.Equal(malformedRecord, await File.ReadAllTextAsync(malformedLease));
 
         using var missingMarker = ProcessFixture.Create();
@@ -401,7 +401,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             artifact.CheckpointRevision,
             artifact.Sha256,
             CancellationToken.None);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, missingMarkerResult.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, missingMarkerResult.Kind);
         Assert.True(File.Exists(unmarkedTemp));
 
         using var wrongMarker = ProcessFixture.Create();
@@ -416,7 +416,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             artifact.CheckpointRevision,
             artifact.Sha256,
             CancellationToken.None);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, markerResult.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, markerResult.Kind);
         Assert.True(File.Exists(markedTemp));
     }
 
@@ -510,7 +510,7 @@ public sealed class CampaignCheckpointStoreProcessTests
                 CancellationToken.None)
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, write.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unsafe, write.Kind);
         Assert.True(File.Exists(leasePath));
     }
 
@@ -795,8 +795,8 @@ public sealed class CampaignCheckpointStoreProcessTests
             }
             else
             {
-                Assert.Equal(CampaignCheckpointReadKind.Invalid, read.Kind);
-                Assert.Equal(CampaignCheckpointWriteKind.Unwritable, write.Kind);
+                Assert.Equal(CampaignCheckpointReadKind.Unsafe, read.Kind);
+                Assert.Equal(CampaignCheckpointWriteKind.Unsafe, write.Kind);
                 Assert.Equal(
                     sourceEntriesBefore,
                     Directory.EnumerateFileSystemEntries(source)

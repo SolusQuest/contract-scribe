@@ -150,6 +150,80 @@ public sealed record DocumentationPatchDeclarationBatch
 
 public sealed class DocumentationPatchDeclarationResolver
 {
+    internal (DocumentationPatchResolvedDeclaration? Declaration, string? FailureCode)
+        ResolveSelectedTarget(
+            ObservedRepositorySession observed,
+            TargetClassification target,
+            DocumentationDeclarationFact observationDeclaration,
+            CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(observationDeclaration);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var session = observed.ClassificationSession;
+        if (!session.IsBoundToClassificationSession
+            || !observed.IsBoundToObservationSession(session)
+            || session.Classification.Status != ClassificationRunStatus.Success
+            || session.Classification.ClassificationSet is not { } classifications
+            || !classifications.Targets.Any(candidate => ReferenceEquals(candidate, target))
+            || target.SupportStatus != SupportStatus.Supported
+            || target.Origin == ClassificationOrigin.Mixed
+            || observationDeclaration.Source is not RepositoryDocumentationSourceIdentity repositorySource
+            || !string.Equals(repositorySource.ProjectIdentity,
+                observationDeclaration.Source.ProjectIdentity, StringComparison.Ordinal))
+        {
+            return (null, "patch.stale.repository-context");
+        }
+
+        var capture = session.RepositorySession.CaptureDocumentationPatchResolutionBaseline(
+            cancellationToken);
+        if (capture.Baseline is not { } baseline
+            || !baseline.TryGetEntry(repositorySource.Path, out var entry))
+        {
+            return (null, capture.FailureCode ?? "patch.stale.source-bytes");
+        }
+
+        var cache = new ResolverCache(baseline);
+        var current = cache.Read(repositorySource.Path);
+        if (current.FailureCode is { } sourceFailure)
+        {
+            return (null, sourceFailure);
+        }
+        if (!string.Equals(entry.Sha256, repositorySource.SourceSha256, StringComparison.Ordinal))
+        {
+            return (null, "patch.stale.source-bytes");
+        }
+
+        var projects = session.RepositorySession.Projects
+            .GroupBy(project => project.CompilationContextRef, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        if (!projects.TryGetValue(target.SymbolRef.CompilationContextRef, out var project))
+        {
+            return (null, "patch.stale.compilation-context");
+        }
+
+        var failures = ImmutableArray.CreateBuilder<DocumentationPatchDeclarationFailure>();
+        var declaration = ResolveRepositoryDeclaration(
+            classifications,
+            projects,
+            project,
+            observationDeclaration.DeclarationId,
+            target.SymbolRef,
+            repositorySource.Path,
+            repositorySource.SourceSha256,
+            DetectEncoding(entry.Bytes.AsSpan()),
+            observationDeclaration.DeclarationSpan,
+            target,
+            cache,
+            failures,
+            cancellationToken);
+        return failures.Count == 0 && declaration is not null
+            ? (declaration, null)
+            : (null, failures.FirstOrDefault()?.Code ?? "patch.rejected.unsupported-target");
+    }
+
     public DocumentationPatchDeclarationBatch Resolve(
         ClassifiedRepositorySession session,
         DocumentationPatchRequest request,
@@ -298,8 +372,12 @@ public sealed class DocumentationPatchDeclarationResolver
                 classifications,
                 projects,
                 project!,
-                block,
-                repositoryLocator,
+                block.BlockId,
+                block.SymbolRef,
+                repositoryLocator.Path,
+                repositoryLocator.OriginalFileSha256,
+                repositoryLocator.Encoding,
+                repositoryLocator.DeclarationSpan,
                 supported,
                 cache,
                 failures,
@@ -318,22 +396,26 @@ public sealed class DocumentationPatchDeclarationResolver
         ClassificationSet classifications,
         IReadOnlyDictionary<string, LoadedProject> projects,
         LoadedProject project,
-        DocumentationPatchBlockRequest block,
-        DocumentationPatchRepositoryLocator locator,
+        string blockId,
+        SymbolRef symbolRef,
+        string repositoryPath,
+        string sourceSha256,
+        DocumentationPatchRepositoryEncoding encoding,
+        Utf16Span requestedDeclarationSpan,
         TargetClassification target,
         ResolverCache cache,
         ImmutableArray<DocumentationPatchDeclarationFailure>.Builder failures,
         CancellationToken cancellationToken)
     {
         var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(
-                block.SymbolRef.DocumentationCommentId,
+                symbolRef.DocumentationCommentId,
                 project.Compilation)
             .Select(CanonicalPartialMember)
             .Distinct(SymbolEqualityComparer.Default)
             .ToImmutableArray();
         if (symbols.Length != 1)
         {
-            AddFailure(failures, block, "patch.rejected.ambiguous-target");
+            AddFailure(failures, blockId, "patch.rejected.ambiguous-target");
             return null;
         }
 
@@ -341,7 +423,7 @@ public sealed class DocumentationPatchDeclarationResolver
         var definition = CanonicalPartialMember(symbol);
         if (HasUnauthorizedPartialImplementation(definition))
         {
-            AddFailure(failures, block, "patch.rejected.ambiguous-target");
+            AddFailure(failures, blockId, "patch.rejected.ambiguous-target");
             return null;
         }
 
@@ -354,7 +436,7 @@ public sealed class DocumentationPatchDeclarationResolver
                 .ToImmutableArray();
             if (!ValidateConsultedReferences(project, consulted, cache, cancellationToken))
             {
-                AddFailure(failures, block, "patch.stale.source-bytes");
+                AddFailure(failures, blockId, "patch.stale.source-bytes");
                 return null;
             }
 
@@ -372,13 +454,14 @@ public sealed class DocumentationPatchDeclarationResolver
         }
 
         var matching = authorityReferences
-            .Where(reference => Matches(reference, project, locator))
+            .Where(reference => Matches(
+                reference, project, repositoryPath, requestedDeclarationSpan))
             .ToImmutableArray();
         if (matching.Length != 1)
         {
             AddFailure(
                 failures,
-                block,
+                blockId,
                 authorityReferences.Length > 1
                     && definition is not INamedTypeSymbol
                     ? "patch.rejected.ambiguous-target"
@@ -394,13 +477,13 @@ public sealed class DocumentationPatchDeclarationResolver
         var owner = GetDocumentationOwner(syntax);
         if (owner is null)
         {
-            AddFailure(failures, block, "patch.rejected.unsupported-target");
+            AddFailure(failures, blockId, "patch.rejected.unsupported-target");
             return null;
         }
 
         var components = ResolveComponents(
             classifications,
-            block.SymbolRef,
+            symbolRef,
             owner);
         var ownerResolution = ResolveOwnerSymbols(
             classifications,
@@ -427,14 +510,14 @@ public sealed class DocumentationPatchDeclarationResolver
             && syntax is TypeDeclarationSyntax or ParameterSyntax;
 
         return new DocumentationPatchResolvedDeclaration(
-            block.BlockId,
-            block.SymbolRef,
+            blockId,
+            symbolRef,
             project.ProjectIdentity,
-            locator.Path,
+            repositoryPath,
             physicalSourceIdentity,
-            locator.OriginalFileSha256,
-            locator.Encoding,
-            locator.DeclarationSpan,
+            sourceSha256,
+            encoding,
+            requestedDeclarationSpan,
             Span(reference.Span.Start, reference.Span.End),
             Span(owner.Span.Start, owner.Span.End),
             documentationSpan,
@@ -600,11 +683,18 @@ public sealed class DocumentationPatchDeclarationResolver
         SyntaxReference reference,
         LoadedProject project,
         DocumentationPatchRepositoryLocator locator) =>
+        Matches(reference, project, locator.Path, locator.DeclarationSpan);
+
+    private static bool Matches(
+        SyntaxReference reference,
+        LoadedProject project,
+        string repositoryPath,
+        Utf16Span declarationSpan) =>
         project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source)
         && source.RepositoryPath is { } path
-        && string.Equals(path, locator.Path, StringComparison.Ordinal)
-        && reference.Span.Start == locator.DeclarationSpan.Start
-        && reference.Span.End == locator.DeclarationSpan.End;
+        && string.Equals(path, repositoryPath, StringComparison.Ordinal)
+        && reference.Span.Start == declarationSpan.Start
+        && reference.Span.End == declarationSpan.End;
 
     private static bool Matches(
         CandidateLocator candidate,
@@ -826,11 +916,16 @@ public sealed class DocumentationPatchDeclarationResolver
     private static void AddFailure(
         ImmutableArray<DocumentationPatchDeclarationFailure>.Builder failures,
         DocumentationPatchBlockRequest block,
+        string code) => AddFailure(failures, block.BlockId, code);
+
+    private static void AddFailure(
+        ImmutableArray<DocumentationPatchDeclarationFailure>.Builder failures,
+        string blockId,
         string code)
     {
         if (!failures.Any(failure => string.Equals(failure.Code, code, StringComparison.Ordinal)))
         {
-            failures.Add(new DocumentationPatchDeclarationFailure(code, block.BlockId));
+            failures.Add(new DocumentationPatchDeclarationFailure(code, blockId));
         }
     }
 
@@ -944,6 +1039,15 @@ public sealed class DocumentationPatchDeclarationResolver
 
     private static Utf16Span Span(int start, int end) =>
         DocumentationObservationInput.Span(start, end);
+
+    private static DocumentationPatchRepositoryEncoding DetectEncoding(ReadOnlySpan<byte> bytes) =>
+        bytes.StartsWith(new byte[] { 0xef, 0xbb, 0xbf })
+            ? DocumentationPatchRepositoryEncoding.Utf8Bom
+            : bytes.StartsWith(new byte[] { 0xff, 0xfe })
+                ? DocumentationPatchRepositoryEncoding.Utf16LittleEndianBom
+                : bytes.StartsWith(new byte[] { 0xfe, 0xff })
+                    ? DocumentationPatchRepositoryEncoding.Utf16BigEndianBom
+                    : DocumentationPatchRepositoryEncoding.Utf8;
 
     private sealed record SourceCheck(string? FailureCode)
     {

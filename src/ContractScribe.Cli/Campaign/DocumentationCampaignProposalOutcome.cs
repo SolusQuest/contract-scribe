@@ -14,7 +14,8 @@ internal sealed class DocumentationCampaignProposalOutcome
         DocumentationCampaignProposalOutcomeKind kind,
         string code,
         string? workItemKey = null,
-        CampaignCheckpointArtifact? artifact = null)
+        CampaignCheckpointArtifact? artifact = null,
+        CampaignCheckpointAcceptanceKind? checkpointFailure = null)
     {
         if (!ValidCode(kind, code))
         {
@@ -25,12 +26,14 @@ internal sealed class DocumentationCampaignProposalOutcome
         Code = code;
         WorkItemKey = workItemKey;
         Artifact = artifact;
+        CheckpointFailure = checkpointFailure;
     }
 
     internal DocumentationCampaignProposalOutcomeKind Kind { get; }
     internal string Code { get; }
     internal string? WorkItemKey { get; }
     internal CampaignCheckpointArtifact? Artifact { get; }
+    internal CampaignCheckpointAcceptanceKind? CheckpointFailure { get; }
     internal CampaignTrustedProposal? TrustedProposal => WorkItemKey is null || Artifact is null
         ? null
         : Artifact.State.WorkItems.SingleOrDefault(item =>
@@ -62,6 +65,7 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.runtime.mismatch")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid")
+            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.credential.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid");
 }

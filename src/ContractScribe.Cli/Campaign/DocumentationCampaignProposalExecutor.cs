@@ -20,11 +20,12 @@ internal sealed record DocumentationCampaignProposalInput(
     ReadOnlyMemory<byte> RequestUtf8Json,
     ICampaignCheckpointStore Store,
     DocumentationScribeRuntimeOptions RuntimeOptions,
-    IDocumentationScribeModelExchange Exchange,
+    IDocumentationScribeModelExchange? Exchange,
     string? ConfiguredAgentEntrypoint,
     CancellationToken ExecutionToken,
     CancellationToken SettlementToken,
-    TimeProvider? TimeProvider = null);
+    TimeProvider? TimeProvider = null,
+    Func<IDocumentationScribeModelExchange?>? DeferredExchange = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -36,7 +37,10 @@ internal static class DocumentationCampaignProposalExecutor
             input.Store, input.SettlementToken).ConfigureAwait(false);
         if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null)
         {
-            return Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.checkpoint.unaccepted");
+            return new DocumentationCampaignProposalOutcome(
+                DocumentationCampaignProposalOutcomeKind.StateConflict,
+                "campaign.checkpoint.unaccepted",
+                checkpointFailure: accepted.Kind);
         }
 
         var current = accepted.AcceptedCheckpoint;
@@ -150,22 +154,41 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError,
                 "campaign.reservation.invalid");
         }
-        var reserved = await CampaignCheckpointAcceptance.AcceptAsync(
-            input.Store, transition, input.SettlementToken).ConfigureAwait(false);
+
+        var exchange = input.Exchange ?? input.DeferredExchange?.Invoke();
+        if (exchange is null)
+        {
+            return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError,
+                "campaign.credential.invalid");
+        }
+        CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+        CampaignCheckpointAcceptanceResult reserved;
+        using (CampaignProcessBoundaryHooks.EnterReplacementScope(
+                   CampaignProcessBoundaryHooks.ProposalReservationReplacementScope))
+        {
+            reserved = await CampaignCheckpointAcceptance.AcceptAsync(
+                input.Store, transition, input.SettlementToken).ConfigureAwait(false);
+        }
         if (reserved.Kind != CampaignCheckpointAcceptanceKind.Accepted || reserved.AcceptedCheckpoint is null)
         {
-            return reserved.Kind is CampaignCheckpointAcceptanceKind.Conflict
+            DisposeDeferredExchange(input, exchange);
+            var failure = reserved.Kind is CampaignCheckpointAcceptanceKind.Conflict
                 or CampaignCheckpointAcceptanceKind.InvalidRead
                 or CampaignCheckpointAcceptanceKind.Unreadable
                 ? Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.conflict")
                 : Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.unconfirmed");
+            return new DocumentationCampaignProposalOutcome(
+                failure.Kind, failure.Code, checkpointFailure: reserved.Kind);
         }
         if (reserved.Artifact?.State.ActiveReservation is not CampaignProviderReservation)
         {
+            DisposeDeferredExchange(input, exchange);
             return reserved.Artifact is null
                 ? Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.unconfirmed")
                 : FromArtifact(reserved.Artifact, selectedState.WorkItemKey);
         }
+
+        CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterReservationReadback);
 
         CampaignProviderInvocationAuthority invocation;
         try
@@ -176,13 +199,31 @@ internal static class DocumentationCampaignProposalExecutor
         }
         catch (ArgumentException)
         {
+            DisposeDeferredExchange(input, exchange);
             return Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.observer");
         }
 
-        var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
-            selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
-            input.RuntimeOptions, input.Exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
+        DocumentationCampaignPreparation prepared;
+        try
+        {
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeProviderDispatch);
+            prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
+                selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
+                input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (input.Exchange is null && exchange is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+        CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
+        var proposalResult = prepared.Kind == DocumentationCampaignPreparationKind.Completion;
+        CampaignProcessBoundaryHooks.Reach(proposalResult
+            ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
+            : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
         if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
         {
             completed = CampaignStateReducer.CompleteProviderInvocation(
@@ -214,19 +255,31 @@ internal static class DocumentationCampaignProposalExecutor
                 "campaign.settlement.invalid");
         }
 
-        var settled = await CampaignCheckpointAcceptance.AcceptAsync(
-            input.Store, completed, input.SettlementToken).ConfigureAwait(false);
+        CampaignCheckpointAcceptanceResult settled;
+        using (CampaignProcessBoundaryHooks.EnterReplacementScope(proposalResult
+                   ? CampaignProcessBoundaryHooks.ProposalResultReplacementScope
+                   : CampaignProcessBoundaryHooks.ProposalClosedReplacementScope))
+        {
+            settled = await CampaignCheckpointAcceptance.AcceptAsync(
+                input.Store, completed, input.SettlementToken).ConfigureAwait(false);
+        }
         if (settled.Kind == CampaignCheckpointAcceptanceKind.Accepted && settled.Artifact is not null)
         {
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterResultReadback);
+            CampaignProcessBoundaryHooks.Reach(proposalResult
+                ? CampaignProcessBoundaryHooks.ProposalAfterProposalReadback
+                : CampaignProcessBoundaryHooks.ProposalAfterClosedReadback);
             return FromArtifact(settled.Artifact, selectedState.WorkItemKey);
         }
 
-        return settled.Kind is CampaignCheckpointAcceptanceKind.Conflict
+        var settlementFailure = settled.Kind is CampaignCheckpointAcceptanceKind.Conflict
             or CampaignCheckpointAcceptanceKind.InvalidRead
             or CampaignCheckpointAcceptanceKind.Unreadable
             or CampaignCheckpointAcceptanceKind.WriteRejected
             ? Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict")
             : Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.settlement.unconfirmed");
+        return new DocumentationCampaignProposalOutcome(
+            settlementFailure.Kind, settlementFailure.Code, checkpointFailure: settled.Kind);
     }
 
     private static bool TrySelectAudit(
@@ -279,4 +332,14 @@ internal static class DocumentationCampaignProposalExecutor
 
     private static DocumentationCampaignProposalOutcome Outcome(
         DocumentationCampaignProposalOutcomeKind kind, string code) => new(kind, code);
+
+    private static void DisposeDeferredExchange(
+        DocumentationCampaignProposalInput input,
+        IDocumentationScribeModelExchange exchange)
+    {
+        if (input.Exchange is null && exchange is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
 }

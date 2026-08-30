@@ -155,6 +155,24 @@ public sealed record CampaignPlanningContentAuthority
             writer.Complete());
     }
 
+    public static CampaignPlanningContentAuthority CreateValidatedCommitment(
+        CampaignPlanningContentFamily family,
+        string id,
+        string contentSha256)
+    {
+        if (!Enum.IsDefined(family)
+            || string.IsNullOrEmpty(id)
+            || contentSha256 is not { Length: 64 }
+            || contentSha256.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new CampaignPlanningValidationException(
+                CampaignPlanningValidationCode.InvalidConfiguration,
+                "Configuration authority requires a closed family, identifier, and lowercase SHA-256 commitment.");
+        }
+
+        return new CampaignPlanningContentAuthority(family, id, contentSha256);
+    }
+
     internal static string GetContentFamilyId(CampaignPlanningContentFamily family) => family switch
     {
         CampaignPlanningContentFamily.ProposalContract => "configuration.proposal-contract",

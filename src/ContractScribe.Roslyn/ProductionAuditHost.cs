@@ -6,11 +6,11 @@ using ContractScribe.Core.Hosting;
 
 namespace ContractScribe.Roslyn;
 
-internal sealed class ProductionAuditHost
+internal sealed class ProductionRepositorySessionHost
 {
     private readonly HostBuildProvenance actualProvenance;
 
-    public ProductionAuditHost(HostBuildProvenance actualProvenance)
+    public ProductionRepositorySessionHost(HostBuildProvenance actualProvenance)
     {
         this.actualProvenance = actualProvenance
             ?? throw new ArgumentNullException(nameof(actualProvenance));
@@ -62,13 +62,21 @@ internal sealed class ProductionAuditHost
         coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
         using var callerCauseRegistration = cancellationToken.Register(
             () => RegisterInterruption(HostExecutionOutcome.Cancelled));
-        AtomicResultPublisher publisher;
+        AtomicResultPublisher? publisher = null;
         try
         {
-            publisher = AtomicResultPublisher.Prepare(
-                request.PublicationTarget,
-                controls);
-            Record(controls, transitions, "invalidation-completed");
+            if (request.PublishResult)
+            {
+                publisher = AtomicResultPublisher.Prepare(
+                    request.PublicationTarget
+                    ?? throw new ArgumentException("Publication target is required for audit publication."),
+                    controls);
+                Record(controls, transitions, "invalidation-completed");
+            }
+            else
+            {
+                Record(controls, transitions, "publication-not-requested");
+            }
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or ArgumentException)
@@ -104,7 +112,10 @@ internal sealed class ProductionAuditHost
 
             using var meter = new TemporaryDiskMeter(
                 request.AuditTemporaryRoot,
-                request.OutputStagingRoot ?? publisher.StagingPath);
+                request.OutputStagingRoot
+                ?? publisher?.StagingPath
+                ?? request.AuditTemporaryRoot
+                ?? request.RepositoryRoot);
             using var processMeter = controls.ProcessMeterFactory?.Invoke()
                 ?? new ToolchainProcessMeter();
             using var totalDeadline = new CancellationTokenSource();
@@ -538,6 +549,8 @@ internal sealed class ProductionAuditHost
             }
 
             byte[] canonical;
+            IReadOnlyList<AuditRecordInput> inputs;
+            AuditDocument audit;
             coordinator.TransitionExecutionState(HostStage.Audit, toolchain);
             try
             {
@@ -549,8 +562,8 @@ internal sealed class ProductionAuditHost
                     throw new InvalidOperationException(
                         "The validation control stimulated an aggregation failure.");
                 }
-                var inputs = AuditInputAssembler.Assemble(classifications, policy, extracted);
-                var audit = AuditAggregator.Aggregate(
+                inputs = AuditInputAssembler.Assemble(classifications, policy, extracted);
+                audit = AuditAggregator.Aggregate(
                     policy.TargetProfile,
                     classifications,
                     policy,
@@ -625,6 +638,53 @@ internal sealed class ProductionAuditHost
                     hostDiagnostics).ConfigureAwait(false);
             }
 
+            if (controls.SessionConsumer is not null)
+            {
+                try
+                {
+                    await controls.SessionConsumer(
+                        new ProductionRepositorySessionBundle(
+                            resolvedPaths,
+                            policy,
+                            session,
+                            classified,
+                            classifications,
+                            observed,
+                            extracted,
+                            inputs,
+                            audit,
+                            canonical,
+                            toolchain,
+                            loaderFact),
+                        totalToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return await CompleteComponentInterruptionAsync(
+                        session,
+                        coordinator,
+                        toolchain,
+                        HostStage.Internal,
+                        CurrentInterruptionOutcome(),
+                        controls,
+                        transitions,
+                        loaderFact,
+                        hostDiagnostics).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    return await CompleteComponentFailureAsync(
+                        session,
+                        coordinator,
+                        toolchain,
+                        "host.internal.unexpected",
+                        controls,
+                        transitions,
+                        loaderFact,
+                        hostDiagnostics).ConfigureAwait(false);
+                }
+            }
+
             Task? shutdownTask = null;
             coordinator.TransitionExecutionState(HostStage.Shutdown, toolchain);
             try
@@ -683,6 +743,29 @@ internal sealed class ProductionAuditHost
                     diagnostics: hostDiagnostics).ConfigureAwait(false);
             }
 
+            if (!request.PublishResult)
+            {
+                var sessionSuccess = new HostTerminalRecord(
+                    HostExecutionOutcome.Succeeded,
+                    auditOutcome,
+                    HostTerminalState.CommittedResult,
+                    null,
+                    actualProvenance,
+                    toolchain,
+                    new HostOutputCommit(HostArtifactState.Absent, null, 0),
+                    hostDiagnostics.ToImmutableArray(),
+                    ImmutableArray<HostMeasuredBound>.Empty,
+                    1);
+                Record(controls, transitions, "session-consumer-completed");
+                return new ProductionAuditOutcome(
+                    sessionSuccess,
+                    canonical,
+                    loaderFact,
+                    transitions);
+            }
+
+            var publicationPublisher = publisher
+                ?? throw new InvalidOperationException("Audit publication requires a prepared publisher.");
             HostMeasuredBound processFact;
             coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
             try
@@ -696,7 +779,7 @@ internal sealed class ProductionAuditHost
                 if (checked(existingBytes + canonical.LongLength) > bound)
                 {
                     return await CommitTemporaryDiskBoundAsync(
-                        publisher,
+                        publicationPublisher,
                         meter,
                         coordinator,
                         actualProvenance,
@@ -707,16 +790,16 @@ internal sealed class ProductionAuditHost
                         hostDiagnostics).ConfigureAwait(false);
                 }
                 meter.ObserveHostAllocation(
-                    publisher.StagingPath,
+                    publicationPublisher.StagingPath,
                     existingBytes,
                     canonical.LongLength);
-                publisher.Stage(canonical);
+                publicationPublisher.Stage(canonical);
                 Record(controls, transitions, "staging-created-in-destination");
                 meter.Reconcile();
                 if (meter.HighWater > bound)
                 {
                     return await CommitTemporaryDiskBoundAsync(
-                        publisher,
+                        publicationPublisher,
                         meter,
                         coordinator,
                         actualProvenance,
@@ -733,7 +816,7 @@ internal sealed class ProductionAuditHost
                 if (meter.HighWater > bound)
                 {
                     return await CommitTemporaryDiskBoundAsync(
-                        publisher,
+                        publicationPublisher,
                         meter,
                         coordinator,
                         actualProvenance,
@@ -758,7 +841,7 @@ internal sealed class ProductionAuditHost
             }
             catch (OperationCanceledException)
             {
-                var cleanupSucceeded = publisher.TryCleanupStaging();
+                var cleanupSucceeded = publicationPublisher.TryCleanupStaging();
                 return await CommitRegisteredInterruptionAsync(
                     coordinator,
                     actualProvenance,
@@ -772,7 +855,7 @@ internal sealed class ProductionAuditHost
             }
             catch (Exception)
             {
-                var cleanupSucceeded = publisher.TryCleanupStaging();
+                var cleanupSucceeded = publicationPublisher.TryCleanupStaging();
                 return await CommitFailureAsync(
                     coordinator,
                     actualProvenance,
@@ -796,7 +879,7 @@ internal sealed class ProductionAuditHost
                     out var winningCause)
                 || publicationDecision is null)
             {
-                var cleanupSucceeded = publisher.TryCleanupStaging();
+                var cleanupSucceeded = publicationPublisher.TryCleanupStaging();
                 if (winningCause is not null
                     && TryCommitRegisteredCause(
                         coordinator,
@@ -823,12 +906,12 @@ internal sealed class ProductionAuditHost
             string committedSha256;
             try
             {
-                committedSha256 = publisher.CommitRename();
+                committedSha256 = publicationPublisher.CommitRename();
             }
             catch (Exception)
             {
                 Record(controls, transitions, "atomic-replace-attempt-failed");
-                var cleanupSucceeded = publisher.TryCleanupStaging();
+                var cleanupSucceeded = publicationPublisher.TryCleanupStaging();
                 if (cleanupSucceeded)
                 {
                     Record(controls, transitions, "staging-cleanup-completed");
