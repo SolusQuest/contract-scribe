@@ -1659,18 +1659,37 @@ public static class CampaignStateFactory
             || !string.Equals(actual.AuditDocumentSha256, accepted.AuditDocumentSha256, StringComparison.Ordinal)
             || !string.Equals(actual.ExecutionCommitment, accepted.ExecutionCommitment, StringComparison.Ordinal)
             || actual.TargetProfile != accepted.TargetProfile
-            || actual.Summary != accepted.Summary
+            || !SameSummary(actual.Summary, accepted.Summary)
             || !actual.WorkItems.Select(item => item.WorkItemKey).SequenceEqual(
                 accepted.WorkItems.Select(item => item.WorkItemKey),
                 StringComparer.Ordinal)
-            || !actual.WorkItems.Select(item => item.Disposition).SequenceEqual(
-                accepted.WorkItems.Select(item => item.Disposition)))
+            || !actual.WorkItems.Select(item => item.Disposition)
+                .Zip(accepted.WorkItems.Select(item => item.Disposition))
+                .All(pair => SameDisposition(pair.First, pair.Second)))
         {
             throw Fail(
                 CampaignStateValidationCode.InvalidCorrelation,
                 "Accepted campaign plan does not match a fresh deterministic replan.");
         }
     }
+
+    private static bool SameSummary(
+        CampaignPlanningSummary actual,
+        CampaignPlanningSummary accepted) =>
+        actual.TotalWorkItems == accepted.TotalWorkItems
+        && actual.ExecutableWorkItems == accepted.ExecutableWorkItems
+        && actual.TerminalWorkItems == accepted.TerminalWorkItems
+        && actual.RepositoryBackedWorkItems == accepted.RepositoryBackedWorkItems
+        && actual.GeneratedOrNonWritableWorkItems == accepted.GeneratedOrNonWritableWorkItems
+        && actual.TerminalReasonCounts.SequenceEqual(accepted.TerminalReasonCounts);
+
+    private static bool SameDisposition(
+        CampaignPlanningDisposition actual,
+        CampaignPlanningDisposition accepted) =>
+        actual.Kind == accepted.Kind
+        && actual.EditCapability == accepted.EditCapability
+        && actual.PrimaryTerminalReason == accepted.PrimaryTerminalReason
+        && actual.TerminalReasons.SequenceEqual(accepted.TerminalReasons);
 
     private static void ValidateSnapshot(CampaignStateSnapshotAuthority snapshot)
     {

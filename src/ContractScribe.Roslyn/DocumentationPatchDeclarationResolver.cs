@@ -215,6 +215,7 @@ public sealed class DocumentationPatchDeclarationResolver
             repositorySource.SourceSha256,
             DetectEncoding(entry.Bytes.AsSpan()),
             observationDeclaration.DeclarationSpan,
+            observationDeclaration.DeclarationSpan,
             target,
             cache,
             failures,
@@ -378,6 +379,7 @@ public sealed class DocumentationPatchDeclarationResolver
                 repositoryLocator.OriginalFileSha256,
                 repositoryLocator.Encoding,
                 repositoryLocator.DeclarationSpan,
+                observedDeclarationSpan: null,
                 supported,
                 cache,
                 failures,
@@ -402,6 +404,7 @@ public sealed class DocumentationPatchDeclarationResolver
         string sourceSha256,
         DocumentationPatchRepositoryEncoding encoding,
         Utf16Span requestedDeclarationSpan,
+        Utf16Span? observedDeclarationSpan,
         TargetClassification target,
         ResolverCache cache,
         ImmutableArray<DocumentationPatchDeclarationFailure>.Builder failures,
@@ -454,8 +457,10 @@ public sealed class DocumentationPatchDeclarationResolver
         }
 
         var matching = authorityReferences
-            .Where(reference => Matches(
-                reference, project, repositoryPath, requestedDeclarationSpan))
+            .Where(reference => observedDeclarationSpan is { } observed
+                ? MatchesObservedDeclaration(
+                    reference, project, repositoryPath, observed, cancellationToken)
+                : Matches(reference, project, repositoryPath, requestedDeclarationSpan))
             .ToImmutableArray();
         if (matching.Length != 1)
         {
@@ -471,6 +476,9 @@ public sealed class DocumentationPatchDeclarationResolver
 
         var reference = matching[0];
         var syntax = reference.GetSyntax(cancellationToken);
+        var resolvedRequestedDeclarationSpan = observedDeclarationSpan is null
+            ? requestedDeclarationSpan
+            : Span(reference.Span.Start, reference.Span.End);
         var physicalSourceIdentity = project.SourceTrees[reference.SyntaxTree].PhysicalSourceIdentity
             ?? throw new InvalidOperationException(
                 "A repository source must retain its physical source identity.");
@@ -517,7 +525,7 @@ public sealed class DocumentationPatchDeclarationResolver
             physicalSourceIdentity,
             sourceSha256,
             encoding,
-            requestedDeclarationSpan,
+            resolvedRequestedDeclarationSpan,
             Span(reference.Span.Start, reference.Span.End),
             Span(owner.Span.Start, owner.Span.End),
             documentationSpan,
@@ -695,6 +703,19 @@ public sealed class DocumentationPatchDeclarationResolver
         && string.Equals(path, repositoryPath, StringComparison.Ordinal)
         && reference.Span.Start == declarationSpan.Start
         && reference.Span.End == declarationSpan.End;
+
+    private static bool MatchesObservedDeclaration(
+        SyntaxReference reference,
+        LoadedProject project,
+        string repositoryPath,
+        Utf16Span declarationSpan,
+        CancellationToken cancellationToken) =>
+        project.SourceTrees.TryGetValue(reference.SyntaxTree, out var source)
+        && source.RepositoryPath is { } path
+        && string.Equals(path, repositoryPath, StringComparison.Ordinal)
+        && GetDocumentationOwner(reference.GetSyntax(cancellationToken)) is { } owner
+        && owner.FullSpan.Start == declarationSpan.Start
+        && owner.FullSpan.End == declarationSpan.End;
 
     private static bool Matches(
         CandidateLocator candidate,

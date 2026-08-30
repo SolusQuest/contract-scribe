@@ -452,22 +452,7 @@ internal static class CampaignCommandRunner
             {
                 continue;
             }
-            var styleComponents = authority.ApplicableComponents.Select(component =>
-                new DocumentationPatchApplicableComponent(
-                    component.Kind switch
-                    {
-                        ComponentKind.TypeParameter => DocumentationPatchComponentKind.TypeParameter,
-                        ComponentKind.Parameter => DocumentationPatchComponentKind.Parameter,
-                        ComponentKind.Return => DocumentationPatchComponentKind.Return,
-                        ComponentKind.Value => DocumentationPatchComponentKind.Value,
-                        _ => throw new InvalidOperationException(),
-                    },
-                    component.Identity,
-                    component.Name)).ToImmutableArray();
-            authorities.Add(authority with
-            {
-                ExecutableStyleProfile = configuration.ScribeRequest.StyleProfileTemplate.Expand(styleComponents),
-            });
+            authorities.Add(authority);
         }
 
         var violationParents = CampaignPlanner.ReadViolationParentSymbols(bundle.Audit);
@@ -483,6 +468,19 @@ internal static class CampaignCommandRunner
                 violationParents.Contains(authority.Target.SymbolRef)))
             .Select(group => new CampaignPlanningOwnerAuthority(group.ToImmutableArray()))
             .ToImmutableArray();
+        var executableStyleParents = CampaignPlanner.ReadExecutableStyleParentSymbols(
+            bundle.Audit,
+            owners);
+        owners = owners.Select(owner => owner with
+        {
+            Targets = owner.Targets.Select(authority =>
+                executableStyleParents.Contains(authority.Target.SymbolRef)
+                    ? authority with
+                    {
+                        ExecutableStyleProfile = ExpandStyleProfile(configuration, authority),
+                    }
+                    : authority).ToImmutableArray(),
+        }).ToImmutableArray();
         var evidence = bundle.Evidence.Bindings.Select(binding =>
             new CampaignPlanningEvidenceAuthority(
                 bundle.Observed.ObservationSet!.Observations.Single(observation =>
@@ -503,6 +501,25 @@ internal static class CampaignCommandRunner
             evidence,
             bundle.Audit,
             new CampaignPlanningOwnerAuthoritySet(owners));
+    }
+
+    private static DocumentationScribeStyleProfile ExpandStyleProfile(
+        CampaignConfigurationDocument configuration,
+        CampaignPlanningTargetAuthority authority)
+    {
+        var components = authority.ApplicableComponents.Select(component =>
+            new DocumentationPatchApplicableComponent(
+                component.Kind switch
+                {
+                    ComponentKind.TypeParameter => DocumentationPatchComponentKind.TypeParameter,
+                    ComponentKind.Parameter => DocumentationPatchComponentKind.Parameter,
+                    ComponentKind.Return => DocumentationPatchComponentKind.Return,
+                    ComponentKind.Value => DocumentationPatchComponentKind.Value,
+                    _ => throw new InvalidOperationException(),
+                },
+                component.Identity,
+                component.Name)).ToImmutableArray();
+        return configuration.ScribeRequest.StyleProfileTemplate.Expand(components);
     }
 
     private static string? ClassifyInitialRead(CampaignOperation operation, CampaignCheckpointReadResult read)

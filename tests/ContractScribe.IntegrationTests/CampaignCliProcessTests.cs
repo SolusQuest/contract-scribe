@@ -28,11 +28,20 @@ public sealed class CampaignCliProcessTests
     private const string RequiredPolicy =
         "{\"defaultDecision\":\"required\",\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\"}\n";
 
-    [Fact]
-    public async Task SharedProductionSession_ComposesTheNoWorkCampaignAuthority()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task SharedProductionSession_ComposesCampaignAuthority(
+        bool required,
+        bool executable)
     {
         await using var fixture = await LoaderFixture.CreateAsync();
-        var policyBytes = Encoding.UTF8.GetBytes(OptionalPolicy);
+        if (executable)
+        {
+            await SetSingleWorkItemSourceAsync(fixture.Root);
+        }
+        var policyBytes = Encoding.UTF8.GetBytes(required ? RequiredPolicy : OptionalPolicy);
         var configurationBytes = await File.ReadAllBytesAsync(Path.Join(
             RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"));
         var configuration = CampaignConfiguration.Parse(configurationBytes);
@@ -91,7 +100,21 @@ public sealed class CampaignCliProcessTests
         Assert.Equal(ContractScribe.Core.Hosting.HostExecutionOutcome.Succeeded,
             outcome.Terminal.ExecutionOutcome);
         Assert.NotNull(state);
-        Assert.Equal(CampaignTerminalReason.NoWork, state.TerminalOutcome!.Reason);
+        if (executable)
+        {
+            Assert.Null(state.TerminalOutcome);
+            Assert.NotEmpty(state.WorkItems);
+        }
+        else if (required)
+        {
+            Assert.Equal(CampaignTerminalKind.Complete, state.TerminalOutcome!.Kind);
+            Assert.Equal(CampaignTerminalReason.AllWorkClosed, state.TerminalOutcome.Reason);
+            Assert.NotEmpty(state.WorkItems);
+        }
+        else
+        {
+            Assert.Equal(CampaignTerminalReason.NoWork, state.TerminalOutcome!.Reason);
+        }
     }
 
     [Fact]
