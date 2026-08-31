@@ -205,6 +205,9 @@ public sealed class CampaignChangedBaseProcessTests
             "tests", "fixtures", "campaign", "changed-base", "target-evolution-matrix.json");
         using var matrix = JsonDocument.Parse(await File.ReadAllBytesAsync(matrixPath));
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        var baselineProjectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
+        var baselineLibraryProjectPath = Path.Join(
+            fixture.Repository.Root, "Library", "Library.csproj");
         var targetEvolutionInputPath = Path.Join(fixture.Repository.Root, "TargetEvolution.slnx");
         const string BaselineTargetEvolutionInput =
             "<Solution><Project Path=\"App/App.csproj\" /></Solution>";
@@ -214,9 +217,9 @@ public sealed class CampaignChangedBaseProcessTests
             CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
         var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
         var baselineSourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
-        var baselineProjectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
         var baselineSource = await File.ReadAllBytesAsync(baselineSourcePath);
         var baselineProject = await File.ReadAllBytesAsync(baselineProjectPath);
+        var baselineLibraryProject = await File.ReadAllBytesAsync(baselineLibraryProjectPath);
 
         var failedPredecessor = ReadArtifact(fixture.StatePath);
         var failedPredecessorBytes = await File.ReadAllBytesAsync(fixture.StatePath);
@@ -235,9 +238,7 @@ public sealed class CampaignChangedBaseProcessTests
             await File.WriteAllTextAsync(targetEvolutionInputPath, BaselineTargetEvolutionInput);
             await File.WriteAllBytesAsync(baselineSourcePath, baselineSource);
             await File.WriteAllBytesAsync(baselineProjectPath, baselineProject);
-            var changedContextProjectPath = Path.Join(
-                fixture.Repository.Root, "App", "ChangedContext.csproj");
-            if (File.Exists(changedContextProjectPath)) File.Delete(changedContextProjectPath);
+            await File.WriteAllBytesAsync(baselineLibraryProjectPath, baselineLibraryProject);
             foreach (var extra in new[] { "Moved.cs", "Alpha.cs", "Zulu.cs" })
             {
                 var extraPath = Path.Join(fixture.Repository.Root, "App", extra);
@@ -251,7 +252,7 @@ public sealed class CampaignChangedBaseProcessTests
             {
                 await File.WriteAllTextAsync(
                     targetEvolutionInputPath,
-                    "<Solution><Project Path=\"App/ChangedContext.csproj\" /></Solution>");
+                    "<Solution><Project Path=\"Library/Library.csproj\" /></Solution>");
             }
             var requestCount = fixture.Server.RequestCount;
             var snapshot = $"snapshot.target.{++index}";
@@ -616,10 +617,17 @@ public sealed class CampaignChangedBaseProcessTests
                     "namespace Fixture;\npublic static partial class App\n{\n    public static void Run() { }\n}\n");
                 return false;
             case "changed-compilation-context":
-                var projectPath = Path.Join(repositoryRoot, "App", "App.csproj");
-                File.Move(
-                    projectPath,
-                    Path.Join(repositoryRoot, "App", "ChangedContext.csproj"));
+                var libraryProjectPath = Path.Join(repositoryRoot, "Library", "Library.csproj");
+                var libraryProject = await File.ReadAllTextAsync(libraryProjectPath);
+                Assert.Contains("</Project>", libraryProject, StringComparison.Ordinal);
+                await File.WriteAllTextAsync(libraryProjectPath, libraryProject.Replace(
+                    "</Project>",
+                    "  <ItemGroup>\n"
+                    + "    <Compile Remove=\"Library.cs\" />\n"
+                    + "    <Compile Include=\"../App/App.cs\" Link=\"App.cs\" />\n"
+                    + "  </ItemGroup>\n"
+                    + "</Project>",
+                    StringComparison.Ordinal));
                 return false;
             case "changed-applicable-components":
                 await File.WriteAllTextAsync(sourcePath,
