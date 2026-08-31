@@ -583,8 +583,24 @@ public sealed class CampaignCliProcessTests
             server.Endpoint,
             vector.Scenario == "closed-patch" ? 1 : null);
 
+        var snapshot = "snapshot.boundary";
+        var initialOperation = "start";
+        if (vector.Scenario == "changed-base")
+        {
+            var initialized = await RunAsync(
+                Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary.a"),
+                timeout: TimeSpan.FromMinutes(5));
+            AssertCampaign(
+                initialized,
+                0,
+                "campaign.complete",
+                CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!.CheckpointRevision);
+            snapshot = "snapshot.boundary.b";
+            initialOperation = "resume";
+        }
+
         using var running = Start(
-            Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
+            Args(initialOperation, fixture.Root, statePath, configurationPath, snapshot),
             new Dictionary<string, string?>
             {
                 ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
@@ -611,7 +627,7 @@ public sealed class CampaignCliProcessTests
 
             var operation = File.Exists(statePath) ? "resume" : "start";
             var recovered = await RunAsync(
-                Args(operation, fixture.Root, statePath, configurationPath, "snapshot.boundary"),
+                Args(operation, fixture.Root, statePath, configurationPath, snapshot),
                 timeout: TimeSpan.FromMinutes(5));
             AssertControlledCampaign(recovered, vector.Hook);
             if (File.Exists(statePath))
@@ -897,11 +913,13 @@ public sealed class CampaignCliProcessTests
                 }
             }
             var evidence = targetEvidence ?? throw new InvalidDataException("Target evidence message was not found.");
-            var evidenceReferenceId = evidence.GetProperty("evidenceReferences")[0]
+            var evidenceReferences = evidence.GetProperty("evidenceReferences").EnumerateArray().ToArray();
+            var summaryEvidenceReferenceId = evidenceReferences
+                .First(reference => reference.GetProperty("subject").TryGetProperty("symbolRef", out _))
                 .GetProperty("evidenceReferenceId").GetString()!;
             var units = new JsonArray
             {
-                ContentUnit("content.summary", null, null, evidenceReferenceId),
+                ContentUnit("content.summary", null, null, summaryEvidenceReferenceId),
             };
             foreach (var component in evidence.GetProperty("applicableComponents").EnumerateArray())
             {
@@ -913,9 +931,15 @@ public sealed class CampaignCliProcessTests
                     "value" => "content.value",
                     _ => throw new InvalidDataException("Unknown component kind."),
                 };
+                var componentIdentity = component.GetProperty("identity").GetString();
+                var evidenceReferenceId = evidenceReferences
+                    .First(reference => reference.GetProperty("subject")
+                        .TryGetProperty("identity", out var identity)
+                        && string.Equals(identity.GetString(), componentIdentity, StringComparison.Ordinal))
+                    .GetProperty("evidenceReferenceId").GetString()!;
                 units.Add(ContentUnit(
                     kind,
-                    component.GetProperty("identity").GetString(),
+                    componentIdentity,
                     component.TryGetProperty("name", out var name) ? name.GetString() : null,
                     evidenceReferenceId));
             }

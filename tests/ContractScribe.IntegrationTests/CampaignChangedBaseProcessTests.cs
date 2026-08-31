@@ -308,17 +308,24 @@ public sealed class CampaignChangedBaseProcessTests
             using var winner = CampaignCliProcessTests.Start(
                 fixture.Args("resume", "snapshot.concurrent.b"),
                 CampaignCliProcessTests.HookEnvironment(
-                    CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, winnerAck, winnerRelease));
+                    CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback,
+                    winnerAck,
+                    winnerRelease));
             try
             {
                 await CampaignCliProcessTests.WaitForFileAsync(
-                    winnerAck, winner, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement,
+                    winnerAck,
+                    winner,
+                    CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback,
                     TimeSpan.FromMinutes(3));
 
                 await File.WriteAllTextAsync(contenderRelease, "release\n");
                 await contender.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
                 var blocked = await contender.CompleteAsync();
                 CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
+                Assert.Equal(
+                    "snapshot.concurrent.b",
+                    ReadArtifact(fixture.StatePath).State.Snapshot.OpaqueSnapshotBinding);
                 Assert.Equal(0, fixture.Server.RequestCount);
 
                 await File.WriteAllTextAsync(winnerRelease, "release\n");
