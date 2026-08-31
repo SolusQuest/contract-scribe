@@ -1,6 +1,6 @@
 # Campaign and GitHub workflow
 
-> **Status:** Current pre-release M4-C1 snapshot-scoped planning draft, implemented by `CampaignPlanner`. Governing M4 design authority: repository revision `9853f5e234cd7c245b058e7573b8c53e51c188a9`. Persistence, cursors, checkpoints, ledgers, batch execution, state transitions, provider dispatch, and every GitHub adapter representation remain candidate architecture owned by later M4/M5 work.
+> **Status:** Current pre-release M4 local campaign execution boundary. `CampaignPlanner`, Campaign State v1, the C3 reducer, X2A checkpoint store, X1B/X1C execution, and the production campaign CLI implement snapshot-scoped planning, durable same-snapshot recovery, and caller-attested changed-base supersession. GitHub identity, branch and pull-request generations, remote operations, automatic rebase, and Action scheduling remain M5/M6 candidate architecture.
 
 ## Goal
 
@@ -20,7 +20,7 @@ The current planner is deliberately source-free and platform-neutral. It does no
 
 The plan contains identities, exact source commitments and encoding, spans, target/component facts, Audit-row commitments, Style Profile values for executable targets, dispositions, and bounded counts. Terminal targets must not carry execution-only Style Profile authority. It contains no source excerpts, trivia, documentation text, prompt content, provider output, candidate bytes, diff, credential, transcript, machine-absolute path, checkpoint history, or GitHub state.
 
-The normative in-process draft contract is [Campaign Planning v1](contracts/campaign-planning-v1.md). M4-C2 owns the first persisted checkpoint representation. M4-C3 owns reducer and budget-consumption behavior. Provider/M2/CLI execution and all GitHub publication semantics are later leaves; they may consume this plan but do not retroactively add persistence or mutation semantics to it.
+The normative planning contract is [Campaign Planning v1](contracts/campaign-planning-v1.md). [Campaign State v1](contracts/campaign-state-v1.md) is the accepted persisted C2 representation; the C3 reducer owns transitions and budget consumption; X2A owns secure exact-predecessor checkpoint publication; and X1B/X1C plus the campaign CLI compose provider and cumulative M2 execution. GitHub publication semantics remain later leaves and do not retroactively add remote identity or mutation semantics to the local M4 contracts.
 
 ## Identity model
 
@@ -87,6 +87,14 @@ Batch identity inherits snapshot identity through work-plan identity. Every pers
 ### Campaign identity
 
 A campaign is the stable lineage that continues across snapshots as documentation pull requests merge and the target branch advances. A campaign does not pretend that two different base commits are one immutable snapshot.
+
+### Current M4 changed-base supersession
+
+A valid resume with the same opaque snapshot uses exact same-snapshot continuation. A different caller-attested opaque snapshot enters changed-base reconciliation only after the production M1 load/audit and complete C1 plan succeed. Policy or configuration drift, input-identity or target-profile substitution, product/contract incompatibility, missing or invalid state, and checkpoint or lease conflict remain distinct fail-closed outcomes and cannot trigger migration.
+
+The composition owner builds one clean revision-zero C2 template from the new M1/C1 authority. `CampaignStateReducer.Supersede` is the only transition authority: it preserves the stable lineage, configured lineage policy, and monotonic consumptive charges; conservatively settles old active exposure; retains one bounded immediate-predecessor summary; and replaces current work, proposals, attempts, candidate state, and completion state with the fresh plan. `CampaignCheckpointAcceptance` and X2A then conditionally replace the exact predecessor and require canonical readback before X1B/X1C may reserve or dispatch successor work.
+
+Opaque snapshot identity is authoritative even when two exact repository fixture revisions produce byte-identical canonical Audit and consumed content commitments. The new execution commitment and every work-item and attempt namespace still change. No display name, array position, old `SymbolRef`, proposal, Patch candidate, or completion record grants cross-snapshot continuity. The CLI performs no Git discovery and creates no branch, pull-request generation, or remote operation identity; those remain M5/M6 responsibilities.
 
 ### Symbol and result identity
 
