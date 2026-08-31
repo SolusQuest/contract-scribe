@@ -901,32 +901,15 @@ public sealed class CampaignCliProcessTests
             var summaryEvidenceReferenceId = evidenceReferences
                 .First(reference => reference.GetProperty("subject").TryGetProperty("symbolRef", out _))
                 .GetProperty("evidenceReferenceId").GetString()!;
+            var components = evidence.GetProperty("applicableComponents").EnumerateArray().ToArray();
+            if (components.Length > 0)
+            {
+                return CreateSkipResponse();
+            }
             var units = new JsonArray
             {
                 ContentUnit("content.summary", null, null, summaryEvidenceReferenceId),
             };
-            foreach (var component in evidence.GetProperty("applicableComponents").EnumerateArray())
-            {
-                var kind = component.GetProperty("kind").GetString() switch
-                {
-                    "typeParameter" => "content.type-parameter",
-                    "parameter" => "content.parameter",
-                    "return" => "content.return",
-                    "value" => "content.value",
-                    _ => throw new InvalidDataException("Unknown component kind."),
-                };
-                var componentIdentity = component.GetProperty("identity").GetString();
-                var evidenceReferenceId = evidenceReferences
-                    .First(reference => reference.GetProperty("subject")
-                        .TryGetProperty("identity", out var identity)
-                        && string.Equals(identity.GetString(), componentIdentity, StringComparison.Ordinal))
-                    .GetProperty("evidenceReferenceId").GetString()!;
-                units.Add(ContentUnit(
-                    kind,
-                    componentIdentity,
-                    component.TryGetProperty("name", out var name) ? name.GetString() : null,
-                    evidenceReferenceId));
-            }
             var terminal = new JsonObject
             {
                 ["kind"] = "proposal",

@@ -265,8 +265,13 @@ public sealed class CampaignChangedBaseProcessTests
             }
             else
             {
-                await InterruptAtAsync(fixture, "resume", snapshot,
-                    CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
+                var hook = string.Equals(
+                    evolution,
+                    "changed-applicable-components",
+                    StringComparison.Ordinal)
+                    ? CampaignProcessBoundaryHooks.ProposalAfterClosedReadback
+                    : CampaignProcessBoundaryHooks.ProposalAfterProposalReadback;
+                await InterruptAtAsync(fixture, "resume", snapshot, hook);
             }
 
             var current = ReadArtifact(fixture.StatePath);
@@ -413,7 +418,7 @@ public sealed class CampaignChangedBaseProcessTests
 
         await File.WriteAllTextAsync(
             Path.Join(fixture.Repository.Root, "App", "App.cs"),
-            "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void Run(int value) { }\n}\n");
+            "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void RunAgain() { }\n}\n");
         var changed = await CampaignCliProcessTests.RunAsync(
             fixture.Args("resume", "snapshot.production.b"), TimeSpan.FromMinutes(5));
         var completed = ReadArtifact(fixture.StatePath);
