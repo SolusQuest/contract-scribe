@@ -205,6 +205,11 @@ public sealed class CampaignChangedBaseProcessTests
             "tests", "fixtures", "campaign", "changed-base", "target-evolution-matrix.json");
         using var matrix = JsonDocument.Parse(await File.ReadAllBytesAsync(matrixPath));
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        var targetEvolutionInputPath = Path.Join(fixture.Repository.Root, "TargetEvolution.slnx");
+        const string BaselineTargetEvolutionInput =
+            "<Solution><Project Path=\"App/App.csproj\" /></Solution>";
+        await File.WriteAllTextAsync(targetEvolutionInputPath, BaselineTargetEvolutionInput);
+        fixture.Input = "TargetEvolution.slnx";
         await InterruptAtAsync(fixture, "start", "snapshot.target.a",
             CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
         var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
@@ -227,8 +232,12 @@ public sealed class CampaignChangedBaseProcessTests
         var index = 0;
         foreach (var evolution in matrix.RootElement.EnumerateArray().Select(item => item.GetString()!))
         {
+            await File.WriteAllTextAsync(targetEvolutionInputPath, BaselineTargetEvolutionInput);
             await File.WriteAllBytesAsync(baselineSourcePath, baselineSource);
             await File.WriteAllBytesAsync(baselineProjectPath, baselineProject);
+            var changedContextProjectPath = Path.Join(
+                fixture.Repository.Root, "App", "ChangedContext.csproj");
+            if (File.Exists(changedContextProjectPath)) File.Delete(changedContextProjectPath);
             foreach (var extra in new[] { "Moved.cs", "Alpha.cs", "Zulu.cs" })
             {
                 var extraPath = Path.Join(fixture.Repository.Root, "App", extra);
@@ -240,7 +249,9 @@ public sealed class CampaignChangedBaseProcessTests
             var expectsNoWork = await ApplyTargetEvolutionAsync(fixture.Repository.Root, evolution);
             if (string.Equals(evolution, "changed-compilation-context", StringComparison.Ordinal))
             {
-                await RestoreProjectAsync(fixture.Repository.Root);
+                await File.WriteAllTextAsync(
+                    targetEvolutionInputPath,
+                    "<Solution><Project Path=\"App/ChangedContext.csproj\" /></Solution>");
             }
             var requestCount = fixture.Server.RequestCount;
             var snapshot = $"snapshot.target.{++index}";
@@ -585,40 +596,6 @@ public sealed class CampaignChangedBaseProcessTests
         }
     }
 
-    private static async Task RestoreProjectAsync(string repositoryRoot)
-    {
-        var start = new System.Diagnostics.ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = repositoryRoot,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        start.ArgumentList.Add("restore");
-        start.ArgumentList.Add("App/App.csproj");
-        start.ArgumentList.Add("-nodeReuse:false");
-        start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        start.Environment["DOTNET_NOLOGO"] = "true";
-        using var process = System.Diagnostics.Process.Start(start)
-            ?? throw new InvalidOperationException("Fixture restore failed to start.");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
-        }
-        catch (TimeoutException)
-        {
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
-            await Task.WhenAll(stdout, stderr);
-            throw;
-        }
-        Assert.True(process.ExitCode == 0,
-            $"fixture restore exit={process.ExitCode} stdout={await stdout} stderr={await stderr}");
-    }
-
     private static async Task<bool> ApplyTargetEvolutionAsync(string repositoryRoot, string evolution)
     {
         var sourcePath = Path.Join(repositoryRoot, "App", "App.cs");
@@ -640,17 +617,9 @@ public sealed class CampaignChangedBaseProcessTests
                 return false;
             case "changed-compilation-context":
                 var projectPath = Path.Join(repositoryRoot, "App", "App.csproj");
-                var project = await File.ReadAllTextAsync(projectPath);
-                Assert.Contains("<TargetFramework>net10.0</TargetFramework>", project, StringComparison.Ordinal);
-                await File.WriteAllTextAsync(projectPath, project
-                    .Replace(
-                        "<TargetFramework>net10.0</TargetFramework>",
-                        "<TargetFramework>net10.0-windows</TargetFramework>",
-                        StringComparison.Ordinal)
-                    .Replace(
-                        "</PropertyGroup>",
-                        "  <EnableWindowsTargeting>true</EnableWindowsTargeting>\n  </PropertyGroup>",
-                        StringComparison.Ordinal));
+                File.Move(
+                    projectPath,
+                    Path.Join(repositoryRoot, "App", "ChangedContext.csproj"));
                 return false;
             case "changed-applicable-components":
                 await File.WriteAllTextAsync(sourcePath,
@@ -702,9 +671,14 @@ public sealed class CampaignChangedBaseProcessTests
         internal string ConfigurationPath { get; }
         internal string StatePath { get; }
 
-        internal string[] Args(string operation, string snapshot) =>
-            CampaignCliProcessTests.Args(
-                operation, Repository.Root, StatePath, ConfigurationPath, snapshot);
+        internal string Input { get; set; } = "App/App.csproj";
+
+        internal string[] Args(string operation, string snapshot) => CampaignCliProcessTests.Args(
+                operation, Repository.Root, StatePath, ConfigurationPath, snapshot)
+            .Select(argument => string.Equals(argument, "App/App.csproj", StringComparison.Ordinal)
+                ? Input
+                : argument)
+            .ToArray();
 
         [SupportedOSPlatform("linux")]
         internal static async Task<ProcessFixture> CreateAsync(
