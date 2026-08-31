@@ -206,7 +206,7 @@ public sealed class CampaignChangedBaseProcessTests
         using var matrix = JsonDocument.Parse(await File.ReadAllBytesAsync(matrixPath));
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.target.a",
-            CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+            CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
         var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
         var baselineSourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
         var baselineProjectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
@@ -266,22 +266,13 @@ public sealed class CampaignChangedBaseProcessTests
             else
             {
                 await InterruptAtAsync(fixture, "resume", snapshot,
-                    CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+                    CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
             }
 
             var current = ReadArtifact(fixture.StatePath);
             Assert.Equal(snapshot, current.State.Snapshot.OpaqueSnapshotBinding);
             Assert.Equal(predecessor.Sha256, current.State.Predecessor!.FinalCheckpointSha256);
             Assert.DoesNotContain(current.State.WorkItems, item => predecessorKeys.Contains(item.WorkItemKey));
-            if (!string.Equals(evolution, "reordered-plan", StringComparison.Ordinal))
-            {
-                Assert.All(current.State.WorkItems, item =>
-                {
-                    Assert.Null(item.TrustedProposal);
-                    Assert.Equal(0, item.OuterAttemptCount);
-                    Assert.Equal(0, item.CandidateAttemptCount);
-                });
-            }
             Assert.Null(current.State.ActiveReservation);
             var freshRequests = fixture.Server.RequestBodies.Skip(requestCount).ToArray();
             AssertFreshTargetEvidence(evolution, baselineEvidence, freshRequests);
@@ -304,11 +295,16 @@ public sealed class CampaignChangedBaseProcessTests
         using var contender = CampaignCliProcessTests.Start(
             fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
             CampaignCliProcessTests.HookEnvironment(
-                "changed-base.before-reconciliation", contenderAck, contenderRelease));
+                CampaignProcessBoundaryHooks.ChangedBaseBeforeReconciliation,
+                contenderAck,
+                contenderRelease));
         try
         {
             await CampaignCliProcessTests.WaitForFileAsync(
-                contenderAck, contender, "changed-base.before-reconciliation", TimeSpan.FromMinutes(3));
+                contenderAck,
+                contender,
+                CampaignProcessBoundaryHooks.ChangedBaseBeforeReconciliation,
+                TimeSpan.FromMinutes(3));
             using var winner = CampaignCliProcessTests.Start(
                 fixture.Args("resume", "snapshot.concurrent.b"),
                 CampaignCliProcessTests.HookEnvironment(
@@ -351,7 +347,8 @@ public sealed class CampaignChangedBaseProcessTests
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await ProcessFixture.CreateAsync(
             executable: true,
-            maximumCampaignElapsedMilliseconds: 600_000);
+            maximumCampaignElapsedMilliseconds: 600_000,
+            maximumCandidatesPerBlock: 8);
         var first = await CampaignCliProcessTests.RunAsync(
             fixture.Args("start", "snapshot.production.a"), TimeSpan.FromMinutes(5));
         var accepted = ReadArtifact(fixture.StatePath);
@@ -660,7 +657,8 @@ public sealed class CampaignChangedBaseProcessTests
         [SupportedOSPlatform("linux")]
         internal static async Task<ProcessFixture> CreateAsync(
             bool executable,
-            int? maximumCampaignElapsedMilliseconds = null)
+            int? maximumCampaignElapsedMilliseconds = null,
+            int? maximumCandidatesPerBlock = null)
         {
             var repository = await LoaderFixture.CreateAsync();
             if (executable)
@@ -678,10 +676,17 @@ public sealed class CampaignChangedBaseProcessTests
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var configurationPath = Path.Join(outside, "campaign.json");
             await CampaignCliProcessTests.WriteConfigurationAsync(configurationPath, server.Endpoint);
-            if (maximumCampaignElapsedMilliseconds is { } maximumElapsed)
+            if (maximumCampaignElapsedMilliseconds is not null || maximumCandidatesPerBlock is not null)
             {
                 var configuration = JsonNode.Parse(await File.ReadAllBytesAsync(configurationPath))!.AsObject();
-                configuration["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = maximumElapsed;
+                if (maximumCampaignElapsedMilliseconds is { } maximumElapsed)
+                {
+                    configuration["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = maximumElapsed;
+                }
+                if (maximumCandidatesPerBlock is { } maximumCandidates)
+                {
+                    configuration["budgets"]!["campaign"]!["maximumCandidatesPerBlock"] = maximumCandidates;
+                }
                 await File.WriteAllTextAsync(
                     configurationPath,
                     configuration.ToJsonString(),

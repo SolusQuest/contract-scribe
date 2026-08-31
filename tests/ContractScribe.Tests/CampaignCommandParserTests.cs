@@ -153,8 +153,9 @@ public sealed class CampaignCommandParserTests
     [Fact]
     public void ProcessBoundaryHook_RejectsUnknownNamesAndPublishesClosedAllowlist()
     {
-        Assert.Equal(41, CampaignProcessBoundaryHooks.Allowlist.Count);
+        Assert.Equal(42, CampaignProcessBoundaryHooks.Allowlist.Count);
         Assert.Contains("checkpoint.initial.before-create", CampaignProcessBoundaryHooks.Allowlist);
+        Assert.Contains("changed-base.before-reconciliation", CampaignProcessBoundaryHooks.Allowlist);
         Assert.Contains("proposal.result.proposal.in-replacement", CampaignProcessBoundaryHooks.Allowlist);
         Assert.Contains("proposal.result.closed.after-replacement-before-readback", CampaignProcessBoundaryHooks.Allowlist);
         Assert.Contains("patch.result.accepted.in-replacement", CampaignProcessBoundaryHooks.Allowlist);

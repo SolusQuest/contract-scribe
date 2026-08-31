@@ -208,7 +208,8 @@ internal static class CampaignCommandRunner
             }
             else
             {
-                CampaignProcessBoundaryHooks.Reach("changed-base.before-reconciliation");
+                CampaignProcessBoundaryHooks.Reach(
+                    CampaignProcessBoundaryHooks.ChangedBaseBeforeReconciliation);
                 var reconciled = await ChangedBaseCampaignReconciler.ReconcileAsync(
                     current,
                     store,
