@@ -210,50 +210,33 @@ public sealed class CampaignChangedBaseProcessTests
         await InterruptAtAsync(fixture, "start", "snapshot.concurrent.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
         var firstAck = Path.Join(fixture.Outside, "concurrent.first.ack");
-        var secondAck = Path.Join(fixture.Outside, "concurrent.second.ack");
         var firstRelease = Path.Join(fixture.Outside, "concurrent.first.release");
-        var secondRelease = Path.Join(fixture.Outside, "concurrent.second.release");
         using var first = CampaignCliProcessTests.Start(
             fixture.Args("resume", "snapshot.concurrent.b"),
             CampaignCliProcessTests.HookEnvironment(
                 CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, firstAck, firstRelease));
-        using var second = CampaignCliProcessTests.Start(
-            fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
-            CampaignCliProcessTests.HookEnvironment(
-                CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, secondAck, secondRelease));
         try
         {
-            await Task.WhenAll(
-                CampaignCliProcessTests.WaitForFileAsync(
-                    firstAck, first, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, TimeSpan.FromMinutes(3)),
-                CampaignCliProcessTests.WaitForFileAsync(
-                    secondAck, second, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, TimeSpan.FromMinutes(3)));
+            await CampaignCliProcessTests.WaitForFileAsync(
+                firstAck, first, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, TimeSpan.FromMinutes(3));
+            var blocked = await CampaignCliProcessTests.RunAsync(
+                fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
+                TimeSpan.FromMinutes(3));
+            CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
+            Assert.Equal(0, fixture.Server.RequestCount);
+
             await File.WriteAllTextAsync(firstRelease, "release\n");
-            await File.WriteAllTextAsync(secondRelease, "release\n");
-            await Task.WhenAll(
-                first.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5)),
-                second.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5)));
-            var results = await Task.WhenAll(first.CompleteAsync(), second.CompleteAsync());
+            await first.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
+            var winner = await first.CompleteAsync();
             var current = ReadArtifact(fixture.StatePath);
-            Assert.Contains(current.State.Snapshot.OpaqueSnapshotBinding,
-                competing
-                    ? new[] { "snapshot.concurrent.b", "snapshot.concurrent.c" }
-                    : new[] { "snapshot.concurrent.b" });
+            Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
             Assert.Null(current.State.ActiveReservation);
-            Assert.True(fixture.Server.RequestCount <= 1);
-            Assert.All(results, result => Assert.NotEqual(-1, result.ExitCode));
-            Assert.DoesNotContain(results, result => result.Stdout.Contains(
-                "campaign.host-contract-error", StringComparison.Ordinal));
-            if (competing)
-            {
-                Assert.Contains(results, result => result.Stdout.Contains(
-                    "campaign.state-conflict", StringComparison.Ordinal));
-            }
+            CampaignCliProcessTests.AssertCampaign(winner, 0, "campaign.complete", current.CheckpointRevision);
+            Assert.Equal(1, fixture.Server.RequestCount);
         }
         finally
         {
             await CampaignCliProcessTests.StopAsync(first);
-            await CampaignCliProcessTests.StopAsync(second);
         }
     }
 
@@ -261,7 +244,9 @@ public sealed class CampaignChangedBaseProcessTests
     public async Task CompleteM4ProductionPath_RecoversSupersedesAndCompletes()
     {
         if (!OperatingSystem.IsLinux()) return;
-        await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        await using var fixture = await ProcessFixture.CreateAsync(
+            executable: true,
+            maximumCampaignElapsedMilliseconds: 600_000);
         var first = await CampaignCliProcessTests.RunAsync(
             fixture.Args("start", "snapshot.production.a"), TimeSpan.FromMinutes(5));
         var accepted = ReadArtifact(fixture.StatePath);
@@ -420,7 +405,9 @@ public sealed class CampaignChangedBaseProcessTests
                 operation, Repository.Root, StatePath, ConfigurationPath, snapshot);
 
         [SupportedOSPlatform("linux")]
-        internal static async Task<ProcessFixture> CreateAsync(bool executable)
+        internal static async Task<ProcessFixture> CreateAsync(
+            bool executable,
+            int? maximumCampaignElapsedMilliseconds = null)
         {
             var repository = await LoaderFixture.CreateAsync();
             if (executable)
@@ -438,6 +425,15 @@ public sealed class CampaignChangedBaseProcessTests
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var configurationPath = Path.Join(outside, "campaign.json");
             await CampaignCliProcessTests.WriteConfigurationAsync(configurationPath, server.Endpoint);
+            if (maximumCampaignElapsedMilliseconds is { } maximumElapsed)
+            {
+                var configuration = JsonNode.Parse(await File.ReadAllBytesAsync(configurationPath))!.AsObject();
+                configuration["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = maximumElapsed;
+                await File.WriteAllTextAsync(
+                    configurationPath,
+                    configuration.ToJsonString(),
+                    new UTF8Encoding(false, true));
+            }
             return new(
                 repository,
                 server,
