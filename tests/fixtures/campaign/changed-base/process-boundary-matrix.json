@@ -1,0 +1,14 @@
+[
+  {
+    "hook": "checkpoint.before-replacement",
+    "expectedAuthority": "predecessor"
+  },
+  {
+    "hook": "checkpoint.after-replacement-before-readback",
+    "expectedAuthority": "successor"
+  },
+  {
+    "hook": "proposal.before-reservation-commit",
+    "expectedAuthority": "successor-without-reservation"
+  }
+]
