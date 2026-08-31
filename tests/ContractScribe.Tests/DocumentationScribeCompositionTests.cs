@@ -286,6 +286,84 @@ public sealed partial class DocumentationScribeCompositionTests
     }
 
     [Fact]
+    public async Task Proposal_executor_routes_skip_completion_through_closed_result_hooks()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var observed = new List<string>();
+        using var registration = CampaignProcessBoundaryHooks.Register(observed.Add);
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, new SkipExchange(), RuntimeOptions()));
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition, observed);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition, observed);
+        Assert.Contains(CampaignProcessBoundaryHooks.ProposalAfterClosedReadback, observed);
+        Assert.DoesNotContain(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition, observed);
+        Assert.DoesNotContain(CampaignProcessBoundaryHooks.ProposalAfterProposalReadback, observed);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_binds_deferred_exchange_once_after_preview_and_before_reservation_commit()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var binds = 0;
+        var input = campaign.Input(
+            fixture,
+            store,
+            new CountingExchange(),
+            RuntimeOptions()) with
+        {
+            Exchange = null,
+            DeferredExchange = () =>
+            {
+                Assert.Equal(0, store.SuccessfulReplaceCount);
+                binds++;
+                return new ProposalExchange(fixture.Request);
+            },
+        };
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
+        Assert.Equal(1, binds);
+        Assert.Equal(2, store.SuccessfulReplaceCount);
+    }
+
+    [Fact]
+    public async Task Proposal_executor_does_not_bind_deferred_exchange_when_higher_precedence_authority_is_invalid()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
+        var binds = 0;
+        var input = campaign.Input(
+            fixture,
+            store,
+            new CountingExchange(),
+            RuntimeOptions()) with
+        {
+            AcceptedAuditInputs = ImmutableArray<AuditRecordInput>.Empty,
+            Exchange = null,
+            DeferredExchange = () =>
+            {
+                binds++;
+                return new CountingExchange();
+            },
+        };
+
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
+
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, outcome.Kind);
+        Assert.Equal(0, binds);
+        Assert.Equal(0, store.SuccessfulReplaceCount);
+    }
+
+    [Fact]
     public async Task Proposal_executor_validates_current_audit_authority_before_initial_or_replay_work()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();

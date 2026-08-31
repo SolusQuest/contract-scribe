@@ -116,6 +116,32 @@ public sealed class CampaignCheckpointStorePortTests
     }
 
     [Fact]
+    public async Task Initial_create_never_adopts_an_exact_concurrent_winner()
+    {
+        var initial = CreateInitialArtifact();
+        var authority = CampaignCheckpointAcceptance.CreateInitialAuthority(initial);
+        var alreadyPresent = new MemoryStore(initial);
+        var concurrentWinner = new MemoryStore(null)
+        {
+            CreateResult = CampaignCheckpointWriteKind.AlreadyPresent,
+            WinnerOnRejectedWrite = initial,
+        };
+
+        var observedBeforeCreate = await CampaignCheckpointAcceptance.AcceptInitialAsync(
+            alreadyPresent,
+            authority);
+        var lostCreate = await CampaignCheckpointAcceptance.AcceptInitialAsync(
+            concurrentWinner,
+            authority);
+
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, observedBeforeCreate.Kind);
+        Assert.Equal(0, alreadyPresent.CreateCalls);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, lostCreate.Kind);
+        Assert.Equal(1, concurrentWinner.CreateCalls);
+        Assert.Null(lostCreate.AcceptedCheckpoint);
+    }
+
+    [Fact]
     public async Task Conditional_conflict_accepts_only_an_exact_concurrent_winner()
     {
         var predecessor = CreateOpenArtifact();
@@ -218,6 +244,7 @@ public sealed class CampaignCheckpointStorePortTests
             CreateCalls++;
             if (CreateResult != CampaignCheckpointWriteKind.Written || Artifact is not null)
             {
+                Artifact = WinnerOnRejectedWrite ?? Artifact;
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(
                     Artifact is not null ? CampaignCheckpointWriteKind.AlreadyPresent : CreateResult));
             }

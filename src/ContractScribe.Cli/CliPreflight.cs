@@ -8,6 +8,12 @@ internal sealed record CliPreflightResult(
     byte[] PolicyBytes,
     ResolvedPublicationTarget PublicationTarget);
 
+internal sealed record CliInputPreflightResult(
+    string RepositoryRoot,
+    string InputPath,
+    string PolicyPath,
+    byte[] PolicyBytes);
+
 internal sealed class CliPreflightException(string code) : Exception
 {
     public string Code { get; } = code;
@@ -24,11 +30,30 @@ internal static class CliPreflight
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentException.ThrowIfNullOrEmpty(currentDirectory);
 
+        var inputs = ResolveInputs(
+            arguments.RepositoryRoot,
+            arguments.Input,
+            arguments.Policy,
+            currentDirectory);
+        var output = ResolveOutput(arguments.Output, currentDirectory, inputs.RepositoryRoot);
+        return new CliPreflightResult(
+            inputs.RepositoryRoot,
+            inputs.InputPath,
+            inputs.PolicyBytes,
+            ResolvedPublicationTarget.ForExternalCli(inputs.RepositoryRoot, output));
+    }
+
+    internal static CliInputPreflightResult ResolveInputs(
+        string repositoryRoot,
+        string inputValue,
+        string policyValue,
+        string currentDirectory)
+    {
         string lexicalRoot;
         string resolvedRoot;
         try
         {
-            lexicalRoot = Path.GetFullPath(arguments.RepositoryRoot, currentDirectory);
+            lexicalRoot = Path.GetFullPath(repositoryRoot, currentDirectory);
             if (!Directory.Exists(lexicalRoot))
             {
                 throw Failure("cli.preflight.repository-root");
@@ -50,7 +75,7 @@ internal static class CliPreflight
         }
 
         var input = ResolveConfined(
-            arguments.Input,
+            inputValue,
             lexicalRoot,
             resolvedRoot,
             "cli.preflight.input-escape",
@@ -64,7 +89,7 @@ internal static class CliPreflight
         }
 
         var policy = ResolveConfined(
-            arguments.Policy,
+            policyValue,
             lexicalRoot,
             resolvedRoot,
             "cli.preflight.policy-escape",
@@ -84,12 +109,11 @@ internal static class CliPreflight
             throw Failure("cli.preflight.policy");
         }
 
-        var output = ResolveOutput(arguments.Output, currentDirectory, resolvedRoot);
-        return new CliPreflightResult(
+        return new CliInputPreflightResult(
             resolvedRoot,
             input,
-            policyBytes,
-            ResolvedPublicationTarget.ForExternalCli(resolvedRoot, output));
+            policy,
+            policyBytes);
     }
 
     private static string ResolveConfined(
@@ -161,7 +185,7 @@ internal static class CliPreflight
         return final;
     }
 
-    private static string ResolveExistingPath(
+    internal static string ResolveExistingPath(
         string path,
         string? confinementRoot = null,
         string? escapeCode = null)
@@ -263,7 +287,7 @@ internal static class CliPreflight
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 
-    private static bool IsRegularFileNoFollow(string path)
+    internal static bool IsRegularFileNoFollow(string path)
     {
         try
         {
@@ -289,7 +313,7 @@ internal static class CliPreflight
         }
     }
 
-    private static bool IsContainedOrEqual(string root, string path)
+    internal static bool IsContainedOrEqual(string root, string path)
     {
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
@@ -303,7 +327,7 @@ internal static class CliPreflight
             || normalizedPath.StartsWith(rootPrefix, comparison);
     }
 
-    private static bool IsPathFailure(Exception exception) =>
+    internal static bool IsPathFailure(Exception exception) =>
         exception is ArgumentException
             or IOException
             or NotSupportedException

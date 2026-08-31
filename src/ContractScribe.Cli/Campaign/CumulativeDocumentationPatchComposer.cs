@@ -67,6 +67,8 @@ internal static class CumulativeDocumentationPatchComposer
             planningInput.Snapshot.TargetProfile);
         var request = acceptedOnly
             ? CampaignStateFactory.ReconstructAcceptedPatchRequest(state, context, currentEvidence)
+            : state.ActiveReservation is CampaignPatchReservation
+                ? CampaignStateFactory.ReconstructRetriedPatchRequest(state, context, currentEvidence)
             : CampaignStateFactory.ReconstructPatchRequest(state, context, currentEvidence);
         var expectedIds = selected.Select(pair => pair.First.WorkItemKey)
             .Order(StringComparer.Ordinal)

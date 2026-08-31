@@ -23,7 +23,8 @@ internal sealed record DocumentationCampaignPatchInput(
     CancellationToken SettlementToken,
     DocumentationPatchEngine? PatchEngine = null,
     TimeProvider? TimeProvider = null,
-    Action? AfterPatchExecutionObserver = null);
+    Action? AfterPatchExecutionObserver = null,
+    Func<bool>? DispatchGuard = null);
 
 internal static class DocumentationCampaignPatchExecutor
 {
@@ -181,10 +182,16 @@ internal static class DocumentationCampaignPatchExecutor
                     : Outcome(DocumentationCampaignOutcomeKind.HostContractError, "campaign.patch.reservation-invalid");
             }
 
-            var reserved = await CampaignCheckpointAcceptance.AcceptAsync(
-                input.Store,
-                reservation,
-                input.SettlementToken).ConfigureAwait(false);
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchBeforeReservationCommit);
+            CampaignCheckpointAcceptanceResult reserved;
+            using (CampaignProcessBoundaryHooks.EnterReplacementScope(
+                       CampaignProcessBoundaryHooks.PatchReservationReplacementScope))
+            {
+                reserved = await CampaignCheckpointAcceptance.AcceptAsync(
+                    input.Store,
+                    reservation,
+                    input.SettlementToken).ConfigureAwait(false);
+            }
             if (reserved.Kind != CampaignCheckpointAcceptanceKind.Accepted
                 || reserved.AcceptedCheckpoint is null)
             {
@@ -196,6 +203,8 @@ internal static class DocumentationCampaignPatchExecutor
                     ? Outcome(DocumentationCampaignOutcomeKind.AmbiguousDispatch, "campaign.patch.reservation-unconfirmed")
                     : FromArtifact(reserved.Artifact);
             }
+
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchAfterReservationReadback);
 
             CampaignPatchInvocationAuthority invocation;
             try
@@ -214,6 +223,14 @@ internal static class DocumentationCampaignPatchExecutor
             PatchExecution execution;
             try
             {
+                CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchBeforeDispatch);
+                if (!DispatchAllowed(input.DispatchGuard))
+                {
+                    return new DocumentationCampaignOutcome(
+                        DocumentationCampaignOutcomeKind.StateConflict,
+                        "campaign.patch.configuration-changed",
+                        reserved.Artifact);
+                }
                 execution = ExecutePatch(
                     engine,
                     invocation,
@@ -232,6 +249,7 @@ internal static class DocumentationCampaignPatchExecutor
                 return Outcome(DocumentationCampaignOutcomeKind.AmbiguousDispatch, "campaign.patch.dispatch-unavailable");
             }
             input.AfterPatchExecutionObserver?.Invoke();
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchAfterDispatchBeforeResultTransition);
 
             CampaignTransitionResult completion;
             var appliedReduction = false;
@@ -264,14 +282,37 @@ internal static class DocumentationCampaignPatchExecutor
                 return Outcome(DocumentationCampaignOutcomeKind.HostContractError, "campaign.patch.settlement-invalid");
             }
 
-            var settled = await CampaignCheckpointAcceptance.AcceptAsync(
-                input.Store,
-                completion,
-                input.SettlementToken).ConfigureAwait(false);
+            var acceptedResult = !appliedReduction
+                && execution.Outcome?.Result?.Outcome == DocumentationPatchOutcome.Accepted;
+            CampaignProcessBoundaryHooks.Reach(appliedReduction
+                ? CampaignProcessBoundaryHooks.PatchAfterExecutionBeforeReductionTransition
+                : acceptedResult
+                    ? CampaignProcessBoundaryHooks.PatchAfterExecutionBeforeAcceptedTransition
+                    : CampaignProcessBoundaryHooks.PatchAfterExecutionBeforeClosedTransition);
+            var replacementScope = appliedReduction
+                ? CampaignProcessBoundaryHooks.PatchReductionReplacementScope
+                : acceptedResult
+                    ? CampaignProcessBoundaryHooks.PatchAcceptedReplacementScope
+                    : CampaignProcessBoundaryHooks.PatchClosedReplacementScope;
+            CampaignCheckpointAcceptanceResult settled;
+            using (CampaignProcessBoundaryHooks.EnterReplacementScope(replacementScope))
+            {
+                settled = await CampaignCheckpointAcceptance.AcceptAsync(
+                    input.Store,
+                    completion,
+                    input.SettlementToken).ConfigureAwait(false);
+            }
             if (settled.Kind != CampaignCheckpointAcceptanceKind.Accepted || settled.Artifact is null)
             {
                 return AcceptanceFailure(settled.Kind, "campaign.patch.settlement");
             }
+
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchAfterResultReadback);
+            CampaignProcessBoundaryHooks.Reach(appliedReduction
+                ? CampaignProcessBoundaryHooks.PatchAfterReductionReadback
+                : acceptedResult
+                    ? CampaignProcessBoundaryHooks.PatchAfterAcceptedReadback
+                    : CampaignProcessBoundaryHooks.PatchAfterClosedReadback);
 
             var artifact = settled.Artifact;
             if (artifact.State.CumulativeOutcome?.Kind == CampaignCumulativeOutcomeKind.Accepted
@@ -333,6 +374,7 @@ internal static class DocumentationCampaignPatchExecutor
         DocumentationPatchExecutionOutcome? outcome = null;
         try
         {
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PatchDuringExecution);
             outcome = engine.Execute(session, request, linked.Token);
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
@@ -560,7 +602,9 @@ internal static class DocumentationCampaignPatchExecutor
 
     private static DocumentationCampaignOutcome AcceptanceFailure(
         CampaignCheckpointAcceptanceKind kind,
-        string prefix) => kind switch
+        string prefix)
+    {
+        var outcome = kind switch
         {
             CampaignCheckpointAcceptanceKind.Conflict
                 or CampaignCheckpointAcceptanceKind.InvalidRead
@@ -571,10 +615,25 @@ internal static class DocumentationCampaignPatchExecutor
                 Outcome(DocumentationCampaignOutcomeKind.StateConflict, prefix + "-conflict"),
             _ => Outcome(DocumentationCampaignOutcomeKind.AmbiguousDispatch, prefix + "-unconfirmed"),
         };
+        return new DocumentationCampaignOutcome(
+            outcome.Kind, outcome.Code, checkpointFailure: kind);
+    }
 
     private static DocumentationCampaignOutcome Outcome(
         DocumentationCampaignOutcomeKind kind,
         string code) => new(kind, code);
+
+    private static bool DispatchAllowed(Func<bool>? guard)
+    {
+        try
+        {
+            return guard?.Invoke() ?? true;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return false;
+        }
+    }
 
     private enum PatchStateAction
     {

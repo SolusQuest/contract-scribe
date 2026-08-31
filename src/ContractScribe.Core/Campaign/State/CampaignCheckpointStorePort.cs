@@ -7,6 +7,9 @@ public enum CampaignCheckpointReadKind
 {
     NotFound,
     Found,
+    Unsafe,
+    LeaseConflict,
+    LeaseUnverifiable,
     Invalid,
     Unreadable,
 }
@@ -17,21 +20,24 @@ public sealed class CampaignCheckpointReadResult
         CampaignCheckpointReadKind kind,
         ImmutableArray<byte> exactUtf8Json,
         long? checkpointRevision,
-        string? sha256)
+        string? sha256,
+        CampaignStateValidationCode? failureCode)
     {
         Kind = kind;
         ExactUtf8Json = exactUtf8Json;
         CheckpointRevision = checkpointRevision;
         Sha256 = sha256;
+        FailureCode = failureCode;
     }
 
     public CampaignCheckpointReadKind Kind { get; }
     public ImmutableArray<byte> ExactUtf8Json { get; }
     public long? CheckpointRevision { get; }
     public string? Sha256 { get; }
+    public CampaignStateValidationCode? FailureCode { get; }
 
     public static CampaignCheckpointReadResult NotFound() =>
-        new(CampaignCheckpointReadKind.NotFound, default, null, null);
+        new(CampaignCheckpointReadKind.NotFound, default, null, null, null);
 
     public static CampaignCheckpointReadResult Found(
         ReadOnlySpan<byte> exactUtf8Json,
@@ -52,14 +58,25 @@ public sealed class CampaignCheckpointReadResult
             CampaignCheckpointReadKind.Found,
             ImmutableArray.CreateRange(exactUtf8Json.ToArray()),
             checkpointRevision,
-            sha256);
+            sha256,
+            null);
     }
 
-    public static CampaignCheckpointReadResult Invalid() =>
-        new(CampaignCheckpointReadKind.Invalid, default, null, null);
+    public static CampaignCheckpointReadResult Unsafe() =>
+        new(CampaignCheckpointReadKind.Unsafe, default, null, null, null);
+
+    public static CampaignCheckpointReadResult LeaseConflict() =>
+        new(CampaignCheckpointReadKind.LeaseConflict, default, null, null, null);
+
+    public static CampaignCheckpointReadResult LeaseUnverifiable() =>
+        new(CampaignCheckpointReadKind.LeaseUnverifiable, default, null, null, null);
+
+    public static CampaignCheckpointReadResult Invalid(
+        CampaignStateValidationCode? failureCode = null) =>
+        new(CampaignCheckpointReadKind.Invalid, default, null, null, failureCode);
 
     public static CampaignCheckpointReadResult Unreadable() =>
-        new(CampaignCheckpointReadKind.Unreadable, default, null, null);
+        new(CampaignCheckpointReadKind.Unreadable, default, null, null, null);
 }
 
 public enum CampaignCheckpointWriteKind
@@ -68,7 +85,10 @@ public enum CampaignCheckpointWriteKind
     AlreadyPresent,
     PredecessorMissing,
     CurrentMismatch,
-    Unwritable,
+    Unsafe,
+    LeaseConflict,
+    LeaseUnverifiable,
+    PublicationFailure,
 }
 
 public readonly record struct CampaignCheckpointWriteResult(CampaignCheckpointWriteKind Kind);
@@ -97,8 +117,13 @@ public enum CampaignCheckpointAcceptanceKind
     Accepted,
     Conflict,
     InvalidRead,
+    Unsafe,
+    LeaseConflict,
+    LeaseUnverifiable,
+    UnsupportedRevision,
     Unreadable,
     WriteRejected,
+    PublicationFailure,
     ReadbackMismatch,
     InvalidTransition,
     Cancelled,
@@ -203,6 +228,20 @@ public static class CampaignCheckpointAcceptance
         try
         {
             var read = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+            return AcceptCurrent(read);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Cancelled, null);
+        }
+    }
+
+    public static CampaignCheckpointAcceptanceResult AcceptCurrent(
+        CampaignCheckpointReadResult read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        try
+        {
             if (read.Kind != CampaignCheckpointReadKind.Found
                 || read.CheckpointRevision is null
                 || read.Sha256 is null
@@ -221,7 +260,9 @@ public static class CampaignCheckpointAcceptance
                 || !bytes.SequenceEqual(parsed.Artifact.ExactUtf8Json.AsSpan()))
             {
                 return new CampaignCheckpointAcceptanceResult(
-                    CampaignCheckpointAcceptanceKind.InvalidRead,
+                    parsed.FailureCode == CampaignStateValidationCode.UnsupportedVersion
+                        ? CampaignCheckpointAcceptanceKind.UnsupportedRevision
+                        : CampaignCheckpointAcceptanceKind.InvalidRead,
                     null);
             }
 
@@ -231,9 +272,11 @@ public static class CampaignCheckpointAcceptance
                     parsed.Artifact,
                     CampaignAcceptedCheckpointAuthorityKind.RetirementOnly));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Cancelled, null);
+            return new CampaignCheckpointAcceptanceResult(
+                CampaignCheckpointAcceptanceKind.InvalidRead,
+                null);
         }
     }
 
@@ -276,7 +319,12 @@ public static class CampaignCheckpointAcceptance
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(authority);
-        return await AcceptCoreAsync(store, null, authority.Artifact, cancellationToken).ConfigureAwait(false);
+        return await AcceptCoreAsync(
+            store,
+            null,
+            authority.Artifact,
+            acceptExactConcurrentWinner: false,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptAsync(
@@ -297,6 +345,7 @@ public static class CampaignCheckpointAcceptance
             store,
             transition.Predecessor,
             transition.Artifact,
+            acceptExactConcurrentWinner: true,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -304,6 +353,7 @@ public static class CampaignCheckpointAcceptance
         ICampaignCheckpointStore store,
         CampaignCheckpointArtifact? expectedPredecessor,
         CampaignCheckpointArtifact intended,
+        bool acceptExactConcurrentWinner,
         CancellationToken cancellationToken)
     {
         try
@@ -317,6 +367,12 @@ public static class CampaignCheckpointAcceptance
 
             if (currentMatch == MatchKind.Exact)
             {
+                if (!acceptExactConcurrentWinner)
+                {
+                    return new CampaignCheckpointAcceptanceResult(
+                        CampaignCheckpointAcceptanceKind.Conflict,
+                        null);
+                }
                 return await VerifyReadbackAsync(
                     store,
                     intended,
@@ -361,7 +417,8 @@ public static class CampaignCheckpointAcceptance
                     or CampaignCheckpointWriteKind.CurrentMismatch)
                 {
                     var concurrent = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
-                    if (Match(concurrent, intended) == MatchKind.Exact)
+                    if (acceptExactConcurrentWinner
+                        && Match(concurrent, intended) == MatchKind.Exact)
                     {
                         return new CampaignCheckpointAcceptanceResult(
                             CampaignCheckpointAcceptanceKind.Accepted,
@@ -371,13 +428,7 @@ public static class CampaignCheckpointAcceptance
                     }
                 }
 
-                return new CampaignCheckpointAcceptanceResult(
-                    write.Kind is CampaignCheckpointWriteKind.AlreadyPresent
-                        or CampaignCheckpointWriteKind.PredecessorMissing
-                        or CampaignCheckpointWriteKind.CurrentMismatch
-                        ? CampaignCheckpointAcceptanceKind.Conflict
-                        : CampaignCheckpointAcceptanceKind.WriteRejected,
-                    null);
+                return new CampaignCheckpointAcceptanceResult(MapWriteFailure(write.Kind), null);
             }
 
             return await VerifyReadbackAsync(
@@ -411,11 +462,33 @@ public static class CampaignCheckpointAcceptance
     }
 
     private static CampaignCheckpointAcceptanceResult ReadFailure(CampaignCheckpointReadResult read) =>
-        new(
-            read.Kind == CampaignCheckpointReadKind.Unreadable
-                ? CampaignCheckpointAcceptanceKind.Unreadable
-                : CampaignCheckpointAcceptanceKind.InvalidRead,
-            null);
+        new(MapReadFailure(read), null);
+
+    private static CampaignCheckpointAcceptanceKind MapReadFailure(
+        CampaignCheckpointReadResult read) => read.Kind switch
+        {
+            CampaignCheckpointReadKind.Unsafe => CampaignCheckpointAcceptanceKind.Unsafe,
+            CampaignCheckpointReadKind.LeaseConflict => CampaignCheckpointAcceptanceKind.LeaseConflict,
+            CampaignCheckpointReadKind.LeaseUnverifiable => CampaignCheckpointAcceptanceKind.LeaseUnverifiable,
+            CampaignCheckpointReadKind.Unreadable => CampaignCheckpointAcceptanceKind.Unreadable,
+            CampaignCheckpointReadKind.Invalid
+                when read.FailureCode == CampaignStateValidationCode.UnsupportedVersion =>
+                CampaignCheckpointAcceptanceKind.UnsupportedRevision,
+            _ => CampaignCheckpointAcceptanceKind.InvalidRead,
+        };
+
+    private static CampaignCheckpointAcceptanceKind MapWriteFailure(
+        CampaignCheckpointWriteKind kind) => kind switch
+        {
+            CampaignCheckpointWriteKind.AlreadyPresent
+                or CampaignCheckpointWriteKind.PredecessorMissing
+                or CampaignCheckpointWriteKind.CurrentMismatch => CampaignCheckpointAcceptanceKind.Conflict,
+            CampaignCheckpointWriteKind.Unsafe => CampaignCheckpointAcceptanceKind.Unsafe,
+            CampaignCheckpointWriteKind.LeaseConflict => CampaignCheckpointAcceptanceKind.LeaseConflict,
+            CampaignCheckpointWriteKind.LeaseUnverifiable => CampaignCheckpointAcceptanceKind.LeaseUnverifiable,
+            CampaignCheckpointWriteKind.PublicationFailure => CampaignCheckpointAcceptanceKind.PublicationFailure,
+            _ => CampaignCheckpointAcceptanceKind.WriteRejected,
+        };
 
     private static MatchKind Match(
         CampaignCheckpointReadResult read,

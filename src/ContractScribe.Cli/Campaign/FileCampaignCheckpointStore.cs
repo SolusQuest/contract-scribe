@@ -95,6 +95,28 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             using var context = OpenContext();
             testHook?.Invoke("before-read");
+            var checkpointSurface = InspectName(context, checkpointName);
+            if (checkpointSurface.Kind != NameKind.Absent
+                && (checkpointSurface.Kind != NameKind.Regular
+                    || !IsPrivateFileMetadata(checkpointSurface)))
+            {
+                return ValueTask.FromResult(CampaignCheckpointReadResult.Unsafe());
+            }
+
+            var lease = ObserveLease(context);
+            if (lease is LeaseObservationKind.Unsafe)
+            {
+                return ValueTask.FromResult(CampaignCheckpointReadResult.Unsafe());
+            }
+            if (lease is LeaseObservationKind.Conflict)
+            {
+                return ValueTask.FromResult(CampaignCheckpointReadResult.LeaseConflict());
+            }
+            if (lease is LeaseObservationKind.Unverifiable)
+            {
+                return ValueTask.FromResult(CampaignCheckpointReadResult.LeaseUnverifiable());
+            }
+
             var observation = ReadEntry(context, checkpointName, cancellationToken);
             return ValueTask.FromResult(observation.ToPublicResult());
         }
@@ -106,7 +128,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             return ValueTask.FromResult(
                 fault.Kind == StoreFaultKind.Invalid
-                    ? CampaignCheckpointReadResult.Invalid()
+                    ? CampaignCheckpointReadResult.Unsafe()
                     : CampaignCheckpointReadResult.Unreadable());
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
@@ -158,7 +180,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             || operation == OperationKind.Replace
                 && (!IsRevision(expectedRevision) || !IsSha256(expectedSha256)))
         {
-            return Unwritable();
+            return PublicationFailure();
         }
 
         ActiveLease? active = null;
@@ -169,6 +191,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         try
         {
             context = OpenContext();
+            var checkpointSurface = InspectName(context, checkpointName);
+            if (checkpointSurface.Kind != NameKind.Absent
+                && (checkpointSurface.Kind != NameKind.Regular
+                    || !IsPrivateFileMetadata(checkpointSurface)))
+            {
+                return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Unsafe);
+            }
             for (var acquisitionAttempt = 0; acquisitionAttempt < 2; acquisitionAttempt++)
             {
                 var acquire = TryCreateFreshLease(
@@ -184,15 +213,30 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                     break;
                 }
 
-                if (acquisitionAttempt != 0 || !TryRecoverStaleLease(context))
+                var lease = ObserveLease(context);
+                if (lease == LeaseObservationKind.Unsafe)
                 {
-                    return Unwritable();
+                    return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Unsafe);
+                }
+                if (lease == LeaseObservationKind.Conflict)
+                {
+                    return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.LeaseConflict);
+                }
+                if (lease == LeaseObservationKind.Unverifiable)
+                {
+                    return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.LeaseUnverifiable);
+                }
+                if (acquisitionAttempt != 0
+                    || lease != LeaseObservationKind.Stale
+                    || !TryRecoverStaleLease(context))
+                {
+                    return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.LeaseUnverifiable);
                 }
                 testHook?.Invoke("after-stale-recovery-before-reacquire");
             }
             if (active is null)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -204,7 +248,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 cleanupComplete = CleanupBeforePublication(context, active);
                 if (!cleanupComplete)
                 {
-                    return Unwritable();
+                    return PublicationFailure();
                 }
                 cancellationToken.ThrowIfCancellationRequested();
                 return new CampaignCheckpointWriteResult(conditional);
@@ -223,11 +267,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             testHook?.Invoke("before-publish");
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.CheckpointBeforeReplacement);
+            CampaignProcessBoundaryHooks.ReachReplacement(CampaignProcessBoundaryHooks.InReplacement);
 
             // No callback, cancellation observation, or caller code is admitted from the
             // final identity/predecessor revalidation through the rename linearization point.
@@ -240,7 +286,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             ValidateNamedHandle(context, active.Record.TempName, active.TempHandle, active.Record.TempIdentity);
             ValidateObjectMarker(active.TempHandle, active.Record.TempMarkerBytes);
@@ -254,7 +300,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             var finalCurrent = ReadEntry(context, checkpointName, CancellationToken.None);
             if (ClassifyConditional(operation, finalCurrent, expectedRevision, expectedSha256)
@@ -262,7 +308,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             if (RenameAt2(
                     FileDescriptor(context.DirectoryHandle),
@@ -273,11 +319,14 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
-                return Unwritable();
+                return PublicationFailure();
             }
             published = true;
 
             testHook?.Invoke("after-publish-before-readback");
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback);
+            CampaignProcessBoundaryHooks.ReachReplacement(
+                CampaignProcessBoundaryHooks.AfterReplacementBeforeReadback);
             var readback = ReadEntry(
                 context,
                 checkpointName,
@@ -286,7 +335,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             if (!readback.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || readback.Identity != active.Record.TempIdentity)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
 
             // Publication no longer needs write authority over the checkpoint inode.
@@ -302,7 +351,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 intendedSha256);
             if (!cleanupComplete)
             {
-                return Unwritable();
+                return PublicationFailure();
             }
             active.Dispose();
             active = null;
@@ -331,7 +380,18 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 throw;
             }
-            return Unwritable();
+            return PublicationFailure();
+        }
+        catch (StoreFault fault)
+        {
+            if (active is not null && context is not null && !published && !cleanupAttempted)
+            {
+                cleanupAttempted = true;
+                cleanupComplete = CleanupBeforePublication(context, active);
+            }
+            return fault.Kind == StoreFaultKind.Invalid
+                ? new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Unsafe)
+                : PublicationFailure();
         }
         catch (Exception exception) when (IsBoundedFailure(exception))
         {
@@ -340,7 +400,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 cleanupAttempted = true;
                 cleanupComplete = CleanupBeforePublication(context, active);
             }
-            return Unwritable();
+            return PublicationFailure();
         }
         finally
         {
@@ -524,6 +584,63 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
     }
 
+    private LeaseObservationKind ObserveLease(DirectoryContext context)
+    {
+        RevalidateContext(context);
+        var status = InspectName(context, leaseName);
+        if (status.Kind == NameKind.Absent)
+        {
+            return LeaseObservationKind.None;
+        }
+        if (status is not { Kind: NameKind.Regular, Identity: { } observedIdentity }
+            || !IsPrivateFileMetadata(status))
+        {
+            return LeaseObservationKind.Unsafe;
+        }
+
+        try
+        {
+            using var lease = OpenObserved(context, leaseName, observedIdentity, write: false);
+            var identity = ValidatePrivateFile(lease);
+            if (identity != observedIdentity)
+            {
+                return LeaseObservationKind.Unsafe;
+            }
+
+            var bytes = ReadExactBytes(lease, MaximumLeaseBytes);
+            if (!LeaseRecord.TryParse(bytes, checkpointName, out var record))
+            {
+                return LeaseObservationKind.Unverifiable;
+            }
+            ValidateObjectMarker(lease, record.LeaseMarkerBytes);
+
+            if (Flock(FileDescriptor(lease), LockExclusive | LockNonBlocking) != 0)
+            {
+                return Marshal.GetLastPInvokeError() == WouldBlock
+                    ? LeaseObservationKind.Conflict
+                    : LeaseObservationKind.Unverifiable;
+            }
+
+            var after = ReadExactBytes(lease, MaximumLeaseBytes);
+            RevalidateContext(context);
+            ValidateNamedHandle(context, leaseName, lease, identity);
+            ValidateObjectMarker(lease, record.LeaseMarkerBytes);
+            return after.AsSpan().SequenceEqual(bytes)
+                && LeaseRecord.TryParse(after, checkpointName, out var afterRecord)
+                && afterRecord == record
+                ? LeaseObservationKind.Stale
+                : LeaseObservationKind.Unverifiable;
+        }
+        catch (StoreFault)
+        {
+            return LeaseObservationKind.Unverifiable;
+        }
+        catch (Exception exception) when (IsBoundedFailure(exception))
+        {
+            return LeaseObservationKind.Unverifiable;
+        }
+    }
+
     private bool TryRecoverStaleLease(DirectoryContext context)
     {
         var leaseStatus = InspectName(context, leaseName);
@@ -645,7 +762,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 ObservationKind.NotFound => CampaignCheckpointWriteKind.Written,
                 ObservationKind.Found => CampaignCheckpointWriteKind.AlreadyPresent,
-                _ => CampaignCheckpointWriteKind.Unwritable,
+                ObservationKind.Unsafe => CampaignCheckpointWriteKind.Unsafe,
+                _ => CampaignCheckpointWriteKind.PublicationFailure,
             };
         }
 
@@ -655,7 +773,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             ObservationKind.Found when current.IsExact(expectedRevision!.Value, expectedSha256!) =>
                 CampaignCheckpointWriteKind.Written,
             ObservationKind.Found => CampaignCheckpointWriteKind.CurrentMismatch,
-            _ => CampaignCheckpointWriteKind.Unwritable,
+            ObservationKind.Unsafe => CampaignCheckpointWriteKind.Unsafe,
+            _ => CampaignCheckpointWriteKind.PublicationFailure,
         };
     }
 
@@ -778,11 +897,11 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         }
         if (status is not { Kind: NameKind.Regular, Identity: { } observedIdentity })
         {
-            return ReadObservation.Invalid();
+            return ReadObservation.Unsafe();
         }
         if (!IsPrivateFileMetadata(status))
         {
-            return ReadObservation.Invalid();
+            return ReadObservation.Unsafe();
         }
 
         try
@@ -838,7 +957,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 || parsed.Artifact is null
                 || !parsed.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(bytes))
             {
-                return ReadObservation.Invalid();
+                return ReadObservation.Invalid(parsed.FailureCode);
             }
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             if (!string.Equals(parsed.Artifact.Sha256, digest, StringComparison.Ordinal))
@@ -1442,8 +1561,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static CampaignCheckpointWriteResult Unwritable() =>
-        new(CampaignCheckpointWriteKind.Unwritable);
+    private static CampaignCheckpointWriteResult PublicationFailure() =>
+        new(CampaignCheckpointWriteKind.PublicationFailure);
 
     private static bool IsBoundedFailure(Exception exception) => exception is
         IOException
@@ -1473,6 +1592,15 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         RecordCommitted,
     }
 
+    private enum LeaseObservationKind
+    {
+        None,
+        Stale,
+        Conflict,
+        Unverifiable,
+        Unsafe,
+    }
+
     private enum StoreFaultKind
     {
         Invalid,
@@ -1483,6 +1611,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     {
         NotFound,
         Found,
+        Unsafe,
         Invalid,
         Unreadable,
     }
@@ -1580,13 +1709,16 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         byte[]? Bytes,
         long? Revision,
         string? Sha256,
-        FileIdentity? Identity)
+        FileIdentity? Identity,
+        CampaignStateValidationCode? FailureCode)
     {
-        internal static ReadObservation NotFound() => new(ObservationKind.NotFound, null, null, null, null);
-        internal static ReadObservation Invalid() => new(ObservationKind.Invalid, null, null, null, null);
-        internal static ReadObservation Unreadable() => new(ObservationKind.Unreadable, null, null, null, null);
+        internal static ReadObservation NotFound() => new(ObservationKind.NotFound, null, null, null, null, null);
+        internal static ReadObservation Unsafe() => new(ObservationKind.Unsafe, null, null, null, null, null);
+        internal static ReadObservation Invalid(CampaignStateValidationCode? failureCode = null) =>
+            new(ObservationKind.Invalid, null, null, null, null, failureCode);
+        internal static ReadObservation Unreadable() => new(ObservationKind.Unreadable, null, null, null, null, null);
         internal static ReadObservation Found(byte[] bytes, long revision, string sha256, FileIdentity identity) =>
-            new(ObservationKind.Found, bytes, revision, sha256, identity);
+            new(ObservationKind.Found, bytes, revision, sha256, identity, null);
 
         internal bool IsExact(long revision, string sha256) =>
             Kind == ObservationKind.Found
@@ -1600,7 +1732,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             ObservationKind.NotFound => CampaignCheckpointReadResult.NotFound(),
             ObservationKind.Found => CampaignCheckpointReadResult.Found(Bytes, Revision!.Value, Sha256!),
-            ObservationKind.Invalid => CampaignCheckpointReadResult.Invalid(),
+            ObservationKind.Unsafe => CampaignCheckpointReadResult.Unsafe(),
+            ObservationKind.Invalid => CampaignCheckpointReadResult.Invalid(FailureCode),
             _ => CampaignCheckpointReadResult.Unreadable(),
         };
     }

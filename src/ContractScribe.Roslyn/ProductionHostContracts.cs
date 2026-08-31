@@ -1,3 +1,4 @@
+using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
 
 namespace ContractScribe.Roslyn;
@@ -6,10 +7,25 @@ internal sealed record ProductionAuditRequest(
     string RepositoryRoot,
     string InputPath,
     byte[] PolicyBytes,
-    ResolvedPublicationTarget PublicationTarget,
+    ResolvedPublicationTarget? PublicationTarget,
     string? AuditTemporaryRoot = null,
     string? OutputStagingRoot = null,
-    IReadOnlyList<ToolGeneratedSourceInput>? ToolGeneratedSources = null);
+    IReadOnlyList<ToolGeneratedSourceInput>? ToolGeneratedSources = null,
+    bool PublishResult = true);
+
+internal sealed record ProductionRepositorySessionBundle(
+    ResolvedRepositoryPaths ResolvedPaths,
+    PolicyDocumentV1 Policy,
+    LoadedRepositorySession Session,
+    ClassifiedRepositorySession Classified,
+    ClassificationSet Classifications,
+    ObservedRepositorySession Observed,
+    PolicyEvidenceExtractionOutcome Evidence,
+    IReadOnlyList<AuditRecordInput> AuditInputs,
+    AuditDocument Audit,
+    byte[] CanonicalAudit,
+    HostToolchainFact Toolchain,
+    LoaderFact? LoaderFact);
 
 internal sealed record ProductionAuditOutcome(
     HostTerminalRecord Terminal,
@@ -60,7 +76,8 @@ internal sealed record ProductionAuditHostControls(
     Action? BeforeInvalidation = null,
     Action? BeforeAtomicRename = null,
     Action<HostTerminalRecord>? AfterCauseAccepted = null,
-    Action<HostToolchainFact>? AfterToolchainSelection = null)
+    Action<HostToolchainFact>? AfterToolchainSelection = null,
+    Func<ProductionRepositorySessionBundle, CancellationToken, Task>? SessionConsumer = null)
 {
     public Task ReachAsync(
         ProductionHostControlPoint point,

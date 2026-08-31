@@ -27,7 +27,8 @@ internal sealed record DocumentationCampaignOutcome
         DocumentationCampaignOutcomeKind kind,
         string code,
         CampaignCheckpointArtifact? artifact = null,
-        DocumentationPatchAcceptedCandidate? acceptedCandidate = null)
+        DocumentationPatchAcceptedCandidate? acceptedCandidate = null,
+        CampaignCheckpointAcceptanceKind? checkpointFailure = null)
     {
         if (acceptedCandidate is not null
             && kind is not (DocumentationCampaignOutcomeKind.Accepted
@@ -40,6 +41,7 @@ internal sealed record DocumentationCampaignOutcome
         Code = code;
         Artifact = artifact;
         AcceptedCandidate = acceptedCandidate;
+        CheckpointFailure = checkpointFailure;
     }
 
     internal DocumentationCampaignOutcomeKind Kind { get; }
@@ -49,6 +51,8 @@ internal sealed record DocumentationCampaignOutcome
     internal CampaignCheckpointArtifact? Artifact { get; }
 
     internal DocumentationPatchAcceptedCandidate? AcceptedCandidate { get; }
+
+    internal CampaignCheckpointAcceptanceKind? CheckpointFailure { get; }
 
     public override string ToString() =>
         $"{nameof(DocumentationCampaignOutcome)} {{ Kind = {Kind}, Code = {Code}, HasArtifact = {Artifact is not null}, HasCandidate = {AcceptedCandidate is not null} }}";

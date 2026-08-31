@@ -58,7 +58,7 @@ public sealed class CampaignCheckpointStoreTests
             CancellationToken.None);
 
         Assert.Equal(CampaignCheckpointReadKind.Unreadable, read.Kind);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, write.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, write.Kind);
         Assert.False(File.Exists(path));
     }
 
@@ -167,7 +167,7 @@ public sealed class CampaignCheckpointStoreTests
         release.Set();
         var winner = await firstWrite;
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, competing.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseConflict, competing.Kind);
         Assert.Equal(CampaignCheckpointWriteKind.Written, winner.Kind);
         AssertExact(await fixture.Store.ReadAsync(CancellationToken.None), artifact);
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
@@ -192,8 +192,8 @@ public sealed class CampaignCheckpointStoreTests
         var read = await fixture.Store.ReadAsync(CancellationToken.None);
         var create = await WriteInitialAsync(fixture.Store, artifact);
 
-        Assert.Equal(CampaignCheckpointReadKind.Invalid, read.Kind);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, create.Kind);
+        Assert.Equal(CampaignCheckpointReadKind.Unsafe, read.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unsafe, create.Kind);
         Assert.True(File.GetUnixFileMode(fixture.CheckpointPath).HasFlag(UnixFileMode.GroupRead));
     }
 
@@ -216,10 +216,10 @@ public sealed class CampaignCheckpointStoreTests
         File.SetUnixFileMode(fixture.CheckpointPath, mode);
 
         Assert.Equal(
-            CampaignCheckpointReadKind.Invalid,
+            CampaignCheckpointReadKind.Unsafe,
             (await fixture.Store.ReadAsync(CancellationToken.None)).Kind);
         Assert.Equal(
-            CampaignCheckpointWriteKind.Unwritable,
+            CampaignCheckpointWriteKind.Unsafe,
             (await WriteInitialAsync(fixture.Store, artifact)).Kind);
         Assert.Equal(mode, File.GetUnixFileMode(fixture.CheckpointPath));
     }
@@ -243,7 +243,7 @@ public sealed class CampaignCheckpointStoreTests
             0,
             CreateHardLink(linked.CheckpointPath, Path.Join(linked.Root, "checkpoint-link")));
         Assert.Equal(
-            CampaignCheckpointReadKind.Invalid,
+            CampaignCheckpointReadKind.Unsafe,
             (await linked.Store.ReadAsync(CancellationToken.None)).Kind);
         Assert.True(File.Exists(Path.Join(linked.Root, "checkpoint-link")));
 
@@ -256,10 +256,10 @@ public sealed class CampaignCheckpointStoreTests
             | UnixFileMode.GroupRead
             | UnixFileMode.GroupExecute);
         Assert.Equal(
-            CampaignCheckpointReadKind.Invalid,
+            CampaignCheckpointReadKind.Unsafe,
             (await exposedDirectory.Store.ReadAsync(CancellationToken.None)).Kind);
         Assert.Equal(
-            CampaignCheckpointWriteKind.Unwritable,
+            CampaignCheckpointWriteKind.Unsafe,
             (await WriteInitialAsync(exposedDirectory.Store, artifact)).Kind);
         Assert.Empty(Directory.EnumerateFileSystemEntries(exposedDirectory.StateDirectory));
     }
@@ -376,7 +376,7 @@ public sealed class CampaignCheckpointStoreTests
 
         var result = await WriteInitialAsync(fixture.Store, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, result.Kind);
         Assert.Equal("malformed", await File.ReadAllTextAsync(leasePath));
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
@@ -462,7 +462,7 @@ public sealed class CampaignCheckpointStoreTests
                 intended.Sha256,
                 CancellationToken.None);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
         var authoritative = await fixture.Store.ReadAsync(CancellationToken.None);
         if (replace)
         {
@@ -552,7 +552,7 @@ public sealed class CampaignCheckpointStoreTests
 
         Assert.True(mutated);
         Assert.Null(mutationFailure);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
         AssertCleanupMutationPreserved(fixture, intended, alternate, mutation);
     }
@@ -614,7 +614,7 @@ public sealed class CampaignCheckpointStoreTests
                 cancellation.Token);
 
         Assert.True(mutated);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
         AssertCleanupMutationPreserved(fixture, intended, alternate, "truncate");
     }
@@ -686,7 +686,7 @@ public sealed class CampaignCheckpointStoreTests
                 cancellation.Token);
 
         Assert.True(mutated);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
         Assert.True(File.Exists(LeasePath(fixture)));
         var authoritative = await fixture.Store.ReadAsync(CancellationToken.None);
         if (scenario == "replace-missing")
@@ -772,7 +772,7 @@ public sealed class CampaignCheckpointStoreTests
                 : await WriteInitialAsync(store, intended);
 
             Assert.True(swapped);
-            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
             Assert.Equal(
                 CampaignCheckpointReadKind.NotFound,
                 (await new FileCampaignCheckpointStore(checkpointPath, RepositoryRoot())
@@ -861,7 +861,7 @@ public sealed class CampaignCheckpointStoreTests
                 : await WriteInitialAsync(store, predecessor);
 
             Assert.True(moved);
-            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
             Assert.Empty(Directory.EnumerateFileSystemEntries(stateDirectory));
             Assert.True(File.Exists(movedLeasePath));
             Assert.Equal(0, new FileInfo(movedLeasePath).Length);
@@ -986,7 +986,7 @@ public sealed class CampaignCheckpointStoreTests
 
         Assert.Null(mutationFailure);
         Assert.True(mutationApplied);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.Unsafe, result.Kind);
         Assert.True(File.Exists(leasePath));
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
@@ -1012,7 +1012,7 @@ public sealed class CampaignCheckpointStoreTests
                 CancellationToken.None)
             : await WriteInitialAsync(retryStore, predecessor);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retry.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retry.Kind);
         AssertFreshLeaseMutationPreserved(leasePath, mutation, changedBytes, changedMarker);
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(fixture.StateDirectory),
@@ -1135,7 +1135,7 @@ public sealed class CampaignCheckpointStoreTests
             var result = await WriteInitialAsync(store, artifact);
 
             Assert.True(swapped);
-            Assert.Equal(CampaignCheckpointWriteKind.Unwritable, result.Kind);
+            Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, result.Kind);
             Assert.Equal(expectedStateEntryCount, Directory.EnumerateFileSystemEntries(stateDirectory).Count());
             if (hook == "after-lease-create-before-lock")
             {
@@ -1277,8 +1277,8 @@ public sealed class CampaignCheckpointStoreTests
             phase => staleLockAcquired |= phase == "after-stale-lease-lock");
         var retried = await WriteInitialAsync(retry, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, failed.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retried.Kind);
         Assert.True(staleLockAcquired);
         Assert.Equal("collision", File.ReadAllText(collisionPath));
     }
@@ -1309,7 +1309,7 @@ public sealed class CampaignCheckpointStoreTests
             });
 
         var failed = await WriteInitialAsync(store, artifact);
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, failed.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure, failed.Kind);
         Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
 
@@ -1320,7 +1320,7 @@ public sealed class CampaignCheckpointStoreTests
             phase => staleLockAcquired |= phase == "after-stale-lease-lock");
         var retried = await WriteInitialAsync(retry, artifact);
 
-        Assert.Equal(CampaignCheckpointWriteKind.Unwritable, retried.Kind);
+        Assert.Equal(CampaignCheckpointWriteKind.LeaseUnverifiable, retried.Kind);
         Assert.True(staleLockAcquired);
         Assert.Contains("operation=replace", File.ReadAllText(LeasePath(fixture)), StringComparison.Ordinal);
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());

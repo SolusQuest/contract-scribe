@@ -307,6 +307,8 @@ public sealed class ObservedRepositorySession
         ClassifiedRepositorySession session) =>
         ReferenceEquals(observationSession, session);
 
+    internal ClassifiedRepositorySession ClassificationSession => observationSession;
+
     internal static ObservedRepositorySession Bind(
         ClassifiedRepositorySession observationSession,
         DocumentationObservationOutcome observation) =>

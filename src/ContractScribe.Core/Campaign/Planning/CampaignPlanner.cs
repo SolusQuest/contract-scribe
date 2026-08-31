@@ -133,6 +133,46 @@ public static class CampaignPlanner
             summary);
     }
 
+    internal static ImmutableHashSet<SymbolRef> ReadViolationParentSymbols(
+        AuditDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return ReadAuditRows(document).Values
+            .Where(row => row.Outcome == AuditOutcome.Violation)
+            .Select(row => row.ParentSymbolRef)
+            .ToImmutableHashSet();
+    }
+
+    internal static ImmutableHashSet<SymbolRef> ReadExecutableStyleParentSymbols(
+        AuditDocument document,
+        ImmutableArray<CampaignPlanningOwnerAuthority> owners)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (owners.IsDefault)
+        {
+            throw new ArgumentException("Owner authority is not initialized.", nameof(owners));
+        }
+
+        var violationReasons = ReadAuditRows(document).Values
+            .Where(row => row.Outcome == AuditOutcome.Violation)
+            .GroupBy(row => row.ParentSymbolRef)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(row => row.Reason).ToImmutableArray());
+        return owners
+            .Where(owner => owner is not null && owner.Targets.Length == 1)
+            .Select(owner => (Owner: owner, Target: owner.Targets[0]))
+            .Where(pair => IsM3Eligible(
+                pair.Owner.AmbiguousOwner,
+                pair.Owner.Targets,
+                pair.Target)
+                && violationReasons.TryGetValue(pair.Target.Target.SymbolRef, out var reasons)
+                && !reasons.IsEmpty
+                && reasons.All(reason => reason == AuditReason.RequiredAbsent))
+            .Select(pair => pair.Target.Target.SymbolRef)
+            .ToImmutableHashSet();
+    }
+
     private static void ValidateRoot(CampaignPlanningInput input)
     {
         Require(input.Snapshot is not null, CampaignPlanningValidationCode.InvalidRoot,
@@ -1203,19 +1243,10 @@ public static class CampaignPlanner
                 }
 
                 var targetRow = auditRows[TargetKey(authority.Target.SymbolRef)];
-                var eligible = owner.Targets.Length == 1
-                    && !owner.AmbiguousOwner
-                    && !authority.MultiDeclarator
-                    && !authority.PrimaryConstructor
-                    && !authority.PrimaryConstructorAlias
-                    && authority.OwnerSymbolRefs.Length == 1
-                    && authority.OwnerSymbolRefs[0] == authority.Target.SymbolRef
-                    && authority.Target.PrimaryKind == PrimarySymbolKind.Method
-                    && authority.Source.Kind == DocumentationPatchSourceKind.Repository
-                    && authority.Source.Writable
-                    && authority.Source.BlockState is DocumentationBlockState.NoBlock
-                        or DocumentationBlockState.WhitespaceOnly
-                        or DocumentationBlockState.WellFormed;
+                var eligible = IsM3Eligible(
+                    owner.AmbiguousOwner,
+                    owner.Targets,
+                    authority);
                 return new CampaignPlanningTargetFact(
                     authority.Target.SymbolRef,
                     authority.Target.PrimaryKind,
@@ -1276,6 +1307,24 @@ public static class CampaignPlanner
             causes,
             disposition);
     }
+
+    private static bool IsM3Eligible(
+        bool ambiguousOwner,
+        ImmutableArray<CampaignPlanningTargetAuthority> ownerTargets,
+        CampaignPlanningTargetAuthority authority) =>
+        ownerTargets.Length == 1
+        && !ambiguousOwner
+        && !authority.MultiDeclarator
+        && !authority.PrimaryConstructor
+        && !authority.PrimaryConstructorAlias
+        && authority.OwnerSymbolRefs.Length == 1
+        && authority.OwnerSymbolRefs[0] == authority.Target.SymbolRef
+        && authority.Target.PrimaryKind == PrimarySymbolKind.Method
+        && authority.Source.Kind == DocumentationPatchSourceKind.Repository
+        && authority.Source.Writable
+        && authority.Source.BlockState is DocumentationBlockState.NoBlock
+            or DocumentationBlockState.WhitespaceOnly
+            or DocumentationBlockState.WellFormed;
 
     private static void ValidateStyleProfile(
         DocumentationScribeStyleProfile profile,
