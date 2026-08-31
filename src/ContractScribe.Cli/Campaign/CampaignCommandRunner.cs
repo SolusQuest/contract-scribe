@@ -66,11 +66,7 @@ internal static class CampaignCommandRunner
                     AcceptanceOutcome(accepted.Kind), null);
             }
             existing = checkpoint;
-            if (!MatchesProductRevision(configuration.Planning, checkpoint.Artifact.State)
-                || !string.Equals(
-                    checkpoint.Artifact.State.Snapshot.OpaqueSnapshotBinding,
-                    preflight.SnapshotBinding,
-                    StringComparison.Ordinal))
+            if (!MatchesProductRevision(configuration.Planning, checkpoint.Artifact.State))
             {
                 return Present(identity, preflight.Operation, "state",
                     "campaign.incompatible-snapshot", checkpoint.Artifact.CheckpointRevision);
@@ -188,21 +184,62 @@ internal static class CampaignCommandRunner
         else
         {
             current = existing;
-            try
+            if (string.Equals(
+                    current.Artifact.State.Snapshot.OpaqueSnapshotBinding,
+                    preflight.SnapshotBinding,
+                    StringComparison.Ordinal))
             {
-                CampaignStateFactory.ValidateCurrentContext(
-                    current.Artifact.State,
+                try
+                {
+                    CampaignStateFactory.ValidateCurrentContext(
+                        current.Artifact.State,
+                        execution,
+                        configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+                        configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                        bundle.Session.InputIdentity,
+                        planning,
+                        plan);
+                }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                {
+                    return Terminal(preflight.Operation, "state",
+                        "campaign.incompatible-snapshot", current);
+                }
+            }
+            else
+            {
+                var reconciled = await ChangedBaseCampaignReconciler.ReconcileAsync(
+                    current,
+                    store,
                     execution,
                     configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                     configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
                     bundle.Session.InputIdentity,
                     planning,
-                    plan);
-            }
-            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-            {
-                return Terminal(preflight.Operation, "state",
-                    "campaign.incompatible-snapshot", current);
+                    plan,
+                    preflight.Configuration.Revalidate,
+                    cancellationToken).ConfigureAwait(false);
+                if (reconciled.Kind != ChangedBaseCampaignReconciliationKind.Accepted
+                    || reconciled.AcceptedCheckpoint is not { } acceptedSuccessor)
+                {
+                    var checkpoint = reconciled.AcceptedCheckpoint;
+                    return reconciled.Kind switch
+                    {
+                        ChangedBaseCampaignReconciliationKind.Incompatible =>
+                            Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", checkpoint),
+                        ChangedBaseCampaignReconciliationKind.InvalidConfiguration =>
+                            Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", checkpoint),
+                        ChangedBaseCampaignReconciliationKind.Cancelled =>
+                            Terminal(preflight.Operation, "execution", "campaign.cancelled", checkpoint),
+                        _ => Terminal(
+                            preflight.Operation,
+                            "state",
+                            AcceptanceOutcome(reconciled.CheckpointFailure
+                                ?? CampaignCheckpointAcceptanceKind.InvalidRead),
+                            checkpoint),
+                    };
+                }
+                current = acceptedSuccessor;
             }
         }
 
