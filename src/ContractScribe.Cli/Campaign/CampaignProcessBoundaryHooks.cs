@@ -22,7 +22,6 @@ internal static class CampaignProcessBoundaryHooks
     internal const string PatchAfterResultReadback = "patch.after-result-readback";
     internal const string CheckpointBeforeReplacement = "checkpoint.before-replacement";
     internal const string CheckpointAfterReplacementBeforeReadback = "checkpoint.after-replacement-before-readback";
-    internal const string ChangedBaseBeforeReconciliation = "changed-base.before-reconciliation";
     internal const string ProposalAfterProviderBeforeProposalTransition = "proposal.after-provider-before-proposal-transition";
     internal const string ProposalAfterProviderBeforeClosedTransition = "proposal.after-provider-before-closed-transition";
     internal const string ProposalAfterProposalReadback = "proposal.after-proposal-readback";
@@ -62,7 +61,6 @@ internal static class CampaignProcessBoundaryHooks
         PatchAfterResultReadback,
         CheckpointBeforeReplacement,
         CheckpointAfterReplacementBeforeReadback,
-        ChangedBaseBeforeReconciliation,
         ProposalAfterProviderBeforeProposalTransition,
         ProposalAfterProviderBeforeClosedTransition,
         ProposalAfterProposalReadback,

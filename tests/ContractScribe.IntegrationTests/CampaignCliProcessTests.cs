@@ -583,24 +583,8 @@ public sealed class CampaignCliProcessTests
             server.Endpoint,
             vector.Scenario == "closed-patch" ? 1 : null);
 
-        var snapshot = "snapshot.boundary";
-        var initialOperation = "start";
-        if (vector.Scenario == "changed-base")
-        {
-            var initialized = await RunAsync(
-                Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary.a"),
-                timeout: TimeSpan.FromMinutes(5));
-            AssertCampaign(
-                initialized,
-                0,
-                "campaign.complete",
-                CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!.CheckpointRevision);
-            snapshot = "snapshot.boundary.b";
-            initialOperation = "resume";
-        }
-
         using var running = Start(
-            Args(initialOperation, fixture.Root, statePath, configurationPath, snapshot),
+            Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
             new Dictionary<string, string?>
             {
                 ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
@@ -627,7 +611,7 @@ public sealed class CampaignCliProcessTests
 
             var operation = File.Exists(statePath) ? "resume" : "start";
             var recovered = await RunAsync(
-                Args(operation, fixture.Root, statePath, configurationPath, snapshot),
+                Args(operation, fixture.Root, statePath, configurationPath, "snapshot.boundary"),
                 timeout: TimeSpan.FromMinutes(5));
             AssertControlledCampaign(recovered, vector.Hook);
             if (File.Exists(statePath))

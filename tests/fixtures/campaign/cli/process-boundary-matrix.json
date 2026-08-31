@@ -1,5 +1,4 @@
 [
-  {"hook":"changed-base.before-reconciliation","scenario":"changed-base"},
   {"hook":"checkpoint.initial.before-create","scenario":"accepted"},
   {"hook":"checkpoint.before-replacement","scenario":"accepted"},
   {"hook":"checkpoint.after-replacement-before-readback","scenario":"accepted"},

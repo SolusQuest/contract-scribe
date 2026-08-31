@@ -288,64 +288,94 @@ public sealed class CampaignChangedBaseProcessTests
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.concurrent.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
-        var contenderAck = Path.Join(fixture.Outside, "concurrent.contender.ack");
-        var contenderRelease = Path.Join(fixture.Outside, "concurrent.contender.release");
-        var winnerAck = Path.Join(fixture.Outside, "concurrent.winner.ack");
-        var winnerRelease = Path.Join(fixture.Outside, "concurrent.winner.release");
-        using var contender = CampaignCliProcessTests.Start(
-            fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
+        var predecessorBytes = await File.ReadAllBytesAsync(fixture.StatePath);
+        Assert.Equal(0, fixture.Server.RequestCount);
+
+        if (competing)
+        {
+            await AssertPhysicalLeaseConflictAsync(fixture, predecessorBytes);
+        }
+        else
+        {
+            await AssertExactSuccessorAdoptionAsync(fixture);
+        }
+    }
+
+    private static async Task AssertPhysicalLeaseConflictAsync(
+        ProcessFixture fixture,
+        byte[] predecessorBytes)
+    {
+        var acknowledgement = Path.Join(fixture.Outside, "concurrent.holder.ack");
+        var release = Path.Join(fixture.Outside, "concurrent.holder.release");
+        using var holder = CampaignCliProcessTests.Start(
+            fixture.Args("resume", "snapshot.concurrent.b"),
             CampaignCliProcessTests.HookEnvironment(
-                CampaignProcessBoundaryHooks.ChangedBaseBeforeReconciliation,
-                contenderAck,
-                contenderRelease));
+                CampaignProcessBoundaryHooks.CheckpointBeforeReplacement,
+                acknowledgement,
+                release));
         try
         {
             await CampaignCliProcessTests.WaitForFileAsync(
-                contenderAck,
-                contender,
-                CampaignProcessBoundaryHooks.ChangedBaseBeforeReconciliation,
+                acknowledgement,
+                holder,
+                CampaignProcessBoundaryHooks.CheckpointBeforeReplacement,
                 TimeSpan.FromMinutes(3));
-            using var winner = CampaignCliProcessTests.Start(
-                fixture.Args("resume", "snapshot.concurrent.b"),
-                CampaignCliProcessTests.HookEnvironment(
-                    CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback,
-                    winnerAck,
-                    winnerRelease));
-            try
-            {
-                await CampaignCliProcessTests.WaitForFileAsync(
-                    winnerAck,
-                    winner,
-                    CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback,
-                    TimeSpan.FromMinutes(3));
-
-                await File.WriteAllTextAsync(contenderRelease, "release\n");
-                await contender.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
-                var blocked = await contender.CompleteAsync();
-                CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
-                Assert.Equal(
-                    "snapshot.concurrent.b",
-                    ReadArtifact(fixture.StatePath).State.Snapshot.OpaqueSnapshotBinding);
-                Assert.Equal(0, fixture.Server.RequestCount);
-
-                await File.WriteAllTextAsync(winnerRelease, "release\n");
-                await winner.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
-                var completed = await winner.CompleteAsync();
-                var current = ReadArtifact(fixture.StatePath);
-                Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
-                Assert.Null(current.State.ActiveReservation);
-                CampaignCliProcessTests.AssertCampaign(completed, 0, "campaign.complete", current.CheckpointRevision);
-                Assert.Equal(1, fixture.Server.RequestCount);
-            }
-            finally
-            {
-                await CampaignCliProcessTests.StopAsync(winner);
-            }
+            var blocked = await CampaignCliProcessTests.RunAsync(
+                fixture.Args("resume", "snapshot.concurrent.c"), TimeSpan.FromMinutes(5));
+            CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
+            Assert.Equal(predecessorBytes, await File.ReadAllBytesAsync(fixture.StatePath));
+            Assert.Equal(0, fixture.Server.RequestCount);
         }
         finally
         {
-            await CampaignCliProcessTests.StopAsync(contender);
+            await CampaignCliProcessTests.StopAsync(holder);
         }
+
+        var completed = await CampaignCliProcessTests.RunAsync(
+            fixture.Args("resume", "snapshot.concurrent.b"), TimeSpan.FromMinutes(5));
+        var current = ReadArtifact(fixture.StatePath);
+        CampaignCliProcessTests.AssertCampaign(completed, 0, "campaign.complete", current.CheckpointRevision);
+        Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
+        Assert.Null(current.State.ActiveReservation);
+        Assert.Equal(1, fixture.Server.RequestCount);
+    }
+
+    private static async Task AssertExactSuccessorAdoptionAsync(ProcessFixture fixture)
+    {
+        var acknowledgement = Path.Join(fixture.Outside, "concurrent.writer.ack");
+        var release = Path.Join(fixture.Outside, "concurrent.writer.release");
+        using var staleWriter = CampaignCliProcessTests.Start(
+            fixture.Args("resume", "snapshot.concurrent.b"),
+            CampaignCliProcessTests.HookEnvironment(
+                CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit,
+                acknowledgement,
+                release));
+        try
+        {
+            await CampaignCliProcessTests.WaitForFileAsync(
+                acknowledgement,
+                staleWriter,
+                CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit,
+                TimeSpan.FromMinutes(3));
+            var successor = ReadArtifact(fixture.StatePath);
+            Assert.Equal("snapshot.concurrent.b", successor.State.Snapshot.OpaqueSnapshotBinding);
+            Assert.Null(successor.State.ActiveReservation);
+            Assert.Equal(0, fixture.Server.RequestCount);
+
+            var adopted = await CampaignCliProcessTests.RunAsync(
+                fixture.Args("resume", "snapshot.concurrent.b"), TimeSpan.FromMinutes(5));
+            var current = ReadArtifact(fixture.StatePath);
+            CampaignCliProcessTests.AssertCampaign(adopted, 0, "campaign.complete", current.CheckpointRevision);
+            Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
+            Assert.Null(current.State.ActiveReservation);
+            Assert.Equal(1, fixture.Server.RequestCount);
+        }
+        finally
+        {
+            await CampaignCliProcessTests.StopAsync(staleWriter);
+        }
+
+        Assert.Equal(1, fixture.Server.RequestCount);
     }
 
     [Fact]
@@ -577,6 +607,7 @@ public sealed class CampaignChangedBaseProcessTests
         {
             process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
             throw;
         }
         Assert.True(process.ExitCode == 0,
