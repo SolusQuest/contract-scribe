@@ -76,7 +76,7 @@ public sealed class CampaignChangedBaseProcessTests
         Assert.Equal(oldReservation.ElapsedMilliseconds,
             successor.State.Predecessor.Reservation.ConservativeCharge);
         Assert.True(successor.State.Predecessor.Candidate.AcceptedCount > 0);
-        Assert.NotEmpty(successor.State.Predecessor.CompletedOperations);
+        Assert.Empty(successor.State.Predecessor.CompletedOperations);
         Assert.All(successor.State.WorkItems, item =>
         {
             Assert.Equal(CampaignWorkStatus.Planned, item.Status);
@@ -562,7 +562,16 @@ public sealed class CampaignChangedBaseProcessTests
             ?? throw new InvalidOperationException("Fixture restore failed to start.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        }
+        catch (TimeoutException)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            throw;
+        }
         Assert.True(process.ExitCode == 0,
             $"fixture restore exit={process.ExitCode} stdout={await stdout} stderr={await stderr}");
     }
