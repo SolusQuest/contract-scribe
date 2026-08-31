@@ -10,22 +10,55 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 [Collection("Integration process lane 1")]
 public sealed class CampaignChangedBaseProcessTests
 {
+    public static TheoryData<string, bool, bool> SupersessionCrashCases
+    {
+        get
+        {
+            var path = Path.Join(
+                CampaignCliProcessTests.RepositoryRoot,
+                "tests", "fixtures", "campaign", "changed-base", "process-boundary-matrix.json");
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            var data = new TheoryData<string, bool, bool>();
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var authority = item.GetProperty("expectedAuthority").GetString();
+                data.Add(
+                    item.GetProperty("hook").GetString()!,
+                    authority is "successor" or "successor-without-reservation",
+                    authority is "successor-without-reservation");
+            }
+            return data;
+        }
+    }
+
     [Fact]
     public async Task ExactFixtureRevisions_WithIdenticalAuditAndContent_RotateAllCurrentAuthority()
     {
         if (!OperatingSystem.IsLinux()) return;
-        await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        await using var fixture = await ProcessFixture.CreateAsync(
+            executable: true,
+            maximumCampaignElapsedMilliseconds: 600_000);
         CopyRevision("revision-a", fixture.Repository.Root);
 
-        await InterruptAtAsync(fixture, "start", "snapshot.changed-base.a",
-            CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+        var first = await CampaignCliProcessTests.RunAsync(
+            fixture.Args("start", "snapshot.changed-base.a"), TimeSpan.FromMinutes(5));
         var predecessor = ReadArtifact(fixture.StatePath);
+        CampaignCliProcessTests.AssertCampaign(first, 0, "campaign.complete", predecessor.CheckpointRevision);
         var predecessorKeys = predecessor.State.WorkItems.Select(item => item.WorkItemKey).ToArray();
         Assert.NotEmpty(predecessorKeys);
+        Assert.NotNull(predecessor.State.CandidateObservation);
+        Assert.NotNull(predecessor.State.CumulativeOutcome);
+
+        await InterruptAtAsync(fixture, "resume", "snapshot.changed-base.a",
+            CampaignProcessBoundaryHooks.PatchBeforeDispatch);
+        var ambiguous = ReadArtifact(fixture.StatePath);
+        var oldReservation = Assert.IsType<CampaignPatchReservation>(ambiguous.State.ActiveReservation);
+        var providerCallsBeforeSupersession = fixture.Server.RequestCount;
+        var oldEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
 
         CopyRevision("revision-b", fixture.Repository.Root);
         await InterruptAtAsync(fixture, "resume", "snapshot.changed-base.b",
-            CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+            CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback);
         var successor = ReadArtifact(fixture.StatePath);
         var successorKeys = successor.State.WorkItems.Select(item => item.WorkItemKey).ToArray();
 
@@ -36,7 +69,14 @@ public sealed class CampaignChangedBaseProcessTests
         Assert.NotEqual(predecessor.State.Snapshot.ExecutionCommitmentSha256,
             successor.State.Snapshot.ExecutionCommitmentSha256);
         Assert.False(predecessorKeys.SequenceEqual(successorKeys));
-        Assert.Equal(predecessor.Sha256, successor.State.Predecessor!.FinalCheckpointSha256);
+        Assert.Equal(ambiguous.Sha256, successor.State.Predecessor!.FinalCheckpointSha256);
+        Assert.Equal("patch", successor.State.Predecessor.Reservation!.Kind);
+        Assert.Equal(oldReservation.PatchRequestSha256,
+            successor.State.Predecessor.Reservation.CorrelationSha256);
+        Assert.Equal(oldReservation.ElapsedMilliseconds,
+            successor.State.Predecessor.Reservation.ConservativeCharge);
+        Assert.True(successor.State.Predecessor.Candidate.AcceptedCount > 0);
+        Assert.NotEmpty(successor.State.Predecessor.CompletedOperations);
         Assert.All(successor.State.WorkItems, item =>
         {
             Assert.Equal(CampaignWorkStatus.Planned, item.Status);
@@ -47,20 +87,24 @@ public sealed class CampaignChangedBaseProcessTests
         Assert.Null(successor.State.ActiveReservation);
         Assert.Null(successor.State.CandidateObservation);
         Assert.Null(successor.State.CumulativeOutcome);
-        Assert.Equal(0, fixture.Server.RequestCount);
+        Assert.True(successor.State.LineageCharges.PatchValidationInvocations
+            >= ambiguous.State.LineageCharges.PatchValidationInvocations);
+        Assert.Equal(providerCallsBeforeSupersession, fixture.Server.RequestCount);
 
         var completed = await CampaignCliProcessTests.RunAsync(
             fixture.Args("resume", "snapshot.changed-base.b"), TimeSpan.FromMinutes(5));
         var completedArtifact = ReadArtifact(fixture.StatePath);
         CampaignCliProcessTests.AssertCampaign(
             completed, 0, "campaign.complete", completedArtifact.CheckpointRevision);
-        Assert.True(fixture.Server.RequestCount > 0);
+        Assert.Equal(providerCallsBeforeSupersession + 1, fixture.Server.RequestCount);
+        var newEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[^1]);
+        AssertCollisionCommitments(oldEvidence, newEvidence);
+        Assert.DoesNotContain(completedArtifact.State.WorkItems,
+            item => predecessorKeys.Contains(item.WorkItemKey, StringComparer.Ordinal));
     }
 
     [Theory]
-    [InlineData(CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, false, false)]
-    [InlineData(CampaignProcessBoundaryHooks.CheckpointAfterReplacementBeforeReadback, true, false)]
-    [InlineData(CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit, true, true)]
+    [MemberData(nameof(SupersessionCrashCases))]
     public async Task SupersessionCrash_LeavesExactlyOneCompleteAuthority(
         string hook,
         bool successorExpected,
@@ -160,43 +204,87 @@ public sealed class CampaignChangedBaseProcessTests
             CampaignCliProcessTests.RepositoryRoot,
             "tests", "fixtures", "campaign", "changed-base", "target-evolution-matrix.json");
         using var matrix = JsonDocument.Parse(await File.ReadAllBytesAsync(matrixPath));
+        await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        await InterruptAtAsync(fixture, "start", "snapshot.target.a",
+            CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+        var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
+        var baselineSourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
+        var baselineProjectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
+        var baselineSource = await File.ReadAllBytesAsync(baselineSourcePath);
+        var baselineProject = await File.ReadAllBytesAsync(baselineProjectPath);
+
+        var failedPredecessor = ReadArtifact(fixture.StatePath);
+        var failedPredecessorBytes = await File.ReadAllBytesAsync(fixture.StatePath);
+        await File.WriteAllTextAsync(baselineProjectPath, "<Project>");
+        var requestCountBeforeFailure = fixture.Server.RequestCount;
+        var failedLoad = await CampaignCliProcessTests.RunAsync(
+            fixture.Args("resume", "snapshot.target.invalid"), TimeSpan.FromMinutes(3));
+        CampaignCliProcessTests.AssertCampaign(
+            failedLoad, 5, "campaign.load-failure", failedPredecessor.CheckpointRevision);
+        Assert.Equal(failedPredecessorBytes, await File.ReadAllBytesAsync(fixture.StatePath));
+        Assert.Equal(requestCountBeforeFailure, fixture.Server.RequestCount);
+
+        var index = 0;
         foreach (var evolution in matrix.RootElement.EnumerateArray().Select(item => item.GetString()!))
         {
-            await using var fixture = await ProcessFixture.CreateAsync(executable: true);
-            await InterruptAtAsync(fixture, "start", "snapshot.target.a",
-                CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
+            await File.WriteAllBytesAsync(baselineSourcePath, baselineSource);
+            await File.WriteAllBytesAsync(baselineProjectPath, baselineProject);
+            foreach (var extra in new[] { "Moved.cs", "Alpha.cs", "Zulu.cs" })
+            {
+                var extraPath = Path.Join(fixture.Repository.Root, "App", extra);
+                if (File.Exists(extraPath)) File.Delete(extraPath);
+            }
             var predecessor = ReadArtifact(fixture.StatePath);
             var predecessorKeys = predecessor.State.WorkItems.Select(item => item.WorkItemKey).ToHashSet(
                 StringComparer.Ordinal);
             var expectsNoWork = await ApplyTargetEvolutionAsync(fixture.Repository.Root, evolution);
+            if (string.Equals(evolution, "changed-compilation-context", StringComparison.Ordinal))
+            {
+                await RestoreProjectAsync(fixture.Repository.Root);
+            }
+            var requestCount = fixture.Server.RequestCount;
+            var snapshot = $"snapshot.target.{++index}";
 
             if (expectsNoWork)
             {
                 var noWork = await CampaignCliProcessTests.RunAsync(
-                    fixture.Args("resume", "snapshot.target.b"), TimeSpan.FromMinutes(5));
+                    fixture.Args("resume", snapshot), TimeSpan.FromMinutes(5));
                 var successor = ReadArtifact(fixture.StatePath);
                 CampaignCliProcessTests.AssertCampaign(
                     noWork, 0, "campaign.no-work", successor.CheckpointRevision);
+                Assert.Empty(successor.State.WorkItems);
+                Assert.Equal(requestCount, fixture.Server.RequestCount);
+            }
+            else if (string.Equals(evolution, "reordered-plan", StringComparison.Ordinal))
+            {
+                var completed = await CampaignCliProcessTests.RunAsync(
+                    fixture.Args("resume", snapshot), TimeSpan.FromMinutes(5));
+                var successor = ReadArtifact(fixture.StatePath);
+                CampaignCliProcessTests.AssertCampaign(
+                    completed, 0, "campaign.complete", successor.CheckpointRevision);
             }
             else
             {
-                await InterruptAtAsync(fixture, "resume", "snapshot.target.b",
+                await InterruptAtAsync(fixture, "resume", snapshot,
                     CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
             }
 
             var current = ReadArtifact(fixture.StatePath);
-            Assert.Equal("snapshot.target.b", current.State.Snapshot.OpaqueSnapshotBinding);
+            Assert.Equal(snapshot, current.State.Snapshot.OpaqueSnapshotBinding);
             Assert.Equal(predecessor.Sha256, current.State.Predecessor!.FinalCheckpointSha256);
             Assert.DoesNotContain(current.State.WorkItems, item => predecessorKeys.Contains(item.WorkItemKey));
-            Assert.All(current.State.WorkItems, item =>
+            if (!string.Equals(evolution, "reordered-plan", StringComparison.Ordinal))
             {
-                Assert.Null(item.TrustedProposal);
-                Assert.Equal(0, item.OuterAttemptCount);
-                Assert.Equal(0, item.CandidateAttemptCount);
-            });
+                Assert.All(current.State.WorkItems, item =>
+                {
+                    Assert.Null(item.TrustedProposal);
+                    Assert.Equal(0, item.OuterAttemptCount);
+                    Assert.Equal(0, item.CandidateAttemptCount);
+                });
+            }
             Assert.Null(current.State.ActiveReservation);
-            Assert.Null(current.State.CandidateObservation);
-            Assert.Equal(0, fixture.Server.RequestCount);
+            var freshRequests = fixture.Server.RequestBodies.Skip(requestCount).ToArray();
+            AssertFreshTargetEvidence(evolution, baselineEvidence, freshRequests);
         }
     }
 
@@ -209,34 +297,51 @@ public sealed class CampaignChangedBaseProcessTests
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.concurrent.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
-        var firstAck = Path.Join(fixture.Outside, "concurrent.first.ack");
-        var firstRelease = Path.Join(fixture.Outside, "concurrent.first.release");
-        using var first = CampaignCliProcessTests.Start(
-            fixture.Args("resume", "snapshot.concurrent.b"),
+        var contenderAck = Path.Join(fixture.Outside, "concurrent.contender.ack");
+        var contenderRelease = Path.Join(fixture.Outside, "concurrent.contender.release");
+        var winnerAck = Path.Join(fixture.Outside, "concurrent.winner.ack");
+        var winnerRelease = Path.Join(fixture.Outside, "concurrent.winner.release");
+        using var contender = CampaignCliProcessTests.Start(
+            fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
             CampaignCliProcessTests.HookEnvironment(
-                CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, firstAck, firstRelease));
+                "changed-base.before-reconciliation", contenderAck, contenderRelease));
         try
         {
             await CampaignCliProcessTests.WaitForFileAsync(
-                firstAck, first, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, TimeSpan.FromMinutes(3));
-            var blocked = await CampaignCliProcessTests.RunAsync(
-                fixture.Args("resume", competing ? "snapshot.concurrent.c" : "snapshot.concurrent.b"),
-                TimeSpan.FromMinutes(3));
-            CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
-            Assert.Equal(0, fixture.Server.RequestCount);
+                contenderAck, contender, "changed-base.before-reconciliation", TimeSpan.FromMinutes(3));
+            using var winner = CampaignCliProcessTests.Start(
+                fixture.Args("resume", "snapshot.concurrent.b"),
+                CampaignCliProcessTests.HookEnvironment(
+                    CampaignProcessBoundaryHooks.CheckpointBeforeReplacement, winnerAck, winnerRelease));
+            try
+            {
+                await CampaignCliProcessTests.WaitForFileAsync(
+                    winnerAck, winner, CampaignProcessBoundaryHooks.CheckpointBeforeReplacement,
+                    TimeSpan.FromMinutes(3));
 
-            await File.WriteAllTextAsync(firstRelease, "release\n");
-            await first.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
-            var winner = await first.CompleteAsync();
-            var current = ReadArtifact(fixture.StatePath);
-            Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
-            Assert.Null(current.State.ActiveReservation);
-            CampaignCliProcessTests.AssertCampaign(winner, 0, "campaign.complete", current.CheckpointRevision);
-            Assert.Equal(1, fixture.Server.RequestCount);
+                await File.WriteAllTextAsync(contenderRelease, "release\n");
+                await contender.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+                var blocked = await contender.CompleteAsync();
+                CampaignCliProcessTests.AssertCampaign(blocked, 4, "campaign.lease-conflict", null);
+                Assert.Equal(0, fixture.Server.RequestCount);
+
+                await File.WriteAllTextAsync(winnerRelease, "release\n");
+                await winner.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
+                var completed = await winner.CompleteAsync();
+                var current = ReadArtifact(fixture.StatePath);
+                Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
+                Assert.Null(current.State.ActiveReservation);
+                CampaignCliProcessTests.AssertCampaign(completed, 0, "campaign.complete", current.CheckpointRevision);
+                Assert.Equal(1, fixture.Server.RequestCount);
+            }
+            finally
+            {
+                await CampaignCliProcessTests.StopAsync(winner);
+            }
         }
         finally
         {
-            await CampaignCliProcessTests.StopAsync(first);
+            await CampaignCliProcessTests.StopAsync(contender);
         }
     }
 
@@ -265,15 +370,16 @@ public sealed class CampaignChangedBaseProcessTests
 
         var sameSnapshot = await CampaignCliProcessTests.RunAsync(
             fixture.Args("resume", "snapshot.production.a"), TimeSpan.FromMinutes(5));
-        Assert.DoesNotContain("campaign.host-contract-error", sameSnapshot.Stdout, StringComparison.Ordinal);
         var recovered = ReadArtifact(fixture.StatePath);
+        CampaignCliProcessTests.AssertCampaign(
+            sameSnapshot, 0, "campaign.complete", recovered.CheckpointRevision);
         Assert.Null(recovered.State.ActiveReservation);
         Assert.True(recovered.State.LineageCharges.PatchValidationInvocations
             >= accepted.State.LineageCharges.PatchValidationInvocations);
 
         await File.WriteAllTextAsync(
             Path.Join(fixture.Repository.Root, "App", "App.cs"),
-            "namespace Fixture;\npublic static class App\n{\n    public static int Changed(int value) => value;\n}\n");
+            "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void Run(int value) { }\n}\n");
         var changed = await CampaignCliProcessTests.RunAsync(
             fixture.Args("resume", "snapshot.production.b"), TimeSpan.FromMinutes(5));
         var completed = ReadArtifact(fixture.StatePath);
@@ -327,6 +433,143 @@ public sealed class CampaignChangedBaseProcessTests
         return Assert.IsType<CampaignCheckpointArtifact>(parsed.Artifact);
     }
 
+    private static JsonElement ReadTargetEvidence(byte[] body)
+    {
+        using var wire = JsonDocument.Parse(body);
+        foreach (var message in wire.RootElement.GetProperty("messages").EnumerateArray())
+        {
+            var content = message.GetProperty("content").GetString();
+            if (content is null) continue;
+            using var parsed = JsonDocument.Parse(content);
+            if (parsed.RootElement.TryGetProperty("authority", out var authority)
+                && string.Equals(authority.GetString(), "target-evidence", StringComparison.Ordinal))
+            {
+                return parsed.RootElement.Clone();
+            }
+        }
+        throw new InvalidDataException("Target evidence message was not found.");
+    }
+
+    private static void AssertCollisionCommitments(JsonElement oldEvidence, JsonElement newEvidence)
+    {
+        var oldTarget = oldEvidence.GetProperty("terminalTarget");
+        var newTarget = newEvidence.GetProperty("terminalTarget");
+        Assert.Equal(oldTarget.GetProperty("symbolRef").GetRawText(),
+            newTarget.GetProperty("symbolRef").GetRawText());
+        Assert.Equal(oldTarget.GetProperty("sourceCommitment").GetRawText(),
+            newTarget.GetProperty("sourceCommitment").GetRawText());
+        Assert.Equal(oldEvidence.GetProperty("applicableComponents").GetRawText(),
+            newEvidence.GetProperty("applicableComponents").GetRawText());
+        Assert.Equal(
+            oldEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString(),
+            newEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString());
+    }
+
+    private static void AssertFreshTargetEvidence(
+        string evolution,
+        JsonElement baselineEvidence,
+        IReadOnlyList<byte[]> requestBodies)
+    {
+        if (evolution is "disappeared" or "became-compliant")
+        {
+            Assert.Empty(requestBodies);
+            return;
+        }
+
+        var evidence = requestBodies.Select(ReadTargetEvidence).ToArray();
+        var expectedDocumentationIds = evolution switch
+        {
+            "changed-applicable-components" => new[] { "M:Fixture.App.Run(System.Int32)" },
+            "similar-display-name" => new[] { "M:Fixture.App.RunAgain" },
+            "reordered-plan" => new[] { "M:Fixture.App.Alpha", "M:Fixture.App.Zulu" },
+            _ => new[] { "M:Fixture.App.Run" },
+        };
+        Assert.Equal(expectedDocumentationIds, evidence.Select(item => item
+            .GetProperty("terminalTarget")
+            .GetProperty("symbolRef")
+            .GetProperty("documentationCommentId")
+            .GetString()));
+
+        var baselineTarget = baselineEvidence.GetProperty("terminalTarget");
+        foreach (var item in evidence)
+        {
+            var target = item.GetProperty("terminalTarget");
+            var source = target.GetProperty("sourceCommitment");
+            var sourceLocator = source.GetProperty("locator").GetProperty("repository");
+            var reference = item.GetProperty("evidenceReferences")[0];
+            var referenceLocator = reference.GetProperty("locator").GetProperty("repository");
+            Assert.Equal(target.GetProperty("repositoryContextRef").GetString(),
+                reference.GetProperty("repositoryContextRef").GetString());
+            Assert.Equal(sourceLocator.GetProperty("path").GetString(),
+                referenceLocator.GetProperty("path").GetString());
+            Assert.Equal(source.GetProperty("contentSha256").GetString(),
+                reference.GetProperty("contentSha256").GetString());
+            Assert.Equal(64, source.GetProperty("contentSha256").GetString()!.Length);
+            Assert.True(sourceLocator.GetProperty("span").GetProperty("end").GetInt32()
+                > sourceLocator.GetProperty("span").GetProperty("start").GetInt32());
+        }
+
+        var firstTarget = evidence[0].GetProperty("terminalTarget");
+        var firstSymbol = firstTarget.GetProperty("symbolRef");
+        var baselineSymbol = baselineTarget.GetProperty("symbolRef");
+        var firstPath = firstTarget.GetProperty("sourceCommitment")
+            .GetProperty("locator").GetProperty("repository").GetProperty("path").GetString();
+        var baselinePath = baselineTarget.GetProperty("sourceCommitment")
+            .GetProperty("locator").GetProperty("repository").GetProperty("path").GetString();
+        var firstContent = firstTarget.GetProperty("sourceCommitment").GetProperty("contentSha256").GetString();
+        var baselineContent = baselineTarget.GetProperty("sourceCommitment").GetProperty("contentSha256").GetString();
+
+        if (string.Equals(evolution, "moved-source-authority", StringComparison.Ordinal))
+        {
+            Assert.Equal(baselineSymbol.GetRawText(), firstSymbol.GetRawText());
+            Assert.Equal("App/Moved.cs", firstPath);
+            Assert.NotEqual(baselinePath, firstPath);
+            Assert.NotEqual(baselineContent, firstContent);
+        }
+        else if (string.Equals(evolution, "changed-compilation-context", StringComparison.Ordinal))
+        {
+            Assert.Equal(baselineSymbol.GetProperty("documentationCommentId").GetString(),
+                firstSymbol.GetProperty("documentationCommentId").GetString());
+            Assert.NotEqual(baselineSymbol.GetProperty("compilationContextRef").GetString(),
+                firstSymbol.GetProperty("compilationContextRef").GetString());
+            Assert.Equal(baselinePath, firstPath);
+            Assert.Equal(baselineContent, firstContent);
+        }
+        else if (string.Equals(evolution, "changed-applicable-components", StringComparison.Ordinal))
+        {
+            Assert.Equal(
+                new[] { "parameter:parameter/0", "return:return" },
+                evidence[0].GetProperty("applicableComponents").EnumerateArray().Select(component =>
+                    component.GetProperty("kind").GetString() + ":"
+                    + component.GetProperty("identity").GetString()));
+            Assert.NotEqual(baselineContent, firstContent);
+        }
+    }
+
+    private static async Task RestoreProjectAsync(string repositoryRoot)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        start.ArgumentList.Add("restore");
+        start.ArgumentList.Add("App/App.csproj");
+        start.ArgumentList.Add("-nodeReuse:false");
+        start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        start.Environment["DOTNET_NOLOGO"] = "true";
+        using var process = System.Diagnostics.Process.Start(start)
+            ?? throw new InvalidOperationException("Fixture restore failed to start.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        Assert.True(process.ExitCode == 0,
+            $"fixture restore exit={process.ExitCode} stdout={await stdout} stderr={await stderr}");
+    }
+
     private static async Task<bool> ApplyTargetEvolutionAsync(string repositoryRoot, string evolution)
     {
         var sourcePath = Path.Join(repositoryRoot, "App", "App.cs");
@@ -342,17 +585,23 @@ public sealed class CampaignChangedBaseProcessTests
                 return true;
             case "moved-source-authority":
                 await File.WriteAllTextAsync(sourcePath,
-                    "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App { }\n");
+                    "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static partial class App { }\n");
                 await File.WriteAllTextAsync(Path.Join(repositoryRoot, "App", "Moved.cs"),
-                    "namespace Fixture;\n/// <summary>Provides moved operations.</summary>\npublic static class Moved\n{\n    public static void Run() { }\n}\n");
+                    "namespace Fixture;\npublic static partial class App\n{\n    public static void Run() { }\n}\n");
                 return false;
             case "changed-compilation-context":
                 var projectPath = Path.Join(repositoryRoot, "App", "App.csproj");
                 var project = await File.ReadAllTextAsync(projectPath);
-                await File.WriteAllTextAsync(projectPath, project.Replace(
-                    "</Project>",
-                    "  <PropertyGroup><DefineConstants>CHANGED_BASE</DefineConstants></PropertyGroup>\n</Project>",
-                    StringComparison.Ordinal));
+                Assert.Contains("<TargetFramework>net10.0</TargetFramework>", project, StringComparison.Ordinal);
+                await File.WriteAllTextAsync(projectPath, project
+                    .Replace(
+                        "<TargetFramework>net10.0</TargetFramework>",
+                        "<TargetFramework>net10.0-windows</TargetFramework>",
+                        StringComparison.Ordinal)
+                    .Replace(
+                        "</PropertyGroup>",
+                        "  <EnableWindowsTargeting>true</EnableWindowsTargeting>\n  </PropertyGroup>",
+                        StringComparison.Ordinal));
                 return false;
             case "changed-applicable-components":
                 await File.WriteAllTextAsync(sourcePath,
@@ -364,7 +613,11 @@ public sealed class CampaignChangedBaseProcessTests
                 return false;
             case "reordered-plan":
                 await File.WriteAllTextAsync(sourcePath,
-                    "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void Zulu() { }\n    public static void Alpha() { }\n}\n");
+                    "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static partial class App { }\n");
+                await File.WriteAllTextAsync(Path.Join(repositoryRoot, "App", "Alpha.cs"),
+                    "namespace Fixture;\npublic static partial class App { public static void Alpha() { } }\n");
+                await File.WriteAllTextAsync(Path.Join(repositoryRoot, "App", "Zulu.cs"),
+                    "namespace Fixture;\npublic static partial class App { public static void Zulu() { } }\n");
                 return false;
             default:
                 throw new InvalidDataException("Unknown target-evolution fixture.");

@@ -2,8 +2,8 @@
   "disappeared",
   "became-compliant",
   "moved-source-authority",
-  "changed-compilation-context",
   "changed-applicable-components",
   "similar-display-name",
-  "reordered-plan"
+  "reordered-plan",
+  "changed-compilation-context"
 ]

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -809,6 +810,7 @@ public sealed class CampaignCliProcessTests
     {
         private readonly TcpListener listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource disposal = new();
+        private readonly ConcurrentQueue<byte[]> requestBodies = new();
         private readonly Task serverTask;
         private int requestCount;
 
@@ -825,6 +827,8 @@ public sealed class CampaignCliProcessTests
         internal Uri Endpoint { get; }
 
         internal int RequestCount => Volatile.Read(ref requestCount);
+
+        internal IReadOnlyList<byte[]> RequestBodies => requestBodies.ToArray();
 
         public async ValueTask DisposeAsync()
         {
@@ -850,6 +854,7 @@ public sealed class CampaignCliProcessTests
                     using var client = await listener.AcceptTcpClientAsync(disposal.Token);
                     await using var stream = client.GetStream();
                     var body = await ReadHttpBodyAsync(stream, disposal.Token);
+                    requestBodies.Enqueue(body);
                     Interlocked.Increment(ref requestCount);
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()

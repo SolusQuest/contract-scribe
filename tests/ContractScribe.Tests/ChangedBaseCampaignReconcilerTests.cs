@@ -113,7 +113,36 @@ public sealed class ChangedBaseCampaignReconcilerTests
     }
 
     [Fact]
-    public async Task Cancelled_acceptance_rejects_missing_or_different_authority()
+    public async Task Active_provider_reservation_is_summarized_charged_and_cleared()
+    {
+        var predecessor = WithProviderReservation(CreateScenario("snapshot.first", '1', '2'));
+        var successor = CreateScenario("snapshot.second", '3', '4');
+        var store = new MemoryStore(predecessor.Artifact);
+        var reservation = Assert.IsType<CampaignProviderReservation>(
+            predecessor.Artifact.State.ActiveReservation);
+
+        var result = await ReconcileAsync(predecessor, successor, store);
+        var accepted = Assert.IsType<CampaignAcceptedCheckpoint>(result.AcceptedCheckpoint);
+        var state = accepted.Artifact.State;
+
+        Assert.Equal(ChangedBaseCampaignReconciliationKind.Accepted, result.Kind);
+        Assert.Null(state.ActiveReservation);
+        Assert.Empty(state.WorkItems);
+        Assert.Equal("provider", state.Predecessor!.Reservation!.Kind);
+        Assert.Equal(reservation.ScribeRequestSha256, state.Predecessor.Reservation.CorrelationSha256);
+        Assert.Equal(16, state.Predecessor.Reservation.ConservativeCharge);
+        Assert.Equal(1, state.LineageCharges.ProviderRequests.ConservativeUnobserved);
+        Assert.Equal(3, state.LineageCharges.InputTokens.ConservativeUnobserved);
+        Assert.Equal(3, state.LineageCharges.CachedInputTokens.ConservativeUnobserved);
+        Assert.Equal(2, state.LineageCharges.UncachedInputTokens.ConservativeUnobserved);
+        Assert.Equal(4, state.LineageCharges.OutputTokens.ConservativeUnobserved);
+        Assert.Equal(0, state.LineageCharges.CostMicrounits.ConservativeUnobserved);
+        Assert.Equal(6, state.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+
+    }
+
+    [Fact]
+    public async Task Cancelled_acceptance_rejects_missing_authority()
     {
         var scenario = CreateScenario("snapshot.first", '1', '2');
         var successor = CreateScenario("snapshot.second", '3', '4');
@@ -194,6 +223,56 @@ public sealed class ChangedBaseCampaignReconcilerTests
             artifact.CheckpointRevision,
             artifact.Sha256));
         return new(configuration, execution, input, plan, artifact, accepted.AcceptedCheckpoint!);
+    }
+
+    private static Scenario WithProviderReservation(Scenario scenario)
+    {
+        const string WorkItemKey =
+            "campaign-work.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        Assert.True(DocumentationScribeAttemptId.TryParse(
+            "scribe-attempt.11111111111111111111111111111111",
+            out var attemptId));
+        var state = scenario.Artifact.State;
+        var reserved = CampaignStateFactory.CreateValidated(
+            state.ProductRevision,
+            state.CampaignLineage,
+            state.Snapshot,
+            state.CheckpointRevision,
+            state.ConfiguredCeilings,
+            state.LineageCharges,
+            [new CampaignWorkItemState(
+                WorkItemKey,
+                OuterAttemptCount: 0,
+                CandidateAttemptCount: 0,
+                CampaignWorkStatus.Planned,
+                TrustedProposal: null,
+                ClosedOutcome: null)],
+            new CampaignProviderReservation(
+                WorkItemKey,
+                Hash('8'),
+                attemptId,
+                new CampaignProviderReservationExposure(
+                    ProviderRequests: 1,
+                    InputTokens: 3,
+                    UncachedInputTokens: 2,
+                    OutputTokens: 4,
+                    CostMicrounits: 0,
+                    ElapsedMilliseconds: 6)),
+            candidateObservation: null,
+            cumulativeOutcome: null,
+            state.KnownCompletedOperations,
+            terminalOutcome: null,
+            state.Predecessor);
+        var artifact = CampaignStateJson.CreateArtifact(reserved);
+        var accepted = CampaignCheckpointAcceptance.AcceptCurrent(CampaignCheckpointReadResult.Found(
+            artifact.ExactUtf8Json.AsSpan(),
+            artifact.CheckpointRevision,
+            artifact.Sha256));
+        return scenario with
+        {
+            Artifact = artifact,
+            Accepted = accepted.AcceptedCheckpoint!,
+        };
     }
 
     private static string Fixture(string name) => Path.GetFullPath(Path.Join(
