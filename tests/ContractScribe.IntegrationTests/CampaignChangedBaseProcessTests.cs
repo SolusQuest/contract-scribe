@@ -664,9 +664,9 @@ public sealed class CampaignChangedBaseProcessTests
                 await File.WriteAllTextAsync(sourcePath,
                     "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static partial class App { }\n");
                 await File.WriteAllTextAsync(Path.Join(repositoryRoot, "App", "Alpha.cs"),
-                    "namespace Fixture;\npublic static partial class App { public static void Alpha() { } }\n");
+                    "namespace Fixture;\npublic static partial class App\n{\n    public static void Alpha() { }\n}\n");
                 await File.WriteAllTextAsync(Path.Join(repositoryRoot, "App", "Zulu.cs"),
-                    "namespace Fixture;\npublic static partial class App { public static void Zulu() { } }\n");
+                    "namespace Fixture;\npublic static partial class App\n{\n    public static void Zulu() { }\n}\n");
                 return false;
             default:
                 throw new InvalidDataException("Unknown target-evolution fixture.");
