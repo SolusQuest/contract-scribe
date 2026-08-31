@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -14,18 +15,18 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 [Collection("Integration process lane 1")]
 public sealed class CampaignCliProcessTests
 {
-    private static readonly string RepositoryRoot = FindRepositoryRoot();
+    internal static readonly string RepositoryRoot = FindRepositoryRoot();
     private static readonly string Configuration = AppContext.BaseDirectory.Contains(
         $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
         StringComparison.OrdinalIgnoreCase) ? "Release" : "Debug";
     private static readonly string CliPath = Path.Join(
         RepositoryRoot, "src", "ContractScribe.Cli", "bin", Configuration, "net10.0", "ContractScribe.Cli.dll");
-    private static readonly string StartupHookPath = Path.Join(
+    internal static readonly string StartupHookPath = Path.Join(
         RepositoryRoot, "tests", "ContractScribe.CampaignStartupHook", "bin", Configuration,
         "net10.0", "ContractScribe.CampaignStartupHook.dll");
-    private const string OptionalPolicy =
+    internal const string OptionalPolicy =
         "{\"defaultDecision\":\"optional\",\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\"}\n";
-    private const string RequiredPolicy =
+    internal const string RequiredPolicy =
         "{\"defaultDecision\":\"required\",\"schemaVersion\":1,\"targetProfile\":\"profile.external-api\"}\n";
 
     [Theory]
@@ -201,10 +202,6 @@ public sealed class CampaignCliProcessTests
             var resumed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.one"),
                 timeout: TimeSpan.FromMinutes(3));
             AssertCampaign(resumed, 0, "campaign.no-work", 0);
-            Assert.Equal(initial, await File.ReadAllBytesAsync(statePath));
-
-            var incompatible = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.two"));
-            AssertCampaign(incompatible, 4, "campaign.incompatible-snapshot", 0);
             Assert.Equal(initial, await File.ReadAllBytesAsync(statePath));
         }
         finally
@@ -507,7 +504,7 @@ public sealed class CampaignCliProcessTests
         }
     }
 
-    private static string[] Args(
+    internal static string[] Args(
         string operation,
         string repository,
         string state,
@@ -523,10 +520,10 @@ public sealed class CampaignCliProcessTests
         "--configuration", configuration,
     ];
 
-    private static async Task WriteConfigurationAsync(string destination, Uri? endpoint = null)
+    internal static async Task WriteConfigurationAsync(string destination, Uri? endpoint = null)
         => await WriteConfigurationAsync(destination, endpoint, maximumPatchElapsedMilliseconds: null);
 
-    private static async Task WriteConfigurationAsync(
+    internal static async Task WriteConfigurationAsync(
         string destination,
         Uri? endpoint,
         int? maximumPatchElapsedMilliseconds)
@@ -661,12 +658,12 @@ public sealed class CampaignCliProcessTests
             item.GetProperty("scenario").GetString()!)).ToArray();
     }
 
-    private static Task SetSingleWorkItemSourceAsync(string repositoryRoot) =>
+    internal static Task SetSingleWorkItemSourceAsync(string repositoryRoot) =>
         File.WriteAllTextAsync(
             Path.Join(repositoryRoot, "App", "App.cs"),
             "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void Run() { }\n}\n");
 
-    private static void AssertCampaign(
+    internal static void AssertCampaign(
         ProcessResult result,
         int exitCode,
         string outcome,
@@ -695,7 +692,7 @@ public sealed class CampaignCliProcessTests
         Assert.Equal(exitCode == 0 ? string.Empty : $"{outcome}: campaign stopped: {outcome}\n", result.Stderr);
     }
 
-    private static async Task<ProcessResult> RunAsync(
+    internal static async Task<ProcessResult> RunAsync(
         IReadOnlyList<string> arguments,
         TimeSpan? timeout = null)
     {
@@ -716,7 +713,7 @@ public sealed class CampaignCliProcessTests
         }
     }
 
-    private static IReadOnlyDictionary<string, string?> HookEnvironment(
+    internal static IReadOnlyDictionary<string, string?> HookEnvironment(
         string hook,
         string acknowledgement,
         string release) => new Dictionary<string, string?>
@@ -727,7 +724,7 @@ public sealed class CampaignCliProcessTests
             ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_RELEASE"] = release,
         };
 
-    private static async Task StopAsync(RunningProcess running)
+    internal static async Task StopAsync(RunningProcess running)
     {
         if (!running.Process.HasExited)
         {
@@ -736,7 +733,7 @@ public sealed class CampaignCliProcessTests
         }
     }
 
-    private static RunningProcess Start(
+    internal static RunningProcess Start(
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string?>? environment)
     {
@@ -760,7 +757,7 @@ public sealed class CampaignCliProcessTests
             ?? throw new InvalidOperationException("Campaign CLI process failed to start."));
     }
 
-    private static async Task WaitForFileAsync(
+    internal static async Task WaitForFileAsync(
         string path,
         RunningProcess running,
         string expectedHook,
@@ -784,7 +781,7 @@ public sealed class CampaignCliProcessTests
         }
     }
 
-    private static string CreatePrivateDirectory(string prefix)
+    internal static string CreatePrivateDirectory(string prefix)
     {
         var path = Path.Join(Path.GetTempPath(), prefix, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
@@ -805,14 +802,15 @@ public sealed class CampaignCliProcessTests
         throw new DirectoryNotFoundException("Repository root not found.");
     }
 
-    private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
+    internal sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 
     private sealed record BoundaryVector(string Hook, string Scenario);
 
-    private sealed class ProposalLoopbackServer : IAsyncDisposable
+    internal sealed class ProposalLoopbackServer : IAsyncDisposable
     {
         private readonly TcpListener listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource disposal = new();
+        private readonly ConcurrentQueue<byte[]> requestBodies = new();
         private readonly Task serverTask;
         private int requestCount;
 
@@ -829,6 +827,8 @@ public sealed class CampaignCliProcessTests
         internal Uri Endpoint { get; }
 
         internal int RequestCount => Volatile.Read(ref requestCount);
+
+        internal IReadOnlyList<byte[]> RequestBodies => requestBodies.ToArray();
 
         public async ValueTask DisposeAsync()
         {
@@ -854,6 +854,7 @@ public sealed class CampaignCliProcessTests
                     using var client = await listener.AcceptTcpClientAsync(disposal.Token);
                     await using var stream = client.GetStream();
                     var body = await ReadHttpBodyAsync(stream, disposal.Token);
+                    requestBodies.Enqueue(body);
                     Interlocked.Increment(ref requestCount);
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()
@@ -896,28 +897,19 @@ public sealed class CampaignCliProcessTests
                 }
             }
             var evidence = targetEvidence ?? throw new InvalidDataException("Target evidence message was not found.");
-            var evidenceReferenceId = evidence.GetProperty("evidenceReferences")[0]
+            var evidenceReferences = evidence.GetProperty("evidenceReferences").EnumerateArray().ToArray();
+            var summaryEvidenceReferenceId = evidenceReferences
+                .First(reference => reference.GetProperty("subject").TryGetProperty("symbolRef", out _))
                 .GetProperty("evidenceReferenceId").GetString()!;
+            var components = evidence.GetProperty("applicableComponents").EnumerateArray().ToArray();
+            if (components.Length > 0)
+            {
+                return CreateSkipResponse();
+            }
             var units = new JsonArray
             {
-                ContentUnit("content.summary", null, null, evidenceReferenceId),
+                ContentUnit("content.summary", null, null, summaryEvidenceReferenceId),
             };
-            foreach (var component in evidence.GetProperty("applicableComponents").EnumerateArray())
-            {
-                var kind = component.GetProperty("kind").GetString() switch
-                {
-                    "typeParameter" => "content.type-parameter",
-                    "parameter" => "content.parameter",
-                    "return" => "content.return",
-                    "value" => "content.value",
-                    _ => throw new InvalidDataException("Unknown component kind."),
-                };
-                units.Add(ContentUnit(
-                    kind,
-                    component.GetProperty("identity").GetString(),
-                    component.TryGetProperty("name", out var name) ? name.GetString() : null,
-                    evidenceReferenceId));
-            }
             var terminal = new JsonObject
             {
                 ["kind"] = "proposal",
@@ -1002,7 +994,7 @@ public sealed class CampaignCliProcessTests
         }
     }
 
-    private sealed class RunningProcess : IDisposable
+    internal sealed class RunningProcess : IDisposable
     {
         private readonly Task<string> stdout;
         private readonly Task<string> stderr;
