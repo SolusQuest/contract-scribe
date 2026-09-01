@@ -513,7 +513,7 @@ public sealed class GitHubPublicationContractTests
     public void Core_boundary_and_single_port_remain_platform_neutral()
     {
         var root = FindRepositoryRoot();
-        var project = XDocument.Load(Path.Combine(root, "src", "ContractScribe.Core",
+        var project = XDocument.Load(Path.Join(root, "src", "ContractScribe.Core",
             "ContractScribe.Core.csproj"));
         Assert.Empty(project.Descendants("PackageReference"));
         Assert.Empty(project.Descendants("ProjectReference"));
@@ -528,7 +528,7 @@ public sealed class GitHubPublicationContractTests
             type.IsInterface && type.Name.Contains("GitHubPublication", StringComparison.Ordinal));
 
         var source = string.Join("\n", Directory.EnumerateFiles(
-            Path.Combine(root, "src", "ContractScribe.Core", "GitHub"), "*.cs",
+            Path.Join(root, "src", "ContractScribe.Core", "GitHub"), "*.cs",
             SearchOption.AllDirectories).Select(File.ReadAllText));
         foreach (var forbidden in new[]
         {
@@ -539,8 +539,8 @@ public sealed class GitHubPublicationContractTests
         {
             Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
         }
-        Assert.False(Directory.Exists(Path.Combine(root, "src", "ContractScribe.GitHub")));
-        Assert.False(File.Exists(Path.Combine(root, "tests", "ContractScribe.Tests",
+        Assert.False(Directory.Exists(Path.Join(root, "src", "ContractScribe.GitHub")));
+        Assert.False(File.Exists(Path.Join(root, "tests", "ContractScribe.Tests",
             "GitHubPublicationProtocolDecisionHarnessTests.cs")));
     }
 
@@ -733,14 +733,14 @@ public sealed class GitHubPublicationContractTests
             CandidateDocumentationLineCount: 1);
 
     private static JsonDocument ReadFixture(string name) => JsonDocument.Parse(
-        File.ReadAllBytes(Path.Combine(FindRepositoryRoot(), "tests", "fixtures", "github",
+        File.ReadAllBytes(Path.Join(FindRepositoryRoot(), "tests", "fixtures", "github",
             "publication-contract", name)));
 
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null
-               && !File.Exists(Path.Combine(directory.FullName, "ContractScribe.slnx")))
+               && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx")))
         {
             directory = directory.Parent;
         }
