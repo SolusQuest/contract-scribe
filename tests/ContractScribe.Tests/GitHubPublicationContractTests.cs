@@ -168,6 +168,46 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
+    public void M4_campaign_lineage_grammar_is_preserved_but_M5_identifiers_are_marker_safe()
+    {
+        var authority = GitHubPublicationFactory.CreateAuthority(CreateInput() with
+        {
+            CampaignLineage = "campaign:1",
+        });
+
+        Assert.DoesNotContain("campaign:1", GitHubPublicationFactory.CreateCoordinationRef(authority),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("campaign:1", GitHubPublicationFactory.CreateProposalRef(authority),
+            StringComparison.Ordinal);
+        using var representation = ReadFixture("coordination-representation-v1.json");
+        var marker = Encoding.UTF8.GetString(Convert.FromBase64String(representation.RootElement
+            .GetProperty("ownershipMarkerUtf8Base64").GetString()!));
+        Assert.DoesNotContain("campaign:1", marker, StringComparison.Ordinal);
+        Assert.DoesNotContain(authority.OperationId, marker, StringComparison.Ordinal);
+        Assert.DoesNotContain(authority.GenerationId, marker, StringComparison.Ordinal);
+
+        foreach (var invalidLineage in new[] { ":campaign", ".campaign", "-campaign", "_campaign" })
+        {
+            Assert.Equal(GitHubPublicationValidationCode.InvalidVocabulary,
+                Assert.Throws<GitHubPublicationValidationException>(() =>
+                    GitHubPublicationFactory.CreateAuthority(CreateInput() with
+                    {
+                        CampaignLineage = invalidLineage,
+                    })).Code);
+        }
+
+        foreach (var invalidM5Id in new[] { ".operation", "-operation", "_operation" })
+        {
+            Assert.Equal(GitHubPublicationValidationCode.InvalidVocabulary,
+                Assert.Throws<GitHubPublicationValidationException>(() =>
+                    GitHubPublicationFactory.CreateAuthority(CreateInput() with
+                    {
+                        OperationId = invalidM5Id,
+                    })).Code);
+        }
+    }
+
+    [Fact]
     public void Exact_payload_set_hash_copy_and_byte_bounds_are_enforced_before_copy()
     {
         var authority = GitHubPublicationFactory.CreateAuthority(CreateInput());
@@ -247,6 +287,25 @@ public sealed class GitHubPublicationContractTests
             substitutedCandidate.AuthorityCommitmentSha256);
         Assert.NotEqual(authority.OperationCommitmentSha256,
             substitutedCandidate.OperationCommitmentSha256);
+
+        Assert.Equal(GitHubPublicationValidationCode.InvalidTransition,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(append with
+                {
+                    PrecedingOperationId = append.OperationId,
+                })).Code);
+    }
+
+    [Fact]
+    public void Exact_replay_reuses_the_complete_current_authority_without_a_predecessor_id()
+    {
+        var first = GitHubPublicationFactory.CreateAuthority(CreateInput());
+        var replay = GitHubPublicationFactory.CreateAuthority(CreateInput());
+
+        Assert.Null(first.PrecedingOperationId);
+        Assert.Equal(first.AuthorityCommitmentSha256, replay.AuthorityCommitmentSha256);
+        Assert.Equal(first.OperationCommitmentSha256, replay.OperationCommitmentSha256);
+        Assert.True(first.ChangedFiles.SequenceEqual(replay.ChangedFiles));
     }
 
     [Fact]
@@ -261,12 +320,21 @@ public sealed class GitHubPublicationContractTests
         Assert.DoesNotContain(typeof(GitHubPublicationLocalFailure).GetProperties(), property =>
             property.PropertyType == typeof(string));
 
+        var oneCharacterDifferentBase = $"{new string('1', 39)}2";
         var stale = GitHubPublicationResult.StaleBaseAfterCreate(
             new GitHubPublicationStaleDraftResidual(
                 42, Hex('a'), "refs/heads/proposal", GitOid('2'), "refs/heads/main",
-                GitOid('1'), GitOid('3'), "generation-1", "operation-1", Hex('b')));
+                GitOid('1'), oneCharacterDifferentBase,
+                "generation-1", "operation-1", Hex('b')));
         Assert.Equal(42, stale.StaleDraft!.PullRequestNumber);
+        Assert.Equal(GitOid('1'), stale.StaleDraft.ExpectedBaseOid);
+        Assert.Equal(oneCharacterDifferentBase, stale.StaleDraft.ObservedBaseOid);
         Assert.Null(stale.RemoteFailure);
+
+        Assert.Throws<ArgumentException>(() => GitHubPublicationResult.StaleBaseAfterCreate(
+            new GitHubPublicationStaleDraftResidual(
+                42, Hex('a'), "refs/heads/proposal", GitOid('2'), "refs/heads/main",
+                GitOid('1'), GitOid('1'), "generation-1", "operation-1", Hex('b'))));
         foreach (var kind in Enum.GetValues<GitHubPublicationRemoteFailureKind>())
         {
             var failure = GitHubPublicationResult.FromRemoteFailure(kind);
@@ -288,6 +356,42 @@ public sealed class GitHubPublicationContractTests
         Assert.False(root.GetProperty("afterOidMayBeZero").GetBoolean());
         Assert.Equal(4, root.GetProperty("resources").GetArrayLength());
         Assert.Equal("zero-further-mutation", root.GetProperty("visibleDrift").GetString());
+    }
+
+    [Fact]
+    public void Coordination_representation_preimages_and_Git_object_ids_are_frozen()
+    {
+        using var fixture = ReadFixture("coordination-representation-v1.json");
+        var root = fixture.RootElement;
+        var vectors = CreateCoordinationVectors();
+        Assert.Equal(".contract-scribe", root.GetProperty("rootTreePath").GetString());
+        Assert.Equal("40000", root.GetProperty("rootTreeMode").GetString());
+        Assert.Equal("coordination-state-v1.json", root.GetProperty("statePath").GetString());
+        Assert.Equal("100644", root.GetProperty("stateMode").GetString());
+        Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                $"<!-- contract-scribe-publication-v1 ownership=sha256:{Hex('e')} -->\n")),
+            root.GetProperty("ownershipMarkerUtf8Base64").GetString());
+
+        var expected = root.GetProperty("vectors").EnumerateArray().ToArray();
+        Assert.Equal(vectors.Length, expected.Length);
+        for (var index = 0; index < vectors.Length; index++)
+        {
+            var actual = CreateCoordinationKnownAnswer(vectors[index]);
+            Assert.Equal(vectors[index].Name, expected[index].GetProperty("name").GetString());
+            Assert.Equal(Sha(actual.StateBytes),
+                expected[index].GetProperty("canonicalStateSha256").GetString());
+            Assert.Equal(actual.BlobOid, expected[index].GetProperty("blobOid").GetString());
+            Assert.Equal(actual.LeafTreeOid, expected[index].GetProperty("leafTreeOid").GetString());
+            Assert.Equal(actual.RootTreeOid, expected[index].GetProperty("rootTreeOid").GetString());
+            Assert.Equal(Sha(actual.CommitBytes),
+                expected[index].GetProperty("commitSha256").GetString());
+            Assert.Equal(actual.CommitOid, expected[index].GetProperty("commitOid").GetString());
+        }
+
+        Assert.Equal(expected[0].GetProperty("canonicalStateSha256").GetString(),
+            expected[1].GetProperty("canonicalStateSha256").GetString());
+        Assert.Equal(expected[0].GetProperty("commitOid").GetString(),
+            expected[1].GetProperty("commitOid").GetString());
     }
 
     [Fact]
@@ -369,6 +473,166 @@ public sealed class GitHubPublicationContractTests
             ChangedFiles: files ?? [Changed("docs/readme.md", OriginalBytes, CandidateBytes)],
             PrecedingChangedFiles: []);
 
+    private static CoordinationVector[] CreateCoordinationVectors()
+    {
+        var initial = new CoordinationVector(
+            "initial-claim", "claimed", "initial", null, null, null,
+            GitOid('0'), null, null, null, null, null, null, null, null, null);
+        var content = initial with
+        {
+            Name = "content-partial",
+            Stage = "content-created",
+            CoordinationPredecessorOid = GitOid('3'),
+            ContentCommitOid = GitOid('4'),
+        };
+        var proposal = content with
+        {
+            Name = "ref-partial",
+            Stage = "proposal-ref-advanced",
+            CoordinationPredecessorOid = GitOid('4'),
+            ProposalRefOid = GitOid('5'),
+            ProposalCommitOid = GitOid('5'),
+            ProposalTreeOid = GitOid('6'),
+        };
+        var stale = proposal with
+        {
+            Name = "pr-create-residual",
+            Stage = "stale-draft",
+            CoordinationPredecessorOid = GitOid('5'),
+            PullRequestCreationOperationCommitmentSha256 = Hex('d'),
+            PullRequestNumber = 42,
+            ExpectedBaseOid = GitOid('1'),
+            ObservedBaseOid = GitOid('7'),
+            OwnershipMarkerSha256 = Hex('e'),
+        };
+        var published = proposal with
+        {
+            Name = "completed-publication",
+            Stage = "published",
+            CoordinationPredecessorOid = GitOid('6'),
+            PullRequestCreationOperationCommitmentSha256 = Hex('d'),
+            PullRequestNumber = 42,
+            ExpectedBaseOid = GitOid('1'),
+            ObservedBaseOid = GitOid('1'),
+            OwnershipMarkerSha256 = Hex('e'),
+        };
+        return
+        [
+            initial,
+            initial with { Name = "exact-replay" },
+            initial with
+            {
+                Name = "append-claim",
+                Transition = "same-snapshot-append",
+                PrecedingOperationId = "operation-0",
+                PrecedingAuthorityCommitmentSha256 = Hex('a'),
+                PrecedingCandidateCommitmentSha256 = Hex('b'),
+                CoordinationPredecessorOid = GitOid('2'),
+            },
+            content,
+            proposal,
+            stale,
+            published,
+        ];
+    }
+
+    private static CoordinationKnownAnswer CreateCoordinationKnownAnswer(
+        CoordinationVector vector)
+    {
+        byte[] stateBytes;
+        using (var stream = new MemoryStream())
+        {
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("version", 1);
+                writer.WriteString("stage", vector.Stage);
+                writer.WriteString("repositoryId", "SolusQuest/contract-scribe");
+                writer.WriteString("targetRef", "refs/heads/main");
+                writer.WriteString("targetCommitOid", GitOid('1'));
+                writer.WriteString("authorityCommitmentSha256", Hex('9'));
+                writer.WriteString("policyCommitmentSha256", Hex('8'));
+                writer.WriteString("operationId", "operation-1");
+                writer.WriteString("operationCommitmentSha256", Hex('7'));
+                writer.WriteString("currentCandidateCommitmentSha256", Hex('6'));
+                WriteOptional(writer, "precedingOperationId", vector.PrecedingOperationId);
+                WriteOptional(writer, "precedingAuthorityCommitmentSha256",
+                    vector.PrecedingAuthorityCommitmentSha256);
+                WriteOptional(writer, "precedingCandidateCommitmentSha256",
+                    vector.PrecedingCandidateCommitmentSha256);
+                writer.WriteString("generationId", "generation-1");
+                writer.WriteString("transition", vector.Transition);
+                writer.WriteString("coordinationPredecessorOid", vector.CoordinationPredecessorOid);
+                WriteOptional(writer, "contentCommitOid", vector.ContentCommitOid);
+                WriteOptional(writer, "proposalRefOid", vector.ProposalRefOid);
+                WriteOptional(writer, "proposalCommitOid", vector.ProposalCommitOid);
+                WriteOptional(writer, "proposalTreeOid", vector.ProposalTreeOid);
+                WriteOptional(writer, "pullRequestCreationOperationCommitmentSha256",
+                    vector.PullRequestCreationOperationCommitmentSha256);
+                if (vector.PullRequestNumber is { } number)
+                    writer.WriteNumber("pullRequestNumber", number);
+                else
+                    writer.WriteNull("pullRequestNumber");
+                WriteOptional(writer, "expectedBaseOid", vector.ExpectedBaseOid);
+                WriteOptional(writer, "observedBaseOid", vector.ObservedBaseOid);
+                WriteOptional(writer, "ownershipMarkerSha256", vector.OwnershipMarkerSha256);
+                writer.WriteStartArray("cumulativeChangedFiles");
+                writer.WriteStartObject();
+                writer.WriteString("path", "docs/a.md");
+                writer.WriteString("candidateSha256", Hex('4'));
+                writer.WriteEndObject();
+                writer.WriteStartObject();
+                writer.WriteString("path", "docs/b.md");
+                writer.WriteString("candidateSha256", Hex('5'));
+                writer.WriteEndObject();
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+            stream.WriteByte((byte)'\n');
+            stateBytes = stream.ToArray();
+        }
+
+        var blobOid = GitObjectOid("blob", stateBytes);
+        var leafTreeBytes = GitTreeEntry("100644", "coordination-state-v1.json", blobOid);
+        var leafTreeOid = GitObjectOid("tree", leafTreeBytes);
+        var rootTreeBytes = GitTreeEntry("40000", ".contract-scribe", leafTreeOid);
+        var rootTreeOid = GitObjectOid("tree", rootTreeBytes);
+        var commitText = $"tree {rootTreeOid}\n" +
+            $"parent {GitOid('2')}\n" +
+            "author ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n" +
+            "committer ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n\n" +
+            "ContractScribe coordination v1\n" +
+            $"operation={Hex('7')}\n" +
+            $"stage={vector.Stage}\n";
+        var commitBytes = Encoding.UTF8.GetBytes(commitText);
+        return new(stateBytes, blobOid, leafTreeOid, rootTreeOid, commitBytes,
+            GitObjectOid("commit", commitBytes));
+    }
+
+    private static void WriteOptional(Utf8JsonWriter writer, string name, string? value)
+    {
+        if (value is null) writer.WriteNull(name);
+        else writer.WriteString(name, value);
+    }
+
+    private static byte[] GitTreeEntry(string mode, string name, string oid)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Encoding.UTF8.GetBytes($"{mode} {name}"));
+        stream.WriteByte(0);
+        stream.Write(Convert.FromHexString(oid));
+        return stream.ToArray();
+    }
+
+    private static string GitObjectOid(string type, byte[] bytes)
+    {
+        var header = Encoding.ASCII.GetBytes($"{type} {bytes.Length}\0");
+        var framed = new byte[header.Length + bytes.Length];
+        header.CopyTo(framed, 0);
+        bytes.CopyTo(framed, header.Length);
+        return Convert.ToHexString(SHA1.HashData(framed)).ToLowerInvariant();
+    }
+
     private static GitHubPublicationAuthorityInput CreateAppendInput()
     {
         var previous = Encoding.UTF8.GetBytes("previous-a\n");
@@ -445,4 +709,30 @@ public sealed class GitHubPublicationContractTests
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     private static string Hex(char value) => new(value, 64);
     private static string GitOid(char value) => new(value, 40);
+
+    private sealed record CoordinationVector(
+        string Name,
+        string Stage,
+        string Transition,
+        string? PrecedingOperationId,
+        string? PrecedingAuthorityCommitmentSha256,
+        string? PrecedingCandidateCommitmentSha256,
+        string CoordinationPredecessorOid,
+        string? ContentCommitOid,
+        string? ProposalRefOid,
+        string? ProposalCommitOid,
+        string? ProposalTreeOid,
+        string? PullRequestCreationOperationCommitmentSha256,
+        int? PullRequestNumber,
+        string? ExpectedBaseOid,
+        string? ObservedBaseOid,
+        string? OwnershipMarkerSha256);
+
+    private sealed record CoordinationKnownAnswer(
+        byte[] StateBytes,
+        string BlobOid,
+        string LeafTreeOid,
+        string RootTreeOid,
+        byte[] CommitBytes,
+        string CommitOid);
 }

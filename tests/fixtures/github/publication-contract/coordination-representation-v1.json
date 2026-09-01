@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "rootTreePath": ".contract-scribe",
+  "rootTreeMode": "40000",
+  "statePath": "coordination-state-v1.json",
+  "stateMode": "100644",
+  "ownershipMarkerUtf8Base64": "PCEtLSBjb250cmFjdC1zY3JpYmUtcHVibGljYXRpb24tdjEgb3duZXJzaGlwPXNoYTI1NjplZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlIC0tPgo=",
+  "vectors": [
+    {
+      "name": "initial-claim",
+      "canonicalStateSha256": "06cf0374c1a74133715b966ed0b2c300bad62abbb0d14d907f038d9fd67c7cad",
+      "blobOid": "7995f429bf4c53301ee73c0e02ad276e5ee8551b",
+      "leafTreeOid": "22abd2d898822359afedd8ee9216ae3504f60223",
+      "rootTreeOid": "010332022665a7514491e4a58f9b2882eec13499",
+      "commitSha256": "e4e9f6ac0396caa54de944bc91ed2537d4c1411236400028361c0031bba87327",
+      "commitOid": "2244b2d5dea0fe5b4030628d36688cffe46347ab"
+    },
+    {
+      "name": "exact-replay",
+      "canonicalStateSha256": "06cf0374c1a74133715b966ed0b2c300bad62abbb0d14d907f038d9fd67c7cad",
+      "blobOid": "7995f429bf4c53301ee73c0e02ad276e5ee8551b",
+      "leafTreeOid": "22abd2d898822359afedd8ee9216ae3504f60223",
+      "rootTreeOid": "010332022665a7514491e4a58f9b2882eec13499",
+      "commitSha256": "e4e9f6ac0396caa54de944bc91ed2537d4c1411236400028361c0031bba87327",
+      "commitOid": "2244b2d5dea0fe5b4030628d36688cffe46347ab"
+    },
+    {
+      "name": "append-claim",
+      "canonicalStateSha256": "24f40625fe3c458c23018785683efe69c226976df5ed8f46f0c9d6095e6e3968",
+      "blobOid": "843476d121e271f11b804df4fcd38157a5d64418",
+      "leafTreeOid": "71248ba8dbf9a9310bcd58ef91b6ddc12bfa96de",
+      "rootTreeOid": "2eb6068d393ae75eba86092d4a4455684bd7bde3",
+      "commitSha256": "7eb053f0537d5b9f37f43ce42cd42c2ed0af174d6307417605d99782bfb88211",
+      "commitOid": "6faa5aa71807aef49f1e21b63bcde71531dd05b1"
+    },
+    {
+      "name": "content-partial",
+      "canonicalStateSha256": "c5c10a95176ef6340159c4054669a18bfadfe77343d75c626189a9274bf93683",
+      "blobOid": "5ecb2d86ff8bf170a0977f6a162acba381ac553a",
+      "leafTreeOid": "840762ea8bf76b3899b778f606a7a8afc4718345",
+      "rootTreeOid": "3275eafa202960a4351fdd7561aa4211c06baca5",
+      "commitSha256": "8ffb708ac50125ba61f9d53918fe72bc24aad2f1515a12e3e230c4295defbb3e",
+      "commitOid": "b7d675d7e038169bf6d565fdd39d625ea84d6bd6"
+    },
+    {
+      "name": "ref-partial",
+      "canonicalStateSha256": "d19d7408e186b69ef94f3f84da4116431579877e90830e42525a15340263cff4",
+      "blobOid": "ccab524e6ce47df243032676b63b14ec75927b59",
+      "leafTreeOid": "8fbac20831a808e2921832fc8ef13eb4d46378d7",
+      "rootTreeOid": "6a349a7d7d4725fb28c8b108974e40ba40849456",
+      "commitSha256": "8332c5ca96cac17abace619d646b41da56e369d74b3bcebdeb7910622831b00e",
+      "commitOid": "b228e02827f0bb97af42ec649189e25136aac3af"
+    },
+    {
+      "name": "pr-create-residual",
+      "canonicalStateSha256": "cfd5ac2b7b723c3c87488971909440a8e12bdbfc1b125e92b9fd4e112488993f",
+      "blobOid": "e9ba38c863b748530e5598891ecf0292fa208bf0",
+      "leafTreeOid": "198c07e7a1cb063339faa45728aad61a3be096f4",
+      "rootTreeOid": "290db1b78c5a28d96441cc126749220a1b6b18d2",
+      "commitSha256": "ccdf9cbb95cec518e8dbe9f9691e4d545e3cc7eafd676d1d3be78f86c5e39e8f",
+      "commitOid": "793d10fbda09fcb19173710eb655da65d16bf723"
+    },
+    {
+      "name": "completed-publication",
+      "canonicalStateSha256": "c8813815be820f2ef50abe5c066d4b9eac8f2fffa33526fec0229f1484ce7fc0",
+      "blobOid": "ac00fd3a9bf56f0e655d0ceb2d0b9ac98cc10d77",
+      "leafTreeOid": "5c9b711a95d92b94b5238ec87067258b99427153",
+      "rootTreeOid": "9fd7b45c4fc02ec36bb240e961ce91b1a385bbe7",
+      "commitSha256": "4848ec9c2b54afa20eacbf35ce3110bca640254554a72b87a04390a4066d0f0f",
+      "commitOid": "d0d573884cf020dcbe5dcc3d848d626b30f65e20"
+    }
+  ]
+}

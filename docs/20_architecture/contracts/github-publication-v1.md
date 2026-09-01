@@ -40,12 +40,15 @@ production implementation and is forbidden.
   preceding operation ID;
 - for a closed-unmerged successor only, the exact explicit authorization.
 
-Authority identifiers use the marker-safe grammar `[A-Za-z0-9._-]+` and the
-existing scalar bound. Whitespace, Unicode formatting characters, `=`, HTML
+Campaign lineage retains the M4 grammar
+`[A-Za-z0-9][A-Za-z0-9._:-]*` and its existing scalar bound. New M5 identifiers
+use the marker-safe grammar `[A-Za-z0-9][A-Za-z0-9._-]*` and the same bound.
+Whitespace, leading punctuation, Unicode formatting characters, `=`, HTML
 comment delimiters, controls, and all other characters fail before a commitment,
-credential, filesystem access, or request. Raw identifiers therefore cannot
-escape line or HTML metadata later. Repositories and refs retain their own
-stricter grammars.
+credential, filesystem access, or request. Raw lineage and M5 identifiers are
+never interpolated into PR or ownership-marker metadata; those surfaces contain
+only lowercase commitment keys. Repositories and refs retain their own stricter
+grammars.
 
 The authority contains no tree/blob/mode observation, current remote head,
 proposal object, PR observation, token, request, response, source bytes, or
@@ -125,6 +128,48 @@ authority/candidate/operation, generation/transition, exact coordination and
 proposal predecessor/result OIDs, exact PR residual identity when present, and
 the complete cumulative changed-path/candidate-hash map.
 
+The coordination ref points to a commit whose tree contains exactly one entry:
+the tree `.contract-scribe` with mode `40000`. That tree contains exactly
+`coordination-state-v1.json` with mode `100644`; no proposal or ownership file is
+present. The state object has every key below in this exact order. Optional and
+stage-forbidden values are encoded as JSON `null`, never omitted. Changed files
+are ordered by ordinal path and each object has exactly `path` then
+`candidateSha256`.
+
+```text
+version, stage, repositoryId, targetRef, targetCommitOid,
+authorityCommitmentSha256, policyCommitmentSha256, operationId,
+operationCommitmentSha256, currentCandidateCommitmentSha256,
+precedingOperationId, precedingAuthorityCommitmentSha256,
+precedingCandidateCommitmentSha256, generationId, transition,
+coordinationPredecessorOid, contentCommitOid, proposalRefOid,
+proposalCommitOid, proposalTreeOid,
+pullRequestCreationOperationCommitmentSha256, pullRequestNumber,
+expectedBaseOid, observedBaseOid, ownershipMarkerSha256,
+cumulativeChangedFiles
+```
+
+The Git commit has exactly one nonzero parent and these exact, LF-only preimage
+lines (the final message line is LF terminated):
+
+```text
+tree <root-tree-oid>
+parent <coordination-parent-oid>
+author ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000
+committer ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000
+
+ContractScribe coordination v1
+operation=<operation-commitment-sha256>
+stage=<lexical-stage-id>
+```
+
+Git blob, tree and commit identities use the ordinary SHA-1 Git object framing
+`<type> <decimal-byte-count>\0<preimage>`. The ownership marker is strict UTF-8,
+LF terminated, and exactly
+`<!-- contract-scribe-publication-v1 ownership=sha256:<lowercase-sha256> -->`.
+Only its SHA-256 commitment is stored as `ownershipMarkerSha256`; raw lineage,
+operation and generation IDs never appear in the marker.
+
 Its closed stages are:
 
 ```text
@@ -141,11 +186,29 @@ closed-unmerged
 
 Each stage has a closed required/forbidden field matrix. Later stages retain all
 earlier exact identities; no caller-controlled diagnostic is correctness-bearing.
-R3 fixtures must freeze bytes and object identities for initial claim, exact
-replay, append claim, content partial, ref partial, PR-create residual,
-published/awaiting-review, stale draft, merged and closed-unmerged. R3 must
-authenticate state bytes, complete tree, commit message, actor, timestamp,
-parent and OID before producing a validated capability.
+The common fields from `version` through `coordinationPredecessorOid`, plus the
+cumulative map, are always required. In a `claimed` initial/successor record the
+three `preceding*` fields are forbidden; in a `claimed` append they are required.
+The remaining required/forbidden matrix is:
+
+| stage | content | proposal ref/commit/tree | PR create operation/number | expected/observed base | ownership marker |
+| --- | --- | --- | --- | --- | --- |
+| `claimed` | forbidden | forbidden | forbidden | forbidden | forbidden |
+| `content-created` | required | forbidden | forbidden | forbidden | forbidden |
+| `proposal-ref-advanced` | required | required | forbidden | forbidden | forbidden |
+| `pr-created` | required | required | required | required and equal | required |
+| `published` | required | required | required | required and equal | required |
+| `awaiting-review` | required | required | required | required and equal | required |
+| `stale-draft` | required | required | required | required and unequal | required |
+| `merged` | required | required | required | required | required |
+| `closed-unmerged` | required | required | required | required | required |
+
+`tests/fixtures/github/publication-contract/coordination-representation-v1.json`
+freezes canonical state and commit preimages plus blob, nested-tree, root-tree and
+commit OIDs for initial claim, byte-exact replay, append claim, content partial,
+ref partial, PR-create residual and completed publication. R3 must authenticate
+those state bytes, the complete tree, commit message, actor, timestamp, parent
+and OID before producing a validated capability.
 
 Initial admission accepts either expected absence or byte-exact same-operation
 replay. Append requires authenticated equality of preceding operation,

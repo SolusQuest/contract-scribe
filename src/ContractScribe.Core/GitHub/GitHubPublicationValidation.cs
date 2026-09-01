@@ -17,7 +17,7 @@ public static class GitHubPublicationFactory
         ValidateRepositoryPart(input.RepositoryName);
         Require(IsRefName(input.TargetRef), GitHubPublicationValidationCode.InvalidVocabulary);
         RequireGitOid(input.ExpectedBaseCommitOid, allowMissing: false);
-        RequireOpaque(input.CampaignLineage);
+        RequireCampaignLineage(input.CampaignLineage);
         RequireSha256(input.SnapshotCommitmentSha256);
         RequireSha256(input.ExecutionCommitmentSha256);
         RequireSha256(input.WorkPlanCommitmentSha256);
@@ -193,9 +193,15 @@ public static class GitHubPublicationFactory
         {
             return false;
         }
-        return value.All(character => char.IsAsciiLetterOrDigit(character)
-            || character is '-' or '_' or '.');
+        return char.IsAsciiLetterOrDigit(value[0])
+            && value[1..].All(character => char.IsAsciiLetterOrDigit(character)
+                || character is '-' or '_' or '.');
     }
+
+    internal static bool IsCampaignLineage(string? value) =>
+        CampaignStateFactory.IsOpaqueId(
+            value,
+            CampaignStateContract.MaximumIdentifierScalars);
 
     internal static bool IsSha256(string? value) => IsLowerHex(value, 64);
     internal static bool IsGitOid(string? value, bool allowMissing) =>
@@ -253,6 +259,8 @@ public static class GitHubPublicationFactory
                 break;
             case GitHubPublicationTransitionKind.SameSnapshotAppend:
                 Require(hasPrecedingOperation && hasPrecedingAuthority && hasPrecedingCandidate
+                        && !string.Equals(input.OperationId, input.PrecedingOperationId,
+                            StringComparison.Ordinal)
                         && !precedingFiles.IsEmpty && input.TerminalPredecessor is null
                         && input.ClosedUnmergedSuccessorAuthorization is null,
                     GitHubPublicationValidationCode.InvalidTransition);
@@ -396,6 +404,8 @@ public static class GitHubPublicationFactory
 
     private static void RequireOpaque(string value) =>
         Require(IsOpaqueIdentifier(value), GitHubPublicationValidationCode.InvalidVocabulary);
+    private static void RequireCampaignLineage(string value) =>
+        Require(IsCampaignLineage(value), GitHubPublicationValidationCode.InvalidVocabulary);
     private static void RequireSha256(string value) =>
         Require(IsSha256(value), GitHubPublicationValidationCode.InvalidHash);
     private static void RequireGitOid(string value, bool allowMissing) =>

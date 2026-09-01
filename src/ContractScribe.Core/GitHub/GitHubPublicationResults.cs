@@ -270,6 +270,8 @@ public sealed class GitHubPublicationResult
             || !GitHubPublicationFactory.IsRefName(residual.ExpectedBaseRef)
             || !GitHubPublicationFactory.IsGitOid(residual.ExpectedBaseOid, allowMissing: false)
             || !GitHubPublicationFactory.IsGitOid(residual.ObservedBaseOid, allowMissing: false)
+            || string.Equals(residual.ExpectedBaseOid, residual.ObservedBaseOid,
+                StringComparison.Ordinal)
             || !GitHubPublicationFactory.IsOpaqueIdentifier(residual.GenerationId)
             || !GitHubPublicationFactory.IsOpaqueIdentifier(residual.OperationId)
             || !GitHubPublicationFactory.IsSha256(residual.OperationCommitmentSha256))
