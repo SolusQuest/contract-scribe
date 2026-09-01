@@ -383,15 +383,40 @@ public sealed class GitHubPublicationContractTests
             Assert.Equal(actual.BlobOid, expected[index].GetProperty("blobOid").GetString());
             Assert.Equal(actual.LeafTreeOid, expected[index].GetProperty("leafTreeOid").GetString());
             Assert.Equal(actual.RootTreeOid, expected[index].GetProperty("rootTreeOid").GetString());
+            Assert.Equal(actual.CommitParentOid,
+                expected[index].GetProperty("commitParentOid").GetString());
             Assert.Equal(Sha(actual.CommitBytes),
                 expected[index].GetProperty("commitSha256").GetString());
             Assert.Equal(actual.CommitOid, expected[index].GetProperty("commitOid").GetString());
         }
 
-        Assert.Equal(expected[0].GetProperty("canonicalStateSha256").GetString(),
-            expected[1].GetProperty("canonicalStateSha256").GetString());
-        Assert.Equal(expected[0].GetProperty("commitOid").GetString(),
-            expected[1].GetProperty("commitOid").GetString());
+        var answers = vectors.ToDictionary(
+            vector => vector.Name,
+            CreateCoordinationKnownAnswer,
+            StringComparer.Ordinal);
+        var states = vectors.ToDictionary(vector => vector.Name, StringComparer.Ordinal);
+        Assert.Equal(answers["initial-claim"].StateBytes, answers["exact-replay"].StateBytes);
+        Assert.Equal(answers["initial-claim"].CommitBytes, answers["exact-replay"].CommitBytes);
+        Assert.Equal(answers["initial-claim"].CommitOid, answers["exact-replay"].CommitOid);
+        Assert.Equal(GitOid('1'), answers["initial-claim"].CommitParentOid);
+        Assert.Equal(GitOid('1'), answers["exact-replay"].CommitParentOid);
+        Assert.Equal(answers["initial-claim"].CommitOid,
+            states["content-partial"].CoordinationPredecessorOid);
+        Assert.Equal(answers["content-partial"].CommitOid,
+            states["ref-partial"].CoordinationPredecessorOid);
+        Assert.Equal(answers["ref-partial"].CommitOid,
+            states["pr-create-residual"].CoordinationPredecessorOid);
+        Assert.Equal(answers["ref-partial"].CommitOid,
+            states["completed-publication"].CoordinationPredecessorOid);
+        Assert.Equal(answers["completed-publication"].CommitOid,
+            states["append-claim"].CoordinationPredecessorOid);
+        Assert.All(vectors, vector =>
+        {
+            var answer = answers[vector.Name];
+            Assert.NotEqual(GitOid('0'), answer.CommitParentOid);
+            if (vector.CoordinationPredecessorOid != GitOid('0'))
+                Assert.Equal(vector.CoordinationPredecessorOid, answer.CommitParentOid);
+        });
     }
 
     [Fact]
@@ -476,29 +501,50 @@ public sealed class GitHubPublicationContractTests
     private static CoordinationVector[] CreateCoordinationVectors()
     {
         var initial = new CoordinationVector(
-            "initial-claim", "claimed", "initial", null, null, null,
-            GitOid('0'), null, null, null, null, null, null, null, null, null);
+            Name: "initial-claim",
+            Stage: "claimed",
+            Transition: "initial",
+            AuthorityCommitmentSha256: Hex('9'),
+            OperationId: "operation-1",
+            OperationCommitmentSha256: Hex('7'),
+            CurrentCandidateCommitmentSha256: Hex('6'),
+            PrecedingOperationId: null,
+            PrecedingAuthorityCommitmentSha256: null,
+            PrecedingCandidateCommitmentSha256: null,
+            CoordinationPredecessorOid: GitOid('0'),
+            ContentCommitOid: null,
+            ProposalRefOid: null,
+            ProposalCommitOid: null,
+            ProposalTreeOid: null,
+            PullRequestCreationOperationCommitmentSha256: null,
+            PullRequestNumber: null,
+            ExpectedBaseOid: null,
+            ObservedBaseOid: null,
+            OwnershipMarkerSha256: null);
+        var initialAnswer = CreateCoordinationKnownAnswer(initial);
         var content = initial with
         {
             Name = "content-partial",
             Stage = "content-created",
-            CoordinationPredecessorOid = GitOid('3'),
+            CoordinationPredecessorOid = initialAnswer.CommitOid,
             ContentCommitOid = GitOid('4'),
         };
+        var contentAnswer = CreateCoordinationKnownAnswer(content);
         var proposal = content with
         {
             Name = "ref-partial",
             Stage = "proposal-ref-advanced",
-            CoordinationPredecessorOid = GitOid('4'),
+            CoordinationPredecessorOid = contentAnswer.CommitOid,
             ProposalRefOid = GitOid('5'),
             ProposalCommitOid = GitOid('5'),
             ProposalTreeOid = GitOid('6'),
         };
+        var proposalAnswer = CreateCoordinationKnownAnswer(proposal);
         var stale = proposal with
         {
             Name = "pr-create-residual",
             Stage = "stale-draft",
-            CoordinationPredecessorOid = GitOid('5'),
+            CoordinationPredecessorOid = proposalAnswer.CommitOid,
             PullRequestCreationOperationCommitmentSha256 = Hex('d'),
             PullRequestNumber = 42,
             ExpectedBaseOid = GitOid('1'),
@@ -509,26 +555,32 @@ public sealed class GitHubPublicationContractTests
         {
             Name = "completed-publication",
             Stage = "published",
-            CoordinationPredecessorOid = GitOid('6'),
+            CoordinationPredecessorOid = proposalAnswer.CommitOid,
             PullRequestCreationOperationCommitmentSha256 = Hex('d'),
             PullRequestNumber = 42,
             ExpectedBaseOid = GitOid('1'),
             ObservedBaseOid = GitOid('1'),
             OwnershipMarkerSha256 = Hex('e'),
         };
+        var publishedAnswer = CreateCoordinationKnownAnswer(published);
+        var append = initial with
+        {
+            Name = "append-claim",
+            Transition = "same-snapshot-append",
+            AuthorityCommitmentSha256 = Hex('a'),
+            OperationId = "operation-2",
+            OperationCommitmentSha256 = Hex('b'),
+            CurrentCandidateCommitmentSha256 = Hex('c'),
+            PrecedingOperationId = "operation-1",
+            PrecedingAuthorityCommitmentSha256 = Hex('9'),
+            PrecedingCandidateCommitmentSha256 = Hex('6'),
+            CoordinationPredecessorOid = publishedAnswer.CommitOid,
+        };
         return
         [
             initial,
             initial with { Name = "exact-replay" },
-            initial with
-            {
-                Name = "append-claim",
-                Transition = "same-snapshot-append",
-                PrecedingOperationId = "operation-0",
-                PrecedingAuthorityCommitmentSha256 = Hex('a'),
-                PrecedingCandidateCommitmentSha256 = Hex('b'),
-                CoordinationPredecessorOid = GitOid('2'),
-            },
+            append,
             content,
             proposal,
             stale,
@@ -550,11 +602,12 @@ public sealed class GitHubPublicationContractTests
                 writer.WriteString("repositoryId", "SolusQuest/contract-scribe");
                 writer.WriteString("targetRef", "refs/heads/main");
                 writer.WriteString("targetCommitOid", GitOid('1'));
-                writer.WriteString("authorityCommitmentSha256", Hex('9'));
+                writer.WriteString("authorityCommitmentSha256", vector.AuthorityCommitmentSha256);
                 writer.WriteString("policyCommitmentSha256", Hex('8'));
-                writer.WriteString("operationId", "operation-1");
-                writer.WriteString("operationCommitmentSha256", Hex('7'));
-                writer.WriteString("currentCandidateCommitmentSha256", Hex('6'));
+                writer.WriteString("operationId", vector.OperationId);
+                writer.WriteString("operationCommitmentSha256", vector.OperationCommitmentSha256);
+                writer.WriteString("currentCandidateCommitmentSha256",
+                    vector.CurrentCandidateCommitmentSha256);
                 WriteOptional(writer, "precedingOperationId", vector.PrecedingOperationId);
                 WriteOptional(writer, "precedingAuthorityCommitmentSha256",
                     vector.PrecedingAuthorityCommitmentSha256);
@@ -597,15 +650,18 @@ public sealed class GitHubPublicationContractTests
         var leafTreeOid = GitObjectOid("tree", leafTreeBytes);
         var rootTreeBytes = GitTreeEntry("40000", ".contract-scribe", leafTreeOid);
         var rootTreeOid = GitObjectOid("tree", rootTreeBytes);
+        var commitParentOid = vector.CoordinationPredecessorOid == GitOid('0')
+            ? GitOid('1')
+            : vector.CoordinationPredecessorOid;
         var commitText = $"tree {rootTreeOid}\n" +
-            $"parent {GitOid('2')}\n" +
+            $"parent {commitParentOid}\n" +
             "author ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n" +
             "committer ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n\n" +
             "ContractScribe coordination v1\n" +
-            $"operation={Hex('7')}\n" +
+            $"operation={vector.OperationCommitmentSha256}\n" +
             $"stage={vector.Stage}\n";
         var commitBytes = Encoding.UTF8.GetBytes(commitText);
-        return new(stateBytes, blobOid, leafTreeOid, rootTreeOid, commitBytes,
+        return new(stateBytes, blobOid, leafTreeOid, rootTreeOid, commitParentOid, commitBytes,
             GitObjectOid("commit", commitBytes));
     }
 
@@ -714,6 +770,10 @@ public sealed class GitHubPublicationContractTests
         string Name,
         string Stage,
         string Transition,
+        string AuthorityCommitmentSha256,
+        string OperationId,
+        string OperationCommitmentSha256,
+        string CurrentCandidateCommitmentSha256,
         string? PrecedingOperationId,
         string? PrecedingAuthorityCommitmentSha256,
         string? PrecedingCandidateCommitmentSha256,
@@ -733,6 +793,7 @@ public sealed class GitHubPublicationContractTests
         string BlobOid,
         string LeafTreeOid,
         string RootTreeOid,
+        string CommitParentOid,
         byte[] CommitBytes,
         string CommitOid);
 }

@@ -163,6 +163,15 @@ operation=<operation-commitment-sha256>
 stage=<lexical-stage-id>
 ```
 
+For expected-absence initial creation, `coordinationPredecessorOid` and the
+coordination-ref `beforeOid` are forty zeroes, while the commit parent is the
+exact authenticated `targetCommitOid`. The zero value is ref-absence evidence,
+not a Git object identity. For every later advance, one identity is authoritative
+across state, object and mutation: the commit parent and
+`coordinationPredecessorOid` both equal the exact coordination-ref head read for
+`beforeOid`; `afterOid` equals the newly computed nonzero commit OID. Exact replay
+reproduces the initial state and commit bytes/OID and performs no ref mutation.
+
 Git blob, tree and commit identities use the ordinary SHA-1 Git object framing
 `<type> <decimal-byte-count>\0<preimage>`. The ownership marker is strict UTF-8,
 LF terminated, and exactly
@@ -208,7 +217,11 @@ freezes canonical state and commit preimages plus blob, nested-tree, root-tree a
 commit OIDs for initial claim, byte-exact replay, append claim, content partial,
 ref partial, PR-create residual and completed publication. R3 must authenticate
 those state bytes, the complete tree, commit message, actor, timestamp, parent
-and OID before producing a validated capability.
+and OID before producing a validated capability. The known answers form a
+predecessor-bound chain from the authenticated target commit through initial,
+content and proposal-ref states. Stale and completed publication are alternative
+successors of that proposal-ref state; append is a new operation whose parent and
+predecessor are the completed-publication coordination commit.
 
 Initial admission accepts either expected absence or byte-exact same-operation
 replay. Append requires authenticated equality of preceding operation,

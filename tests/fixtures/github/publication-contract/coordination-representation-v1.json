@@ -12,8 +12,9 @@
       "blobOid": "7995f429bf4c53301ee73c0e02ad276e5ee8551b",
       "leafTreeOid": "22abd2d898822359afedd8ee9216ae3504f60223",
       "rootTreeOid": "010332022665a7514491e4a58f9b2882eec13499",
-      "commitSha256": "e4e9f6ac0396caa54de944bc91ed2537d4c1411236400028361c0031bba87327",
-      "commitOid": "2244b2d5dea0fe5b4030628d36688cffe46347ab"
+      "commitParentOid": "1111111111111111111111111111111111111111",
+      "commitSha256": "d265831b9a34ec253eb64504f63444cbeb84fb2ff28d218fa62772354d063383",
+      "commitOid": "b7ae9232b35835f31b20127974ce66dc3754db3f"
     },
     {
       "name": "exact-replay",
@@ -21,53 +22,59 @@
       "blobOid": "7995f429bf4c53301ee73c0e02ad276e5ee8551b",
       "leafTreeOid": "22abd2d898822359afedd8ee9216ae3504f60223",
       "rootTreeOid": "010332022665a7514491e4a58f9b2882eec13499",
-      "commitSha256": "e4e9f6ac0396caa54de944bc91ed2537d4c1411236400028361c0031bba87327",
-      "commitOid": "2244b2d5dea0fe5b4030628d36688cffe46347ab"
+      "commitParentOid": "1111111111111111111111111111111111111111",
+      "commitSha256": "d265831b9a34ec253eb64504f63444cbeb84fb2ff28d218fa62772354d063383",
+      "commitOid": "b7ae9232b35835f31b20127974ce66dc3754db3f"
     },
     {
       "name": "append-claim",
-      "canonicalStateSha256": "24f40625fe3c458c23018785683efe69c226976df5ed8f46f0c9d6095e6e3968",
-      "blobOid": "843476d121e271f11b804df4fcd38157a5d64418",
-      "leafTreeOid": "71248ba8dbf9a9310bcd58ef91b6ddc12bfa96de",
-      "rootTreeOid": "2eb6068d393ae75eba86092d4a4455684bd7bde3",
-      "commitSha256": "7eb053f0537d5b9f37f43ce42cd42c2ed0af174d6307417605d99782bfb88211",
-      "commitOid": "6faa5aa71807aef49f1e21b63bcde71531dd05b1"
+      "canonicalStateSha256": "e253bad11e91ae5ecae5e8094bc1482b65ebbc453621a5dd45ba854d8ee55c97",
+      "blobOid": "0813855c70cfccda7d8650a28894cd9ba08ba79a",
+      "leafTreeOid": "85a4126e0adaf8f7faf00450c604110aa5f34855",
+      "rootTreeOid": "2195abeefad165a1ed24a307018dbcc432be05ce",
+      "commitParentOid": "44c5461008734a463a50863676884fa25bbe436d",
+      "commitSha256": "47545ba74ff91a60c613da87d8ee034405cb2bac8ca07e3713cf1fa88e78269a",
+      "commitOid": "d657fcbc74857e246c2ede4596eea75c249fa0d7"
     },
     {
       "name": "content-partial",
-      "canonicalStateSha256": "c5c10a95176ef6340159c4054669a18bfadfe77343d75c626189a9274bf93683",
-      "blobOid": "5ecb2d86ff8bf170a0977f6a162acba381ac553a",
-      "leafTreeOid": "840762ea8bf76b3899b778f606a7a8afc4718345",
-      "rootTreeOid": "3275eafa202960a4351fdd7561aa4211c06baca5",
-      "commitSha256": "8ffb708ac50125ba61f9d53918fe72bc24aad2f1515a12e3e230c4295defbb3e",
-      "commitOid": "b7d675d7e038169bf6d565fdd39d625ea84d6bd6"
+      "canonicalStateSha256": "48d1a48366e97cd04f594b8062a180de233acb2dbad35d6d396ad079dfd2ab2f",
+      "blobOid": "43867853bcc33033e9c3e6d03de22a177e4f934e",
+      "leafTreeOid": "c9bcd13797bb980afb473ac46928cd4a319d2c41",
+      "rootTreeOid": "c6ecf1426fb6ad298d2c5170ad4501f357e0cdb7",
+      "commitParentOid": "b7ae9232b35835f31b20127974ce66dc3754db3f",
+      "commitSha256": "02829ce5af81bb7d9014308d32880263dae4ce5e242ab4b2cbab69f17a5bf4f3",
+      "commitOid": "a7bedd9ebbc872a66368240121985025d21a1b79"
     },
     {
       "name": "ref-partial",
-      "canonicalStateSha256": "d19d7408e186b69ef94f3f84da4116431579877e90830e42525a15340263cff4",
-      "blobOid": "ccab524e6ce47df243032676b63b14ec75927b59",
-      "leafTreeOid": "8fbac20831a808e2921832fc8ef13eb4d46378d7",
-      "rootTreeOid": "6a349a7d7d4725fb28c8b108974e40ba40849456",
-      "commitSha256": "8332c5ca96cac17abace619d646b41da56e369d74b3bcebdeb7910622831b00e",
-      "commitOid": "b228e02827f0bb97af42ec649189e25136aac3af"
+      "canonicalStateSha256": "371d60962d5bf1c6be0f00b2baafb600a67b36131896643a013ac820eba3c992",
+      "blobOid": "52ede3c9cc7aea6383ae53a8019a98cab7f632a7",
+      "leafTreeOid": "66c4a217709a10d77d96bd369c5c7be4ca82ef95",
+      "rootTreeOid": "991abe7cf34b6b20a3d24164850d7b28422866d5",
+      "commitParentOid": "a7bedd9ebbc872a66368240121985025d21a1b79",
+      "commitSha256": "ebb084714230a3727a8189b8f2dc7d4c804824106d22a800508ba07195b647a6",
+      "commitOid": "b471c01fbcef06e14d0444a00b2c3efe5b754224"
     },
     {
       "name": "pr-create-residual",
-      "canonicalStateSha256": "cfd5ac2b7b723c3c87488971909440a8e12bdbfc1b125e92b9fd4e112488993f",
-      "blobOid": "e9ba38c863b748530e5598891ecf0292fa208bf0",
-      "leafTreeOid": "198c07e7a1cb063339faa45728aad61a3be096f4",
-      "rootTreeOid": "290db1b78c5a28d96441cc126749220a1b6b18d2",
-      "commitSha256": "ccdf9cbb95cec518e8dbe9f9691e4d545e3cc7eafd676d1d3be78f86c5e39e8f",
-      "commitOid": "793d10fbda09fcb19173710eb655da65d16bf723"
+      "canonicalStateSha256": "b12932dfdf87dcedcef61580a8ff82e00c383c6e38873d726c14d7c242d01c50",
+      "blobOid": "b9dbb643b1c14def8f21b2f7f6319d542de6456f",
+      "leafTreeOid": "3be3e21314a1a87c44068bfe03cffa6f36bacc8d",
+      "rootTreeOid": "47219803dfa43f29ffc65cd4fd06bebc21a32116",
+      "commitParentOid": "b471c01fbcef06e14d0444a00b2c3efe5b754224",
+      "commitSha256": "6c4adfa7ee82848c8c9005b8703c4fcbe45185c36df8123cc175f3dcac80196c",
+      "commitOid": "644a0f61131074d3b999448e0009f538c047f478"
     },
     {
       "name": "completed-publication",
-      "canonicalStateSha256": "c8813815be820f2ef50abe5c066d4b9eac8f2fffa33526fec0229f1484ce7fc0",
-      "blobOid": "ac00fd3a9bf56f0e655d0ceb2d0b9ac98cc10d77",
-      "leafTreeOid": "5c9b711a95d92b94b5238ec87067258b99427153",
-      "rootTreeOid": "9fd7b45c4fc02ec36bb240e961ce91b1a385bbe7",
-      "commitSha256": "4848ec9c2b54afa20eacbf35ce3110bca640254554a72b87a04390a4066d0f0f",
-      "commitOid": "d0d573884cf020dcbe5dcc3d848d626b30f65e20"
+      "canonicalStateSha256": "ccedb2d04ff798129ccf0b9c7f52c7f15b0f6ab7abd683be2263d1a6053da5fc",
+      "blobOid": "9c59f420ad714cf47fb21c93881a07ea16c76eac",
+      "leafTreeOid": "901f36b51e9f64230d7003952b60ccfad5bed7df",
+      "rootTreeOid": "faad8a30afcc5d4908a8d7870ed3a8cd0dd61506",
+      "commitParentOid": "b471c01fbcef06e14d0444a00b2c3efe5b754224",
+      "commitSha256": "72159f7edad74308655a4be553ff58430c04de154910d95e9496019376d04601",
+      "commitOid": "44c5461008734a463a50863676884fa25bbe436d"
     }
   ]
 }
