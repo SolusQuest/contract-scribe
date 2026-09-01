@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -14,14 +12,9 @@ public sealed class GitHubPublicationContractTests
     private static readonly byte[] CandidateBytes = Encoding.UTF8.GetBytes("candidate\n");
 
     [Fact]
-    public void Known_answer_authority_refs_state_trees_commits_and_PR_bytes_are_frozen()
+    public void Known_answer_source_free_authority_and_ref_identities_are_frozen()
     {
         var authority = GitHubPublicationFactory.CreateAuthority(CreateInput());
-        var payload = CreatePayload(authority);
-        var prepared = GitHubPublicationFactory.PrepareRemoteOperation(
-            authority,
-            payload,
-            CreateInitialObservation(authority));
         using var fixture = ReadFixture("known-answer-v1.json");
         var root = fixture.RootElement;
 
@@ -35,20 +28,10 @@ public sealed class GitHubPublicationContractTests
             GitHubPublicationFactory.CreateCoordinationRef(authority));
         Assert.Equal(root.GetProperty("proposalRef").GetString(),
             GitHubPublicationFactory.CreateProposalRef(authority));
-        Assert.Equal(root.GetProperty("coordinationStateUtf8").GetString(),
-            Encoding.UTF8.GetString(prepared.CoordinationStateBytes.AsSpan()));
-        Assert.Equal(root.GetProperty("ownershipMarkerUtf8").GetString(),
-            Encoding.UTF8.GetString(prepared.OwnershipMarkerBytes.AsSpan()));
-        Assert.Equal(root.GetProperty("coordinationCommitOid").GetString(),
-            prepared.CoordinationCommit.ExpectedCommitOid);
-        Assert.Equal(root.GetProperty("proposalCommitOid").GetString(),
-            prepared.ProposalCommit.ExpectedCommitOid);
-        Assert.Equal(root.GetProperty("pullRequestTitle").GetString(), prepared.PullRequest.Title);
-        Assert.Equal(root.GetProperty("pullRequestBody").GetString(), prepared.PullRequest.Body);
     }
 
     [Fact]
-    public void Authority_is_order_stable_and_remote_selecting_facts_are_committed()
+    public void Authority_is_order_stable_and_every_remote_selecting_fact_is_committed()
     {
         var a = Changed("docs/a.md", OriginalBytes, Encoding.UTF8.GetBytes("a"));
         var b = Changed("docs/b.md", OriginalBytes, Encoding.UTF8.GetBytes("b"));
@@ -88,7 +71,7 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
-    public void M5_policy_is_subordinate_to_the_actual_accepted_M4_ceilings()
+    public void M5_policy_is_subordinate_to_actual_accepted_M4_ceilings()
     {
         var exact = GitHubPublicationFactory.CreateAuthority(CreateInput() with
         {
@@ -167,6 +150,23 @@ public sealed class GitHubPublicationContractTests
                 })).Code);
     }
 
+    [Theory]
+    [InlineData("generation=2")]
+    [InlineData("generation-->2")]
+    [InlineData("<!--generation")]
+    [InlineData(" generation")]
+    [InlineData("generation ")]
+    [InlineData("generation\u202e2")]
+    public void Marker_unsafe_identifiers_fail_before_commitment_or_transport(string identifier)
+    {
+        Assert.Equal(GitHubPublicationValidationCode.InvalidVocabulary,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(CreateInput() with
+                {
+                    GenerationId = identifier,
+                })).Code);
+    }
+
     [Fact]
     public void Exact_payload_set_hash_copy_and_byte_bounds_are_enforced_before_copy()
     {
@@ -212,7 +212,6 @@ public sealed class GitHubPublicationContractTests
         Assert.NotNull(GitHubPublicationFactory.CreateAuthority(closed));
         var predecessor = closed.TerminalPredecessor!;
         var authorization = closed.ClosedUnmergedSuccessorAuthorization!;
-
         var substitutions = new[]
         {
             closed with { TerminalPredecessor = predecessor with { LogicalPredecessorId = "other" } },
@@ -227,42 +226,7 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
-    public void Successor_remote_preparation_correlates_the_terminal_generation_and_head()
-    {
-        var authority = GitHubPublicationFactory.CreateAuthority(CreateClosedSuccessorInput());
-        var predecessor = authority.TerminalPredecessor!;
-        var baseEntries = BaseEntries(authority);
-        var coordination = new GitHubCoordinationObservation(
-            GitHubPublicationFactory.CreateCoordinationRef(authority),
-            GitOid('5'), GitOid('5'), GitOid('4'), GitOid('3'),
-            Hex('d'), Hex('e'), predecessor.GenerationId, "terminal-operation",
-            predecessor.HeadOid, GitOid('1'), GitOid('2'), []);
-        var observation = new GitHubAuthenticatedRemoteObservation(
-            authority.RepositoryOwner, authority.RepositoryName, "R_repository",
-            authority.ExpectedBaseCommitOid, GitHubPublicationCodec.CreateTreeOid(baseEntries),
-            baseEntries, coordination, Proposal: null, PullRequests: []);
-
-        Assert.NotNull(GitHubPublicationFactory.PrepareRemoteOperation(
-            authority, CreatePayload(authority), observation));
-        Assert.All(
-            new[]
-            {
-                observation with
-                {
-                    Coordination = coordination with { GenerationId = "other-generation" },
-                },
-                observation with
-                {
-                    Coordination = coordination with { ProposalCommitOid = GitOid('9') },
-                },
-            },
-            invalid => Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.PrepareRemoteOperation(
-                    authority, CreatePayload(authority), invalid)));
-    }
-
-    [Fact]
-    public void Append_uses_an_exact_complete_preceding_path_map_without_downgrade()
+    public void Append_binds_complete_preceding_map_and_distinct_candidate_commitment()
     {
         var append = CreateAppendInput();
         var authority = GitHubPublicationFactory.CreateAuthority(append);
@@ -272,200 +236,17 @@ public sealed class GitHubPublicationContractTests
         {
             ChangedFiles = append.ChangedFiles.Where(file => file.Path != "docs/a.md"),
         };
-        Assert.Contains(
-            Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.CreateAuthority(omittedPrior)).Code,
-            new[]
-            {
-                GitHubPublicationValidationCode.InvalidCorrelation,
-                GitHubPublicationValidationCode.InvalidTransition,
-            });
-
-        var observation = CreateAppendObservation(authority);
-        var payload = CreatePayload(authority, new Dictionary<string, byte[]>(StringComparer.Ordinal)
-        {
-            ["docs/a.md"] = Encoding.UTF8.GetBytes("current-a\n"),
-            ["docs/b.md"] = Encoding.UTF8.GetBytes("current-b\n"),
-        });
-        Assert.NotNull(GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, observation));
-
-        var downgraded = observation with
-        {
-            Proposal = observation.Proposal! with
-            {
-                Entries = observation.Proposal!.Entries.Select(entry =>
-                    entry.Path == "docs/a.md"
-                        ? Entry("docs/a.md", OriginalBytes, entry.Mode)
-                        : entry),
-            },
-        };
-        downgraded = downgraded with
-        {
-            Proposal = downgraded.Proposal! with
-            {
-                TreeOid = GitHubPublicationCodec.CreateTreeOid(
-                    downgraded.Proposal!.Entries.ToImmutableArray()),
-                RefOid = GitOid('6'),
-                CommitOid = GitOid('6'),
-            },
-        };
-        Assert.Contains(
-            Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, downgraded)).Code,
-            new[]
-            {
-                GitHubPublicationValidationCode.InvalidCorrelation,
-                GitHubPublicationValidationCode.InvalidTransition,
-            });
-
-        var previousC = Encoding.UTF8.GetBytes("previous-c\n");
-        var fullInput = append with
-        {
-            ChangedFiles = append.ChangedFiles.Append(
-                Changed("docs/c.md", OriginalBytes, Encoding.UTF8.GetBytes("current-c\n"))),
-            PrecedingChangedFiles = append.PrecedingChangedFiles.Append(
-                new GitHubPrecedingChangedFileAuthority("docs/c.md", Sha(previousC))),
-            AcceptedM4Ceilings = new(10, 3, 1_000),
-            Policy = new(10, 3, 1_000),
-        };
-        var fullAuthority = GitHubPublicationFactory.CreateAuthority(fullInput);
-        var fullObservation = CreateAppendObservation(fullAuthority);
-        var fullProposalEntries = fullObservation.Proposal!.Entries.Select(entry =>
-                entry.Path == "docs/c.md" ? Entry("docs/c.md", previousC, entry.Mode) : entry)
-            .ToImmutableArray();
-        var fullProposal = fullObservation.Proposal with
-        {
-            Entries = fullProposalEntries,
-            TreeOid = GitHubPublicationCodec.CreateTreeOid(fullProposalEntries),
-        };
-        fullObservation = fullObservation with
-        {
-            Proposal = fullProposal,
-            Coordination = fullObservation.Coordination! with
-            {
-                ProposalTreeOid = fullProposal.TreeOid,
-            },
-        };
-        var truncatedInput = fullInput with
-        {
-            ChangedFiles = fullInput.ChangedFiles.Where(file => file.Path != "docs/c.md"),
-            PrecedingChangedFiles = fullInput.PrecedingChangedFiles.Where(file => file.Path != "docs/c.md"),
-        };
-        var truncatedAuthority = GitHubPublicationFactory.CreateAuthority(truncatedInput);
         Assert.Throws<GitHubPublicationValidationException>(() =>
-            GitHubPublicationFactory.PrepareRemoteOperation(
-                truncatedAuthority,
-                CreatePayload(truncatedAuthority, new Dictionary<string, byte[]>(StringComparer.Ordinal)
-                {
-                    ["docs/a.md"] = Encoding.UTF8.GetBytes("current-a\n"),
-                    ["docs/b.md"] = Encoding.UTF8.GetBytes("current-b\n"),
-                }),
-                fullObservation));
-    }
+            GitHubPublicationFactory.CreateAuthority(omittedPrior));
 
-    [Fact]
-    public void Initial_remote_preparation_requires_exact_absence_and_correlated_repository_base_and_PR_state()
-    {
-        var authority = GitHubPublicationFactory.CreateAuthority(CreateInput());
-        var payload = CreatePayload(authority);
-        var observation = CreateInitialObservation(authority);
-        Assert.NotNull(GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, observation));
-
-        var wrongRepository = observation with { RepositoryName = "other" };
-        var wrongTarget = observation with { ObservedTargetCommitOid = GitOid('9') };
-        var existingCoordination = observation with
+        var substitutedCandidate = GitHubPublicationFactory.CreateAuthority(append with
         {
-            Coordination = Coordination(authority, Hex('a'), "previous-operation"),
-        };
-        var existingProposal = observation with
-        {
-            Proposal = Proposal(authority, observation.BaseTreeEntries.ToImmutableArray()),
-        };
-        var activePr = observation with
-        {
-            PullRequests = [PullRequest(authority, GitOid('6'), Hex('a'))],
-        };
-        Assert.All([wrongRepository, wrongTarget, existingCoordination, existingProposal, activePr], invalid =>
-            Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, invalid)));
-    }
-
-    [Fact]
-    public void Append_remote_preparation_requires_exact_heads_parents_tree_marker_and_one_owned_draft()
-    {
-        var authority = GitHubPublicationFactory.CreateAuthority(CreateAppendInput());
-        var payload = CreatePayload(authority, new Dictionary<string, byte[]>(StringComparer.Ordinal)
-        {
-            ["docs/a.md"] = Encoding.UTF8.GetBytes("current-a\n"),
-            ["docs/b.md"] = Encoding.UTF8.GetBytes("current-b\n"),
+            PrecedingCandidateCommitmentSha256 = Hex('c'),
         });
-        var valid = CreateAppendObservation(authority);
-        Assert.NotNull(GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, valid));
-
-        var noProposal = valid with { Proposal = null };
-        var noPr = valid with { PullRequests = [] };
-        var readyPr = valid with
-        {
-            PullRequests = valid.PullRequests.Select(pr => pr with { State = GitHubPullRequestState.ReadyOpen }),
-        };
-        var wrongHead = valid with
-        {
-            PullRequests = valid.PullRequests.Select(pr => pr with { HeadRef = "refs/heads/human" }),
-        };
-        var wrongParent = valid with
-        {
-            Proposal = valid.Proposal! with { ParentOid = GitOid('9') },
-        };
-        Assert.All([noProposal, noPr, readyPr, wrongHead, wrongParent], invalid =>
-            Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.PrepareRemoteOperation(authority, payload, invalid)));
-    }
-
-    [Fact]
-    public void Deterministic_codecs_preserve_base_entries_and_recompute_real_Git_OIDs()
-    {
-        var authority = GitHubPublicationFactory.CreateAuthority(CreateInput());
-        var prepared = GitHubPublicationFactory.PrepareRemoteOperation(
-            authority, CreatePayload(authority), CreateInitialObservation(authority));
-
-        Assert.Equal(GitHubPublicationContract.CommitActorName,
-            prepared.CoordinationCommit.AuthorName);
-        Assert.Equal(GitHubPublicationContract.CommitTimestampSeconds,
-            prepared.CoordinationCommit.AuthorTimestampSeconds);
-        Assert.Equal(authority.ExpectedBaseCommitOid, prepared.ProposalCommit.ParentOid);
-        Assert.Contains("ContractScribe proposal", prepared.ProposalCommit.Message, StringComparison.Ordinal);
-        Assert.Contains("README.md", prepared.ProposalTreeEntries.Select(entry => entry.Path));
-        Assert.Contains("docs/readme.md", prepared.ProposalTreeEntries.Select(entry => entry.Path));
-        Assert.Contains(GitHubPublicationContract.OwnershipMarkerPath,
-            prepared.ProposalTreeEntries.Select(entry => entry.Path));
-        Assert.Equal(GitHubPublicationFactory.CreateProposalRef(authority), prepared.PullRequest.HeadRef);
-        Assert.Equal(authority.TargetRef, prepared.PullRequest.BaseRef);
-        Assert.True(prepared.PullRequest.Draft);
-        Assert.False(prepared.PullRequest.MaintainerCanModify);
-
-        var retry = GitHubPublicationFactory.PrepareRemoteOperation(
-            authority, CreatePayload(authority), CreateInitialObservation(authority));
-        Assert.True(prepared.CoordinationCommit.ExactCommitBytes.AsSpan().SequenceEqual(
-            retry.CoordinationCommit.ExactCommitBytes.AsSpan()));
-        Assert.Equal(prepared.CoordinationCommit.ExpectedCommitOid,
-            retry.CoordinationCommit.ExpectedCommitOid);
-        Assert.Equal(prepared.ProposalCommit.ExpectedCommitOid, retry.ProposalCommit.ExpectedCommitOid);
-        Assert.Equal(prepared.CommitmentSha256, retry.CommitmentSha256);
-    }
-
-    [Fact]
-    public void Caller_authority_has_no_authenticated_remote_observation_fields()
-    {
-        var names = typeof(GitHubPublicationAuthorityInput).GetProperties()
-            .Select(property => property.Name).ToArray();
-        foreach (var fragment in new[]
-        {
-            "BaseTree", "EntryMode", "EntryType", "CoordinationRefOid",
-            "ProposalRefOid", "ProposalCommit", "ProposalTree", "ActivePullRequest",
-        })
-        {
-            Assert.DoesNotContain(names, name => name.Contains(fragment, StringComparison.Ordinal));
-        }
+        Assert.NotEqual(authority.AuthorityCommitmentSha256,
+            substitutedCandidate.AuthorityCommitmentSha256);
+        Assert.NotEqual(authority.OperationCommitmentSha256,
+            substitutedCandidate.OperationCommitmentSha256);
     }
 
     [Fact]
@@ -510,7 +291,7 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
-    public void Core_boundary_and_single_port_remain_platform_neutral()
+    public void Core_boundary_has_one_port_and_no_R3_through_R6_implementation()
     {
         var root = FindRepositoryRoot();
         var project = XDocument.Load(Path.Join(root, "src", "ContractScribe.Core",
@@ -527,6 +308,20 @@ public sealed class GitHubPublicationContractTests
         Assert.Single(typeof(IGitHubPublicationPort).Assembly.GetExportedTypes(), type =>
             type.IsInterface && type.Name.Contains("GitHubPublication", StringComparison.Ordinal));
 
+        var exportedNames = typeof(IGitHubPublicationPort).Assembly.GetExportedTypes()
+            .Where(type => type.Namespace == typeof(IGitHubPublicationPort).Namespace)
+            .Select(type => type.Name).ToArray();
+        foreach (var forbiddenType in new[]
+        {
+            "AuthenticatedRemote", "RemoteEntryObservation", "CoordinationObservation",
+            "ProposalObservation", "PullRequestObservation", "PreparedRemoteOperation",
+            "DeterministicCommitPayload", "DeterministicPullRequestPayload",
+        })
+        {
+            Assert.DoesNotContain(exportedNames,
+                name => name.Contains(forbiddenType, StringComparison.Ordinal));
+        }
+
         var source = string.Join("\n", Directory.EnumerateFiles(
             Path.Join(root, "src", "ContractScribe.Core", "GitHub"), "*.cs",
             SearchOption.AllDirectories).Select(File.ReadAllText));
@@ -534,7 +329,9 @@ public sealed class GitHubPublicationContractTests
         {
             "HttpClient", "AuthorizationHeaderValue", "Environment.Get", "File.Read",
             "File.Write", "Directory.", "Microsoft.CodeAnalysis", "ContractScribe.Agent",
-            "ContractScribe.Patching", "Octokit", "GitHubClient",
+            "ContractScribe.Patching", "Octokit", "GitHubClient", "CreateBlobOid",
+            "CreateTreeOid", "CreateCommit", "CreatePullRequest", "PrepareRemoteOperation",
+            "SHA1", "Utf8JsonWriter", "ownership-v1",
         })
         {
             Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
@@ -614,110 +411,6 @@ public sealed class GitHubPublicationContractTests
                 Hex('a'), Hex('b'), Hex('c'), "generation-2", "operation-2"),
         };
     }
-
-    private static ValidatedGitHubChangedFilePayload CreatePayload(
-        ValidatedGitHubPublicationAuthority authority,
-        IReadOnlyDictionary<string, byte[]>? candidates = null) =>
-        GitHubPublicationFactory.CreatePayload(authority, authority.ChangedFiles.Select(file =>
-            new GitHubChangedFilePayloadInput(
-                file.Path,
-                candidates is not null ? candidates[file.Path] : CandidateBytes)));
-
-    private static GitHubAuthenticatedRemoteObservation CreateInitialObservation(
-        ValidatedGitHubPublicationAuthority authority)
-    {
-        var entries = BaseEntries(authority);
-        return new(
-            authority.RepositoryOwner,
-            authority.RepositoryName,
-            "R_repository",
-            authority.ExpectedBaseCommitOid,
-            GitHubPublicationCodec.CreateTreeOid(entries),
-            entries,
-            Coordination: null,
-            Proposal: null,
-            PullRequests: []);
-    }
-
-    private static GitHubAuthenticatedRemoteObservation CreateAppendObservation(
-        ValidatedGitHubPublicationAuthority authority)
-    {
-        var baseEntries = BaseEntries(authority);
-        var marker = GitHubPublicationCodec.CreateOwnershipMarker(authority);
-        var markerSha = Sha(marker.AsSpan());
-        var proposalEntries = baseEntries.ToDictionary(entry => entry.Path, StringComparer.Ordinal);
-        proposalEntries["docs/a.md"] = Entry(
-            "docs/a.md", Encoding.UTF8.GetBytes("previous-a\n"), "100644");
-        proposalEntries[GitHubPublicationContract.OwnershipMarkerPath] = new(
-            GitHubPublicationContract.OwnershipMarkerPath,
-            GitHubPublicationCodec.CreateBlobOid(marker.AsSpan()),
-            GitHubRemoteEntryKind.Blob,
-            "100644",
-            markerSha);
-        var proposalArray = proposalEntries.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal)
-            .ToImmutableArray();
-        var proposal = Proposal(authority, proposalArray);
-        var observation = new GitHubAuthenticatedRemoteObservation(
-            authority.RepositoryOwner,
-            authority.RepositoryName,
-            "R_repository",
-            authority.ExpectedBaseCommitOid,
-            GitHubPublicationCodec.CreateTreeOid(baseEntries),
-            baseEntries,
-            Coordination(authority, authority.PrecedingAuthorityCommitmentSha256!,
-                authority.PrecedingOperationId!, proposal),
-            proposal,
-            PullRequests: []);
-        return observation with
-        {
-            PullRequests = [PullRequest(authority, proposal.CommitOid, markerSha)],
-        };
-    }
-
-    private static GitHubCoordinationObservation Coordination(
-        ValidatedGitHubPublicationAuthority authority,
-        string precedingAuthority,
-        string precedingOperation,
-        GitHubProposalObservation? proposal = null) => new(
-            GitHubPublicationFactory.CreateCoordinationRef(authority),
-            GitOid('5'), GitOid('5'), GitOid('4'), GitOid('3'),
-            precedingAuthority, authority.PolicyCommitmentSha256,
-            authority.GenerationId, precedingOperation,
-            proposal?.CommitOid, proposal?.ParentOid, proposal?.TreeOid,
-            authority.PrecedingChangedFiles);
-
-    private static GitHubProposalObservation Proposal(
-        ValidatedGitHubPublicationAuthority authority,
-        ImmutableArray<GitHubRemoteEntryObservation> entries) => new(
-            GitHubPublicationFactory.CreateProposalRef(authority),
-            GitOid('6'), GitOid('6'), GitOid('5'),
-            GitHubPublicationCodec.CreateTreeOid(entries),
-            entries);
-
-    private static GitHubPullRequestObservation PullRequest(
-        ValidatedGitHubPublicationAuthority authority,
-        string headOid,
-        string markerSha) => new(
-            42, authority.RepositoryOwner, authority.RepositoryName,
-            GitHubPublicationFactory.CreateProposalRef(authority), headOid,
-            authority.TargetRef, authority.ExpectedBaseCommitOid, markerSha,
-            GitHubPullRequestState.DraftOpen, BotOwned: true);
-
-    private static ImmutableArray<GitHubRemoteEntryObservation> BaseEntries(
-        ValidatedGitHubPublicationAuthority authority)
-    {
-        var entries = authority.ChangedFiles.Select(file =>
-            Entry(file.Path, OriginalBytes, "100644")).ToList();
-        entries.Add(Entry("README.md", Encoding.UTF8.GetBytes("readme\n"), "100644"));
-        return entries.OrderBy(entry => entry.Path, StringComparer.Ordinal).ToImmutableArray();
-    }
-
-    private static GitHubRemoteEntryObservation Entry(string path, byte[] bytes, string mode) => new(
-        path,
-        GitHubPublicationCodec.CreateBlobOid(bytes),
-        GitHubRemoteEntryKind.Blob,
-        mode,
-        Sha(bytes));
 
     private static GitHubChangedFileAuthority Changed(
         string path,

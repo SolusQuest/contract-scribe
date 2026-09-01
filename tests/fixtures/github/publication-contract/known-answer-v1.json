@@ -4,11 +4,5 @@
   "authorityCommitmentSha256": "de467ae1a97d890c8c9223fa6675deb840802f0c707d739b0839c98628f706c5",
   "operationCommitmentSha256": "2f872f22c76fff5db32bd566708b5a922ca26a863f507ed2a329c06102f877ee",
   "coordinationRef": "refs/heads/contract-scribe/coordination/96ad6b148dbb062dcb7962900fe60e38205c00e239352aef9decb15bdf8f436e",
-  "proposalRef": "refs/heads/contract-scribe/proposals/d2292192e61b0d0cfbf5e9167de40554c377474a01db608671a2886f2d58cbf6/da8d04097102c481b7da2555a29fa84a517de71ee8f6f1e1c0e42e746a99bc4f",
-  "coordinationStateUtf8": "{\"version\":1,\"authority\":\"de467ae1a97d890c8c9223fa6675deb840802f0c707d739b0839c98628f706c5\",\"operation\":\"2f872f22c76fff5db32bd566708b5a922ca26a863f507ed2a329c06102f877ee\",\"policy\":\"5d862f9db95a70e142aea77ea21b03cf118523a3828415781aded1481f51b0fc\",\"repository\":\"R_repository\",\"targetRef\":\"refs/heads/main\",\"targetCommit\":\"1111111111111111111111111111111111111111\",\"baseTree\":\"19f27f1527a2d086e8d554698753a029477d4a09\",\"generation\":\"generation-1\",\"transition\":\"Initial\",\"coordinationPredecessor\":\"0000000000000000000000000000000000000000\",\"proposalPredecessor\":\"0000000000000000000000000000000000000000\",\"changedFileCount\":1,\"documentationBlocks\":1,\"patchBytes\":10,\"changedFiles\":[{\"path\":\"docs/readme.md\",\"candidateSha256\":\"1e81270f1a47dce22a2e4985250c74b2e3374443734f1492b03ea2cd2af4ec48\"}],\"status\":\"prepared\"}\n",
-  "ownershipMarkerUtf8": "contract-scribe-publication-v1\ncampaign=campaign-1\ngeneration=generation-1\npolicy=5d862f9db95a70e142aea77ea21b03cf118523a3828415781aded1481f51b0fc\n",
-  "coordinationCommitOid": "65e6005739eb4da946a6c1c90b0a39e7fbdaf712",
-  "proposalCommitOid": "fdfd11a5a4373bc25008d43d3af85758e3b8014b",
-  "pullRequestTitle": "ContractScribe documentation generation generation-1",
-  "pullRequestBody": "<!-- contract-scribe-publication-v1\ncampaign=campaign-1\ngeneration=generation-1\nsnapshot=1111111111111111111111111111111111111111111111111111111111111111\npolicy=5d862f9db95a70e142aea77ea21b03cf118523a3828415781aded1481f51b0fc\noperation=2f872f22c76fff5db32bd566708b5a922ca26a863f507ed2a329c06102f877ee\nmarker=01a57fd39a28e77588aa1d819b67171ecf8698a6041fb185c12ed24804215cc7\n-->"
+  "proposalRef": "refs/heads/contract-scribe/proposals/d2292192e61b0d0cfbf5e9167de40554c377474a01db608671a2886f2d58cbf6/da8d04097102c481b7da2555a29fa84a517de71ee8f6f1e1c0e42e746a99bc4f"
 }
