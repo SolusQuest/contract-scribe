@@ -9,7 +9,15 @@ public static class GitHubPublicationContract
     public const int MaximumChangedFiles = CampaignStateContract.MaximumChangedFiles;
     public const int MaximumIdentifierScalars = CampaignStateContract.MaximumIdentifierScalars;
     public const int MaximumPathScalars = CampaignStateContract.MaximumPathScalars;
+    public const int MaximumPayloadBytesPerFile = 16_777_216;
+    public const long MaximumAggregatePayloadBytes = 67_108_864;
+    public const int MaximumRemoteTreeEntries = 100_000;
     public const string MissingGitObjectId = "0000000000000000000000000000000000000000";
+    public const string CoordinationStatePath = ".contract-scribe/coordination-state-v1.json";
+    public const string OwnershipMarkerPath = ".contract-scribe/ownership-v1";
+    public const string CommitActorName = "ContractScribe";
+    public const string CommitActorEmail = "contract-scribe@users.noreply.github.com";
+    public const long CommitTimestampSeconds = 946_684_800;
 }
 
 public enum GitHubPublicationTransitionKind
@@ -51,6 +59,11 @@ public sealed record GitHubPublicationPolicy(
     int MaximumDistinctChangedFiles,
     long MaximumCumulativePatchBytes);
 
+public sealed record GitHubPublicationM4Ceilings(
+    int MaximumDocumentationBlocks,
+    int MaximumDistinctChangedFiles,
+    long MaximumCumulativePatchBytes);
+
 public sealed record GitHubChangedFileAuthority(
     string Path,
     string OriginalFileSha256,
@@ -59,11 +72,28 @@ public sealed record GitHubChangedFileAuthority(
     int OriginalDocumentationByteCount,
     int CandidateDocumentationByteCount,
     int OriginalDocumentationLineCount,
-    int CandidateDocumentationLineCount,
-    string? PrecedingCandidateFileSha256 = null);
+    int CandidateDocumentationLineCount);
+
+public sealed record GitHubPrecedingChangedFileAuthority(
+    string Path,
+    string CandidateFileSha256);
+
+public enum GitHubPublicationPredecessorDisposition
+{
+    Merged,
+    ClosedUnmerged,
+}
+
+public sealed record GitHubPublicationPredecessorAuthority(
+    string LogicalPredecessorId,
+    long PullRequestNumber,
+    string GenerationId,
+    string HeadOid,
+    GitHubPublicationPredecessorDisposition Disposition);
 
 public sealed record GitHubClosedUnmergedSuccessorAuthorization(
     string AuthorizationId,
+    string LogicalPredecessorId,
     long ClosedPullRequestNumber,
     string ClosedGenerationId,
     string ClosedHeadOid,
@@ -95,11 +125,15 @@ public sealed record GitHubPublicationAuthorityInput(
     string AcceptedProjectionCommitmentSha256,
     string OperationId,
     string GenerationId,
-    string? LogicalPredecessorId,
+    string? PrecedingOperationId,
+    string? PrecedingAuthorityCommitmentSha256,
     string? PrecedingCandidateCommitmentSha256,
+    GitHubPublicationPredecessorAuthority? TerminalPredecessor,
     GitHubPublicationTransitionKind Transition,
+    GitHubPublicationM4Ceilings AcceptedM4Ceilings,
     GitHubPublicationPolicy Policy,
     IEnumerable<GitHubChangedFileAuthority> ChangedFiles,
+    IEnumerable<GitHubPrecedingChangedFileAuthority> PrecedingChangedFiles,
     GitHubClosedUnmergedSuccessorAuthorization? ClosedUnmergedSuccessorAuthorization = null);
 
 public sealed class ValidatedGitHubPublicationAuthority
@@ -107,6 +141,7 @@ public sealed class ValidatedGitHubPublicationAuthority
     internal ValidatedGitHubPublicationAuthority(
         GitHubPublicationAuthorityInput input,
         ImmutableArray<GitHubChangedFileAuthority> changedFiles,
+        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingChangedFiles,
         int cumulativeDocumentationBlocks,
         long cumulativePatchBytes,
         string policyCommitmentSha256,
@@ -129,11 +164,15 @@ public sealed class ValidatedGitHubPublicationAuthority
         AcceptedProjectionCommitmentSha256 = input.AcceptedProjectionCommitmentSha256;
         OperationId = input.OperationId;
         GenerationId = input.GenerationId;
-        LogicalPredecessorId = input.LogicalPredecessorId;
+        PrecedingOperationId = input.PrecedingOperationId;
+        PrecedingAuthorityCommitmentSha256 = input.PrecedingAuthorityCommitmentSha256;
         PrecedingCandidateCommitmentSha256 = input.PrecedingCandidateCommitmentSha256;
+        TerminalPredecessor = input.TerminalPredecessor;
         Transition = input.Transition;
+        AcceptedM4Ceilings = input.AcceptedM4Ceilings;
         Policy = input.Policy;
         ChangedFiles = changedFiles;
+        PrecedingChangedFiles = precedingChangedFiles;
         ClosedUnmergedSuccessorAuthorization = input.ClosedUnmergedSuccessorAuthorization;
         CumulativeDocumentationBlocks = cumulativeDocumentationBlocks;
         CumulativePatchBytes = cumulativePatchBytes;
@@ -158,11 +197,15 @@ public sealed class ValidatedGitHubPublicationAuthority
     public string AcceptedProjectionCommitmentSha256 { get; }
     public string OperationId { get; }
     public string GenerationId { get; }
-    public string? LogicalPredecessorId { get; }
+    public string? PrecedingOperationId { get; }
+    public string? PrecedingAuthorityCommitmentSha256 { get; }
     public string? PrecedingCandidateCommitmentSha256 { get; }
+    public GitHubPublicationPredecessorAuthority? TerminalPredecessor { get; }
     public GitHubPublicationTransitionKind Transition { get; }
+    public GitHubPublicationM4Ceilings AcceptedM4Ceilings { get; }
     public GitHubPublicationPolicy Policy { get; }
     public ImmutableArray<GitHubChangedFileAuthority> ChangedFiles { get; }
+    public ImmutableArray<GitHubPrecedingChangedFileAuthority> PrecedingChangedFiles { get; }
     public GitHubClosedUnmergedSuccessorAuthorization? ClosedUnmergedSuccessorAuthorization { get; }
     public int CumulativeDocumentationBlocks { get; }
     public long CumulativePatchBytes { get; }
@@ -219,40 +262,82 @@ public sealed record GitHubRemoteEntryObservation(
     string ObjectOid,
     GitHubRemoteEntryKind Kind,
     string Mode,
-    string FullFileSha256,
-    bool WasPreviouslyPublished);
+    string FullFileSha256);
 
-public sealed record GitHubAuthenticatedRemoteObservation(
-    string CanonicalRepositoryId,
-    string ObservedTargetCommitOid,
-    string ObservedBaseTreeOid,
-    string CoordinationRefOid,
-    string? ProposalRefOid,
+public sealed record GitHubCoordinationObservation(
+    string RefName,
+    string RefOid,
+    string CommitOid,
+    string ParentOid,
+    string TreeOid,
+    string AuthorityCommitmentSha256,
+    string PolicyCommitmentSha256,
+    string GenerationId,
+    string OperationId,
     string? ProposalCommitOid,
     string? ProposalParentOid,
     string? ProposalTreeOid,
-    long? ActivePullRequestNumber,
-    string? ActivePullRequestState,
+    IEnumerable<GitHubPrecedingChangedFileAuthority> CumulativeChangedFiles);
+
+public sealed record GitHubProposalObservation(
+    string RefName,
+    string RefOid,
+    string CommitOid,
+    string ParentOid,
+    string TreeOid,
     IEnumerable<GitHubRemoteEntryObservation> Entries);
 
+public enum GitHubPullRequestState
+{
+    DraftOpen,
+    ReadyOpen,
+    Merged,
+    ClosedUnmerged,
+}
+
+public sealed record GitHubPullRequestObservation(
+    long Number,
+    string RepositoryOwner,
+    string RepositoryName,
+    string HeadRef,
+    string HeadOid,
+    string BaseRef,
+    string BaseOid,
+    string OwnershipMarkerSha256,
+    GitHubPullRequestState State,
+    bool BotOwned);
+
+public sealed record GitHubAuthenticatedRemoteObservation(
+    string RepositoryOwner,
+    string RepositoryName,
+    string CanonicalRepositoryId,
+    string ObservedTargetCommitOid,
+    string ObservedBaseTreeOid,
+    IEnumerable<GitHubRemoteEntryObservation> BaseTreeEntries,
+    GitHubCoordinationObservation? Coordination,
+    GitHubProposalObservation? Proposal,
+    IEnumerable<GitHubPullRequestObservation> PullRequests);
+
 public sealed record GitHubDeterministicCommitPayload(
-    string TreeLayoutCommitmentSha256,
-    string MessageSha256,
+    string TreeOid,
+    string Message,
     string ParentOid,
     string AuthorName,
     string AuthorEmail,
-    string AuthorTimestamp,
+    long AuthorTimestampSeconds,
     string CommitterName,
     string CommitterEmail,
-    string CommitterTimestamp,
+    long CommitterTimestampSeconds,
     string OwnershipMarkerSha256,
+    ImmutableArray<byte> ExactCommitBytes,
     string ExpectedCommitOid);
 
 public sealed record GitHubDeterministicPullRequestPayload(
     string HeadRef,
     string BaseRef,
-    string TitleSha256,
-    string BodyMarkerSha256,
+    string Title,
+    string Body,
+    string OwnershipMarkerSha256,
     bool Draft,
     bool MaintainerCanModify);
 
@@ -260,14 +345,30 @@ public sealed class ValidatedGitHubPreparedRemoteOperation
 {
     internal ValidatedGitHubPreparedRemoteOperation(
         GitHubAuthenticatedRemoteObservation observation,
-        ImmutableArray<GitHubRemoteEntryObservation> entries,
+        ImmutableArray<GitHubRemoteEntryObservation> baseTreeEntries,
+        ImmutableArray<GitHubRemoteEntryObservation> observedProposalTreeEntries,
+        ImmutableArray<GitHubRemoteEntryObservation> proposalTreeEntries,
+        ImmutableArray<GitHubPullRequestObservation> pullRequests,
+        ImmutableArray<byte> coordinationStateBytes,
+        ImmutableArray<byte> ownershipMarkerBytes,
         GitHubDeterministicCommitPayload coordinationCommit,
         GitHubDeterministicCommitPayload proposalCommit,
         GitHubDeterministicPullRequestPayload pullRequest,
         string commitmentSha256)
     {
-        Observation = observation with { Entries = entries };
-        Entries = entries;
+        Observation = observation with
+        {
+            BaseTreeEntries = baseTreeEntries,
+            Proposal = observation.Proposal is null
+                ? null
+                : observation.Proposal with { Entries = observedProposalTreeEntries },
+            PullRequests = pullRequests,
+        };
+        BaseTreeEntries = baseTreeEntries;
+        ProposalTreeEntries = proposalTreeEntries;
+        PullRequests = pullRequests;
+        CoordinationStateBytes = coordinationStateBytes;
+        OwnershipMarkerBytes = ownershipMarkerBytes;
         CoordinationCommit = coordinationCommit;
         ProposalCommit = proposalCommit;
         PullRequest = pullRequest;
@@ -275,7 +376,11 @@ public sealed class ValidatedGitHubPreparedRemoteOperation
     }
 
     public GitHubAuthenticatedRemoteObservation Observation { get; }
-    public ImmutableArray<GitHubRemoteEntryObservation> Entries { get; }
+    public ImmutableArray<GitHubRemoteEntryObservation> BaseTreeEntries { get; }
+    public ImmutableArray<GitHubRemoteEntryObservation> ProposalTreeEntries { get; }
+    public ImmutableArray<GitHubPullRequestObservation> PullRequests { get; }
+    public ImmutableArray<byte> CoordinationStateBytes { get; }
+    public ImmutableArray<byte> OwnershipMarkerBytes { get; }
     public GitHubDeterministicCommitPayload CoordinationCommit { get; }
     public GitHubDeterministicCommitPayload ProposalCommit { get; }
     public GitHubDeterministicPullRequestPayload PullRequest { get; }

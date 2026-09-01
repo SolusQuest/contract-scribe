@@ -6,18 +6,24 @@
 
 ## Executable evidence
 
-The transient serialized decision harness is reviewable at commit
-`5009ff42b53584d6b49c2c2ef71b5f1fdfea9a4d` on the Issue #158 branch. The final
+The corrected transient serialized decision harness is reviewable at commit
+`f6bbf08c35ba0f6a45b21e22f7d0741f3153870a` on the Issue #158 branch. It
+supersedes the earlier comparison at `5009ff42b53584d6b49c2c2ef71b5f1fdfea9a4d`,
+whose rejected alternatives did not traverse an equivalent executable boundary.
+The final
 accepted tree intentionally removes its executable rejected alternatives. It was
 executed from that committed source with:
 
 ```text
-dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~GitHubPublicationProtocolDecisionHarnessTests" --logger "trx;LogFileName=issue-158-harness-committed.trx"
+dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --no-build --filter "FullyQualifiedName~GitHubPublicationProtocolDecisionHarnessTests" --logger "console;verbosity=normal"
 ```
 
 Result: one harness test passed. It executed 12 scenarios against each of three
-alternatives, producing 36 bounded observations and serialized request
-transcripts. The selected path satisfied all twelve. The decision record keeps
+viable implementations behind the same JSON-serialized request/response and
+fault-injection server, producing 36 bounded observations and serialized request
+transcripts. Verdicts were derived from observed admission, mutation, recovery,
+and residual state rather than the alternative name. The selected path satisfied
+all twelve. The decision record keeps
 the complete outcome matrix and exact transcript shapes; the final fixture tree
 keeps only reusable selected-path vectors.
 
@@ -29,43 +35,40 @@ alternative remains evidence about that alternative; it is not a product test.
 
 | Vector | coordination ref | managed Issue ledger | external serializer |
 |---|---:|---:|---:|
-| Initial-create response loss | pass: exact ref readback | fail: append may duplicate | fail: no durable repository proof |
-| Stale predecessor | pass: exact CAS rejects | fail: body patch lacks predecessor CAS | fail: caller lock does not validate repository predecessor |
-| Coordination ancestor rewind | pass: exact CAS rejects | fail: issue update is independent | fail: external lock is independent |
-| Proposal ancestor rewind | pass: proposal ref has its own exact CAS | pass only as observation, not admission authority | pass only with external prerequisite |
+| Initial-create response loss | pass: exact ref readback | pass: exact comment readback; election is not final | pass: exact lease readback; external prerequisite |
+| Stale predecessor | pass: exact CAS rejects | pass: repository gate rejects before comment | pass: repository gate rejects before lease |
+| Coordination ancestor rewind | pass: exact CAS rejects | pass: repository gate rejects before comment | pass: repository gate rejects before lease |
+| Proposal ancestor rewind | pass: proposal ref has its own exact CAS | pass: proposal CAS rejects after ledger admission | pass: proposal CAS rejects after external admission |
 | Target move before claim | pass: authenticated reread, zero write | pass: zero ledger write | pass: zero caller dispatch |
-| Target move after claim, before resource | pass: step reread, zero resource write | pass only with extra reconciliation | pass only with external prerequisite |
-| Target move during PR create | pass: one marker-owned stale draft | pass only with ledger plus PR discovery | pass only with external prerequisite |
-| Two first-publication invocations | pass: one all-zero CAS winner | fail: two issue mutations admitted | fail: no repository-bound winner proof |
-| Two append invocations | pass: one predecessor CAS winner | pass only with non-atomic application logic | fail: two independent callers can proceed |
-| Ambiguous commit response | pass: expected content OID discovery | pass only with separate content recovery | pass only with external prerequisite |
-| Ambiguous proposal-ref response | pass: exact head readback | pass only with separate ref recovery | pass only with external prerequisite |
-| Ambiguous PR response | pass: exhaustive immutable-marker discovery | pass only with separate PR discovery | pass only with external prerequisite |
+| Target move after claim, before resource | pass: step reread, zero resource write | pass: step reread, zero resource write | pass: step reread; external prerequisite |
+| Target move during PR create | pass: one marker-owned stale draft | pass: one discovered marker-owned stale draft | pass: one discovered marker-owned stale draft |
+| Two first-publication invocations | pass: one all-zero CAS winner | fail: both append durable claims before a non-final election | pass: one external lease winner |
+| Two append invocations | pass: one predecessor CAS winner | fail: both append durable claims before a non-final election | pass: one external lease winner |
+| Ambiguous commit response | pass: expected content OID discovery | pass: expected content OID discovery | pass: expected content OID discovery |
+| Ambiguous proposal-ref response | pass: exact head readback | pass: exact head readback | pass: exact head readback |
+| Ambiguous PR response | pass: exhaustive immutable-marker discovery | pass: exhaustive immutable-marker discovery | pass: exhaustive immutable-marker discovery |
 
-The harness serialized the coordination mutation as this exact boundary:
+Every alternative crossed the same serialized boundary. For example, a
+coordination mutation was represented as:
 
 ```json
 {
-  "query": "mutation($refUpdates:[RefUpdate!]!){updateRefs(input:{repositoryId:\"repository\",refUpdates:$refUpdates}){clientMutationId}}",
-  "variables": {
-    "refUpdates": [
-      {
-        "name": "refs/heads/contract-scribe/coordination/campaign",
-        "beforeOid": "<exact predecessor or forty zeroes>",
-        "afterOid": "<exact nonzero successor>",
-        "force": false
-      }
-    ]
-  }
+  "Kind": "graphql-update-ref",
+  "OperationId": "operation-a",
+  "Resource": "coordination",
+  "BeforeOid": "<exact predecessor or forty zeroes>",
+  "AfterOid": "<exact nonzero successor>",
+  "LoseResponse": false
 }
 ```
 
-The managed-Issue transcript serialized
-`PATCH /issues` with `operationId` and `expectedPredecessor`; the request has no
-atomic comparison against the previously read body. The external-serializer
-transcript recorded caller admission but no durable repository predecessor
-comparison. These are the exercised differences, not assumptions about the
-alternatives.
+The managed-Issue implementation used append-comment, full readback, and a
+deterministic election. Both racing claims become durable before election, so
+the loser cannot be made un-admitted and the authority is not final. The
+external implementation used acquire/readback of an actual serialized lease and
+passed the exercised vectors, but its winner is neither repository-bound nor
+available without an external service. These are observed tradeoffs, not
+alternatives made to fail by construction.
 
 ## Platform facts and minimum choice
 
@@ -98,10 +101,11 @@ managed Issue, external locking service, Action wrapper, database, or migration
 family. R1 itself reads no credential and performs no network mutation.
 
 The managed-Issue alternative adds Issues write permission and a separately
-reconciled mutable ledger without supplying a one-request exact-body CAS. The
-external serializer adds an operational dependency whose lock is not durable
-repository state and still needs repository predecessor validation. Neither is
-the minimum initial protocol.
+reconciled append-only ledger whose post-write election cannot provide final
+single-winner admission. The external serializer is viable under the tested
+faults, but adds an operational dependency whose lease is not durable repository
+state and still needs repository predecessor validation. Neither is the minimum
+initial protocol.
 
 ## Exact sequencing and remaining race
 

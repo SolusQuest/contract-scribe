@@ -31,7 +31,27 @@ public enum GitHubPublicationResourceKind
 
 public sealed record GitHubPublicationLocalFailure(
     GitHubPublicationValidationCode Code,
-    string? Field);
+    GitHubPublicationFieldId? Field);
+
+public enum GitHubPublicationFieldId
+{
+    Repository,
+    TargetRef,
+    ExpectedBaseCommit,
+    Campaign,
+    Snapshot,
+    WorkPlan,
+    Checkpoint,
+    Candidate,
+    Operation,
+    Generation,
+    Predecessor,
+    Policy,
+    ChangedFiles,
+    Payload,
+    Authorization,
+    RemoteObservation,
+}
 
 public sealed record GitHubPublicationContentResidual(
     GitHubPublicationResourceKind ResourceKind,
@@ -121,10 +141,10 @@ public sealed class GitHubPublicationResult
 
     public static GitHubPublicationResult LocalInvalid(
         GitHubPublicationValidationCode code,
-        string? field = null)
+        GitHubPublicationFieldId? field = null)
     {
         if (!Enum.IsDefined(code)
-            || (field is not null && !GitHubPublicationFactory.IsOpaqueIdentifier(field)))
+            || (field is not null && !Enum.IsDefined(field.Value)))
         {
             throw new ArgumentException("Local failure detail is invalid.", nameof(field));
         }

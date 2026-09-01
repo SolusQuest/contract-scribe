@@ -32,9 +32,13 @@ network, filesystem, or ambient Git state. It binds:
 - campaign lineage, snapshot, execution and work-plan commitments;
 - checkpoint revision/digest, candidate, Patch Request, Patch Result and
   accepted-projection commitments;
+- the actual M4 campaign ceilings accepted for that checkpoint, not merely M5
+  policy maxima;
 - stable operation ID, logical generation and predecessor identities;
 - every and only changed repository path with exact original/candidate full-file
   SHA-256 and M4 cumulative observations;
+- for append, the complete preceding published-path map and its exact candidate
+  SHA-256 values;
 - immutable publication policy and optional exact closed-successor authority.
 
 It cannot contain an observed tree OID, Git entry type/mode, current ref head,
@@ -59,9 +63,12 @@ retry recreates byte-identical payloads and object identities.
 ## Policy
 
 The policy has positive maximum documentation blocks, distinct changed files,
-and cumulative patch bytes per pull-request generation. Each ceiling is no
-greater than its accepted M4 campaign ceiling and is immutable for the lifetime
-of the generation. A mismatch is incompatible, not migrated.
+and cumulative patch bytes per pull-request generation. The caller also supplies
+the actual accepted M4 ceiling projection for this checkpoint. Validation binds
+that projection into the authority commitment and proves every M5 maximum is no
+greater than the corresponding actual M4 ceiling. Comparing only global product
+maxima is invalid. Both projections are immutable for the lifetime of the
+generation; a mismatch is incompatible, not migrated.
 
 The patch-byte observation is exactly:
 
@@ -82,20 +89,28 @@ or backslash paths fail locally. Original and candidate SHA-256 values are exact
 lowercase hexadecimal.
 
 `ValidatedGitHubChangedFilePayload` is a distinct input. Admission requires the
-exact authority path set, recomputes every candidate SHA-256, and copies every
-buffer. Its bytes are excluded from authority and operation serialization,
+exact authority path set, recomputes every candidate SHA-256, and accepts at most
+16,777,216 bytes per file and 67,108,864 bytes in aggregate. Counts and checked
+length sums are validated before allocating or copying; each admitted buffer is
+copied exactly once. Its bytes are excluded from authority and operation serialization,
 commitments, results, `ToString()`, diagnostics, persistence, and logs.
 
 At authenticated preparation:
 
-- first/new-generation publication requires every path in the exact configured
-  base tree to be a regular blob whose full bytes match M4 original SHA-256;
+- the authenticated observation supplies the complete flattened base tree, up
+  to 100,000 entries, and its locally recomputed Git tree OID must equal the
+  observed base-tree OID;
+- first/new-generation publication requires every governed changed path in that
+  tree to be a regular blob whose full bytes match M4 original SHA-256;
 - `100644` and `100755` are the only accepted modes and are preserved;
-- missing entries, trees, symbolic links, submodules, unsupported modes/types,
-  extra paths, and original-byte drift fail before mutation;
+- missing governed entries, duplicate paths, symbolic links, submodules,
+  unsupported changed-entry modes/types, and original-byte drift fail before
+  mutation;
 - append requires the exact owned proposal head/commit/parent/tree; previously
   published paths must match their recorded preceding cumulative-candidate
   hashes, while newly introduced paths still match M4 original hashes;
+- append's preceding path map must equal the complete cumulative prior path set,
+  so an omitted prior path cannot be silently downgraded to a new path;
 - candidate blobs are built from the exact byte buffers. UTF-8, BOM, UTF-16, and
   arbitrary binary bytes are never transcoded.
 
@@ -134,15 +149,23 @@ refs/heads/contract-scribe/proposals/<campaign-sha256>/<generation-sha256>
 Raw caller display text never enters a ref. Canonical coordination state uses
 strict UTF-8 without BOM and LF, a fixed key order, lowercase hash/OID values,
 and only version, identities, commitments, counts, state, exact predecessor and
-result OIDs, and bounded sanitized diagnostics. It contains no source or secret.
+result OIDs, the complete cumulative changed-path/candidate-hash map, and bounded
+sanitized diagnostics. On append, the authenticated state map must exactly equal
+the caller's preceding map; removing a path from both caller collections cannot
+downgrade it to unpublished. The state contains no source or secret.
 
-Coordination and proposal commits bind a canonical tree layout commitment,
-exact message hash, exactly one parent (forty-zero expected absence is represented
-by no existing ref, not a zero parent), author/committer names, emails and fixed
-timestamps, ownership marker hash, and locally expected Git commit OID. The
-proposal tree contains only exact candidate blobs at their authorized paths and
-the fixed ownership marker. The coordination tree contains the canonical state
-and marker. No server-selected current time is permitted.
+Coordination and proposal commits are fully materialized locally. Blob OIDs,
+recursive tree OIDs, and commit OIDs are the real Git SHA-1 identities computed
+from canonical Git object headers and bytes. Proposal construction overlays the
+authorized candidate blobs and fixed marker on the complete observed base tree,
+preserving every unchanged entry and mode. Coordination construction uses only
+the canonical state and marker. Both commits have exactly one nonzero parent,
+the fixed message and marker, actor `ContractScribe`, email
+`contract-scribe@users.noreply.github.com`, timestamp `946684800 +0000`
+(2000-01-01T00:00:00Z), and byte-exact
+payloads exposed by the prepared operation. Forty-zero expected absence is a ref
+CAS sentinel, never a parent. No server-selected time or server-selected object
+representation is permitted.
 
 The PR request binds owned head, configured base ref, exact title hash, immutable
 body-marker hash, `draft=true`, and `maintainer_can_modify=false`. Immutable PR
@@ -196,7 +219,8 @@ The closed result vocabulary is `local-invalid`, `replay-no-op`, `admitted`,
 `stale`, `human-change`, `conflict`, `permission`, `rate-limit`, `cancelled`,
 `timeout`, and `host-failure`.
 
-Kinds carry only their exact structured detail. Content and ref partials identify
+Kinds carry only their exact structured detail. `local-invalid` identifies its
+field with a closed enum rather than caller-controlled text. Content and ref partials identify
 expected/observed OIDs and operation; admitted identifies the exact claim;
 published states identify generation ref/PR; stale draft identifies exact PR,
 marker, owned head, expected/observed base, generation and operation. Local and
