@@ -257,7 +257,7 @@ The M4 conformance corpus includes a collision vector in which two different bas
 
 ## Host integration
 
-The later `ContractScribe.GitHub` project consumes the Core-owned validated publication authority and separate byte payload through the single publication port and returns a structured Core result. It does not invoke Roslyn, Patching, or the model provider. Before its first mutation it performs authenticated complete reads and binds those observations into the prepared remote-operation commitment.
+The later `ContractScribe.GitHub` project consumes the Core-owned validated publication authority and separate byte payload through the single publication port and returns a structured Core result. It does not invoke Roslyn, Patching, or the model provider. R3-R6 perform authenticated complete reads and produce their own validated coordination, proposal, PR, terminal, and orchestration capabilities; Core does not expose or manufacture a prepared remote operation.
 
 `ContractScribe.Cli` composes the campaign state machine, patch result, state adapter, and GitHub adapter. The Action host supplies documented inputs and credentials to that CLI command and maps its stable outcome to Action outputs.
 

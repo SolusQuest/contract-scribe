@@ -6,26 +6,29 @@
 
 ## Executable evidence
 
-The corrected transient serialized decision harness is reviewable at commit
-`f6bbf08c35ba0f6a45b21e22f7d0741f3153870a` on the Issue #158 branch. It
-supersedes the earlier comparison at `5009ff42b53584d6b49c2c2ef71b5f1fdfea9a4d`,
-whose rejected alternatives did not traverse an equivalent executable boundary.
-The final
-accepted tree intentionally removes its executable rejected alternatives. It was
-executed from that committed source with:
+The final corrected transient serialized decision harness is reviewable at
+commit `01efbef97dfdd035db3963b63e3626a6945f7298` on the Issue #158 branch. It supersedes the comparisons at
+`5009ff42b53584d6b49c2c2ef71b5f1fdfea9a4d` and
+`f6bbf08c35ba0f6a45b21e22f7d0741f3153870a`: the first did not give rejected
+alternatives an equivalent executable boundary, while the second still read the
+repository outside that boundary and partly accepted implementation-supplied
+finality. The final accepted tree intentionally removes executable rejected
+alternatives. The committed source was executed with:
 
 ```text
 dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --no-build --filter "FullyQualifiedName~GitHubPublicationProtocolDecisionHarnessTests" --logger "console;verbosity=normal"
 ```
 
 Result: one harness test passed. It executed 12 scenarios against each of three
-viable implementations behind the same JSON-serialized request/response and
+bounded implementations behind the same JSON-serialized request/response and
 fault-injection server, producing 36 bounded observations and serialized request
-transcripts. Verdicts were derived from observed admission, mutation, recovery,
-and residual state rather than the alternative name. The selected path satisfied
-all twelve. The decision record keeps
-the complete outcome matrix and exact transcript shapes; the final fixture tree
-keeps only reusable selected-path vectors.
+transcripts. Every predecessor/target read traversed the server. Stale and rewind
+faults were injected after the final successful read and before each
+alternative's admission mutation. Finality came from a later durable observation,
+including a late Issue claimant, rather than an alternative property. PR create
+carried expected base and discovery returned observed base. The selected path
+satisfied all twelve. The final fixture tree keeps only reusable selected-path
+vectors.
 
 ## Complete outcome matrix
 
@@ -35,21 +38,22 @@ alternative remains evidence about that alternative; it is not a product test.
 
 | Vector | coordination ref | managed Issue ledger | external serializer |
 |---|---:|---:|---:|
-| Initial-create response loss | pass: exact ref readback | pass: exact comment readback; election is not final | pass: exact lease readback; external prerequisite |
-| Stale predecessor | pass: exact CAS rejects | pass: repository gate rejects before comment | pass: repository gate rejects before lease |
-| Coordination ancestor rewind | pass: exact CAS rejects | pass: repository gate rejects before comment | pass: repository gate rejects before lease |
+| Initial-create response loss | pass: exact ref readback remains final | fail: exact comment exists but late claimant changes election | pass: exact lease readback; external prerequisite |
+| Stale predecessor after final read | pass: exact CAS rejects | fail: comment writes after repository drift | fail: lease writes after repository drift |
+| Coordination ancestor rewind after final read | pass: exact CAS rejects | fail: comment writes after rewind | fail: lease writes after rewind |
 | Proposal ancestor rewind | pass: proposal ref has its own exact CAS | pass: proposal CAS rejects after ledger admission | pass: proposal CAS rejects after external admission |
 | Target move before claim | pass: authenticated reread, zero write | pass: zero ledger write | pass: zero caller dispatch |
 | Target move after claim, before resource | pass: step reread, zero resource write | pass: step reread, zero resource write | pass: step reread; external prerequisite |
 | Target move during PR create | pass: one marker-owned stale draft | pass: one discovered marker-owned stale draft | pass: one discovered marker-owned stale draft |
-| Two first-publication invocations | pass: one all-zero CAS winner | fail: both append durable claims before a non-final election | pass: one external lease winner |
-| Two append invocations | pass: one predecessor CAS winner | fail: both append durable claims before a non-final election | pass: one external lease winner |
+| Two first-publication invocations | pass: one all-zero CAS winner | fail: both claims durable; later claimant changes election | pass: one external lease winner, external prerequisite |
+| Two append invocations | pass: one predecessor CAS winner | fail: both claims durable; later claimant changes election | pass: one external lease winner, external prerequisite |
 | Ambiguous commit response | pass: expected content OID discovery | pass: expected content OID discovery | pass: expected content OID discovery |
 | Ambiguous proposal-ref response | pass: exact head readback | pass: exact head readback | pass: exact head readback |
 | Ambiguous PR response | pass: exhaustive immutable-marker discovery | pass: exhaustive immutable-marker discovery | pass: exhaustive immutable-marker discovery |
 
-Every alternative crossed the same serialized boundary. For example, a
-coordination mutation was represented as:
+Every alternative performed its final repository read and admission mutation
+through the same serialized server. The server injected stale/rewind between
+those two requests. For example, a coordination mutation was represented as:
 
 ```json
 {
@@ -62,13 +66,15 @@ coordination mutation was represented as:
 }
 ```
 
-The managed-Issue implementation used append-comment, full readback, and a
-deterministic election. Both racing claims become durable before election, so
-the loser cannot be made un-admitted and the authority is not final. The
-external implementation used acquire/readback of an actual serialized lease and
-passed the exercised vectors, but its winner is neither repository-bound nor
-available without an external service. These are observed tradeoffs, not
-alternatives made to fail by construction.
+The managed-Issue implementation used append-comment, full readback and a
+deterministic election. The server then appended a later durable claimant and
+re-ran election; the winner changed, proving non-finality from observed state.
+The external implementation used acquire/readback of an actual serialized lease.
+It produced one lease winner, but stale/rewind injected after its final repository
+read still allowed the lease mutation because repository predecessor and lease
+ownership are different atomic authorities. It therefore fails repository-bound
+admission in addition to requiring an external service. These are executed
+tradeoffs, not implementation-supplied verdicts.
 
 ## Platform facts and minimum choice
 
@@ -102,10 +108,10 @@ family. R1 itself reads no credential and performs no network mutation.
 
 The managed-Issue alternative adds Issues write permission and a separately
 reconciled append-only ledger whose post-write election cannot provide final
-single-winner admission. The external serializer is viable under the tested
-faults, but adds an operational dependency whose lease is not durable repository
-state and still needs repository predecessor validation. Neither is the minimum
-initial protocol.
+single-winner admission. The external serializer adds an operational dependency;
+its lease is not durable repository state and cannot atomically bind the final
+repository predecessor read, so the executed read-to-admission stale/rewind
+window remains open. Neither is the minimum initial protocol.
 
 ## Exact sequencing and remaining race
 
