@@ -7,7 +7,10 @@
 ## Executable evidence
 
 The final corrected transient serialized decision harness is reviewable at
-commit `01efbef97dfdd035db3963b63e3626a6945f7298` on the Issue #158 branch. It supersedes the comparisons at
+commit `8f8be093651526a7ef7b8c25cfeaa6b20ba9d126` on the Issue #158 branch. It
+supersedes the comparison at `01efbef97dfdd035db3963b63e3626a6945f7298`,
+whose target-movement vectors moved the target before the relevant read rather
+than inside the read/write window, as well as the earlier comparisons at
 `5009ff42b53584d6b49c2c2ef71b5f1fdfea9a4d` and
 `f6bbf08c35ba0f6a45b21e22f7d0741f3153870a`: the first did not give rejected
 alternatives an equivalent executable boundary, while the second still read the
@@ -19,12 +22,16 @@ alternatives. The committed source was executed with:
 dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --no-build --filter "FullyQualifiedName~GitHubPublicationProtocolDecisionHarnessTests" --logger "console;verbosity=normal"
 ```
 
-Result: one harness test passed. It executed 12 scenarios against each of three
+Result: one harness test passed. It executed 14 scenarios against each of three
 bounded implementations behind the same JSON-serialized request/response and
-fault-injection server, producing 36 bounded observations and serialized request
+fault-injection server, producing 42 bounded observations and serialized request
 transcripts. Every predecessor/target read traversed the server. Stale and rewind
 faults were injected after the final successful read and before each
-alternative's admission mutation. Finality came from a later durable observation,
+alternative's admission mutation. Target movement was separately injected after
+a successful final read and before admission, after a successful step gate and
+before immutable content creation, and after a successful step gate and before
+proposal-ref CAS. Each path performed exact residual readback and then proved a
+later gate rejected continuation. Finality came from a later durable observation,
 including a late Issue claimant, rather than an alternative property. PR create
 carried expected base and discovery returned observed base. The selected path
 satisfied all twelve. The final fixture tree keeps only reusable selected-path
@@ -42,8 +49,9 @@ alternative remains evidence about that alternative; it is not a product test.
 | Stale predecessor after final read | pass: exact CAS rejects | fail: comment writes after repository drift | fail: lease writes after repository drift |
 | Coordination ancestor rewind after final read | pass: exact CAS rejects | fail: comment writes after rewind | fail: lease writes after rewind |
 | Proposal ancestor rewind | pass: proposal ref has its own exact CAS | pass: proposal CAS rejects after ledger admission | pass: proposal CAS rejects after external admission |
-| Target move before claim | pass: authenticated reread, zero write | pass: zero ledger write | pass: zero caller dispatch |
-| Target move after claim, before resource | pass: step reread, zero resource write | pass: step reread, zero resource write | pass: step reread; external prerequisite |
+| Target move after final read, before claim | pass: one exact claim, post-claim gate, zero content/ref/PR mutation | pass: one ledger claim and zero resource mutation, but ledger finality still fails | pass: one lease claim and zero resource mutation; external prerequisite |
+| Target move after step read, before content write | pass: one deterministic orphan content object, exact readback, zero later ref/PR mutation | pass: same bounded content residual after ledger admission | pass: same bounded content residual; external prerequisite |
+| Target move after step read, before proposal-ref write | pass: one exact old-base generation ref, exact readback, zero PR mutation | pass: same bounded ref residual after ledger admission | pass: same bounded ref residual; external prerequisite |
 | Target move during PR create | pass: one marker-owned stale draft | pass: one discovered marker-owned stale draft | pass: one discovered marker-owned stale draft |
 | Two first-publication invocations | pass: one all-zero CAS winner | fail: both claims durable; later claimant changes election | pass: one external lease winner, external prerequisite |
 | Two append invocations | pass: one predecessor CAS winner | fail: both claims durable; later claimant changes election | pass: one external lease winner, external prerequisite |
@@ -75,6 +83,18 @@ read still allowed the lease mutation because repository predecessor and lease
 ownership are different atomic authorities. It therefore fails repository-bound
 admission in addition to requiring an external service. These are executed
 tradeoffs, not implementation-supplied verdicts.
+
+A one-ref CAS cannot atomically compare the independently mutable target ref.
+The experiment therefore does not rename a target move inside that window to a
+zero-write rejection. Admission may leave one exact claim; content creation may
+leave one deterministic unreachable object; proposal CAS may leave one exact
+old-base generation ref. A fresh read immediately after each mutation discovers
+that residual, and the next repository gate forbids every later content/ref/PR
+mutation. The selected coordination state is then terminalized as `stale` by its
+own exact predecessor CAS. Only a newly attested initial operation on the current
+target, in a new generation, may replace that exact pre-PR stale state. It may
+neither adopt nor advance the old content/ref residual. This is the bounded
+continuation proved by the target-movement vectors.
 
 ## Platform facts and minimum choice
 
@@ -120,6 +140,9 @@ authenticated read, claims the coordination ref once, reads it back, then gates
 each later content/ref/PR request with a fresh exact claim/predecessor/base read.
 It performs at most one bounded mutation and directly reads that resource back
 before the next create. Drift visible before a request means zero further write.
+Drift first observed after a request permits only exact residual discovery and
+one coordination-only stale terminalization CAS; it never permits another
+content, proposal-ref or PR mutation for that operation.
 
 GitHub PR creation names a base branch rather than accepting an expected base
 commit CAS. Therefore the final target read and server-side PR processing retain

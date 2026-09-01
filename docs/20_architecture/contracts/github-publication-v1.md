@@ -220,6 +220,7 @@ pr-created
 published
 awaiting-review
 stale-draft
+stale
 merged
 closed-unmerged
 ```
@@ -241,6 +242,7 @@ The remaining required/forbidden matrix is:
 | `published` | required | required | required | required and equal | required |
 | `awaiting-review` | required | required | required | required and equal | required |
 | `stale-draft` | required | required | required | required and unequal | required |
+| `stale` | optional closed residual | optional with content and equal when present | forbidden | required and unequal | forbidden |
 | `merged` | required | required | required | required | required |
 | `closed-unmerged` | required | required | required | required | required |
 
@@ -249,11 +251,28 @@ and the authenticated `proposalRefOid` are one identity: the exact prepared
 proposal commit. The proposal tree OID is distinct. A state that records
 different values for any of the three commit/ref identities fails closed.
 
+`stale` is the pre-PR target-drift terminal. Its residual has exactly one of
+three closed shapes: claim-only has no content/proposal identity; content has
+only `contentCommitOid`; proposal has content plus all proposal fields with the
+three commit/ref identities equal. It always records the unequal expected and
+observed target OIDs and has no PR creation operation, PR number or marker. After
+exact residual discovery, the adapter may CAS only this terminal state from the
+current coordination predecessor. No later content/ref/PR mutation is permitted.
+
+A fresh `initial` authority for the currently authenticated target may replace
+an exact `stale` state by coordination-ref CAS only after proving the complete
+stale bytes/OID, the residual content/ref identities, and absence of any owned
+PR. It uses a new generation and operation and retains no preceding published
+M4 authority. The old immutable content object and old-generation proposal ref
+are never adopted, advanced or used as the new proposal predecessor. This is the
+only continuation from pre-PR target drift; `stale-draft` remains blocking and
+cannot use it.
+
 `tests/fixtures/github/publication-contract/coordination-representation-v1.json`
 freezes canonical state and commit preimages plus blob, nested-tree, root-tree and
 commit OIDs for initial claim, byte-exact replay, append claim, content partial,
-ref partial, PR-create residual, completed publication and quote/BMP/non-BMP/
-control escaping. R3 must authenticate
+ref partial, all three pre-PR stale residual shapes, PR-create residual,
+completed publication and quote/BMP/non-BMP/control escaping. R3 must authenticate
 those state bytes, the complete tree, commit message, actor, timestamp, parent
 and OID before producing a validated capability. The known answers form a
 predecessor-bound chain from the authenticated target commit through initial,

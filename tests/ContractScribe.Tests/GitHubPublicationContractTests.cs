@@ -649,6 +649,27 @@ public sealed class GitHubPublicationContractTests
             ProposalTreeOid = GitOid('6'),
         };
         var proposalAnswer = CreateCoordinationKnownAnswer(proposal);
+        var staleClaim = initial with
+        {
+            Name = "stale-claim",
+            Stage = "stale",
+            CoordinationPredecessorOid = initialAnswer.CommitOid,
+            ExpectedBaseOid = GitOid('1'),
+            ObservedBaseOid = GitOid('7'),
+        };
+        var staleContent = staleClaim with
+        {
+            Name = "stale-content-residual",
+            ContentCommitOid = content.ContentCommitOid,
+        };
+        var staleProposal = proposal with
+        {
+            Name = "stale-proposal-residual",
+            Stage = "stale",
+            CoordinationPredecessorOid = contentAnswer.CommitOid,
+            ExpectedBaseOid = GitOid('1'),
+            ObservedBaseOid = GitOid('7'),
+        };
         var stale = proposal with
         {
             Name = "pr-create-residual",
@@ -710,6 +731,9 @@ public sealed class GitHubPublicationContractTests
             append,
             content,
             proposal,
+            staleClaim,
+            staleContent,
+            staleProposal,
             stale,
             published,
             escaping,
