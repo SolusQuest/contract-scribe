@@ -46,7 +46,8 @@ jobs:
       - name: Integration suite
         id: integration_tests
         continue-on-error: true
-        timeout-minutes: 25
+        # Hosted Ubuntu runs now approach 25 minutes before testhost/TRX teardown.
+        timeout-minutes: 35
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
