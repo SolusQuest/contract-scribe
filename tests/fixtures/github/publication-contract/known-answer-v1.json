@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "policyCommitmentSha256": "ecebb9e30ca84be29f6ac610cb3717cd88b3c653b027a31908d08fc869b39ba6",
+  "authorityCommitmentSha256": "029a3c1747116add618de2cc3e0f02f293e5886a919609809a2a49a7bc0572fc",
+  "operationCommitmentSha256": "6490c81f8dac746af00b07b2e127ae45761ca6487c7ff038bfc7dd9fc31cbc36",
+  "coordinationRef": "refs/heads/contract-scribe/coordination/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "proposalRef": "refs/heads/contract-scribe/proposals/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

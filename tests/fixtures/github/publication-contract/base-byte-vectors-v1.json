@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "acceptedEntryKinds": ["blob"],
+  "acceptedModes": ["100644", "100755"],
+  "rejectedEntryKinds": ["tree", "symbolic-link", "submodule"],
+  "byteHandling": ["utf-8", "utf-8-bom", "utf-16le-bom", "arbitrary-binary"],
+  "transcoding": false,
+  "firstPublicationExpectedBytes": "m4-original-full-file-sha256",
+  "appendPreviouslyPublishedExpectedBytes": "preceding-cumulative-candidate-full-file-sha256",
+  "appendNewPathExpectedBytes": "m4-original-full-file-sha256"
+}

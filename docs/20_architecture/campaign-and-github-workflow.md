@@ -1,6 +1,6 @@
 # Campaign and GitHub workflow
 
-> **Status:** Current pre-release M4 local campaign execution boundary. `CampaignPlanner`, Campaign State v1, the C3 reducer, X2A checkpoint store, X1B/X1C execution, and the production campaign CLI implement snapshot-scoped planning, durable same-snapshot recovery, and caller-attested changed-base supersession. GitHub identity, branch and pull-request generations, remote operations, automatic rebase, and Action scheduling remain M5/M6 candidate architecture.
+> **Status:** Current pre-release M4 local campaign boundary plus accepted M5-R1 GitHub publication protocol. `CampaignPlanner`, Campaign State v1, the C3 reducer, X2A checkpoint store, X1B/X1C execution, and the production campaign CLI implement snapshot-scoped planning, durable same-snapshot recovery, and caller-attested changed-base supersession. M5-R1 now freezes the credential-free Core publication authority, coordination-ref admission protocol, deterministic remote intent, policy, results, and adapter port. Production GitHub transport/reconciliation and CLI composition remain later M5 leaves; automatic rebase, ready, merge, close, deletion, and Action scheduling remain M6 deferrals.
 
 ## Goal
 
@@ -9,6 +9,8 @@ Campaign orchestration turns audit violations into deterministic, bounded, resum
 The core state model is platform-neutral. GitHub Issues, branches, commits, and pull requests are adapter representations.
 
 The production adapter is part of the .NET payload. A GitHub Action wrapper invokes that payload and does not duplicate publication logic in TypeScript, shell, workflow expressions, or a second state machine.
+
+The normative M5-R1 contract is [GitHub Publication v1](contracts/github-publication-v1.md). The exercised alternative comparison and minimum-protocol rationale are in the [M5 publication protocol decision](validation/m5-publication-protocol-decision.md).
 
 ## Current M4-C1 planning boundary
 
@@ -20,7 +22,7 @@ The current planner is deliberately source-free and platform-neutral. It does no
 
 The plan contains identities, exact source commitments and encoding, spans, target/component facts, Audit-row commitments, Style Profile values for executable targets, dispositions, and bounded counts. Terminal targets must not carry execution-only Style Profile authority. It contains no source excerpts, trivia, documentation text, prompt content, provider output, candidate bytes, diff, credential, transcript, machine-absolute path, checkpoint history, or GitHub state.
 
-The normative planning contract is [Campaign Planning v1](contracts/campaign-planning-v1.md). [Campaign State v1](contracts/campaign-state-v1.md) is the accepted persisted C2 representation; the C3 reducer owns transitions and budget consumption; X2A owns secure exact-predecessor checkpoint publication; and X1B/X1C plus the campaign CLI compose provider and cumulative M2 execution. GitHub publication semantics remain later leaves and do not retroactively add remote identity or mutation semantics to the local M4 contracts.
+The normative planning contract is [Campaign Planning v1](contracts/campaign-planning-v1.md). [Campaign State v1](contracts/campaign-state-v1.md) is the accepted persisted C2 representation; the C3 reducer owns transitions and budget consumption; X2A owns secure exact-predecessor checkpoint publication; and X1B/X1C plus the campaign CLI compose provider and cumulative M2 execution. GitHub Publication v1 consumes a source-free projection of accepted M4 authority without retroactively adding remote identity or mutation semantics to the local M4 contracts.
 
 ## Identity model
 
@@ -197,18 +199,33 @@ Closing a pull request without merge requires an explicit policy outcome:
 
 No automatic merge is permitted in the initial workflow.
 
-## GitHub Issue state adapter
+## Accepted M5 coordination protocol
 
-The first adapter may use one managed issue per campaign:
+The initial adapter uses one deterministic coordination ref per campaign. A
+managed Issue/comment ledger and an externally serialized caller were executed
+against the same bounded race/recovery vectors and rejected as the initial
+authority. The accepted protocol needs no Issues write or external lock service.
 
-- the issue body contains the current schema version, campaign identity, checkpoint digest, and current summary;
-- comments contain append-only run and batch records;
-- every mutation has an operation ID bound to the snapshot identity, work-plan identity, intended transition, and pull-request generation when the operation belongs to one;
-- replay reconciles remote state before writing;
-- malformed, manually corrupted, deleted, or checksum-mismatched state fails closed;
-- large ledgers rotate under an explicit successor rule.
+Credential-free local admission validates repository/target/configured-base,
+M4 authority, complete changed-path/full-file-hash facts, stable operation,
+generation/predecessor, immutable publication policy, and optional exact
+closed-successor authorization. Ephemeral candidate bytes are a separate exact
+path-set input. Actual base trees, entry types/modes, current refs, proposal
+commits/trees, and PR state are authenticated adapter observations and cannot be
+injected through caller authority.
 
-The issue stores only machine identities, hashes, counts, budgets, status, bounded diagnostics, validation summaries, and GitHub URLs. It does not store source excerpts, private or complete prompt content, raw provider responses, secrets, complete transcripts, or full diffs.
+Both coordination and proposal ref creation/advancement use one GraphQL
+`updateRefs` `RefUpdate` with exact predecessor or forty-zero expected absence
+`beforeOid`, exact nonzero `afterOid`, and `force=false`. REST ref create/update
+is not an admission primitive. Every later content, ref, or PR request is gated
+by an exact claim/predecessor/base reread, performs at most one bounded mutation,
+and requires direct readback before another create is permitted.
+
+Deterministic source-free state, tree/commit intent, ownership markers, locally
+expected object IDs, and the exact draft-PR request are committed. Response loss
+is recovered only by exact OID/ref/marker discovery. Target movement during PR
+create processing may leave one exact marker-owned stale draft; it records no
+completed transition and blocks automatic continuation or a second create.
 
 ## Scheduling
 
@@ -240,7 +257,7 @@ The M4 conformance corpus includes a collision vector in which two different bas
 
 ## Host integration
 
-`ContractScribe.GitHub` consumes a validated publication plan and returns a publication record through Core-owned contracts. It does not invoke Roslyn or the model provider.
+The later `ContractScribe.GitHub` project consumes the Core-owned validated publication authority and separate byte payload through the single publication port and returns a structured Core result. It does not invoke Roslyn, Patching, or the model provider. Before its first mutation it performs authenticated complete reads and binds those observations into the prepared remote-operation commitment.
 
 `ContractScribe.Cli` composes the campaign state machine, patch result, state adapter, and GitHub adapter. The Action host supplies documented inputs and credentials to that CLI command and maps its stable outcome to Action outputs.
 
