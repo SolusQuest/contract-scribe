@@ -52,6 +52,11 @@ public static class GitHubPublicationFactory
             {
                 ArgumentNullException.ThrowIfNull(file);
                 ValidatePathAndHashes(file.Path, file.OriginalFileSha256, file.CandidateFileSha256);
+                Require(!string.Equals(
+                        file.OriginalFileSha256,
+                        file.CandidateFileSha256,
+                        StringComparison.Ordinal),
+                    GitHubPublicationValidationCode.InvalidCorrelation);
                 Require(paths.Add(file.Path), GitHubPublicationValidationCode.DuplicatePath);
                 Require(foldedPaths.Add(file.Path), GitHubPublicationValidationCode.CaseCollidingPath);
                 Require(file.ChangedDocumentationBlockCount is > 0
@@ -169,7 +174,8 @@ public static class GitHubPublicationFactory
     {
         ArgumentNullException.ThrowIfNull(authority);
         var key = GitHubPublicationCommitments.CreateIdentityKey(
-            "coordination-ref", authority.RepositoryOwner, authority.RepositoryName,
+            "coordination-ref", CanonicalRepositoryPart(authority.RepositoryOwner),
+            CanonicalRepositoryPart(authority.RepositoryName),
             authority.TargetRef, authority.CampaignLineage);
         return $"refs/heads/contract-scribe/coordination/{key}";
     }
@@ -178,7 +184,8 @@ public static class GitHubPublicationFactory
     {
         ArgumentNullException.ThrowIfNull(authority);
         var campaign = GitHubPublicationCommitments.CreateIdentityKey(
-            "proposal-campaign", authority.RepositoryOwner, authority.RepositoryName,
+            "proposal-campaign", CanonicalRepositoryPart(authority.RepositoryOwner),
+            CanonicalRepositoryPart(authority.RepositoryName),
             authority.TargetRef, authority.CampaignLineage);
         var generation = GitHubPublicationCommitments.CreateIdentityKey(
             "proposal-generation", authority.CampaignLineage, authority.GenerationId,
@@ -388,11 +395,14 @@ public static class GitHubPublicationFactory
                     || character is '-' or '_' or '.'),
             GitHubPublicationValidationCode.InvalidVocabulary);
 
+    private static string CanonicalRepositoryPart(string value) => value.ToLowerInvariant();
+
     private static bool IsRepositoryPath(string? value) =>
         value is { Length: > 0 }
         && value.EnumerateRunes().Count() <= GitHubPublicationContract.MaximumPathScalars
         && !value.StartsWith("/", StringComparison.Ordinal)
         && !value.StartsWith('\\')
+        && !(value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':')
         && !value.Contains('\\')
         && !value.Contains("//", StringComparison.Ordinal)
         && !value.Split('/').Any(segment => segment is "" or "." or "..")

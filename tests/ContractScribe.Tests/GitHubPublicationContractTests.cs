@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Xml.Linq;
 using ContractScribe.Core;
@@ -28,6 +29,24 @@ public sealed class GitHubPublicationContractTests
             GitHubPublicationFactory.CreateCoordinationRef(authority));
         Assert.Equal(root.GetProperty("proposalRef").GetString(),
             GitHubPublicationFactory.CreateProposalRef(authority));
+    }
+
+    [Fact]
+    public void Repository_case_aliases_share_one_ref_identity()
+    {
+        var canonical = GitHubPublicationFactory.CreateAuthority(CreateInput());
+        var alias = GitHubPublicationFactory.CreateAuthority(CreateInput() with
+        {
+            RepositoryOwner = "solusquest",
+            RepositoryName = "CONTRACT-SCRIBE",
+        });
+
+        Assert.Equal(
+            GitHubPublicationFactory.CreateCoordinationRef(canonical),
+            GitHubPublicationFactory.CreateCoordinationRef(alias));
+        Assert.Equal(
+            GitHubPublicationFactory.CreateProposalRef(canonical),
+            GitHubPublicationFactory.CreateProposalRef(alias));
     }
 
     [Fact]
@@ -121,9 +140,24 @@ public sealed class GitHubPublicationContractTests
                 })).Code);
     }
 
+    [Fact]
+    public void Changed_file_requires_distinct_original_and_candidate_hashes()
+    {
+        var unchanged = Changed("docs/readme.md", OriginalBytes, CandidateBytes) with
+        {
+            CandidateFileSha256 = Sha(OriginalBytes),
+        };
+
+        Assert.Equal(GitHubPublicationValidationCode.InvalidCorrelation,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(CreateInput([unchanged]))).Code);
+    }
+
     [Theory]
     [InlineData("../secret.md")]
     [InlineData("/absolute.md")]
+    [InlineData("C:/outside.md")]
+    [InlineData("c:/outside.md")]
     [InlineData("docs\\readme.md")]
     public void Repository_paths_fail_closed(string path)
     {
@@ -131,6 +165,30 @@ public sealed class GitHubPublicationContractTests
             Assert.Throws<GitHubPublicationValidationException>(() =>
                 GitHubPublicationFactory.CreateAuthority(
                     CreateInput([Changed(path, OriginalBytes, CandidateBytes)]))).Code);
+    }
+
+    [Fact]
+    public void Canonical_state_escape_vectors_are_valid_repository_paths()
+    {
+        var paths = new[]
+        {
+            "docs/\t-control.md",
+            "docs/\"quote.md",
+            "docs/文-bmp.md",
+            "docs/😀-non-bmp.md",
+        };
+
+        var authority = GitHubPublicationFactory.CreateAuthority(CreateInput(
+            paths.Select((path, index) => Changed(
+                path,
+                OriginalBytes,
+                Encoding.UTF8.GetBytes($"candidate-{index}\n")))) with
+        {
+            AcceptedM4Ceilings = new(10, 10, 1_000),
+            Policy = new(10, 10, 1_000),
+        });
+
+        Assert.Equal(paths, authority.ChangedFiles.Select(file => file.Path));
     }
 
     [Theory]
@@ -368,8 +426,8 @@ public sealed class GitHubPublicationContractTests
         Assert.Equal("40000", root.GetProperty("rootTreeMode").GetString());
         Assert.Equal("coordination-state-v1.json", root.GetProperty("statePath").GetString());
         Assert.Equal("100644", root.GetProperty("stateMode").GetString());
-        Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes(
-                $"<!-- contract-scribe-publication-v1 ownership=sha256:{Hex('e')} -->\n")),
+        Assert.Equal(Convert.ToBase64String(
+                CreateOwnershipMarker(CreateMarkerVector()).MarkerBytes),
             root.GetProperty("ownershipMarkerUtf8Base64").GetString());
 
         var expected = root.GetProperty("vectors").EnumerateArray().ToArray();
@@ -378,6 +436,8 @@ public sealed class GitHubPublicationContractTests
         {
             var actual = CreateCoordinationKnownAnswer(vectors[index]);
             Assert.Equal(vectors[index].Name, expected[index].GetProperty("name").GetString());
+            Assert.Equal(Convert.ToBase64String(actual.StateBytes),
+                expected[index].GetProperty("canonicalStateUtf8Base64").GetString());
             Assert.Equal(Sha(actual.StateBytes),
                 expected[index].GetProperty("canonicalStateSha256").GetString());
             Assert.Equal(actual.BlobOid, expected[index].GetProperty("blobOid").GetString());
@@ -417,6 +477,47 @@ public sealed class GitHubPublicationContractTests
             if (vector.CoordinationPredecessorOid != GitOid('0'))
                 Assert.Equal(vector.CoordinationPredecessorOid, answer.CommitParentOid);
         });
+        Assert.All(vectors.Where(vector => vector.ProposalCommitOid is not null), vector =>
+        {
+            Assert.Equal(vector.ContentCommitOid, vector.ProposalCommitOid);
+            Assert.Equal(vector.ContentCommitOid, vector.ProposalRefOid);
+        });
+    }
+
+    [Fact]
+    public void Ownership_marker_commitment_and_one_field_mutations_are_frozen()
+    {
+        using var fixture = ReadFixture("coordination-representation-v1.json");
+        var expected = fixture.RootElement.GetProperty("ownershipMarker");
+        var vector = CreateMarkerVector();
+        var answer = CreateOwnershipMarker(vector);
+
+        Assert.Equal(expected.GetProperty("pullRequestCreationOperationCommitmentSha256")
+            .GetString(), answer.CreationOperationCommitmentSha256);
+        Assert.Equal(expected.GetProperty("ownershipMarkerKeySha256").GetString(),
+            answer.OwnershipMarkerKeySha256);
+        Assert.Equal(answer.CreationOperationCommitmentSha256,
+            answer.OwnershipMarkerKeySha256);
+        Assert.Equal(expected.GetProperty("ownershipMarkerUtf8Base64").GetString(),
+            Convert.ToBase64String(answer.MarkerBytes));
+        Assert.Equal(expected.GetProperty("ownershipMarkerSha256").GetString(),
+            answer.OwnershipMarkerSha256);
+
+        var mutations = new[]
+        {
+            vector with { RepositoryId = "SolusQuest/contract-scribe-next" },
+            vector with { TargetRef = "refs/heads/release" },
+            vector with { TargetCommitOid = GitOid('2') },
+            vector with { AuthorityCommitmentSha256 = Hex('a') },
+            vector with { OperationCommitmentSha256 = Hex('b') },
+            vector with { GenerationId = "generation-2" },
+            vector with { ProposalRef = vector.ProposalRef + "-next" },
+            vector with { ProposalCommitOid = GitOid('5') },
+            vector with { ProposalTreeOid = GitOid('7') },
+        };
+        Assert.All(mutations, mutation => Assert.NotEqual(
+            answer.OwnershipMarkerKeySha256,
+            CreateOwnershipMarker(mutation).OwnershipMarkerKeySha256));
     }
 
     [Fact]
@@ -500,6 +601,7 @@ public sealed class GitHubPublicationContractTests
 
     private static CoordinationVector[] CreateCoordinationVectors()
     {
+        var marker = CreateOwnershipMarker(CreateMarkerVector());
         var initial = new CoordinationVector(
             Name: "initial-claim",
             Stage: "claimed",
@@ -520,7 +622,14 @@ public sealed class GitHubPublicationContractTests
             PullRequestNumber: null,
             ExpectedBaseOid: null,
             ObservedBaseOid: null,
-            OwnershipMarkerSha256: null);
+            OwnershipMarkerSha256: null,
+            CumulativeDocumentationBlocks: 2,
+            CumulativePatchBytes: 20,
+            CumulativeChangedFiles:
+            [
+                new("docs/a.md", Hex('4')),
+                new("docs/b.md", Hex('5')),
+            ]);
         var initialAnswer = CreateCoordinationKnownAnswer(initial);
         var content = initial with
         {
@@ -535,8 +644,8 @@ public sealed class GitHubPublicationContractTests
             Name = "ref-partial",
             Stage = "proposal-ref-advanced",
             CoordinationPredecessorOid = contentAnswer.CommitOid,
-            ProposalRefOid = GitOid('5'),
-            ProposalCommitOid = GitOid('5'),
+            ProposalRefOid = content.ContentCommitOid,
+            ProposalCommitOid = content.ContentCommitOid,
             ProposalTreeOid = GitOid('6'),
         };
         var proposalAnswer = CreateCoordinationKnownAnswer(proposal);
@@ -545,22 +654,24 @@ public sealed class GitHubPublicationContractTests
             Name = "pr-create-residual",
             Stage = "stale-draft",
             CoordinationPredecessorOid = proposalAnswer.CommitOid,
-            PullRequestCreationOperationCommitmentSha256 = Hex('d'),
+            PullRequestCreationOperationCommitmentSha256 =
+                marker.CreationOperationCommitmentSha256,
             PullRequestNumber = 42,
             ExpectedBaseOid = GitOid('1'),
             ObservedBaseOid = GitOid('7'),
-            OwnershipMarkerSha256 = Hex('e'),
+            OwnershipMarkerSha256 = marker.OwnershipMarkerSha256,
         };
         var published = proposal with
         {
             Name = "completed-publication",
             Stage = "published",
             CoordinationPredecessorOid = proposalAnswer.CommitOid,
-            PullRequestCreationOperationCommitmentSha256 = Hex('d'),
+            PullRequestCreationOperationCommitmentSha256 =
+                marker.CreationOperationCommitmentSha256,
             PullRequestNumber = 42,
             ExpectedBaseOid = GitOid('1'),
             ObservedBaseOid = GitOid('1'),
-            OwnershipMarkerSha256 = Hex('e'),
+            OwnershipMarkerSha256 = marker.OwnershipMarkerSha256,
         };
         var publishedAnswer = CreateCoordinationKnownAnswer(published);
         var append = initial with
@@ -576,6 +687,22 @@ public sealed class GitHubPublicationContractTests
             PrecedingCandidateCommitmentSha256 = Hex('6'),
             CoordinationPredecessorOid = publishedAnswer.CommitOid,
         };
+        var escaping = initial with
+        {
+            Name = "canonical-escaping",
+            OperationId = "operation-escape",
+            OperationCommitmentSha256 = Hex('f'),
+            CurrentCandidateCommitmentSha256 = Hex('d'),
+            CumulativeDocumentationBlocks = 4,
+            CumulativePatchBytes = 40,
+            CumulativeChangedFiles =
+            [
+                new("docs/\t-control.md", Hex('1')),
+                new("docs/\"quote.md", Hex('2')),
+                new("docs/文-bmp.md", Hex('3')),
+                new("docs/😀-non-bmp.md", Hex('4')),
+            ],
+        };
         return
         [
             initial,
@@ -585,6 +712,7 @@ public sealed class GitHubPublicationContractTests
             proposal,
             stale,
             published,
+            escaping,
         ];
     }
 
@@ -594,7 +722,12 @@ public sealed class GitHubPublicationContractTests
         byte[] stateBytes;
         using (var stream = new MemoryStream())
         {
-            using (var writer = new Utf8JsonWriter(stream))
+            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+            {
+                Encoder = JavaScriptEncoder.Default,
+                Indented = false,
+                SkipValidation = false,
+            }))
             {
                 writer.WriteStartObject();
                 writer.WriteNumber("version", 1);
@@ -629,15 +762,17 @@ public sealed class GitHubPublicationContractTests
                 WriteOptional(writer, "expectedBaseOid", vector.ExpectedBaseOid);
                 WriteOptional(writer, "observedBaseOid", vector.ObservedBaseOid);
                 WriteOptional(writer, "ownershipMarkerSha256", vector.OwnershipMarkerSha256);
+                writer.WriteNumber("cumulativeDocumentationBlocks",
+                    vector.CumulativeDocumentationBlocks);
+                writer.WriteNumber("cumulativePatchBytes", vector.CumulativePatchBytes);
                 writer.WriteStartArray("cumulativeChangedFiles");
-                writer.WriteStartObject();
-                writer.WriteString("path", "docs/a.md");
-                writer.WriteString("candidateSha256", Hex('4'));
-                writer.WriteEndObject();
-                writer.WriteStartObject();
-                writer.WriteString("path", "docs/b.md");
-                writer.WriteString("candidateSha256", Hex('5'));
-                writer.WriteEndObject();
+                foreach (var file in vector.CumulativeChangedFiles)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("path", file.Path);
+                    writer.WriteString("candidateSha256", file.CandidateSha256);
+                    writer.WriteEndObject();
+                }
                 writer.WriteEndArray();
                 writer.WriteEndObject();
             }
@@ -669,6 +804,41 @@ public sealed class GitHubPublicationContractTests
     {
         if (value is null) writer.WriteNull(name);
         else writer.WriteString(name, value);
+    }
+
+    private static MarkerVector CreateMarkerVector() => new(
+        RepositoryId: "SolusQuest/contract-scribe",
+        TargetRef: "refs/heads/main",
+        TargetCommitOid: GitOid('1'),
+        AuthorityCommitmentSha256: Hex('9'),
+        OperationCommitmentSha256: Hex('7'),
+        GenerationId: "generation-1",
+        ProposalRef: "refs/heads/contract-scribe/proposals/campaign/generation",
+        ProposalCommitOid: GitOid('4'),
+        ProposalTreeOid: GitOid('6'));
+
+    private static MarkerKnownAnswer CreateOwnershipMarker(MarkerVector vector)
+    {
+        using var writer = new GitHubPublicationCommitmentWriter(
+            "contract-scribe/github-pull-request-creation/v1");
+        writer.Add("version", GitHubPublicationContract.Version);
+        writer.Add("repository-id", vector.RepositoryId);
+        writer.Add("target-ref", vector.TargetRef);
+        writer.Add("target-commit-oid", vector.TargetCommitOid);
+        writer.Add("authority-commitment", vector.AuthorityCommitmentSha256);
+        writer.Add("operation-commitment", vector.OperationCommitmentSha256);
+        writer.Add("generation-id", vector.GenerationId);
+        writer.Add("proposal-ref", vector.ProposalRef);
+        writer.Add("proposal-commit-oid", vector.ProposalCommitOid);
+        writer.Add("proposal-tree-oid", vector.ProposalTreeOid);
+        var creationCommitment = writer.Complete();
+        var markerBytes = Encoding.UTF8.GetBytes(
+            $"<!-- contract-scribe-publication-v1 ownership=sha256:{creationCommitment} -->\n");
+        return new(
+            creationCommitment,
+            creationCommitment,
+            markerBytes,
+            Sha(markerBytes));
     }
 
     private static byte[] GitTreeEntry(string mode, string name, string oid)
@@ -786,7 +956,29 @@ public sealed class GitHubPublicationContractTests
         int? PullRequestNumber,
         string? ExpectedBaseOid,
         string? ObservedBaseOid,
-        string? OwnershipMarkerSha256);
+        string? OwnershipMarkerSha256,
+        int CumulativeDocumentationBlocks,
+        long CumulativePatchBytes,
+        IReadOnlyList<CoordinationChangedFile> CumulativeChangedFiles);
+
+    private sealed record CoordinationChangedFile(string Path, string CandidateSha256);
+
+    private sealed record MarkerVector(
+        string RepositoryId,
+        string TargetRef,
+        string TargetCommitOid,
+        string AuthorityCommitmentSha256,
+        string OperationCommitmentSha256,
+        string GenerationId,
+        string ProposalRef,
+        string ProposalCommitOid,
+        string ProposalTreeOid);
+
+    private sealed record MarkerKnownAnswer(
+        string CreationOperationCommitmentSha256,
+        string OwnershipMarkerKeySha256,
+        byte[] MarkerBytes,
+        string OwnershipMarkerSha256);
 
     private sealed record CoordinationKnownAnswer(
         byte[] StateBytes,

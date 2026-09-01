@@ -65,7 +65,11 @@ it is not a Git blob/diff measure or the newest append delta.
 
 Authority paths are canonical repository-relative paths ordered ordinally.
 Missing, extra, duplicate, ordinal-ignore-case-colliding, absolute, traversing,
-or backslash paths fail locally. Hashes are exact lowercase SHA-256.
+or backslash paths fail locally. An ASCII-letter drive prefix such as `C:` or
+`c:` is absolute and fails before any remote access. Hashes are exact lowercase
+SHA-256. Each member of the changed-file set is a true change, so its original
+and candidate hashes must be unequal. This inequality does not apply to the
+preceding path map, which carries only the previous candidate identity.
 
 `ValidatedGitHubChangedFilePayload` is a separate nonpersistent input. Admission
 requires the exact authority path set, recomputes each candidate SHA-256, and
@@ -114,6 +118,12 @@ refs/heads/contract-scribe/coordination/<campaign-sha256>
 refs/heads/contract-scribe/proposals/<campaign-sha256>/<generation-sha256>
 ```
 
+GitHub repository owner and name spelling is preserved in caller authority and
+must later be authenticated against GitHub's canonical repository identity. For
+ref derivation only, both ASCII repository parts are lowercased before hashing,
+so GitHub case aliases cannot create parallel coordination or proposal
+namespaces. Target ref and campaign/generation facts remain ordinal.
+
 The forty-zero Git OID means expected ref absence only; it is never an
 `afterOid`, object parent, or product commitment.
 
@@ -126,7 +136,9 @@ ID and its commitment as distinct fields, plus repository ID, target ref/base,
 authority/policy/current-candidate commitments, nullable preceding
 authority/candidate/operation, generation/transition, exact coordination and
 proposal predecessor/result OIDs, exact PR residual identity when present, and
-the complete cumulative changed-path/candidate-hash map.
+the complete cumulative block count, cumulative candidate-byte count and
+changed-path/candidate-hash map. The distinct changed-file count is exactly the
+map length; it is not a separately caller-controlled field.
 
 The coordination ref points to a commit whose tree contains exactly one entry:
 the tree `.contract-scribe` with mode `40000`. That tree contains exactly
@@ -135,6 +147,15 @@ present. The state object has every key below in this exact order. Optional and
 stage-forbidden values are encoded as JSON `null`, never omitted. Changed files
 are ordered by ordinal path and each object has exactly `path` then
 `candidateSha256`.
+
+JSON numbers are base-ten integers without exponent, leading zero or fractional
+form. Strings use the exact escaping produced by a non-indented
+`Utf8JsonWriter` with `JavaScriptEncoder.Default`, validation enabled: JSON
+syntax, control, HTML-sensitive and non-ASCII scalars are escaped by that
+encoder. Quote, tab, BMP and surrogate-pair non-BMP cases are frozen as exact
+base64 state bytes. Replacement characters are never admitted for invalid
+UTF-16. The known-answer fixture, rather than a platform's future encoder
+defaults, is normative for byte replay.
 
 ```text
 version, stage, repositoryId, targetRef, targetCommitOid,
@@ -146,7 +167,7 @@ coordinationPredecessorOid, contentCommitOid, proposalRefOid,
 proposalCommitOid, proposalTreeOid,
 pullRequestCreationOperationCommitmentSha256, pullRequestNumber,
 expectedBaseOid, observedBaseOid, ownershipMarkerSha256,
-cumulativeChangedFiles
+cumulativeDocumentationBlocks, cumulativePatchBytes, cumulativeChangedFiles
 ```
 
 The Git commit has exactly one nonzero parent and these exact, LF-only preimage
@@ -173,11 +194,21 @@ across state, object and mutation: the commit parent and
 reproduces the initial state and commit bytes/OID and performs no ref mutation.
 
 Git blob, tree and commit identities use the ordinary SHA-1 Git object framing
-`<type> <decimal-byte-count>\0<preimage>`. The ownership marker is strict UTF-8,
-LF terminated, and exactly
-`<!-- contract-scribe-publication-v1 ownership=sha256:<lowercase-sha256> -->`.
-Only its SHA-256 commitment is stored as `ownershipMarkerSha256`; raw lineage,
-operation and generation IDs never appear in the marker.
+`<type> <decimal-byte-count>\0<preimage>`. The pull-request creation operation
+commitment is SHA-256 over the same four-byte big-endian length-framed field
+encoding as Core commitments, with domain
+`contract-scribe/github-pull-request-creation/v1` and these labels in exact
+order: `version`, `repository-id`, `target-ref`, `target-commit-oid`,
+`authority-commitment`, `operation-commitment`, `generation-id`, `proposal-ref`,
+`proposal-commit-oid`, `proposal-tree-oid`. It binds only authenticated immutable
+generation-creation facts. The lowercase marker ownership key is exactly this
+`pullRequestCreationOperationCommitmentSha256`, not an independent caller value.
+The ownership marker is strict UTF-8, LF terminated, and exactly
+`<!-- contract-scribe-publication-v1 ownership=sha256:<marker-key> -->`.
+`ownershipMarkerSha256` is SHA-256 over those complete marker bytes. Raw lineage,
+operation and generation IDs never appear in the marker. The fixture freezes the
+creation commitment, marker key, marker bytes, marker hash, exact replay and
+one-field mutation behavior.
 
 Its closed stages are:
 
@@ -195,8 +226,9 @@ closed-unmerged
 
 Each stage has a closed required/forbidden field matrix. Later stages retain all
 earlier exact identities; no caller-controlled diagnostic is correctness-bearing.
-The common fields from `version` through `coordinationPredecessorOid`, plus the
-cumulative map, are always required. In a `claimed` initial/successor record the
+The common fields from `version` through `coordinationPredecessorOid`, plus all
+three cumulative observations, are always required and must equal the accepted
+authority. In a `claimed` initial/successor record the
 three `preceding*` fields are forbidden; in a `claimed` append they are required.
 The remaining required/forbidden matrix is:
 
@@ -212,10 +244,16 @@ The remaining required/forbidden matrix is:
 | `merged` | required | required | required | required | required |
 | `closed-unmerged` | required | required | required | required | required |
 
+Whenever proposal fields are required, `contentCommitOid`, `proposalCommitOid`
+and the authenticated `proposalRefOid` are one identity: the exact prepared
+proposal commit. The proposal tree OID is distinct. A state that records
+different values for any of the three commit/ref identities fails closed.
+
 `tests/fixtures/github/publication-contract/coordination-representation-v1.json`
 freezes canonical state and commit preimages plus blob, nested-tree, root-tree and
 commit OIDs for initial claim, byte-exact replay, append claim, content partial,
-ref partial, PR-create residual and completed publication. R3 must authenticate
+ref partial, PR-create residual, completed publication and quote/BMP/non-BMP/
+control escaping. R3 must authenticate
 those state bytes, the complete tree, commit message, actor, timestamp, parent
 and OID before producing a validated capability. The known answers form a
 predecessor-bound chain from the authenticated target commit through initial,
