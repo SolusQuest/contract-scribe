@@ -22,10 +22,15 @@ alternatives. The committed source was executed with:
 dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --no-build --filter "FullyQualifiedName~GitHubPublicationProtocolDecisionHarnessTests" --logger "console;verbosity=normal"
 ```
 
-Result: one harness test passed. It executed 14 scenarios against each of three
+Result: one harness test passed. It executed 13 scenarios against each of three
 bounded implementations behind the same JSON-serialized request/response and
-fault-injection server, producing 42 bounded observations and serialized request
-transcripts. Every predecessor/target read traversed the server. Stale and rewind
+fault-injection server, producing 39 bounded observations and serialized request
+transcripts. The denominator is the exact sum of one initial-create response-loss
+case, one stale-predecessor case, two ref-rewind cases, three target-movement
+windows, one PR-create race, two concurrent-invocation cases, and three ambiguous
+response cases. The complete outcome matrix contains one row for each of those 13
+scenarios, so the observation count is exactly `13 * 3`. Every predecessor/target
+read traversed the server. Stale and rewind
 faults were injected after the final successful read and before each
 alternative's admission mutation. Target movement was separately injected after
 a successful final read and before admission, after a successful step gate and
@@ -34,7 +39,7 @@ proposal-ref CAS. Each path performed exact residual readback and then proved a
 later gate rejected continuation. Finality came from a later durable observation,
 including a late Issue claimant, rather than an alternative property. PR create
 carried expected base and discovery returned observed base. The selected path
-satisfied all twelve. The final fixture tree keeps only reusable selected-path
+satisfied all thirteen. The final fixture tree keeps only reusable selected-path
 vectors.
 
 ## Complete outcome matrix
