@@ -70,6 +70,22 @@ public sealed class AuditCommandRunnerTests
             StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("host.sdk-discovery.cancelled", 6)]
+    [InlineData("host.sdk-discovery.timeout", 7)]
+    public void Adapt_PreservesCancellationAndTimeoutExitCodes(string code, int expectedExitCode)
+    {
+        var outcome = ValidFailure(HostContractResources.RequireFailure(code));
+
+        var result = AuditCommandRunner.Adapt(Identity(), outcome);
+
+        Assert.Equal(expectedExitCode, result.ExitCode);
+        Assert.DoesNotContain(
+            "\"terminalLayer\":\"host-contract-error\"",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Adapt_RejectsContradictoryFailureTerminalShapes()
     {

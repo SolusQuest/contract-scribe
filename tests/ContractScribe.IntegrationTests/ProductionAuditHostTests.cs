@@ -908,6 +908,7 @@ public sealed class ProductionAuditHostTests
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
         using var cancellation = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
 
         var outcome = await RunAsync(
             fixture,
@@ -919,9 +920,11 @@ public sealed class ProductionAuditHostTests
                     if (stage == cancelledStage)
                     {
                         cancellation.Cancel();
+                        deadlines["total-audit-timeout"].Trigger();
                     }
                     return Task.CompletedTask;
-                }),
+                },
+                DeadlineSourceFactory: deadlines.Create),
             cancellation.Token);
 
         Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
@@ -948,19 +951,58 @@ public sealed class ProductionAuditHostTests
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var cancellation = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
 
         var outcome = await RunAsync(
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                StageBoundary: (stage, _) => stage == timedOutStage
-                    ? Task.FromException(new OperationCanceledException("test-only"))
-                    : Task.CompletedTask));
+                StageBoundary: (stage, _) =>
+                {
+                    if (stage == timedOutStage)
+                    {
+                        deadlines["total-audit-timeout"].Trigger();
+                        cancellation.Cancel();
+                    }
+                    return Task.CompletedTask;
+                },
+                DeadlineSourceFactory: deadlines.Create),
+            cancellation.Token);
 
         Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
         Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
         Assert.Equal(timedOutStage, outcome.Terminal.Failure?.Stage);
         Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Fact]
+    public async Task TotalAuditDeadline_UsesTheArmedProductionTimerPath()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        var stopwatch = Stopwatch.StartNew();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                DeadlineOverride: name => name == "total-audit-timeout"
+                    ? TimeSpan.FromMilliseconds(50)
+                    : null,
+                StageBoundary: async (stage, token) =>
+                {
+                    if (stage == HostStage.Input)
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                }));
+
+        stopwatch.Stop();
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal("host.input.timeout", outcome.Terminal.Failure?.Code);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
         Assert.False(File.Exists(resultPath));
     }
 
@@ -1085,30 +1127,22 @@ public sealed class ProductionAuditHostTests
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
         using var caller = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
 
         var outcome = await RunAsync(
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                DeadlineOverride: name => name == "sdk-discovery-timeout"
-                    ? TimeSpan.FromMilliseconds(50)
-                    : null,
-                StageBoundary: async (stage, token) =>
+                StageBoundary: (stage, _) =>
                 {
-                    if (stage != HostStage.SdkDiscovery)
+                    if (stage == HostStage.SdkDiscovery)
                     {
-                        return;
-                    }
-                    try
-                    {
-                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                    }
-                    catch (OperationCanceledException)
-                    {
+                        deadlines["sdk-discovery-timeout"].Trigger();
                         caller.Cancel();
-                        throw;
                     }
-                }),
+                    return Task.CompletedTask;
+                },
+                DeadlineSourceFactory: deadlines.Create),
             caller.Token);
 
         Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
@@ -1121,28 +1155,190 @@ public sealed class ProductionAuditHostTests
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
         using var caller = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
 
         var outcome = await RunAsync(
             fixture,
             resultPath,
             new ProductionAuditHostControls(
-                DeadlineOverride: name => name == "sdk-discovery-timeout"
-                    ? TimeSpan.FromMilliseconds(50)
-                    : null,
-                StageBoundary: async (stage, token) =>
+                StageBoundary: (stage, _) =>
                 {
-                    if (stage != HostStage.SdkDiscovery)
+                    if (stage == HostStage.SdkDiscovery)
                     {
-                        return;
+                        caller.Cancel();
+                        deadlines["sdk-discovery-timeout"].Trigger();
                     }
-                    caller.Cancel();
-                    await Task.Delay(100, CancellationToken.None);
-                    throw new OperationCanceledException(token);
-                }),
+                    return Task.CompletedTask;
+                },
+                DeadlineSourceFactory: deadlines.Create),
             caller.Token);
 
         Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
         Assert.Equal("host.sdk-discovery.cancelled", outcome.Terminal.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task DelayedCallerCallback_CannotLetALaterSdkDeadlineReplaceCancellation()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        using var callbackEntered = new ManualResetEventSlim();
+        using var releaseCallback = new ManualResetEventSlim();
+        var deadlines = new TestDeadlineRegistry();
+        Task? cancellationTask = null;
+        CancellationTokenRegistration delayingRegistration = default;
+
+        try
+        {
+            var outcome = await RunAsync(
+                fixture,
+                resultPath,
+                new ProductionAuditHostControls(
+                    StageBoundary: (stage, _) =>
+                    {
+                        if (stage != HostStage.SdkDiscovery)
+                        {
+                            return Task.CompletedTask;
+                        }
+
+                        delayingRegistration = caller.Token.Register(() =>
+                        {
+                            callbackEntered.Set();
+                            Assert.True(releaseCallback.Wait(TimeSpan.FromSeconds(10)));
+                        });
+                        cancellationTask = Task.Run(caller.Cancel);
+                        Assert.True(callbackEntered.Wait(TimeSpan.FromSeconds(5)));
+                        deadlines["sdk-discovery-timeout"].Trigger();
+                        releaseCallback.Set();
+                        return Task.CompletedTask;
+                    },
+                    DeadlineSourceFactory: deadlines.Create),
+                caller.Token);
+
+            Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
+            Assert.Equal("host.sdk-discovery.cancelled", outcome.Terminal.Failure?.Code);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            if (cancellationTask is not null)
+            {
+                await cancellationTask;
+            }
+            delayingRegistration.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData(HostStage.SdkDiscovery, "sdk-discovery-timeout", false, "host.sdk-discovery.cancelled")]
+    [InlineData(HostStage.SdkDiscovery, "sdk-discovery-timeout", true, "host.sdk-discovery.timeout")]
+    [InlineData(HostStage.WorkspaceLoad, "workspace-load-timeout", false, "host.workspace-load.cancelled")]
+    [InlineData(HostStage.WorkspaceLoad, "workspace-load-timeout", true, "host.workspace-load.timeout")]
+    [InlineData(HostStage.Shutdown, "graceful-shutdown-timeout", false, "host.shutdown.cancelled")]
+    [InlineData(HostStage.Shutdown, "graceful-shutdown-timeout", true, "host.shutdown.timeout")]
+    public async Task LocalDeadlineAndCallerOrders_UseTheActualProductionSource(
+        HostStage targetStage,
+        string deadlineName,
+        bool deadlineFirst,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) =>
+                {
+                    if (stage == targetStage)
+                    {
+                        if (deadlineFirst)
+                        {
+                            deadlines[deadlineName].Trigger();
+                            caller.Cancel();
+                        }
+                        else
+                        {
+                            caller.Cancel();
+                            deadlines[deadlineName].Trigger();
+                        }
+                    }
+                    return Task.CompletedTask;
+                },
+                DeadlineSourceFactory: deadlines.Create),
+            caller.Token);
+
+        Assert.Equal(
+            deadlineFirst ? HostExecutionOutcome.Timeout : HostExecutionOutcome.Cancelled,
+            outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(targetStage, outcome.Terminal.Failure?.Stage);
+        Assert.Equal(
+            targetStage == HostStage.SdkDiscovery
+                ? HostToolchainSelectionState.NotSelected
+                : HostToolchainSelectionState.Selected,
+            outcome.Terminal.Toolchain.SelectionState);
+    }
+
+    [Theory]
+    [InlineData(false, "host.shutdown.cancelled")]
+    [InlineData(true, "host.shutdown.timeout")]
+    public async Task SessionConsumerShutdown_RetiresTotalDeadlineAndPreservesBothCausalOrders(
+        bool deadlineFirst,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        var deadlines = new TestDeadlineRegistry();
+        CancellationToken? consumerToken = null;
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) =>
+                {
+                    if (stage == HostStage.Shutdown)
+                    {
+                        if (deadlineFirst)
+                        {
+                            deadlines["graceful-shutdown-timeout"].Trigger();
+                            caller.Cancel();
+                        }
+                        else
+                        {
+                            caller.Cancel();
+                            deadlines["graceful-shutdown-timeout"].Trigger();
+                        }
+                    }
+                    return Task.CompletedTask;
+                },
+                SessionConsumer: (_, token) =>
+                {
+                    consumerToken = token;
+                    deadlines["total-audit-timeout"].Trigger();
+                    return Task.CompletedTask;
+                },
+                DeadlineSourceFactory: deadlines.Create),
+            caller.Token);
+
+        Assert.Equal(caller.Token, consumerToken);
+        Assert.Contains(
+            "audit-deadline-retired-before-session-consumer",
+            outcome.TransitionEvents);
+        Assert.Equal(
+            deadlineFirst ? HostExecutionOutcome.Timeout : HostExecutionOutcome.Cancelled,
+            outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(HostStage.Shutdown, outcome.Terminal.Failure?.Stage);
+        Assert.Equal(
+            HostToolchainSelectionState.Selected,
+            outcome.Terminal.Toolchain.SelectionState);
     }
 
     [Fact]
@@ -1430,6 +1626,21 @@ public sealed class ProductionAuditHostTests
     }
 
     private static HostBuildProvenance Provenance() => new(new string('1', 40));
+
+    private sealed class TestDeadlineRegistry
+    {
+        private readonly Dictionary<string, ProductionDeadlineSource> sources =
+            new(StringComparer.Ordinal);
+
+        public ProductionDeadlineSource this[string name] => sources[name];
+
+        public ProductionDeadlineSource Create(string name)
+        {
+            var source = new ProductionDeadlineSource();
+            Assert.True(sources.TryAdd(name, source), $"Duplicate deadline source: {name}");
+            return source;
+        }
+    }
 
     private static RegisteredToolchain TestToolchain(string root) => new(
         new ToolchainIdentity("10.0.102", "10.0.0", "18.0.0", "X64"),

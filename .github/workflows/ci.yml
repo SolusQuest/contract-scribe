@@ -30,6 +30,15 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
+      - name: Record runner and toolchain facts
+        shell: pwsh
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          dotnet --info
+          dotnet msbuild -version
       - name: Restore
         run: dotnet restore ContractScribe.slnx
       - name: Build

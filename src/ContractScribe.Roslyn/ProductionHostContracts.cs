@@ -77,7 +77,8 @@ internal sealed record ProductionAuditHostControls(
     Action? BeforeAtomicRename = null,
     Action<HostTerminalRecord>? AfterCauseAccepted = null,
     Action<HostToolchainFact>? AfterToolchainSelection = null,
-    Func<ProductionRepositorySessionBundle, CancellationToken, Task>? SessionConsumer = null)
+    Func<ProductionRepositorySessionBundle, CancellationToken, Task>? SessionConsumer = null,
+    Func<string, ProductionDeadlineSource>? DeadlineSourceFactory = null)
 {
     public Task ReachAsync(
         ProductionHostControlPoint point,
@@ -92,4 +93,8 @@ internal sealed record ProductionAuditHostControls(
     public TimeSpan Deadline(string boundName) =>
         DeadlineOverride?.Invoke(boundName)
         ?? TimeSpan.FromMilliseconds(HostContractResources.RequireBound(boundName));
+
+    public ProductionDeadlineSource CreateDeadline(string boundName) =>
+        DeadlineSourceFactory?.Invoke(boundName)
+        ?? new ProductionDeadlineSource();
 }
