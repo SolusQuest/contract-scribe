@@ -78,7 +78,8 @@ internal sealed record ProductionAuditHostControls(
     Action<HostTerminalRecord>? AfterCauseAccepted = null,
     Action<HostToolchainFact>? AfterToolchainSelection = null,
     Func<ProductionRepositorySessionBundle, CancellationToken, Task>? SessionConsumer = null,
-    Func<string, ProductionDeadlineSource>? DeadlineSourceFactory = null)
+    Func<string, ProductionDeadlineSource>? DeadlineSourceFactory = null,
+    Action<string>? AfterInterruptionSourceReserved = null)
 {
     public Task ReachAsync(
         ProductionHostControlPoint point,

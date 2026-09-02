@@ -60,9 +60,14 @@ internal sealed class ProductionRepositorySessionHost
         }
 
         coordinator.TransitionExecutionState(HostStage.Publication, toolchain);
+        var causalArbiter = new CausalInterruptionArbiter();
         using var callerSignal = new CausalCallerSignal(
             cancellationToken,
-            () => RegisterInterruption(HostExecutionOutcome.Cancelled));
+            causalArbiter,
+            () => RegisterInterruption(HostExecutionOutcome.Cancelled),
+            controls.AfterInterruptionSourceReserved is null
+                ? null
+                : () => controls.AfterInterruptionSourceReserved("caller"));
         AtomicResultPublisher? publisher = null;
         try
         {
@@ -96,6 +101,11 @@ internal sealed class ProductionRepositorySessionHost
 
         using (publisher)
         {
+            callerSignal.ObserveIfSourceRequested();
+            if (callerSignal.OccurrenceSequence is not null)
+            {
+                callerSignal.EnsureCauseAccepted();
+            }
             if (coordinator.RegisteredCause is not null)
             {
                 return await CommitFailureAsync(
@@ -118,11 +128,13 @@ internal sealed class ProductionRepositorySessionHost
             using var processMeter = controls.ProcessMeterFactory?.Invoke()
                 ?? new ToolchainProcessMeter();
             using var totalTimeout = new CausalDeadlineScope(
-                callerSignal.Token,
+                callerSignal,
+                causalArbiter,
                 controls.CreateDeadline("total-audit-timeout"),
+                "total-audit-timeout",
                 controls.Deadline("total-audit-timeout"),
-                callerSignal.ObserveIfCancellationRequested,
-                () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                () => RegisterInterruption(HostExecutionOutcome.Timeout),
+                controls.AfterInterruptionSourceReserved);
             var totalToken = totalTimeout.Token;
 
             Record(controls, transitions, "failure-prone-stage-entered");
@@ -186,11 +198,13 @@ internal sealed class ProductionRepositorySessionHost
                     throw LoaderException.Toolchain("toolchain.sdk-unavailable");
                 }
                 using var sdkTimeout = new CausalDeadlineScope(
-                    totalToken,
+                    totalTimeout,
+                    causalArbiter,
                     controls.CreateDeadline("sdk-discovery-timeout"),
+                    "sdk-discovery-timeout",
                     controls.Deadline("sdk-discovery-timeout"),
-                    callerSignal.ObserveIfCancellationRequested,
-                    () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                    () => RegisterInterruption(HostExecutionOutcome.Timeout),
+                    controls.AfterInterruptionSourceReserved);
                 await controls.ReachStageAsync(HostStage.SdkDiscovery, sdkTimeout.Token)
                     .ConfigureAwait(false);
                 sdkTimeout.Token.ThrowIfCancellationRequested();
@@ -275,11 +289,13 @@ internal sealed class ProductionRepositorySessionHost
             Task<RepositoryLoadOutcome>? loaderTask = null;
             coordinator.TransitionExecutionState(HostStage.WorkspaceLoad, toolchain);
             using var workspaceTimeout = new CausalDeadlineScope(
-                totalToken,
+                totalTimeout,
+                causalArbiter,
                 controls.CreateDeadline("workspace-load-timeout"),
+                "workspace-load-timeout",
                 controls.Deadline("workspace-load-timeout"),
-                callerSignal.ObserveIfCancellationRequested,
-                () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                () => RegisterInterruption(HostExecutionOutcome.Timeout),
+                controls.AfterInterruptionSourceReserved);
             try
             {
                 await controls.ReachStageAsync(HostStage.WorkspaceLoad, workspaceTimeout.Token)
@@ -631,13 +647,14 @@ internal sealed class ProductionRepositorySessionHost
                     hostDiagnostics).ConfigureAwait(false);
             }
 
-            var shutdownLifetimeToken = totalToken;
+            ICausalInterruptionSignal shutdownLifetime = totalTimeout;
             if (controls.SessionConsumer is not null)
             {
                 try
                 {
                     totalTimeout.RetireDeadline();
                     totalToken.ThrowIfCancellationRequested();
+                    shutdownLifetime = callerSignal;
                     Record(controls, transitions, "audit-deadline-retired-before-session-consumer");
                     await controls.SessionConsumer(
                         new ProductionRepositorySessionBundle(
@@ -687,11 +704,13 @@ internal sealed class ProductionRepositorySessionHost
             try
             {
                 using var shutdownTimeout = new CausalDeadlineScope(
-                    shutdownLifetimeToken,
+                    shutdownLifetime,
+                    causalArbiter,
                     controls.CreateDeadline("graceful-shutdown-timeout"),
+                    "graceful-shutdown-timeout",
                     controls.Deadline("graceful-shutdown-timeout"),
-                    callerSignal.ObserveIfCancellationRequested,
-                    () => RegisterInterruption(HostExecutionOutcome.Timeout));
+                    () => RegisterInterruption(HostExecutionOutcome.Timeout),
+                    controls.AfterInterruptionSourceReserved);
                 await controls.ReachStageAsync(HostStage.Shutdown, shutdownTimeout.Token)
                     .ConfigureAwait(false);
                 _ = processMeter.Reconcile();

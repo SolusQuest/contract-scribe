@@ -951,6 +951,39 @@ public sealed class ProductionAuditHostTests
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+
+        var outcome = await RunAsync(
+            fixture,
+            resultPath,
+            new ProductionAuditHostControls(
+                StageBoundary: (stage, _) => stage == timedOutStage
+                    ? Task.FromException(new OperationCanceledException("test-only"))
+                    : Task.CompletedTask));
+
+        Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+        Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+        Assert.Equal(timedOutStage, outcome.Terminal.Failure?.Stage);
+        Assert.Null(outcome.CanonicalResult);
+        Assert.False(File.Exists(resultPath));
+    }
+
+    [Theory]
+    [InlineData(HostStage.Input, "host.input.timeout")]
+    [InlineData(HostStage.SdkDiscovery, "host.sdk-discovery.timeout")]
+    [InlineData(HostStage.WorkspaceLoad, "host.workspace-load.timeout")]
+    [InlineData(HostStage.Classification, "host.classification.timeout")]
+    [InlineData(HostStage.DocumentationObservation, "host.documentation-observation.timeout")]
+    [InlineData(HostStage.PolicyEvidence, "host.policy-evidence.timeout")]
+    [InlineData(HostStage.Audit, "host.audit.timeout")]
+    [InlineData(HostStage.ResultValidation, "host.result-validation.timeout")]
+    [InlineData(HostStage.Shutdown, "host.shutdown.timeout")]
+    [InlineData(HostStage.Publication, "host.publication.timeout")]
+    public async Task TotalAuditDeadlineAtEveryManagedStage_CommitsTheStageRow(
+        HostStage timedOutStage,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
         using var cancellation = new CancellationTokenSource();
         var deadlines = new TestDeadlineRegistry();
 
@@ -1187,7 +1220,6 @@ public sealed class ProductionAuditHostTests
         using var releaseCallback = new ManualResetEventSlim();
         var deadlines = new TestDeadlineRegistry();
         Task? cancellationTask = null;
-        CancellationTokenRegistration delayingRegistration = default;
 
         try
         {
@@ -1202,18 +1234,21 @@ public sealed class ProductionAuditHostTests
                             return Task.CompletedTask;
                         }
 
-                        delayingRegistration = caller.Token.Register(() =>
-                        {
-                            callbackEntered.Set();
-                            Assert.True(releaseCallback.Wait(TimeSpan.FromSeconds(10)));
-                        });
                         cancellationTask = Task.Run(caller.Cancel);
                         Assert.True(callbackEntered.Wait(TimeSpan.FromSeconds(5)));
                         deadlines["sdk-discovery-timeout"].Trigger();
                         releaseCallback.Set();
                         return Task.CompletedTask;
                     },
-                    DeadlineSourceFactory: deadlines.Create),
+                    DeadlineSourceFactory: deadlines.Create,
+                    AfterInterruptionSourceReserved: name =>
+                    {
+                        if (name == "caller")
+                        {
+                            callbackEntered.Set();
+                            Assert.True(releaseCallback.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                    }),
                 caller.Token);
 
             Assert.Equal(HostExecutionOutcome.Cancelled, outcome.Terminal.ExecutionOutcome);
@@ -1226,7 +1261,60 @@ public sealed class ProductionAuditHostTests
             {
                 await cancellationTask;
             }
-            delayingRegistration.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DelayedDeadlineCallback_CannotLetLaterCallerCancellationReplaceTimeout()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        using var callbackEntered = new ManualResetEventSlim();
+        using var releaseCallback = new ManualResetEventSlim();
+        var deadlines = new TestDeadlineRegistry();
+        Task? deadlineTask = null;
+
+        try
+        {
+            var outcome = await RunAsync(
+                fixture,
+                resultPath,
+                new ProductionAuditHostControls(
+                    StageBoundary: (stage, _) =>
+                    {
+                        if (stage != HostStage.SdkDiscovery)
+                        {
+                            return Task.CompletedTask;
+                        }
+
+                        deadlineTask = Task.Run(deadlines["sdk-discovery-timeout"].Trigger);
+                        Assert.True(callbackEntered.Wait(TimeSpan.FromSeconds(5)));
+                        caller.Cancel();
+                        releaseCallback.Set();
+                        return Task.CompletedTask;
+                    },
+                    DeadlineSourceFactory: deadlines.Create,
+                    AfterInterruptionSourceReserved: name =>
+                    {
+                        if (name == "sdk-discovery-timeout")
+                        {
+                            callbackEntered.Set();
+                            Assert.True(releaseCallback.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                    }),
+                caller.Token);
+
+            Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+            Assert.Equal("host.sdk-discovery.timeout", outcome.Terminal.Failure?.Code);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            if (deadlineTask is not null)
+            {
+                await deadlineTask;
+            }
         }
     }
 
