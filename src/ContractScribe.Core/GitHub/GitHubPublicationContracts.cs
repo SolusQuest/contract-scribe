@@ -122,6 +122,9 @@ public sealed record GitHubPublicationAuthorityInput(
     string? PrecedingOperationId,
     string? PrecedingAuthorityCommitmentSha256,
     string? PrecedingCandidateCommitmentSha256,
+    string? PrecedingGenerationId,
+    string? PrecedingSnapshotCommitmentSha256,
+    string? PrecedingPolicyCommitmentSha256,
     GitHubPublicationPredecessorAuthority? TerminalPredecessor,
     GitHubPublicationTransitionKind Transition,
     GitHubPublicationM4Ceilings AcceptedM4Ceilings,
@@ -161,6 +164,9 @@ public sealed class ValidatedGitHubPublicationAuthority
         PrecedingOperationId = input.PrecedingOperationId;
         PrecedingAuthorityCommitmentSha256 = input.PrecedingAuthorityCommitmentSha256;
         PrecedingCandidateCommitmentSha256 = input.PrecedingCandidateCommitmentSha256;
+        PrecedingGenerationId = input.PrecedingGenerationId;
+        PrecedingSnapshotCommitmentSha256 = input.PrecedingSnapshotCommitmentSha256;
+        PrecedingPolicyCommitmentSha256 = input.PrecedingPolicyCommitmentSha256;
         TerminalPredecessor = input.TerminalPredecessor;
         Transition = input.Transition;
         AcceptedM4Ceilings = input.AcceptedM4Ceilings;
@@ -194,6 +200,9 @@ public sealed class ValidatedGitHubPublicationAuthority
     public string? PrecedingOperationId { get; }
     public string? PrecedingAuthorityCommitmentSha256 { get; }
     public string? PrecedingCandidateCommitmentSha256 { get; }
+    public string? PrecedingGenerationId { get; }
+    public string? PrecedingSnapshotCommitmentSha256 { get; }
+    public string? PrecedingPolicyCommitmentSha256 { get; }
     public GitHubPublicationPredecessorAuthority? TerminalPredecessor { get; }
     public GitHubPublicationTransitionKind Transition { get; }
     public GitHubPublicationM4Ceilings AcceptedM4Ceilings { get; }

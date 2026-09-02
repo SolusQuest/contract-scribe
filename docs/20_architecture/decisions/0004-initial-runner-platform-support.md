@@ -38,7 +38,7 @@ Repositories that require native-Windows-only workloads, MSBuild targets, toolin
 ## Implementation boundary
 
 - Ordinary required CI has one Ubuntu `validate` job. It keeps separate complete fast and integration suites, separate TRX artifacts, and final outcome aggregation.
-- The integration step has a 25-minute outer timeout and no automatic retry. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
+- The integration step has a 35-minute hard timeout and no automatic retry. The existing 25-minute execution observation threshold remains diagnostic guidance; the additional margin covers hosted testhost teardown and TRX finalization. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
 - The Windows-only thirty-iteration causal-topology qualification guard is retired. Linux lifecycle, cleanup, cancellation, timeout, process-observation, and pipe-closure coverage remains.
 - The retained three-worker integration schedule and named process lanes are observed Ubuntu scheduling, not proof that every subprocess launch is globally bounded. New process tests still identify their real filesystem, MSBuild, environment, process-inventory, signal, and other shared boundaries.
 - Low-cost production OS branches and platform-specific signal or process handling remain when they express product behavior. Their presence does not establish support.

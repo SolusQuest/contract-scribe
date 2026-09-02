@@ -63,9 +63,9 @@ public static class GitHubPublicationFactory
                         and <= CampaignStateContract.MaximumActivePatchBlocks,
                     GitHubPublicationValidationCode.InvalidBound);
                 RequireObservation(file.OriginalDocumentationByteCount);
-                RequireObservation(file.CandidateDocumentationByteCount);
+                RequirePositiveObservation(file.CandidateDocumentationByteCount);
                 RequireObservation(file.OriginalDocumentationLineCount);
-                RequireObservation(file.CandidateDocumentationLineCount);
+                RequirePositiveObservation(file.CandidateDocumentationLineCount);
                 cumulativeBlocks = checked(cumulativeBlocks + file.ChangedDocumentationBlockCount);
                 cumulativePatchBytes = checked(
                     cumulativePatchBytes + file.CandidateDocumentationByteCount);
@@ -93,11 +93,10 @@ public static class GitHubPublicationFactory
             GitHubPublicationValidationCode.InvalidPolicy);
         Require(cumulativePatchBytes <= input.Policy.MaximumCumulativePatchBytes,
             GitHubPublicationValidationCode.InvalidPolicy);
-        ValidateTransition(input, precedingFiles);
-
         var policyCommitment = GitHubPublicationCommitments.CreatePolicy(
             input.AcceptedM4Ceilings,
             input.Policy);
+        ValidateTransition(input, precedingFiles, policyCommitment);
         var authorityCommitment = GitHubPublicationCommitments.CreateAuthority(
             input,
             files,
@@ -241,14 +240,21 @@ public static class GitHubPublicationFactory
 
     private static void ValidateTransition(
         GitHubPublicationAuthorityInput input,
-        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingFiles)
+        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingFiles,
+        string policyCommitmentSha256)
     {
         var hasPrecedingOperation = input.PrecedingOperationId is not null;
         var hasPrecedingAuthority = input.PrecedingAuthorityCommitmentSha256 is not null;
         var hasPrecedingCandidate = input.PrecedingCandidateCommitmentSha256 is not null;
+        var hasPrecedingGeneration = input.PrecedingGenerationId is not null;
+        var hasPrecedingSnapshot = input.PrecedingSnapshotCommitmentSha256 is not null;
+        var hasPrecedingPolicy = input.PrecedingPolicyCommitmentSha256 is not null;
         if (hasPrecedingOperation) RequireOpaque(input.PrecedingOperationId!);
         if (hasPrecedingAuthority) RequireSha256(input.PrecedingAuthorityCommitmentSha256!);
         if (hasPrecedingCandidate) RequireSha256(input.PrecedingCandidateCommitmentSha256!);
+        if (hasPrecedingGeneration) RequireOpaque(input.PrecedingGenerationId!);
+        if (hasPrecedingSnapshot) RequireSha256(input.PrecedingSnapshotCommitmentSha256!);
+        if (hasPrecedingPolicy) RequireSha256(input.PrecedingPolicyCommitmentSha256!);
         if (input.TerminalPredecessor is { } predecessor)
         {
             ValidatePredecessor(predecessor);
@@ -260,20 +266,29 @@ public static class GitHubPublicationFactory
         {
             case GitHubPublicationTransitionKind.Initial:
                 Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
+                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
                         && precedingFiles.IsEmpty && input.TerminalPredecessor is null
                         && input.ClosedUnmergedSuccessorAuthorization is null,
                     GitHubPublicationValidationCode.InvalidTransition);
                 break;
             case GitHubPublicationTransitionKind.SameSnapshotAppend:
                 Require(hasPrecedingOperation && hasPrecedingAuthority && hasPrecedingCandidate
+                        && hasPrecedingGeneration && hasPrecedingSnapshot && hasPrecedingPolicy
                         && !string.Equals(input.OperationId, input.PrecedingOperationId,
                             StringComparison.Ordinal)
+                        && string.Equals(input.GenerationId, input.PrecedingGenerationId,
+                            StringComparison.Ordinal)
+                        && string.Equals(input.SnapshotCommitmentSha256,
+                            input.PrecedingSnapshotCommitmentSha256, StringComparison.Ordinal)
+                        && string.Equals(policyCommitmentSha256,
+                            input.PrecedingPolicyCommitmentSha256, StringComparison.Ordinal)
                         && !precedingFiles.IsEmpty && input.TerminalPredecessor is null
                         && input.ClosedUnmergedSuccessorAuthorization is null,
                     GitHubPublicationValidationCode.InvalidTransition);
                 break;
             case GitHubPublicationTransitionKind.SuccessorAfterMerge:
                 Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
+                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
                         && precedingFiles.IsEmpty
                         && input.TerminalPredecessor?.Disposition == GitHubPublicationPredecessorDisposition.Merged
                         && input.ClosedUnmergedSuccessorAuthorization is null,
@@ -281,6 +296,7 @@ public static class GitHubPublicationFactory
                 break;
             case GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged:
                 Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
+                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
                         && precedingFiles.IsEmpty
                         && input.TerminalPredecessor?.Disposition
                             == GitHubPublicationPredecessorDisposition.ClosedUnmerged
@@ -422,6 +438,8 @@ public static class GitHubPublicationFactory
         Require(IsGitOid(value, allowMissing), GitHubPublicationValidationCode.InvalidHash);
     private static void RequireObservation(int value) =>
         Require(value >= 0, GitHubPublicationValidationCode.InvalidBound);
+    private static void RequirePositiveObservation(int value) =>
+        Require(value > 0, GitHubPublicationValidationCode.InvalidBound);
     private static void Require(
         [DoesNotReturnIf(false)] bool condition,
         GitHubPublicationValidationCode code)

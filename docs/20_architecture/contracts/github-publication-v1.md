@@ -36,8 +36,8 @@ production implementation and is forbidden.
 - every and only changed path with exact original/candidate full-file SHA-256
   and cumulative M4 observations;
 - for append, the complete preceding published-path/candidate-hash map, the
-  distinct preceding candidate commitment, preceding authority commitment and
-  preceding operation ID;
+  distinct preceding candidate commitment, preceding authority commitment,
+  preceding operation ID, generation, snapshot commitment and policy commitment;
 - for a closed-unmerged successor only, the exact explicit authorization.
 
 Campaign lineage retains the M4 grammar
@@ -70,6 +70,9 @@ or backslash paths fail locally. An ASCII-letter drive prefix such as `C:` or
 SHA-256. Each member of the changed-file set is a true change, so its original
 and candidate hashes must be unequal. This inequality does not apply to the
 preceding path map, which carries only the previous candidate identity.
+Candidate documentation byte and line observations are positive, matching the
+accepted M4 candidate domain; original observations remain nonnegative so a new
+nonempty documentation file may have an empty original.
 
 `ValidatedGitHubChangedFilePayload` is a separate nonpersistent input. Admission
 requires the exact authority path set, recomputes each candidate SHA-256, and
@@ -85,8 +88,10 @@ The closed caller transitions are:
 
 - `initial`: no preceding operation/authority/candidate, path map, terminal
   predecessor or closed authorization;
-- `same-snapshot-append`: exact preceding operation, authority, candidate and
-  nonempty complete preceding path map; no terminal predecessor/authorization;
+- `same-snapshot-append`: exact preceding operation, authority, candidate,
+  generation, snapshot, policy and nonempty complete preceding path map; the
+  preceding generation/snapshot/policy must equal the current authority and no
+  terminal predecessor/authorization is present;
 - `successor-after-merge`: structured merged predecessor, fresh M4 authority,
   new generation, and no closed authorization;
 - `successor-after-closed-unmerged`: structured closed predecessor, fresh M4
@@ -108,8 +113,10 @@ alone never authorizes a successor.
 Product commitments use SHA-256 with domain tags and big-endian length-framed
 strict UTF-8 fields. Every fact that can select a different future mutation
 changes the authority or operation commitment. Append's preceding candidate
-commitment is independent of the path map and is committed separately. Exact
-retry is stable.
+commitment is independent of the path map and is committed separately. The
+preceding generation/snapshot/policy claims are validated aliases of the equal
+current generation/snapshot/policy fields already framed by the authority; they
+are not framed a second time. Exact retry is stable.
 
 Ref identities contain only lowercase commitment keys:
 
@@ -159,6 +166,7 @@ defaults, is normative for byte replay.
 
 ```text
 version, stage, repositoryId, targetRef, targetCommitOid,
+snapshotCommitmentSha256,
 authorityCommitmentSha256, policyCommitmentSha256, operationId,
 operationCommitmentSha256, currentCandidateCommitmentSha256,
 precedingOperationId, precedingAuthorityCommitmentSha256,
@@ -282,10 +290,13 @@ predecessor are the completed-publication coordination commit.
 
 Initial admission accepts either expected absence or byte-exact same-operation
 replay. Append requires authenticated equality of preceding operation,
-authority, candidate commitment and complete path map. Changing only the
-preceding candidate commitment fails. Partial/restart states resume only the
-next missing bounded step. Unknown, damaged, human-edited or foreign state fails
-closed.
+authority, candidate commitment, generation, snapshot commitment, policy
+commitment and complete path map. R6 compares those caller predecessor claims
+to the validated previous R3 state before admitting the Core equality checks;
+neither an opaque preceding authority hash nor a caller claim alone proves
+same-snapshot lineage. Changing any one predecessor fact fails. Partial/restart
+states resume only the next missing bounded step. Unknown, damaged, human-edited
+or foreign state fails closed.
 
 ## Normative R4 proposal representation
 

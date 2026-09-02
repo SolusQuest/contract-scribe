@@ -141,6 +141,27 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
+    public void Candidate_documentation_observations_are_positive_while_empty_originals_are_valid()
+    {
+        var emptyOriginal = Changed("docs/new.md", OriginalBytes, CandidateBytes) with
+        {
+            OriginalDocumentationByteCount = 0,
+            OriginalDocumentationLineCount = 0,
+        };
+        Assert.NotNull(GitHubPublicationFactory.CreateAuthority(CreateInput([emptyOriginal])));
+
+        var zeroCandidates = new[]
+        {
+            emptyOriginal with { CandidateDocumentationByteCount = 0 },
+            emptyOriginal with { CandidateDocumentationLineCount = 0 },
+        };
+        Assert.All(zeroCandidates, file => Assert.Equal(
+            GitHubPublicationValidationCode.InvalidBound,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(CreateInput([file]))).Code));
+    }
+
+    [Fact]
     public void Changed_file_requires_distinct_original_and_candidate_hashes()
     {
         var unchanged = Changed("docs/readme.md", OriginalBytes, CandidateBytes) with
@@ -324,7 +345,7 @@ public sealed class GitHubPublicationContractTests
     }
 
     [Fact]
-    public void Append_binds_complete_preceding_map_and_distinct_candidate_commitment()
+    public void Append_binds_complete_predecessor_authority_and_path_map()
     {
         var append = CreateAppendInput();
         var authority = GitHubPublicationFactory.CreateAuthority(append);
@@ -346,12 +367,31 @@ public sealed class GitHubPublicationContractTests
         Assert.NotEqual(authority.OperationCommitmentSha256,
             substitutedCandidate.OperationCommitmentSha256);
 
+        var invalidTransitions = new[]
+        {
+            append with { PrecedingOperationId = append.OperationId },
+            append with { GenerationId = "generation-2" },
+            append with { SnapshotCommitmentSha256 = Hex('d') },
+            append with { Policy = new(9, 2, 1_000) },
+            append with { PrecedingGenerationId = null },
+            append with { PrecedingSnapshotCommitmentSha256 = null },
+            append with { PrecedingPolicyCommitmentSha256 = null },
+            append with { PrecedingGenerationId = "generation-2" },
+            append with { PrecedingSnapshotCommitmentSha256 = Hex('d') },
+            append with { PrecedingPolicyCommitmentSha256 = Hex('d') },
+        };
+        Assert.All(invalidTransitions, input => Assert.Equal(
+            GitHubPublicationValidationCode.InvalidTransition,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(input)).Code));
+
+        var initialWithAppendClaim = CreateInput() with
+        {
+            PrecedingGenerationId = "generation-1",
+        };
         Assert.Equal(GitHubPublicationValidationCode.InvalidTransition,
             Assert.Throws<GitHubPublicationValidationException>(() =>
-                GitHubPublicationFactory.CreateAuthority(append with
-                {
-                    PrecedingOperationId = append.OperationId,
-                })).Code);
+                GitHubPublicationFactory.CreateAuthority(initialWithAppendClaim)).Code);
     }
 
     [Fact]
@@ -592,6 +632,9 @@ public sealed class GitHubPublicationContractTests
             PrecedingOperationId: null,
             PrecedingAuthorityCommitmentSha256: null,
             PrecedingCandidateCommitmentSha256: null,
+            PrecedingGenerationId: null,
+            PrecedingSnapshotCommitmentSha256: null,
+            PrecedingPolicyCommitmentSha256: null,
             TerminalPredecessor: null,
             Transition: GitHubPublicationTransitionKind.Initial,
             AcceptedM4Ceilings: new GitHubPublicationM4Ceilings(10, 10, 1_000),
@@ -759,6 +802,7 @@ public sealed class GitHubPublicationContractTests
                 writer.WriteString("repositoryId", "SolusQuest/contract-scribe");
                 writer.WriteString("targetRef", "refs/heads/main");
                 writer.WriteString("targetCommitOid", GitOid('1'));
+                writer.WriteString("snapshotCommitmentSha256", Hex('1'));
                 writer.WriteString("authorityCommitmentSha256", vector.AuthorityCommitmentSha256);
                 writer.WriteString("policyCommitmentSha256", Hex('8'));
                 writer.WriteString("operationId", vector.OperationId);
@@ -886,17 +930,26 @@ public sealed class GitHubPublicationContractTests
     private static GitHubPublicationAuthorityInput CreateAppendInput()
     {
         var previous = Encoding.UTF8.GetBytes("previous-a\n");
-        return CreateInput([
+        var acceptedCeilings = new GitHubPublicationM4Ceilings(10, 2, 1_000);
+        var policy = new GitHubPublicationPolicy(10, 2, 1_000);
+        var input = CreateInput([
             Changed("docs/a.md", OriginalBytes, Encoding.UTF8.GetBytes("current-a\n")),
             Changed("docs/b.md", OriginalBytes, Encoding.UTF8.GetBytes("current-b\n")),
         ]) with
+        {
+            AcceptedM4Ceilings = acceptedCeilings,
+            Policy = policy,
+        };
+        var policyCommitment = GitHubPublicationCommitments.CreatePolicy(acceptedCeilings, policy);
+        return input with
         {
             Transition = GitHubPublicationTransitionKind.SameSnapshotAppend,
             PrecedingOperationId = "previous-operation",
             PrecedingAuthorityCommitmentSha256 = Hex('a'),
             PrecedingCandidateCommitmentSha256 = Hex('b'),
-            AcceptedM4Ceilings = new(10, 2, 1_000),
-            Policy = new(10, 2, 1_000),
+            PrecedingGenerationId = input.GenerationId,
+            PrecedingSnapshotCommitmentSha256 = input.SnapshotCommitmentSha256,
+            PrecedingPolicyCommitmentSha256 = policyCommitment,
             PrecedingChangedFiles = [new GitHubPrecedingChangedFileAuthority(
                 "docs/a.md", Sha(previous))],
         };
