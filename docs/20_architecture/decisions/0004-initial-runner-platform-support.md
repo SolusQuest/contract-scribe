@@ -37,8 +37,10 @@ Repositories that require native-Windows-only workloads, MSBuild targets, toolin
 
 ## Implementation boundary
 
-- Ordinary required CI has one Ubuntu `validate` job. It keeps separate complete fast and integration suites, separate TRX artifacts, and final outcome aggregation.
-- The integration step has a 35-minute hard timeout and no automatic retry. The existing 25-minute execution observation threshold remains diagnostic guidance; the additional margin covers hosted testhost teardown and TRX finalization. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
+- Ordinary required CI keeps `validate` as its stable aggregate status, backed by three independent Ubuntu jobs: complete fast/static validation, the campaign crash-boundary integration partition, and the complementary integration partition. Each job performs its own exact-head checkout, restore, and Release build; no build output, mutable fixture, process, environment, or test result is shared between runners.
+- The integration split is an execution-topology decision, not reduced coverage or increased in-process parallelism. The two filters are an exact equality and its exact complement, each has a zero-test guard, and their TRX full-name multiset must equal an unfiltered integration run when the partition changes. A dispatch-only unfiltered evidence job remains available for that comparison without extending ordinary pull-request latency.
+- Each integration partition has a 35-minute hard timeout and no automatic retry. The existing 25-minute execution observation threshold remains diagnostic guidance; the additional margin covers hosted testhost teardown and TRX finalization. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
+- Pull-request runs share a PR-scoped concurrency group and cancel superseded heads. Push and manual-dispatch runs use their unique run ID, so independent evidence samples cannot cancel or serialize one another. A cancelled obsolete head cannot produce a successful `validate` result for the replacement head.
 - The Windows-only thirty-iteration causal-topology qualification guard is retired. Linux lifecycle, cleanup, cancellation, timeout, process-observation, and pipe-closure coverage remains.
 - The retained three-worker integration schedule and named process lanes are observed Ubuntu scheduling, not proof that every subprocess launch is globally bounded. New process tests still identify their real filesystem, MSBuild, environment, process-inventory, signal, and other shared boundaries.
 - Low-cost production OS branches and platform-specific signal or process handling remain when they express product behavior. Their presence does not establish support.
@@ -79,3 +81,4 @@ This choice is reversible before the first consumable release, but expansion is 
 - [Test validation](../../50_ai/skills/test-validation.md)
 - [ADR 0001](0001-loader-and-distribution-boundary.md)
 - [ADR 0002](0002-process-topology.md)
+- [Issue #168](https://github.com/SolusQuest/contract-scribe/issues/168)
