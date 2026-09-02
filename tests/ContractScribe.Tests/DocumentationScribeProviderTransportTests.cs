@@ -1866,6 +1866,7 @@ public sealed class DocumentationScribeProviderTransportTests
             Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(1, handler.CallCount);
+        await handler.WaitForCancellationAsync();
         Assert.True(handler.CancellationObserved);
         Assert.DoesNotContain(marker, result.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(marker, result.Terminal.ToString(), StringComparison.Ordinal);
@@ -2292,9 +2293,15 @@ public sealed class DocumentationScribeProviderTransportTests
 
     private sealed class HoldingHandler(string marker) : HttpMessageHandler
     {
+        private readonly TaskCompletionSource cancellationObserved = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         internal int CallCount { get; private set; }
 
         internal bool CancellationObserved { get; private set; }
+
+        internal Task WaitForCancellationAsync() =>
+            cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -2309,6 +2316,7 @@ public sealed class DocumentationScribeProviderTransportTests
             catch (OperationCanceledException)
             {
                 CancellationObserved = true;
+                cancellationObserved.TrySetResult();
                 throw new OperationCanceledException(marker, cancellationToken);
             }
 

@@ -1220,6 +1220,7 @@ public sealed class ProductionAuditHostTests
         using var releaseCallback = new ManualResetEventSlim();
         var deadlines = new TestDeadlineRegistry();
         Task? cancellationTask = null;
+        Task? deadlineTask = null;
 
         try
         {
@@ -1236,12 +1237,12 @@ public sealed class ProductionAuditHostTests
 
                         cancellationTask = Task.Run(caller.Cancel);
                         Assert.True(callbackEntered.Wait(TimeSpan.FromSeconds(5)));
-                        deadlines["sdk-discovery-timeout"].Trigger();
+                        deadlineTask = Task.Run(deadlines["sdk-discovery-timeout"].Trigger);
                         releaseCallback.Set();
                         return Task.CompletedTask;
                     },
                     DeadlineSourceFactory: deadlines.Create,
-                    AfterInterruptionSourceReserved: name =>
+                    AfterInterruptionSourceLinearized: name =>
                     {
                         if (name == "caller")
                         {
@@ -1261,6 +1262,10 @@ public sealed class ProductionAuditHostTests
             {
                 await cancellationTask;
             }
+            if (deadlineTask is not null)
+            {
+                await deadlineTask;
+            }
         }
     }
 
@@ -1274,6 +1279,7 @@ public sealed class ProductionAuditHostTests
         using var releaseCallback = new ManualResetEventSlim();
         var deadlines = new TestDeadlineRegistry();
         Task? deadlineTask = null;
+        Task? cancellationTask = null;
 
         try
         {
@@ -1290,12 +1296,12 @@ public sealed class ProductionAuditHostTests
 
                         deadlineTask = Task.Run(deadlines["sdk-discovery-timeout"].Trigger);
                         Assert.True(callbackEntered.Wait(TimeSpan.FromSeconds(5)));
-                        caller.Cancel();
+                        cancellationTask = Task.Run(caller.Cancel);
                         releaseCallback.Set();
                         return Task.CompletedTask;
                     },
                     DeadlineSourceFactory: deadlines.Create,
-                    AfterInterruptionSourceReserved: name =>
+                    AfterInterruptionSourceLinearized: name =>
                     {
                         if (name == "sdk-discovery-timeout")
                         {
@@ -1311,6 +1317,74 @@ public sealed class ProductionAuditHostTests
         finally
         {
             releaseCallback.Set();
+            if (deadlineTask is not null)
+            {
+                await deadlineTask;
+            }
+            if (cancellationTask is not null)
+            {
+                await cancellationTask;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task LinearizedDeadline_BlocksPublicationDecisionUntilItsCauseIsVisible()
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var sourceLinearized = new ManualResetEventSlim();
+        using var publicationAttempted = new ManualResetEventSlim();
+        var deadlines = new TestDeadlineRegistry();
+        Task? deadlineTask = null;
+        var observePublicationAttempt = 0;
+
+        try
+        {
+            var outcome = await RunAsync(
+                fixture,
+                resultPath,
+                new ProductionAuditHostControls(
+                    Gate: (point, _) =>
+                    {
+                        if (point != ProductionHostControlPoint.BeforePublicationDecision)
+                        {
+                            return Task.CompletedTask;
+                        }
+
+                        deadlineTask = Task.Run(deadlines["total-audit-timeout"].Trigger);
+                        Assert.True(sourceLinearized.Wait(TimeSpan.FromSeconds(5)));
+                        Volatile.Write(ref observePublicationAttempt, 1);
+                        return Task.CompletedTask;
+                    },
+                    DeadlineSourceFactory: deadlines.Create,
+                    AfterInterruptionSourceLinearized: name =>
+                    {
+                        if (name == "total-audit-timeout")
+                        {
+                            sourceLinearized.Set();
+                            Assert.True(publicationAttempted.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                    },
+                    BeforeInterruptionProtectedHostProgress: () =>
+                    {
+                        if (Volatile.Read(ref observePublicationAttempt) == 1)
+                        {
+                            publicationAttempted.Set();
+                        }
+                    }));
+
+            Assert.Equal(HostExecutionOutcome.Timeout, outcome.Terminal.ExecutionOutcome);
+            Assert.Equal("host.publication.timeout", outcome.Terminal.Failure?.Code);
+            Assert.Equal(HostStage.Publication, outcome.Terminal.Failure?.Stage);
+            Assert.Equal(
+                HostToolchainSelectionState.Selected,
+                outcome.Terminal.Toolchain.SelectionState);
+            Assert.False(File.Exists(resultPath));
+        }
+        finally
+        {
+            publicationAttempted.Set();
             if (deadlineTask is not null)
             {
                 await deadlineTask;
@@ -1427,6 +1501,77 @@ public sealed class ProductionAuditHostTests
         Assert.Equal(
             HostToolchainSelectionState.Selected,
             outcome.Terminal.Toolchain.SelectionState);
+    }
+
+    [Theory]
+    [InlineData("caller", HostExecutionOutcome.Cancelled, "host.result-validation.cancelled")]
+    [InlineData("total-audit-timeout", HostExecutionOutcome.Timeout, "host.result-validation.timeout")]
+    public async Task TotalDeadlineRetirement_RacingALinearizedSourceCannotDeadlockOrAdmitConsumer(
+        string sourceName,
+        HostExecutionOutcome expectedOutcome,
+        string expectedCode)
+    {
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var resultPath = Path.Join(fixture.Root, "TestResults", "audit-result.json");
+        using var caller = new CancellationTokenSource();
+        using var sourceLinearized = new ManualResetEventSlim();
+        using var retirementAttempted = new ManualResetEventSlim();
+        var deadlines = new TestDeadlineRegistry();
+        Task? interruptionTask = null;
+        var consumerInvoked = false;
+
+        try
+        {
+            var outcome = await RunAsync(
+                fixture,
+                resultPath,
+                new ProductionAuditHostControls(
+                    SessionConsumer: (_, _) =>
+                    {
+                        consumerInvoked = true;
+                        return Task.CompletedTask;
+                    },
+                    DeadlineSourceFactory: deadlines.Create,
+                    AfterInterruptionSourceLinearized: name =>
+                    {
+                        if (name == sourceName)
+                        {
+                            sourceLinearized.Set();
+                            Assert.True(retirementAttempted.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                    },
+                    BeforeDeadlineRetirementLinearized: name =>
+                    {
+                        if (name == "total-audit-timeout")
+                        {
+                            retirementAttempted.Set();
+                        }
+                    },
+                    BeforeTotalDeadlineRetirement: () =>
+                    {
+                        interruptionTask = sourceName == "caller"
+                            ? Task.Run(caller.Cancel)
+                            : Task.Run(deadlines["total-audit-timeout"].Trigger);
+                        Assert.True(sourceLinearized.Wait(TimeSpan.FromSeconds(5)));
+                    }),
+                caller.Token).WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.False(consumerInvoked);
+            Assert.Equal(expectedOutcome, outcome.Terminal.ExecutionOutcome);
+            Assert.Equal(expectedCode, outcome.Terminal.Failure?.Code);
+            Assert.Equal(HostStage.ResultValidation, outcome.Terminal.Failure?.Stage);
+            Assert.Equal(
+                HostToolchainSelectionState.Selected,
+                outcome.Terminal.Toolchain.SelectionState);
+        }
+        finally
+        {
+            retirementAttempted.Set();
+            if (interruptionTask is not null)
+            {
+                await interruptionTask;
+            }
+        }
     }
 
     [Fact]

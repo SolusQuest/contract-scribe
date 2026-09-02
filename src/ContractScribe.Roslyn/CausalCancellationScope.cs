@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace ContractScribe.Roslyn;
 
 internal interface ICausalInterruptionSignal
@@ -15,15 +17,22 @@ internal sealed class CausalInterruptionArbiter
 {
     private readonly object gate = new();
     private readonly List<Source> sources = [];
+    private readonly Action? beforeHostProgress;
     private long nextSequence;
     private Source? accepted;
+
+    public CausalInterruptionArbiter(Action? beforeHostProgress = null)
+    {
+        this.beforeHostProgress = beforeHostProgress;
+    }
 
     public Source RegisterSource(
         Func<bool> isRequested,
         Action acceptCause,
+        Action propagate,
         int tiePriority)
     {
-        var source = new Source(this, isRequested, acceptCause, tiePriority);
+        var source = new Source(this, isRequested, acceptCause, propagate, tiePriority);
         lock (gate)
         {
             sources.Add(source);
@@ -35,38 +44,82 @@ internal sealed class CausalInterruptionArbiter
     {
         lock (gate)
         {
-            ReserveRequestedSourcesLocked();
-            if (accepted is not null)
-            {
-                return;
-            }
-
-            var winner = sources
-                .Where(source => !source.Disposed && source.ReservedSequence is not null)
-                .OrderBy(source => source.ReservedSequence)
-                .ThenBy(source => source.TiePriority)
-                .FirstOrDefault();
-            if (winner is null)
-            {
-                return;
-            }
-
-            accepted = winner;
-            winner.AcceptCause();
+            var newlyReserved = ReserveRequestedSourcesLocked();
+            AcceptEarliestLocked();
+            PropagateLocked(newlyReserved);
         }
     }
 
-    private bool Reserve(Source source)
+    public void ExecuteHostProgress(Action progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        beforeHostProgress?.Invoke();
+        lock (gate)
+        {
+            var newlyReserved = ReserveRequestedSourcesLocked();
+            AcceptEarliestLocked();
+            PropagateLocked(newlyReserved);
+            progress();
+        }
+    }
+
+    public T ExecuteHostProgress<T>(Func<T> progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        beforeHostProgress?.Invoke();
+        lock (gate)
+        {
+            var newlyReserved = ReserveRequestedSourcesLocked();
+            AcceptEarliestLocked();
+            PropagateLocked(newlyReserved);
+            return progress();
+        }
+    }
+
+    private void ObserveOccurrence(
+        Source source,
+        Action? afterLinearized)
     {
         lock (gate)
         {
             var wasReserved = source.ReservedSequence is not null;
-            ReserveRequestedSourcesLocked();
-            if (!source.Disposed && source.ReservedSequence is null)
+            var newlyReserved = ReserveRequestedSourcesLocked();
+            if (!source.Disposed && !source.Retired && source.ReservedSequence is null)
             {
                 source.ReservedSequence = ++nextSequence;
+                newlyReserved.Add(source);
             }
-            return !wasReserved && source.ReservedSequence is not null;
+            AcceptEarliestLocked();
+            PropagateLocked(newlyReserved);
+            if (!wasReserved && source.ReservedSequence is not null)
+            {
+                afterLinearized?.Invoke();
+            }
+        }
+    }
+
+    private bool TryRetire(Source source, Func<bool> hasElapsed)
+    {
+        lock (gate)
+        {
+            var newlyReserved = ReserveRequestedSourcesLocked();
+            if (!source.Disposed
+                && !source.Retired
+                && source.ReservedSequence is null
+                && hasElapsed())
+            {
+                source.ReservedSequence = ++nextSequence;
+                newlyReserved.Add(source);
+            }
+            AcceptEarliestLocked();
+            PropagateLocked(newlyReserved);
+            if (source.Disposed || source.Retired || source.ReservedSequence is not null)
+            {
+                return false;
+            }
+
+            source.Retired = true;
+            return true;
         }
     }
 
@@ -79,13 +132,45 @@ internal sealed class CausalInterruptionArbiter
         }
     }
 
-    private void ReserveRequestedSourcesLocked()
+    private List<Source> ReserveRequestedSourcesLocked()
     {
+        var newlyReserved = new List<Source>();
         foreach (var source in sources
                      .Where(source => !source.Disposed && source.ReservedSequence is null && source.IsRequested())
                      .OrderBy(source => source.TiePriority))
         {
             source.ReservedSequence = ++nextSequence;
+            newlyReserved.Add(source);
+        }
+        return newlyReserved;
+    }
+
+    private void AcceptEarliestLocked()
+    {
+        if (accepted is not null)
+        {
+            return;
+        }
+
+        var winner = sources
+            .Where(source => !source.Disposed && source.ReservedSequence is not null)
+            .OrderBy(source => source.ReservedSequence)
+            .ThenBy(source => source.TiePriority)
+            .FirstOrDefault();
+        if (winner is null)
+        {
+            return;
+        }
+
+        accepted = winner;
+        winner.AcceptCause();
+    }
+
+    private static void PropagateLocked(IEnumerable<Source> newlyReserved)
+    {
+        foreach (var source in newlyReserved)
+        {
+            source.Propagate();
         }
     }
 
@@ -102,16 +187,19 @@ internal sealed class CausalInterruptionArbiter
         private readonly CausalInterruptionArbiter owner;
         private readonly Func<bool> isRequested;
         private readonly Action acceptCause;
+        private readonly Action propagate;
 
         public Source(
             CausalInterruptionArbiter owner,
             Func<bool> isRequested,
             Action acceptCause,
+            Action propagate,
             int tiePriority)
         {
             this.owner = owner;
             this.isRequested = isRequested;
             this.acceptCause = acceptCause;
+            this.propagate = propagate;
             TiePriority = tiePriority;
         }
 
@@ -123,11 +211,18 @@ internal sealed class CausalInterruptionArbiter
 
         public bool Disposed { get; set; }
 
-        public bool Reserve() => owner.Reserve(this);
+        public bool Retired { get; set; }
+
+        public void ObserveOccurrence(Action? afterLinearized = null) =>
+            owner.ObserveOccurrence(this, afterLinearized);
+
+        public bool TryRetire(Func<bool> hasElapsed) => owner.TryRetire(this, hasElapsed);
 
         public bool IsRequested() => isRequested();
 
         public void AcceptCause() => acceptCause();
+
+        public void Propagate() => propagate();
 
         public void Dispose() => owner.Unregister(this);
     }
@@ -136,30 +231,24 @@ internal sealed class CausalInterruptionArbiter
 internal sealed class ProductionDeadlineSource : IDisposable
 {
     private readonly object gate = new();
-    private readonly CancellationTokenSource scheduler = new();
-    private readonly CancellationTokenRegistration registration;
-    private CausalInterruptionArbiter? arbiter;
     private CausalInterruptionArbiter.Source? causalSource;
-    private Action? observeParent;
     private Action? signal;
     private Action? afterOccurrenceReserved;
+    private Action? beforeRetirementLinearized;
+    private Timer? timer;
+    private long deadlineTimestamp;
     private bool armed;
     private bool retired;
     private bool disposed;
-
-    public ProductionDeadlineSource()
-    {
-        registration = scheduler.Token.Register(SignalFromScheduler);
-    }
 
     public long? OccurrenceSequence => causalSource?.Sequence;
 
     public void Configure(
         CausalInterruptionArbiter arbiter,
         Action acceptDeadlineCause,
-        Action observeParent,
         Action signal,
-        Action? afterOccurrenceReserved)
+        Action? afterOccurrenceReserved,
+        Action? beforeRetirementLinearized)
     {
         lock (gate)
         {
@@ -169,16 +258,15 @@ internal sealed class ProductionDeadlineSource : IDisposable
                 throw new InvalidOperationException("A production deadline source can be configured only once.");
             }
 
-            this.arbiter = arbiter ?? throw new ArgumentNullException(nameof(arbiter));
+            ArgumentNullException.ThrowIfNull(arbiter);
             causalSource = arbiter.RegisterSource(
-                IsActiveAndRequested,
+                static () => false,
                 acceptDeadlineCause ?? throw new ArgumentNullException(nameof(acceptDeadlineCause)),
+                signal ?? throw new ArgumentNullException(nameof(signal)),
                 tiePriority: 1);
-            this.observeParent = observeParent
-                ?? throw new ArgumentNullException(nameof(observeParent));
-            this.signal = signal
-                ?? throw new ArgumentNullException(nameof(signal));
+            this.signal = signal;
             this.afterOccurrenceReserved = afterOccurrenceReserved;
+            this.beforeRetirementLinearized = beforeRetirementLinearized;
         }
     }
 
@@ -197,37 +285,61 @@ internal sealed class ProductionDeadlineSource : IDisposable
             }
 
             armed = true;
-            scheduler.CancelAfter(deadline);
+            deadlineTimestamp = Stopwatch.GetTimestamp()
+                + (long)(deadline.TotalSeconds * Stopwatch.Frequency);
+            timer = new Timer(
+                static state => ((ProductionDeadlineSource)state!).SignalFromTimer(),
+                this,
+                deadline,
+                Timeout.InfiniteTimeSpan);
         }
     }
 
-    public void Trigger() => scheduler.Cancel();
+    public void Trigger() => ObserveOccurrence(invokeLinearizedHook: true);
 
     public void ObserveIfSourceRequested()
     {
-        if (scheduler.IsCancellationRequested)
+        if (HasElapsed())
         {
-            ObserveOccurrence(invokeReservationHook: false);
+            ObserveOccurrence(invokeLinearizedHook: false);
         }
     }
 
     public void Retire()
     {
+        CausalInterruptionArbiter.Source? source;
         lock (gate)
         {
-            if (disposed || retired || OccurrenceSequence is not null)
+            if (disposed || retired)
             {
                 return;
             }
+            source = causalSource;
+        }
 
+        beforeRetirementLinearized?.Invoke();
+        var retiredNow = source?.TryRetire(HasElapsed) == true;
+        if (!retiredNow)
+        {
+            signal?.Invoke();
+            return;
+        }
+
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
             retired = true;
-            scheduler.CancelAfter(Timeout.InfiniteTimeSpan);
+            timer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         }
     }
 
     public void Dispose()
     {
         CausalInterruptionArbiter.Source? source;
+        Timer? currentTimer;
         lock (gate)
         {
             if (disposed)
@@ -236,56 +348,37 @@ internal sealed class ProductionDeadlineSource : IDisposable
             }
             disposed = true;
             source = causalSource;
+            currentTimer = timer;
         }
 
-        registration.Dispose();
         source?.Dispose();
-        scheduler.Dispose();
+        currentTimer?.Dispose();
     }
 
-    private void SignalFromScheduler() => ObserveOccurrence(invokeReservationHook: true);
+    private void SignalFromTimer() => ObserveOccurrence(invokeLinearizedHook: true);
 
-    private bool IsActiveAndRequested()
-    {
-        lock (gate)
-        {
-            return !disposed && !retired && scheduler.IsCancellationRequested;
-        }
-    }
+    private bool HasElapsed() =>
+        armed && Stopwatch.GetTimestamp() >= Volatile.Read(ref deadlineTimestamp);
 
-    private void ObserveOccurrence(bool invokeReservationHook)
+    private void ObserveOccurrence(bool invokeLinearizedHook)
     {
-        Action parentObserver;
         CausalInterruptionArbiter.Source source;
-        CausalInterruptionArbiter currentArbiter;
-        Action occurrenceSignal;
+        Action? linearizedHook;
         lock (gate)
         {
             if (disposed || retired)
             {
                 return;
             }
-            parentObserver = observeParent
-                ?? throw new InvalidOperationException("The production deadline source was not configured.");
             source = causalSource
                 ?? throw new InvalidOperationException("The production deadline source was not configured.");
-            currentArbiter = arbiter
-                ?? throw new InvalidOperationException("The production deadline source was not configured.");
-            occurrenceSignal = signal
-                ?? throw new InvalidOperationException("The production deadline source was not configured.");
+            linearizedHook = invokeLinearizedHook ? afterOccurrenceReserved : null;
         }
 
-        // An already-requested parent is observed before this deadline reserves
-        // its position. The arbiter also observes every registered requested
-        // source while holding one gate, with caller priority for a genuine tie.
-        parentObserver();
-        var reserved = source.Reserve();
-        if (reserved && invokeReservationHook)
-        {
-            afterOccurrenceReserved?.Invoke();
-        }
-        currentArbiter.AcceptEarliest();
-        occurrenceSignal();
+        // The timer and manual trigger share this direct occurrence path. Source
+        // selection and Core cause acceptance finish under the arbiter gate
+        // before a test barrier or Host-owned cancellation token is exposed.
+        source.ObserveOccurrence(linearizedHook);
     }
 }
 
@@ -312,6 +405,7 @@ internal sealed class CausalCallerSignal : ICausalInterruptionSignal, IDisposabl
         causalSource = arbiter.RegisterSource(
             () => sourceToken.IsCancellationRequested,
             acceptCause ?? throw new ArgumentNullException(nameof(acceptCause)),
+            Propagate,
             tiePriority: 0);
         this.afterOccurrenceReserved = afterOccurrenceReserved;
         registration = sourceToken.Register(SignalFromSource);
@@ -328,9 +422,7 @@ internal sealed class CausalCallerSignal : ICausalInterruptionSignal, IDisposabl
             return;
         }
 
-        causalSource.Reserve();
-        arbiter.AcceptEarliest();
-        Propagate();
+        causalSource.ObserveOccurrence();
     }
 
     public void EnsureCauseAccepted() => arbiter.AcceptEarliest();
@@ -352,13 +444,7 @@ internal sealed class CausalCallerSignal : ICausalInterruptionSignal, IDisposabl
 
     private void SignalFromSource()
     {
-        var reserved = causalSource.Reserve();
-        if (reserved)
-        {
-            afterOccurrenceReserved?.Invoke();
-        }
-        arbiter.AcceptEarliest();
-        Propagate();
+        causalSource.ObserveOccurrence(afterOccurrenceReserved);
     }
 
     private void Propagate()
@@ -394,7 +480,8 @@ internal sealed class CausalDeadlineScope : ICausalInterruptionSignal, IDisposab
         string deadlineName,
         TimeSpan deadlineValue,
         Action acceptDeadlineCause,
-        Action<string>? afterOccurrenceReserved)
+        Action<string>? afterOccurrenceReserved,
+        Action<string>? beforeRetirementLinearized)
     {
         this.parent = parent ?? throw new ArgumentNullException(nameof(parent));
         this.arbiter = arbiter ?? throw new ArgumentNullException(nameof(arbiter));
@@ -403,11 +490,13 @@ internal sealed class CausalDeadlineScope : ICausalInterruptionSignal, IDisposab
         deadline.Configure(
             arbiter,
             acceptDeadlineCause,
-            parent.ObserveIfSourceRequested,
             SignalFromDeadline,
             afterOccurrenceReserved is null
                 ? null
-                : () => afterOccurrenceReserved(deadlineName));
+                : () => afterOccurrenceReserved(deadlineName),
+            beforeRetirementLinearized is null
+                ? null
+                : () => beforeRetirementLinearized(deadlineName));
         parentRegistration = parent.Token.Register(SignalFromParent);
         deadline.Arm(deadlineValue);
     }
@@ -444,7 +533,14 @@ internal sealed class CausalDeadlineScope : ICausalInterruptionSignal, IDisposab
 
     public void EnsureCauseAccepted() => arbiter.AcceptEarliest();
 
-    public void RetireDeadline() => deadline.Retire();
+    public void RetireDeadline()
+    {
+        deadline.Retire();
+        if (OccurrenceSequence is not null)
+        {
+            Signal();
+        }
+    }
 
     public void Dispose()
     {
