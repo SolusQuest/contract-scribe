@@ -13,6 +13,12 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace ContractScribe.Tests;
 
+// CampaignProcessBoundaryHooks has one process-wide observer; any parallel campaign
+// execution would otherwise be indistinguishable from the registering test's flow.
+[CollectionDefinition("Campaign process boundary hook", DisableParallelization = true)]
+public sealed class CampaignProcessBoundaryHookCollection;
+
+[Collection("Campaign process boundary hook")]
 public sealed partial class DocumentationScribeCompositionTests
 {
     [Fact]

@@ -46,7 +46,8 @@ jobs:
       - name: Integration suite
         id: integration_tests
         continue-on-error: true
-        timeout-minutes: 25
+        # Keep the 25-minute observation threshold plus bounded testhost/TRX teardown margin.
+        timeout-minutes: 35
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore

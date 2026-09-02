@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "mutation": "GraphQL.updateRefs",
+  "refUpdatesPerMutation": 1,
+  "force": false,
+  "expectedAbsenceBeforeOid": "0000000000000000000000000000000000000000",
+  "afterOidMayBeZero": false,
+  "resources": [
+    "coordination-create",
+    "coordination-advance",
+    "proposal-create",
+    "proposal-advance"
+  ],
+  "outcomes": [
+    { "vector": "expected-absence", "outcome": "admitted" },
+    { "vector": "exact-predecessor", "outcome": "admitted" },
+    { "vector": "exact-lost-ack", "outcome": "replay" },
+    { "vector": "stale-predecessor", "outcome": "conflict" },
+    { "vector": "ancestor-rewind", "outcome": "conflict" },
+    { "vector": "competing-successor", "outcome": "conflict" },
+    { "vector": "zero-successor", "outcome": "invalid" }
+  ],
+  "stepOrder": [
+    "credential-free-local-admission",
+    "authenticated-complete-read",
+    "coordination-claim",
+    "claim-readback",
+    "content-step",
+    "content-readback",
+    "proposal-ref-step",
+    "proposal-ref-readback",
+    "final-claim-and-base-read",
+    "pull-request-create",
+    "pull-request-readback"
+  ],
+  "visibleDrift": "zero-further-mutation",
+  "baseMovesDuringPullRequestCreate": "one-marker-owned-stale-draft"
+}

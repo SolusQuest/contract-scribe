@@ -69,16 +69,26 @@ internal static class StartupHook
                 {
                     return;
                 }
-                using (var stream = new FileStream(
-                           acknowledgementPath,
-                           FileMode.CreateNew,
-                           FileAccess.Write,
-                           FileShare.Read,
-                           bufferSize: 1,
-                           FileOptions.WriteThrough))
+                var temporaryPath = acknowledgementPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
                 {
-                    stream.Write(System.Text.Encoding.UTF8.GetBytes(reached + "\n"));
-                    stream.Flush(flushToDisk: true);
+                    using (var stream = new FileStream(
+                               temporaryPath,
+                               FileMode.CreateNew,
+                               FileAccess.Write,
+                               FileShare.None,
+                               bufferSize: 1,
+                               FileOptions.WriteThrough))
+                    {
+                        stream.Write(System.Text.Encoding.UTF8.GetBytes(reached + "\n"));
+                        stream.Flush(flushToDisk: true);
+                    }
+                    File.Move(temporaryPath, acknowledgementPath);
+                }
+                catch
+                {
+                    File.Delete(temporaryPath);
+                    throw;
                 }
                 if (string.IsNullOrEmpty(releasePath))
                 {
