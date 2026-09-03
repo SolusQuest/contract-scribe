@@ -4,7 +4,7 @@
 
 ContractScribe uses project boundaries to enforce dependency and authority boundaries, not to mirror roadmap milestones or create one assembly per feature.
 
-The current graph contains `Core`, `Roslyn`, `Patching`, `Agent`, and `Cli`. `GitHub` remains a candidate future split rather than a project contract:
+The current graph contains `Core`, `Roslyn`, `Patching`, `Agent`, `GitHub`, and `Cli`:
 
 1. `ContractScribe.Core`
 2. `ContractScribe.Roslyn`
@@ -13,7 +13,7 @@ The current graph contains `Core`, `Roslyn`, `Patching`, `Agent`, and `Cli`. `Gi
 5. `ContractScribe.GitHub`
 6. `ContractScribe.Cli`
 
-The existing M1 boundaries, the M2 read-versus-mutation authority boundary, and the M3 read-only Scribe Runtime boundary are current architecture. Later M3 and M5 entries remain candidates, not an instruction to create empty projects or preserve a planned assembly name. Each implementing issue applies the split thresholds below and may keep a capability in an existing project or choose a narrower boundary when executable dependencies and authority require it.
+The existing M1 boundaries, the M2 read-versus-mutation authority boundary, the M3 read-only Scribe Runtime boundary, and the M5-R2 GitHub transport boundary are current architecture. Future capabilities are not an instruction to create empty projects or preserve planned assembly names. Each implementing issue applies the split thresholds below using executable dependencies and authority.
 
 The normal test graph contains two long-lived projects:
 
@@ -24,7 +24,7 @@ Fixture projects, M0 experiment projects, and an optional live evaluation tool a
 
 ## Decision status
 
-The `Core` / `Roslyn` / `Patching` / `Agent` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority, issue #92 added a narrow session-bound immutable repository baseline plus isolated candidate writes under Patching, and issue #103 demonstrated that provider-neutral Scribe orchestration needs a Core-only read boundary. `Patching -> Core`, `Patching -> Roslyn`, and `Agent -> Core` are therefore current one-way edges. `Core` and `Roslyn` do not reference Patching, Roslyn does not grant Patching broad friend access, and Agent receives no mutation, repository-discovery, general-network, provider-credential, or publication capability. Future project names and edges remain candidates selected by their implementing milestones.
+The `Core` / `Roslyn` / `Patching` / `Agent` / `GitHub` / `Cli` graph and its implemented dependency constraints are current architecture. Issue #91 demonstrated that exact declaration resolution needs Roslyn's read authority, issue #92 added a narrow session-bound immutable repository baseline plus isolated candidate writes under Patching, and issue #103 demonstrated that provider-neutral Scribe orchestration needs a Core-only read boundary. Issue #159 meets the credential/mutation isolation threshold with an executable bounded GitHub transport. `Patching -> Core`, `Patching -> Roslyn`, `Agent -> Core`, and `GitHub -> Core` are current one-way edges. Core and Roslyn do not reference Patching; no deterministic or model runtime references GitHub. Agent receives no mutation, repository-discovery, general-network, provider-credential, or publication capability. Later composition edges remain owned by their implementing issues.
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
@@ -172,21 +172,15 @@ The implemented project/reference and API boundaries prevent the Scribe runtime 
 
 Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. Later M3 issues place them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
-### Candidate `ContractScribe.GitHub`
+### `ContractScribe.GitHub`
 
-If M5 evidence meets the split thresholds, `ContractScribe.GitHub` owns the GitHub platform adapter:
+Issue #159 (active M5-R2) establishes an executable internal production transport boundary, not an empty project reservation. No existing source is migrated. Its only product reference is Core; HTTP and JSON use the .NET runtime with no added package. The closed factory consumes an existing validated publication authority and an already-supplied opaque credential. There is no `Cli -> GitHub` edge yet: H2 owns later CLI composition and credential resolution.
 
-- the minimum durable state needed to reconcile GitHub Issues, branches, commits, and pull requests safely;
-- explicit branch and pull-request ownership;
-- at most one compatible active bot-owned proposal pull request for current work, created as draft;
-- idempotent mutation and safe retry using only the identity or operation mechanism demonstrated necessary by M5;
-- base drift, conflict, human-change, corruption, closure, and replay handling;
-- GitHub permission, API failure, rate-limit, and response validation;
-- publication records expressed through Core contracts.
+The current `Transport` directory owns typed repository/authenticated-user observations, exact ref reads, bounded Git blob/tree/commit reads and creates, complete bounded PR list/detail observations and draft creation, and one fixed single-entry GraphQL `updateRefs` mutation. REST ref writes, Issues, PR updates, arbitrary endpoints, generic JSON send methods, provider/Roslyn/filesystem/shell access, and token acquisition are absent. The assembly exports no public types; only the fast test assembly has friend access. The internal reflection-only test hook is default-inert and accepts only a fixed synthetic credential with a canonical numeric loopback root. H2 owns the eventual process startup bridge.
 
-It depends on `ContractScribe.Core` and a narrowly selected GitHub HTTP or SDK implementation. It must not reference Roslyn, `ContractScribe.Agent`, or provider SDKs.
+Every mutation carries a closed, source-free recovery context and produces either uncertainty or an acknowledgement requiring owner readback. R3 owns coordination objects/CAS/recovery, R4 owns content construction and ref reconciliation, R5 owns PR metadata/ownership/discovery/recovery, and R6 owns publication orchestration through Core contracts. These later capabilities are not claimed by the transport or its scripted tests. There is no live credential or GitHub-platform proof here; H3 owns that separately.
 
-The adapter consumes a validated publication plan. It does not select audit targets, generate documentation, validate patches, or own the platform-neutral campaign state machine.
+The adapter does not select audit targets, generate documentation, validate patches, or own the platform-neutral campaign state machine. It must not reference Roslyn, Patching, Agent, provider SDKs, or the CLI. Its dependency direction, absence of ambient authority, closed API, fixed endpoint set, synthetic seam, and failure privacy are executable fast-test constraints.
 
 ### `ContractScribe.Cli`
 
@@ -207,7 +201,7 @@ The same CLI is the payload invoked locally, from validation workflows, and by a
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn, Agent's outbound edge to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. The GitHub edge remains a candidate until its milestone meets the split thresholds.
+Patching's outbound edges to Core and Roslyn, Agent's and GitHub's outbound edges to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. GitHub has no CLI composition edge until H2.
 
 ```text
 ContractScribe.Cli
@@ -217,7 +211,8 @@ ContractScribe.Cli
   +-- ContractScribe.Patching -----> ContractScribe.Core
   |                                  + ContractScribe.Roslyn
   +-- ContractScribe.Agent --------> ContractScribe.Core
-  +-- ContractScribe.GitHub -------> ContractScribe.Core
+
+ContractScribe.GitHub ------------> ContractScribe.Core
 ```
 
 Forbidden references:
@@ -243,7 +238,7 @@ Current architecture tests enumerate existing project references and fail when a
 | M2 | Add `ContractScribe.Patching`; issue #91 establishes deterministic resolution, issue #92 adds baseline-bound rendering and isolated unaccepted candidates, and issue #93 owns final validation/results. |
 | M3 | Add `ContractScribe.Agent`; issue #103 establishes the Core-only read-only runtime, while #104 through #108 add concrete context, tools, transport, evaluation, and CLI composition without broadening its authority. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
-| M5 | Candidate: add `ContractScribe.GitHub` if platform mutation and dependency isolation meet the split thresholds. |
+| M5 | R1 freezes source-free Core contracts; R2 adds the Core-only `ContractScribe.GitHub` transport. R3-R6 own resource reconciliation/orchestration; H2 owns the later CLI edge. |
 | M6 | Add the selected Action wrapper and release artifacts; add no C# project without an observed split need. |
 
 This sequence prevents later projects from becoming speculative dependencies of earlier milestones; implementation evidence, not this table alone, decides the final placement.

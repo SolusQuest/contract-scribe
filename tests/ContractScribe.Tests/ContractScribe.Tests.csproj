@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ContractScribe.Agent\ContractScribe.Agent.csproj" />
     <ProjectReference Include="..\..\src\ContractScribe.Core\ContractScribe.Core.csproj" />
+    <ProjectReference Include="..\..\src\ContractScribe.GitHub\ContractScribe.GitHub.csproj" />
     <ProjectReference Include="..\..\src\ContractScribe.Patching\ContractScribe.Patching.csproj" />
     <ProjectReference Include="..\..\src\ContractScribe.Cli\ContractScribe.Cli.csproj" />
     <ProjectReference Include="..\..\tools\ContractScribe.Evaluation\ContractScribe.Evaluation.csproj" />

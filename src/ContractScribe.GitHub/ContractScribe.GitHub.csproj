@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../ContractScribe.Core/ContractScribe.Core.csproj" />
+    <InternalsVisibleTo Include="ContractScribe.Tests" />
+  </ItemGroup>
+</Project>

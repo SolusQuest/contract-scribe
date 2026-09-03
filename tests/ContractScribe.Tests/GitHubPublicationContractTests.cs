@@ -606,7 +606,6 @@ public sealed class GitHubPublicationContractTests
         {
             Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
         }
-        Assert.False(Directory.Exists(Path.Join(root, "src", "ContractScribe.GitHub")));
         Assert.False(File.Exists(Path.Join(root, "tests", "ContractScribe.Tests",
             "GitHubPublicationProtocolDecisionHarnessTests.cs")));
     }
