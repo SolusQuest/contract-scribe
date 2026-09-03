@@ -284,7 +284,11 @@ internal sealed class GitHubCoordinationStore
                 : null;
             var postTarget = await client.GetRefAsync(authority.TargetRef,
                 postRecovery?.Token ?? cancellationToken).ConfigureAwait(false);
-            if (postTarget.Value is null) return Failed(postTarget);
+            if (postTarget.Value is null)
+                return postRecovery is null ? Failed(postTarget)
+                    : DomainFailure(GitHubCoordinationFailureKind.Transport,
+                        RecoveryFailure(postTarget.Failure, postRecovery), postTarget.Delivery,
+                        postTarget.Context, postTarget.RequiredPermissions);
             if (postTarget.Value.Oid != authority.ExpectedBaseCommitOid)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -506,14 +510,15 @@ internal sealed class GitHubCoordinationStore
                 mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions);
         using var recovery = new CancellationTokenSource(RecoveryTimeout);
         var observed = await read(recovery.Token).ConfigureAwait(false);
+        var readbackFailure = RecoveryFailure(observed.Failure, recovery);
         if (observed.Value is not null)
             return exact(observed.Value) ? null
                 : DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch,
                     mutation.Failure, mutation.Delivery, mutation.Context,
-                    mutation.RequiredPermissions, observed.Failure);
+                    mutation.RequiredPermissions, readbackFailure);
         return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
             mutation.Failure, mutation.Delivery, mutation.Context,
-            mutation.RequiredPermissions, observed.Failure);
+            mutation.RequiredPermissions, readbackFailure);
     }
 
     private async ValueTask<GitHubCoordinationResult> UpdateAndReadAsync(
@@ -531,20 +536,22 @@ internal sealed class GitHubCoordinationStore
                 update.Failure, update.Delivery, update.Context, update.RequiredPermissions);
         using var recovery = new CancellationTokenSource(RecoveryTimeout);
         var read = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
+        var readbackFailure = RecoveryFailure(read.Failure, recovery);
         if (read.Value is null)
             return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                 update.Failure, update.Delivery, update.Context,
-                update.RequiredPermissions, read.Failure);
+                update.RequiredPermissions, readbackFailure);
         if (read.Value.Oid != prepared.CommitOid)
             return DomainFailure(GitHubCoordinationFailureKind.Conflict,
                 update.Failure, update.Delivery, update.Context,
-                update.RequiredPermissions, read.Failure);
+                update.RequiredPermissions, readbackFailure);
         var state = await ReadStateAsync(repository, target, read.Value.Oid,
             recovery.Token).ConfigureAwait(false);
         if (state.State is null)
             return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                 update.Failure, update.Delivery, update.Context,
-                update.RequiredPermissions, state.Failure?.TransportFailure);
+                update.RequiredPermissions,
+                RecoveryFailure(state.Failure?.TransportFailure, recovery));
         var stateCapability = (StateCapability)state.State;
         if (stateCapability.HeadOid != prepared.CommitOid
             || !stateCapability.CanonicalBytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan()))
@@ -674,7 +681,8 @@ internal sealed class GitHubCoordinationStore
                 && current.SnapshotCommitmentSha256 == predecessor.SnapshotCommitmentSha256
                 && current.PolicyCommitmentSha256 == predecessor.PolicyCommitmentSha256
                 && current.TargetCommitOid == predecessor.TargetCommitOid
-                && current.RepositoryId == predecessor.RepositoryId
+                && current.RepositoryId.Equals(predecessor.RepositoryId,
+                    StringComparison.OrdinalIgnoreCase)
                 && current.TargetRef == predecessor.TargetRef,
             (GitHubCoordinationStage.Merged, "successor-after-merge") => true,
             (GitHubCoordinationStage.ClosedUnmerged, "successor-after-closed-unmerged") => true,
@@ -916,6 +924,13 @@ internal sealed class GitHubCoordinationStore
         GitHubApiResult<T> result,
         GitHubCoordinationFailureKind kind = GitHubCoordinationFailureKind.Transport) where T : class =>
         DomainFailure(kind, result.Failure, result.Delivery, result.Context, result.RequiredPermissions);
+
+    private static GitHubFailure? RecoveryFailure(
+        GitHubFailure? failure,
+        CancellationTokenSource recovery) =>
+        recovery.IsCancellationRequested && failure?.Code == GitHubFailureCode.Cancelled
+            ? failure with { Code = GitHubFailureCode.Timeout }
+            : failure;
 
     private static GitHubCoordinationResult DomainFailure(
         GitHubCoordinationFailureKind kind,

@@ -716,6 +716,18 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationStage.Claimed, refResult.State!.Stage);
         Assert.Equal(refResult.State.HeadOid, refRemote.CoordinationHead);
         Assert.Equal(1, refRemote.SuccessfulRefMutations);
+
+        var recoveryFailure = typeof(GitHubCoordinationStore).GetMethod(
+            "RecoveryFailure", BindingFlags.Static | BindingFlags.NonPublic)!;
+        using var expiredRecovery = new CancellationTokenSource();
+        expiredRecovery.Cancel();
+        var timeout = Assert.IsType<GitHubFailure>(recoveryFailure.Invoke(null,
+            [new GitHubFailure(GitHubFailureCode.Cancelled), expiredRecovery]));
+        Assert.Equal(GitHubFailureCode.Timeout, timeout.Code);
+        using var activeRecovery = new CancellationTokenSource();
+        var callerCancellation = Assert.IsType<GitHubFailure>(recoveryFailure.Invoke(null,
+            [new GitHubFailure(GitHubFailureCode.Cancelled), activeRecovery]));
+        Assert.Equal(GitHubFailureCode.Cancelled, callerCancellation.Code);
     }
 
     [Fact]
@@ -987,6 +999,23 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(0, remote.RefMutationAttempts);
     }
 
+    [Fact]
+    public async Task Immediate_edge_preserves_repository_ASCII_case_equivalence()
+    {
+        var predecessorAuthority = InitialAuthority("operation-case-a", '5');
+        var remote = new CoordinationRemote();
+        remote.SeedChain(PublishedChain(predecessorAuthority));
+        using var client = Client(AppendAuthority(
+            predecessorAuthority, "operation-case-b", '6', alternateRepositoryCase: true), remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var current = await store.ReadCurrentAsync();
+
+        var result = await store.ClaimAsync(current.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Admitted, result.Outcome);
+        Assert.Equal("owner/REPO", remote.State(result.State!.HeadOid).RepositoryId);
+    }
+
     private static async Task AssertAdvanceRejected(
         ValidatedGitHubPublicationAuthority authority,
         IEnumerable<GitHubCoordinationState> chain,
@@ -1136,8 +1165,11 @@ public sealed partial class GitHubCoordinationRefTests
         ValidatedGitHubPublicationAuthority predecessor,
         string operation,
         char candidate,
-        char? target = null) => GitHubPublicationFactory.CreateAuthority(new(
-            predecessor.RepositoryOwner, predecessor.RepositoryName, predecessor.TargetRef,
+        char? target = null,
+        bool alternateRepositoryCase = false) => GitHubPublicationFactory.CreateAuthority(new(
+            alternateRepositoryCase ? predecessor.RepositoryOwner.ToLowerInvariant() : predecessor.RepositoryOwner,
+            alternateRepositoryCase ? predecessor.RepositoryName.ToUpperInvariant() : predecessor.RepositoryName,
+            predecessor.TargetRef,
             target is { } targetValue ? Oid(targetValue) : predecessor.ExpectedBaseCommitOid,
             predecessor.CampaignLineage,
             predecessor.SnapshotCommitmentSha256, Hash('2'), Hash('3'), 8, Hash('4'),
@@ -1390,7 +1422,7 @@ public sealed partial class GitHubCoordinationRefTests
         {
             lock (gate)
             {
-                if (path == "/repos/Owner/repo")
+                if (path.Equals("/repos/Owner/repo", StringComparison.OrdinalIgnoreCase))
                     return Json(HttpStatusCode.OK, Repository());
                 if (path.EndsWith("/git/ref/heads/main", StringComparison.Ordinal))
                     return Ref("refs/heads/main", TargetHead);
