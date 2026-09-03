@@ -271,6 +271,11 @@ public sealed class GitHubApiClientTests
     [InlineData("refs/heads/a?token=x")]
     [InlineData("refs/heads/a\\b")]
     [InlineData("refs/heads/a.lock")]
+    [InlineData("refs/heads/a.lock/branch")]
+    [InlineData("refs/heads/branch.")]
+    [InlineData("refs/heads/a b")]
+    [InlineData("refs/heads/a\u007fb")]
+    [InlineData("refs/heads/a\u001fb")]
     [InlineData("refs/heads/a//b")]
     [InlineData("refs/tags/v1")]
     [InlineData("https://evil.invalid/")]
@@ -634,6 +639,48 @@ public sealed class GitHubApiClientTests
 
     private static void Keys(JsonElement element, params string[] keys) =>
         Assert.Equal(keys.Order(StringComparer.Ordinal), element.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+
+    [Theory]
+    [InlineData("a.LOCK")]
+    [InlineData("a./branch")]
+    [InlineData("a\u00a0b")]
+    [InlineData("a\u0085b")]
+    [InlineData("a\u2003b")]
+    public async Task Wire_valid_foreign_refs_are_observable_but_never_grant_write_authority(string branch)
+    {
+        using var harness = await Harness.Create();
+        var fullRef = "refs/heads/" + branch;
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(new JsonObject
+        { ["ref"] = fullRef, ["node_id"] = "REF_1", ["object"] = new JsonObject { ["type"] = "commit", ["sha"] = Oid('2') } }));
+        var reference = await harness.Client.GetRefAsync(fullRef);
+        Assert.Null(reference.Failure);
+        Assert.Equal(fullRef, reference.Value!.Name);
+        Assert.Equal("/repos/Owner/repo/git/ref/heads/" + string.Join('/', branch.Split('/').Select(Uri.EscapeDataString)),
+            Assert.Single(harness.Handler.Requests).Path);
+
+        var pull = Pull();
+        pull["base"]!["ref"] = branch;
+        pull["head"]!["ref"] = branch;
+        pull["head"]!["repo"] = Repository("Other", "fork", 99, "R_99");
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(pull));
+        var detail = await harness.Client.GetPullRequestAsync(1);
+        Assert.Null(detail.Failure);
+        Assert.Equal(branch, detail.Value!.BaseRef);
+        Assert.Equal(branch, detail.Value.Head.Ref);
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(new JsonArray(pull.DeepClone())));
+        var list = await harness.Client.ListPullRequestsAsync();
+        Assert.Null(list.Failure);
+        Assert.Equal(branch, Assert.Single(list.Value!.Items).Head.Ref);
+
+        harness.Handler.Requests.Clear();
+        Assert.Equal(GitHubFailureCode.InvalidRequest,
+            (await harness.Client.UpdateRefAsync(new(fullRef, Oid('1'), Oid('2'), false))).Failure!.Code);
+        Assert.Equal(GitHubFailureCode.InvalidRequest,
+            (await harness.Client.CreatePullRequestAsync(PullRequestInput(harness.Authority) with { HeadRef = fullRef })).Failure!.Code);
+        Assert.Equal(GitHubFailureCode.InvalidRequest,
+            (await harness.Client.CreatePullRequestAsync(PullRequestInput(harness.Authority) with { BaseRef = fullRef })).Failure!.Code);
+        Assert.Empty(harness.Handler.Requests);
+    }
 
     [Theory]
     [InlineData("\t-control.md")]

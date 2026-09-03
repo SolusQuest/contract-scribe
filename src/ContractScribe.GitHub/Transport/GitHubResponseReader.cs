@@ -325,10 +325,10 @@ internal static class GitHubResponseReader
         && !text.Any(c => c is '\0' or '/') && ValidUtf16(text);
     internal static bool RefName(string? text) => text is { Length: > 11 and <= 1024 }
         && text.StartsWith("refs/heads/", StringComparison.Ordinal) && !text.Contains("..", StringComparison.Ordinal)
-        && !text.Contains("@{", StringComparison.Ordinal) && !text.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)
+        && !text.EndsWith('.') && !text.Contains("@{", StringComparison.Ordinal) && !text.Any(c => c <= ' ' || c == '\u007f'
             || c is '~' or '^' or ':' or '?' or '*' or '[' or '\\') && ValidUtf16(text)
-        && text.Split('/').All(part => part.Length > 0 && !part.StartsWith('.') && !part.EndsWith('.')
-            && !part.EndsWith(".lock", StringComparison.OrdinalIgnoreCase));
+        && text.Split('/').All(part => part.Length > 0 && !part.StartsWith('.')
+            && !part.EndsWith(".lock", StringComparison.Ordinal));
     internal static bool IsOid(string? text, bool zero = false) => Hex(text, 40) && (zero || text!.Any(c => c != '0'));
     internal static bool Hex(string? text, int length) => text?.Length == length && text.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
     internal static bool ValidUtf16(string text)
