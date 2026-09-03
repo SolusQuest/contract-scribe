@@ -72,6 +72,7 @@ internal static class GitHubResponseReader
     {
         Object(value);
         var owner = Actor(Property(value, "owner"));
+        Require(owner.Kind != GitHubActorKind.Mannequin);
         var name = String(value, "name", 256);
         Require(RepositoryPart(name) && RepositoryPart(owner.Login));
         Require(String(value, "full_name", 513) == owner.Login + "/" + name);
@@ -88,6 +89,7 @@ internal static class GitHubResponseReader
             "User" => GitHubActorKind.User,
             "Bot" => GitHubActorKind.Bot,
             "Organization" => GitHubActorKind.Organization,
+            "Mannequin" => GitHubActorKind.Mannequin,
             _ => throw new GitHubProtocolException(),
         };
         return new(Positive(value, "id"), Node(value, "node_id"), login, kind);

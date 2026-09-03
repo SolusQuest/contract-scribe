@@ -466,6 +466,164 @@ public sealed class GitHubApiClientTests
         Assert.All(harness.Handler.Requests, request => Assert.StartsWith("/repos/Owner/repo/pulls?", request.Path));
     }
 
+    [Fact]
+    public async Task Mannequin_authors_remain_typed_through_detail_and_paginated_deduplication()
+    {
+        using var harness = await Harness.Create();
+        var migrated = Pull();
+        migrated["user"] = Mannequin();
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(migrated));
+        var detail = await harness.Client.GetPullRequestAsync(1);
+        Assert.Null(detail.Failure);
+        var author = detail.Value!.Author;
+        Assert.Equal(77, author.Id);
+        Assert.Equal("M_synthetic_77", author.NodeId);
+        Assert.Equal("11111111-2222-3333-4444-555555555555", author.Login);
+        Assert.Equal(GitHubActorKind.Mannequin, author.Kind);
+        Assert.NotEqual(GitHubActorKind.Bot, author.Kind);
+
+        harness.Handler.Requests.Clear();
+        var bot = Pull(2);
+        bot["user"]!["type"] = "Bot";
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var response = Json(first ? new JsonArray(migrated.DeepClone())
+                : new JsonArray(migrated.DeepClone(), bot.DeepClone()));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var list = await harness.Client.ListPullRequestsAsync();
+        Assert.Null(list.Failure);
+        Assert.True(list.Value!.Exhausted);
+        Assert.Equal(2, list.Value.Pages);
+        Assert.Equal(3, list.Value.ObservedItems);
+        Assert.Equal(2, list.Value.Items.Length);
+        Assert.Equal(author, list.Value.Items[0].Author);
+        Assert.Equal(GitHubActorKind.Bot, list.Value.Items[1].Author.Kind);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+
+        harness.Handler.Requests.Clear();
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(migrated, 201));
+        var acknowledgement = await harness.Client.CreatePullRequestAsync(PullRequestInput(harness.Authority));
+        Assert.Null(acknowledgement.Failure);
+        Assert.Equal(author, acknowledgement.Value!.Author);
+        Assert.Equal(GitHubDelivery.NeedsReadback, acknowledgement.Delivery);
+        Assert.IsType<GitHubPullRequestContext>(acknowledgement.Context);
+        Assert.Equal("POST", Assert.Single(harness.Handler.Requests).Method);
+    }
+
+    [Theory]
+    [InlineData("FutureActor")]
+    [InlineData("mannequin")]
+    public async Task Unknown_actor_kinds_reject_detail_and_complete_sets(string kind)
+    {
+        using var harness = await Harness.Create();
+        var invalid = Pull(2);
+        invalid["user"]!["type"] = kind;
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(invalid));
+        var detail = await harness.Client.GetPullRequestAsync(2);
+        Assert.Equal(GitHubFailureCode.InvalidResponse, detail.Failure!.Code);
+        Assert.Null(detail.Value);
+
+        harness.Handler.Requests.Clear();
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var response = Json(new JsonArray(first ? Pull() : invalid.DeepClone()));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var list = await harness.Client.ListPullRequestsAsync();
+        Assert.Equal(GitHubFailureCode.InvalidResponse, list.Failure!.Code);
+        Assert.Null(list.Value);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("node_id")]
+    [InlineData("login")]
+    [InlineData("type")]
+    public async Task Actor_changes_on_duplicate_pr_ids_fail_all_or_nothing(string field)
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var pull = Pull();
+            pull["user"] = Mannequin();
+            if (!first)
+            {
+                if (field == "id") pull["user"]![field] = 78;
+                if (field == "node_id") pull["user"]![field] = "M_synthetic_78";
+                if (field == "login") pull["user"]![field] = "11111111-2222-3333-4444-666666666666";
+                if (field == "type") pull["user"]![field] = "Bot";
+            }
+            var response = Json(new JsonArray(pull));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var result = await harness.Client.ListPullRequestsAsync();
+        Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+        Assert.Null(result.Value);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("User", true)]
+    [InlineData("Bot", true)]
+    [InlineData("Organization", false)]
+    [InlineData("Mannequin", false)]
+    [InlineData("FutureActor", false)]
+    public async Task Authenticated_actor_allowlist_does_not_expand_with_observation_kinds(string kind, bool accepted)
+    {
+        using var harness = await Harness.Create();
+        var actor = Actor();
+        actor["type"] = kind;
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(actor));
+        var result = await harness.Client.GetAuthenticatedUserAsync();
+        if (accepted)
+        {
+            Assert.Null(result.Failure);
+            Assert.Equal(kind, result.Value!.Kind.ToString());
+        }
+        else
+        {
+            Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+            Assert.Null(result.Value);
+        }
+        Assert.Single(harness.Handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("repository")]
+    [InlineData("base")]
+    [InlineData("head")]
+    public async Task Mannequins_cannot_be_repository_owners(string surface)
+    {
+        using var harness = await Harness.Create();
+        var repository = Repository();
+        repository["owner"]!["type"] = "Mannequin";
+        if (surface == "repository")
+        {
+            harness.Handler.Reply = (_, _) => Task.FromResult(Json(repository));
+            var result = await harness.Client.GetRepositoryAsync();
+            Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+            Assert.Null(result.Value);
+        }
+        else
+        {
+            var pull = Pull();
+            pull[surface]!["repo"] = repository;
+            harness.Handler.Reply = (_, _) => Task.FromResult(Json(pull));
+            var result = await harness.Client.GetPullRequestAsync(1);
+            Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+            Assert.Null(result.Value);
+        }
+        Assert.Single(harness.Handler.Requests);
+    }
+
     [Theory]
     [InlineData("foreign")]
     [InlineData("deleted")]
@@ -948,6 +1106,13 @@ public sealed class GitHubApiClientTests
 
     private static JsonObject Actor(string login = "owner", long id = 7) => new()
     { ["id"] = id, ["node_id"] = "U_" + id, ["login"] = login, ["type"] = "User" };
+    private static JsonObject Mannequin() => new()
+    {
+        ["id"] = 77,
+        ["node_id"] = "M_synthetic_77",
+        ["login"] = "11111111-2222-3333-4444-555555555555",
+        ["type"] = "Mannequin"
+    };
     private static JsonObject Repository(string owner = "Owner", string name = "repo", long id = 42, string node = "R_42") => new()
     {
         ["id"] = id,

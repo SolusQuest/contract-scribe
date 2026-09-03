@@ -18,7 +18,7 @@ internal enum GitHubDelivery { NotDispatched, Read, NeedsReadback, Ambiguous }
 internal enum GitHubObjectKind { Blob, Tree, Commit }
 internal enum GitHubPermission { Metadata, Contents, PullRequests }
 internal enum GitHubPermissionLevel { Read, Write }
-internal enum GitHubActorKind { User, Bot, Organization }
+internal enum GitHubActorKind { User, Bot, Organization, Mannequin }
 internal enum GitHubTreeMode { File, Executable, Directory, SymbolicLink, Submodule }
 
 internal sealed record GitHubRepositoryIdentity(long Id, string NodeId, string Owner, string Name) : GitHubValue;
