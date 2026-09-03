@@ -3,6 +3,7 @@
     <Project Path="src/ContractScribe.Agent/ContractScribe.Agent.csproj" />
     <Project Path="src/ContractScribe.Cli/ContractScribe.Cli.csproj" />
     <Project Path="src/ContractScribe.Core/ContractScribe.Core.csproj" />
+    <Project Path="src/ContractScribe.GitHub/ContractScribe.GitHub.csproj" />
     <Project Path="src/ContractScribe.Patching/ContractScribe.Patching.csproj" />
     <Project Path="src/ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
   </Folder>
